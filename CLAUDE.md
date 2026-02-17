@@ -26,12 +26,13 @@ For Robothor's identity and personality, read `brain/SOUL.md`.
 | `health/` | `~/garmin-sync/` | Garmin health data sync (every 15 min → SQLite → daily memory) |
 | `templates/` | `~/clawd-main/` | Bootstrap templates for new Robothor instances |
 | `tunnel/` | `~/.cloudflared/` | Cloudflare tunnel config (robothor.ai routes) |
+| `crm/` | `robothor/crm/` | CRM stack: Twenty, Chatwoot, Bridge, Docker Compose |
 
 These are symlinks for navigation. All services and crons use absolute paths — nothing breaks.
 
 ## Architecture at a Glance
 
-**System crons fetch data. Triage worker processes it. Supervisor audits and surfaces.**
+**Three-tier intelligence pipeline feeds RAG. Triage worker processes logs. Supervisor audits and surfaces.**
 
 ```
 Layer 1: System Crons (Python, crontab)
@@ -39,10 +40,15 @@ Layer 1: System Crons (Python, crontab)
   vision_service.py → YOLO + InsightFace detection loop (systemd)
   garmin_sync.py → health data every 15 min
 
-Layer 2a: Triage Worker (Opus 4.6, */15 min, isolated cron)
+Layer 1.5: Intelligence Pipeline (3 tiers, all local Llama + pgvector)
+  Tier 1: continuous_ingest.py (*/10 min) — incremental deduped ingestion (~10 min freshness)
+  Tier 2: periodic_analysis.py (4x daily: 7,11,15,19) — meeting prep, memory blocks, entities
+  Tier 3: intelligence_pipeline.py (daily 3:30 AM) — relationships, engagement, patterns, quality
+
+Layer 2a: Triage Worker (Kimi K2.5, */15 min, isolated cron)
   Reads logs → categorizes → handles routine items → escalates complex to worker-handoff.json
 
-Layer 2b: Supervisor Heartbeat (Opus 4.6, */17 min 7-22h, isolated cron)
+Layer 2b: Supervisor Heartbeat (Kimi K2.5, */17 min 7-22h, isolated cron)
   Phase 1: Surface escalations to Philip via Telegram, check health, meeting reminders
   Phase 2: Audit all logs for completeness (reviewedAt, actionCompletedAt, resolvedAt)
   Phase 3: Output audit summary or HEARTBEAT_OK
@@ -52,20 +58,21 @@ Deep reference: `brain/ARCHITECTURE.md`, `brain/CRON_DESIGN.md`
 
 ## Vision System
 
-Always-on service with three switchable modes: **disarmed** (idle), **basic** (motion detection), **armed** (YOLO + InsightFace + VLM escalation). Mode switch at runtime, no restart needed.
+Always-on service with event-triggered smart detection. Models (YOLO + InsightFace) loaded at startup. Three modes: **disarmed** (idle), **basic** (motion → YOLO → InsightFace → instant Telegram photo alerts + async VLM follow-up), **armed** (same + per-frame tracking). Unknown person → snapshot to Philip's Telegram in <2s. Mode switch at runtime, no restart needed.
 
 | Component | Model | Size |
 |-----------|-------|------|
 | Object detection | YOLOv8-nano | 6 MB |
 | Face recognition | InsightFace buffalo_l (ArcFace) | 300 MB |
 | Scene analysis | llama3.2-vision:11b (on-demand) | 7.8 GB |
-| Camera | USB webcam → MediaMTX RTSP :8554 | 640x480 |
+| Camera | USB webcam → MediaMTX RTSP :8554 + HLS :8890 | 640x480 |
 
 **Service:** `robothor-vision.service` (system-level, needs `sudo`)
 **Health:** `http://localhost:8600/health`
 **Mode switch:** `curl -X POST http://localhost:8600/mode -d '{"mode":"armed"}'`
+**Live stream:** `https://cam.robothor.ai/webcam/` (Cloudflare Access protected)
 
-MCP tools: `look`, `who_is_here`, `enroll_face`
+MCP tools: `look`, `who_is_here`, `enroll_face`, `set_vision_mode`
 Orchestrator endpoints: `/vision/{look,detect,identify,status,enroll,mode}` on port 9099
 
 Deep reference: `brain/VISION.md`
@@ -74,17 +81,32 @@ Deep reference: `brain/VISION.md`
 
 **Hardware:** Lenovo ThinkStation PGX — NVIDIA Grace Blackwell GB10, 128 GB unified memory, ARM Cortex-X925 (20 cores)
 
-**Networking:**
-| Route | Service | Port |
-|-------|---------|------|
-| robothor.ai | Status server | 3000 |
-| status.robothor.ai | Status dashboard | 3001 |
-| voice.robothor.ai | Voice server (Twilio) | 8765 |
-| gchat.robothor.ai | Moltbot gateway | 18789 |
-| Tailscale IP | 100.91.221.100 (ironsail tailnet) | — |
+**Networking (Cloudflare Tunnel):**
+| Route | Service | Port | Auth |
+|-------|---------|------|------|
+| cam.robothor.ai | Webcam HLS stream | 8890 | Cloudflare Access (email OTP) |
+| robothor.ai | Status server | 3000 | Public |
+| status.robothor.ai | Status dashboard | 3001 | Public |
+| dashboard.robothor.ai | Status dashboard (alias) | 3001 | Public |
+| privacy.robothor.ai | Privacy policy | 3002 | Public |
+| ops.robothor.ai | Ops dashboard | 3003 | Cloudflare Access (email OTP) |
+| voice.robothor.ai | Voice server (Twilio) | 8765 | Public |
+| sms.robothor.ai | SMS webhook (Twilio) | 8766 | Public |
+| gateway.robothor.ai | OpenClaw gateway | 18789 | Cloudflare Access (email OTP) |
+| crm.robothor.ai | Twenty CRM | 3030 | Cloudflare Access (email OTP) |
+| inbox.robothor.ai | Chatwoot inbox | 3100 | Cloudflare Access (email OTP) |
+| bridge.robothor.ai | Bridge service | 9100 | Cloudflare Access (email OTP) |
+| orchestrator.robothor.ai | RAG Orchestrator | 9099 | Cloudflare Access (email OTP) |
+| vision.robothor.ai | Vision API | 8600 | Cloudflare Access (email OTP) |
+| Tailscale IP | 100.91.221.100 (ironsail tailnet) | — | — |
 
-**Database:** PostgreSQL 16 + pgvector 0.6.0 — database `robothor_memory`
-Tables: `long_term_memory`, `short_term_memory`, `memory_facts`, `memory_entities`, `memory_relations`, `audit_log`
+All camera ports bound to `127.0.0.1`. Webcam only accessible externally via `cam.robothor.ai` (Cloudflare Access: `philip@ironsail.ai`, `robothor@ironsail.ai`).
+
+**Database:** PostgreSQL 16 + pgvector 0.6.0 (max_connections=200, Docker-accessible via 172.17.0.1)
+Databases: `robothor_memory` (facts, entities, contacts, memory blocks), `twenty_crm`, `chatwoot`
+Key tables: `memory_facts`, `memory_entities`, `memory_relations`, `contact_identifiers`, `agent_memory_blocks`
+
+**Redis:** Port 6379, maxmemory 2GB. Shared by Twenty CRM, Chatwoot, RAG orchestrator.
 
 **Ollama Models (localhost:11434):**
 | Model | Size | Role |
@@ -101,17 +123,21 @@ Deep reference: `INFRASTRUCTURE.md`
 
 | Service | Unit | Level | Port | Notes |
 |---------|------|-------|------|-------|
-| Vision service | robothor-vision.service | system (`sudo`) | 8600 | YOLO + InsightFace loop |
-| MediaMTX RTSP | mediamtx-webcam.service | system (`sudo`) | 8554 | USB webcam → RTSP |
+| Vision service | robothor-vision.service | system (`sudo`) | 8600 | Vision: disarmed/basic/armed modes |
+| MediaMTX | mediamtx-webcam.service | system (`sudo`) | 8554, 8890 | USB webcam → RTSP + HLS |
 | RAG Orchestrator | robothor-orchestrator.service | system (`sudo`) | 9099 | FastAPI, RAG + vision endpoints |
 | Voice server | robothor-voice.service | system (`sudo`) | 8765 | Twilio ConversationRelay |
+| SMS webhook | robothor-sms.service | system (`sudo`) | 8766 | Twilio SMS webhooks |
 | Status server | robothor-status.service | system (`sudo`) | 3000 | robothor.ai homepage |
 | Status dashboard | robothor-status-dashboard.service | system (`sudo`) | 3001 | status.robothor.ai |
-| Dashboard | robothor-dashboard.service | system (`sudo`) | — | Internal dashboard |
+| Ops dashboard | robothor-dashboard.service | system (`sudo`) | 3003 | ops.robothor.ai |
+| Privacy policy | robothor-privacy.service | system (`sudo`) | 3002 | privacy.robothor.ai |
 | Transcript watcher | robothor-transcript.service | system (`sudo`) | — | Watches voice transcripts |
 | Cloudflare tunnel | cloudflared.service | system (`sudo`) | — | robothor.ai routes |
+| CRM stack | robothor-crm.service | system (`sudo`) | 3030, 3100 | Docker: Twenty CRM + Chatwoot (4 containers) |
+| Bridge service | robothor-bridge.service | system (`sudo`) | 9100 | Contact resolution, webhooks, CRM integration |
 | Tailscale | tailscaled.service | system (`sudo`) | — | VPN mesh (ironsail tailnet) |
-| Moltbot gateway | moltbot-gateway.service | user | 18789 | OpenClaw messaging |
+| Moltbot gateway | moltbot-gateway.service | system (`sudo`) | 18789 | OpenClaw messaging |
 
 Deep reference: `SERVICES.md`
 
@@ -127,11 +153,61 @@ Three-tier architecture with structured facts and entity graph:
 - `memory_facts` — categorized facts with confidence, lifecycle, conflict resolution
 - `memory_entities` + `memory_relations` — knowledge graph (people, projects, tech)
 
+**Structured working memory:**
+- `agent_memory_blocks` — named text blocks (persona, user_profile, working_context, operational_findings, contacts_summary) with size limits and usage tracking
+
 **RAG stack:** Qwen3-Embedding → pgvector → Qwen3-Reranker → Qwen3-Next (generation)
-**MCP tools:** `search_memory`, `store_memory`, `get_stats`, `get_entity`
+
+**MCP tools (robothor-memory server):** — Claude Code sessions
+- `search_memory`, `store_memory`, `get_stats`, `get_entity` — facts + knowledge graph
+- `memory_block_read`, `memory_block_write`, `memory_block_list` — structured working memory
+- `log_interaction` — CRM interaction logging (→ bridge → Chatwoot + Twenty)
+- `look`, `who_is_here`, `enroll_face`, `set_vision_mode` — vision
+
+**MCP tools (twenty-crm server):** `list_people`, `get_person`, `create_person`, `update_person`, `search_records`, `create_note`, etc.
+**MCP tools (chatwoot server):** `chatwoot_list_conversations`, `chatwoot_get_conversation`, `chatwoot_list_messages`, `chatwoot_create_message`
+
+**OpenClaw plugin (crm-tools):** — OpenClaw agent sessions (cron jobs, Telegram, Google Chat)
+Same tool names as MCP (`chatwoot_list_conversations`, `log_interaction`, `create_person`, `create_note`, etc.) but routed through Bridge REST proxy on :9100. Agent instructions work identically in both runtimes.
+
 **Ingestion:** `POST /ingest` on port 9099 (channels: discord, email, cli, api, telegram, camera)
 
 Deep reference: `brain/memory_system/MEMORY_SYSTEM.md`
+
+## CRM Stack
+
+**Twenty CRM** (port 3030) — Contact/company/relationship store. Replaces `contacts.json`.
+**Chatwoot** (port 3100) — Unified conversation inbox across all channels.
+**Bridge** (port 9100) — Glue service: contact resolution, webhooks, data sync.
+
+All run as Docker containers via `robothor-crm.service`. Bridge runs as native Python via `robothor-bridge.service`.
+
+Cross-system identity: `contact_identifiers` table maps channel+identifier → Twenty person ID + Chatwoot contact ID + memory entity ID.
+
+**CRM tool access:** Claude Code uses MCP servers (stdio, direct API). OpenClaw agent sessions use the `crm-tools` plugin (HTTP via Bridge :9100 proxy). Tool names are identical in both — agent instructions work unchanged.
+
+Web UIs: `crm.robothor.ai`, `inbox.robothor.ai` (Cloudflare Access protected)
+
+Deep reference: `crm/` directory, `INFRASTRUCTURE.md`
+
+## Backup
+
+**LUKS-encrypted SanDisk SSD** (1.8 TB) at `/mnt/robothor-backup`, auto-unlocked via `/etc/crypttab` keyfile.
+
+| Field | Value |
+|-------|-------|
+| Device | /dev/sda1 (LUKS2) |
+| Mount | /mnt/robothor-backup |
+| Keyfile | /root/robothor-backup.key (slot 0) |
+| Passphrase | Slot 1 fallback (stored in memory system) |
+| Schedule | Daily 4:30 AM |
+| Script | `scripts/backup-ssd.sh` |
+| Log | `scripts/backup.log` |
+| Retention | 30 days (DB dumps) |
+
+**What's backed up:** All project dirs (`clawd`, `moltbot`, `garmin-sync`, `clawd-main`, `robothor`), config dirs (`.openclaw`, `.cloudflared`), systemd service files, credentials (`.bashrc`, `crm/.env`), 3x PostgreSQL dumps (`robothor_memory`, `twenty_crm`, `chatwoot`), Docker volumes (`crm_twenty-server-data`, `crm_twenty-docker-data`, `crm_chatwoot-storage`), crontab + ollama model list, verification manifest.
+
+Deep reference: `scripts/backup-ssd.sh`
 
 ## Key Memory Files
 
@@ -157,10 +233,13 @@ Deep reference: `brain/memory_system/MEMORY_SYSTEM.md`
 | */30 6-22 * * 1-5 | Jira sync | `brain/scripts/jira_sync.py` |
 | */15 * * * * | Garmin sync | `health/garmin_sync.py` |
 | 0 3 * * * | Memory maintenance | `brain/memory_system/maintenance.sh` |
-| 30 3 * * * | Intelligence pipeline | `brain/memory_system/intelligence_pipeline.py` |
+| */10 * * * * | Continuous ingestion (Tier 1) | `brain/memory_system/continuous_ingest.py` |
+| 0 7,11,15,19 * * * | Periodic analysis (Tier 2) | `brain/memory_system/periodic_analysis.py` |
+| 30 3 * * * | Deep analysis (Tier 3) | `brain/memory_system/intelligence_pipeline.py` |
 | 0 4 * * * | Snapshot cleanup (>30d) | `find` + delete |
+| 30 4 * * * | SSD backup (daily) | `scripts/backup-ssd.sh` |
 
-**OpenClaw crons (Layer 2 — Opus 4.6, via `runtime/cron/jobs.json`):**
+**OpenClaw crons (Layer 2 — Kimi K2.5 via OpenRouter, via `runtime/cron/jobs.json`):**
 | Schedule | Job | Purpose |
 |----------|-----|---------|
 | */15 * * * * | Triage Worker | Process logs, categorize, act, escalate |
@@ -171,21 +250,63 @@ Deep reference: `brain/memory_system/MEMORY_SYSTEM.md`
 
 Deep reference: `brain/CRON_DESIGN.md`, `docs/CRON_MAP.md`
 
+## Documentation Index
+
+| Document | Location | Purpose |
+|----------|----------|---------|
+| CLAUDE.md | `robothor/CLAUDE.md` | **This file** — project root, single entry point |
+| INFRASTRUCTURE.md | `robothor/INFRASTRUCTURE.md` | Hardware, networking, database, models |
+| SERVICES.md | `robothor/SERVICES.md` | All systemd services, health checks, cron schedule |
+| DATA_FLOW.md | `robothor/docs/DATA_FLOW.md` | End-to-end data flow from APIs to Philip |
+| CRON_MAP.md | `robothor/docs/CRON_MAP.md` | Unified cron schedule and timeline |
+| ARCHITECTURE.md | `brain/ARCHITECTURE.md` | Three-layer architecture, data flow diagrams |
+| VISION.md | `brain/VISION.md` | Vision system: modes, API, face enrollment, remote access |
+| TOOLS.md | `brain/TOOLS.md` | Tools reference: models, APIs, credentials, Cloudflare |
+| CRON_DESIGN.md | `brain/CRON_DESIGN.md` | Cron architecture and design principles |
+| SOUL.md | `brain/SOUL.md` | Robothor's identity and personality |
+| AGENTS.md | `brain/AGENTS.md` | Agent configuration and startup instructions |
+| MEMORY.md | `brain/MEMORY.md` | Curated long-term memory (operational findings) |
+| MEMORY_SYSTEM.md | `brain/memory_system/MEMORY_SYSTEM.md` | Memory system: RAG, facts, entities, ingestion |
+| TESTING.md | `docs/TESTING.md` | Testing strategy, AI test patterns, 6-phase coverage plan |
+
+## Cloudflare Credentials
+
+Three API tokens for managing the Cloudflare tunnel, DNS, and Access:
+
+| Token Name | Permission | Use For |
+|------------|-----------|---------|
+| `robothor-tunnel-edit` | Tunnel Edit | Adding/modifying tunnel ingress routes |
+| `robothor-dns-edit` | Zone DNS Edit/Read | Creating DNS CNAME records for new subdomains |
+| `robothor-access-edit` | Access Apps/Policies Edit | Managing Zero Trust access policies |
+
+Token values stored in `brain/TOOLS.md` (Cloudflare section) and `~/.bashrc` (env vars).
+Zone ID: `ebd618c6c9edda6ec86f5168daeb8240`
+
 ## Task-Specific Reading Guide
 
 | Task | Read first |
 |------|-----------|
 | Working on vision | `brain/VISION.md` |
+| Viewing the webcam | `https://cam.robothor.ai/webcam/` (Cloudflare Access) |
 | Changing cron behavior | `brain/CRON_DESIGN.md` + `runtime/cron/jobs.json` |
 | Understanding memory/RAG | `brain/memory_system/MEMORY_SYSTEM.md` |
 | Sending emails or calendar | `brain/TOOLS.md` (gog CLI section) |
 | Voice calling | `brain/TOOLS.md` (voice section) + `brain/voice-server/` |
-| Cloudflare tunnel routes | `tunnel/config.yml` + `brain/TOOLS.md` (Cloudflare section) |
+| Cloudflare tunnel routes | `brain/TOOLS.md` (Cloudflare section) |
+| Adding new tunnel subdomain | `brain/TOOLS.md` (Cloudflare section — 4-step workflow) |
 | OpenClaw agents/messaging | `comms/` README + `runtime/` config files |
 | Robothor's identity | `brain/SOUL.md` |
 | Model selection | `brain/TOOLS.md` (Model Selection Guide) |
 | Session startup (as Robothor) | `brain/AGENTS.md` |
 | Health data | `health/` + `brain/memory/garmin-health.md` |
+| CRM / contacts / conversations | `crm/` directory + `INFRASTRUCTURE.md` (CRM Stack section) |
+| Bridge service / webhooks | `crm/bridge/bridge_service.py` |
+| Contact resolution | `crm/bridge/contact_resolver.py` |
+| Memory blocks | `brain/AGENTS.md` (Memory Blocks section) |
+| Services & ports | `SERVICES.md` |
+| Hardware & infrastructure | `INFRASTRUCTURE.md` |
+| Writing or running tests | `docs/TESTING.md` + `brain/memory_system/conftest.py` |
+| Backup / SSD / restore | `scripts/backup-ssd.sh` + `INFRASTRUCTURE.md` (External Storage) |
 
 ## Rules
 
@@ -194,6 +315,49 @@ Deep reference: `brain/CRON_DESIGN.md`, `docs/CRON_MAP.md`
 3. **comms/ is a public repo** — `~/moltbot/` is open source OpenClaw. Don't put private data there.
 4. **Vision service needs `sudo`** — `sudo systemctl {start,stop,restart,status} robothor-vision`
 5. **All system-level services need `sudo`** — everything in `/etc/systemd/system/` requires sudo.
-6. **Moltbot gateway is the only user-level service** — `systemctl --user {start,stop,status} moltbot-gateway`
+6. **All services are system-level** — no user-level systemd services. Use `sudo systemctl` for everything.
 7. **Crons must have `delivery: announce`** — crons with `delivery: none` silently don't run.
-8. **Model: Opus 4.6** for all agent/interactive work. Local Qwen3 for RAG generation only.
+8. **Model: Kimi K2.5** (via OpenRouter) for all agent/interactive work. Opus 4.6 is first fallback. Local Qwen3 for RAG generation only.
+9. **No localhost URLs in agent instructions** — Agent-facing docs (HEARTBEAT.md, WORKER.md, AGENTS.md, jobs.json) must never reference `localhost` or `127.0.0.1` URLs. OpenClaw's `web_fetch` tool blocks loopback addresses for security. Use the appropriate registered tools instead (e.g. `crm_health` instead of fetching `localhost:9100/health`). Localhost is fine in internal code (plugins, Python scripts) and infrastructure reference docs.
+10. **All services with ports must have Cloudflare tunnel routes** — Internal/sensitive services must use Cloudflare Access (email OTP). Public-facing services (status, voice, gchat, privacy) are unprotected.
+11. **Test before commit** — New functions, endpoints, and features require tests. Bug fixes require a regression test that reproduces the bug first. Run fast tests before commit: `pytest -m "not slow and not llm and not e2e"`.
+12. **Use pytest markers** — No marker = unit test (<1s, mocked deps). `@pytest.mark.integration` = real DB/Redis. `@pytest.mark.llm` = needs Ollama. `@pytest.mark.slow` = >10s. `@pytest.mark.e2e` = all services running. `@pytest.mark.smoke` = health checks. Use `test_prefix` fixture for data isolation.
+13. **Test AI by properties, not values** — Validate structure (fields present, types correct, values in valid ranges), not exact content. Golden datasets for regression (80%+ match). Mock LLMs in unit tests.
+14. **Tests live alongside code** — `<module>/tests/test_<feature>.py` with `conftest.py`. Gold standard: `brain/memory_system/conftest.py`.
+15. **Service test requirements** — FastAPI: `httpx.AsyncClient` + `ASGITransport`. MCP: tool schema validation. Systemd: smoke test (is-active + health 200). Cron: `freezegun` + output structure validation.
+
+## Server Infrastructure Policy
+
+This machine runs 24/7. Every long-running process is managed by a system-level systemd service, enabled on boot. There are no user-level systemd services.
+
+**Rules:**
+- Every service with a listening port gets a Cloudflare tunnel route
+- Internal/sensitive services (CRM, bridge, orchestrator, vision, ops dashboard) are protected with Cloudflare Access (email OTP for philip@ironsail.ai and robothor@ironsail.ai)
+- Public services (status, voice, gchat, privacy) have no auth gate
+- SearXNG (:8888) is the exception — internal-only search engine, no tunnel route
+- All services use `Restart=always` and `RestartSec=5`
+- All services use `KillMode=control-group` (not `process`) to prevent orphaned children
+
+## Testing Policy
+
+**Markers:**
+| Marker | Meaning | Speed |
+|--------|---------|-------|
+| *(none)* | Unit test — mocked deps, no I/O | <1s |
+| `@pytest.mark.integration` | Real DB/Redis | <10s |
+| `@pytest.mark.llm` | Needs Ollama running | varies |
+| `@pytest.mark.slow` | >10s wall time | >10s |
+| `@pytest.mark.e2e` | Full system end-to-end | >30s |
+| `@pytest.mark.smoke` | Health check only | <3s |
+
+**Run commands:**
+| Context | Command |
+|---------|---------|
+| Pre-commit (fast) | `pytest -m "not slow and not llm and not e2e"` |
+| Pre-push | `bash run_tests.sh` |
+| Full suite | `bash run_tests.sh --all` |
+| Single module | `pytest crm/bridge/tests/ -v` |
+
+**Gold standard:** `brain/memory_system/conftest.py` — test_prefix isolation, autouse cleanup, layered runner.
+
+Deep reference: `docs/TESTING.md`

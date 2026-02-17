@@ -2,11 +2,12 @@
 
 End-to-end flow from external APIs to Philip.
 
+Canonical reference: `brain/ARCHITECTURE.md`
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                      EXTERNAL SOURCES                         │
-│                                                              │
-│  Google Calendar  │  Gmail  │  Jira  │  Garmin  │  Camera    │
+│  Google Calendar │ Gmail │ Jira │ Garmin │ Camera │ Drive     │
 └────────┬─────────────┬────────┬─────────┬──────────┬─────────┘
          │             │        │         │          │
          ▼             ▼        ▼         ▼          ▼
@@ -16,57 +17,73 @@ End-to-end flow from external APIs to Philip.
 │                                                              │
 │  calendar_sync.py  email_sync.py  jira_sync.py               │
 │       */5 min          */5 min     */30 min M-F               │
+│  meet_transcript_sync.py          garmin_sync.py              │
+│       */10 min                       */15 min                 │
 │          │                │            │                      │
 │          ▼                ▼            ▼                      │
 │  calendar-log.json  email-log.json  jira-log.json            │
+│  meet-transcripts.json  garmin-health.md                      │
 │  (null notifier fields — needs processing)                    │
 │                                                              │
-│  garmin_sync.py (*/15 min) → garmin-health.md                │
 │  vision_service.py (always-on) → POST /ingest (camera)       │
-│  intelligence_pipeline.py (3:30 AM) → fact extraction         │
-│  maintenance.sh (3:00 AM) → TTL expiry, archival             │
+│  system_health_check.py (hourly) → infrastructure health     │
 └──────────────────────────────┬────────────────────────────────┘
                                │
-                    logs with null fields
+                ┌──────────────┼──────────────┐
+                ▼              ▼              ▼
+┌──────────────────────────────────────────────────────────────┐
+│         LAYER 1.5: INTELLIGENCE PIPELINE (Python)             │
+│                                                              │
+│  Tier 1: continuous_ingest.py (*/10 min)                      │
+│    → Deduped ingestion into RAG memory                       │
+│                                                              │
+│  Tier 2: periodic_analysis.py (4x daily: 7,11,15,19)         │
+│    → Meeting prep, memory blocks, entity graph                │
+│    → Phase 4: Contact reconciliation + CRM discovery          │
+│                                                              │
+│  Tier 3: intelligence_pipeline.py (daily 3:30 AM)             │
+│    → Relationships, engagement, patterns, quality             │
+│    → Phase 2.5: Contact enrichment (fill CRM fields)          │
+│                                                              │
+│  triage_prep.py (:14,:29,:44,:59) — 1 min before worker       │
+│    → Extract pending items + enrich with DB contact context   │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+                    enriched triage-inbox.json
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│         LAYER 2a: TRIAGE WORKER (Opus 4.6, */15 min)          │
+│         LAYER 2: TRIAGE WORKER (Kimi K2.5, */15 min)          │
 │         Isolated session via OpenClaw cron                     │
 │                                                              │
-│  1. Read email-log, calendar-log, jira-log                    │
-│  2. Find entries where categorizedAt = null                   │
+│  1. Read triage-inbox.json (NOT full log files)               │
+│  2. Find entries needing processing                           │
 │  3. Categorize: urgency, category, actionRequired             │
 │  4. Handle routine: mark read, draft reply, dismiss           │
 │  5. Escalate complex → worker-handoff.json                    │
-│  6. Update: categorizedAt, pendingReviewAt timestamps         │
-│                                                              │
-│  Output: "Processed 3 emails, escalated 1" or HEARTBEAT_OK   │
+│  6. Write triage-status.md (run summary)                      │
 └──────────────────────────────┬────────────────────────────────┘
                                │
-                    escalations + log updates
+┌──────────────────────────────────────────────────────────────┐
+│    LAYER 2.5: triage_cleanup.py (Python, 5 min after worker)  │
+│    Mark processed items in logs, update heartbeat timestamp   │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+┌──────────────────────────────────────────────────────────────┐
+│    LAYER 3: supervisor_relay.py (Python, */10 min 6-23h)      │
+│    • Meeting alerts within 20 min → directly to Telegram      │
+│    • Stale worker / CRM health → handoff.json (not Telegram) │
+│    • Cooldowns: stale 60 min, CRM 30 min                      │
+└──────────────────────────────┬────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│      LAYER 2b: SUPERVISOR HEARTBEAT (Opus 4.6, */17 min)      │
-│      Isolated session via OpenClaw cron (7 AM - 10 PM)        │
+│  LAYER 3.5: SUPERVISOR (Kimi K2.5, hourly 7-22h, TELEGRAM)   │
 │                                                              │
-│  Phase 1 — Urgent:                                            │
-│    • Read worker-handoff.json for unsurfaced escalations      │
-│    • Surface to Philip via Telegram (set surfacedAt)          │
-│    • Check healthCheck for API failures                       │
-│    • Check calendar for meetings within 20 min                │
-│                                                              │
-│  Phase 2 — Log Audit:                                         │
-│    • Every email entry has reviewedAt?                         │
-│    • Pending actions have actionCompletedAt?                  │
-│    • Escalations have resolvedAt?                             │
-│    • Fix stale entries, handle pending actions                │
-│                                                              │
-│  Phase 3 — Output:                                            │
-│    • Audit summary with counts per source                     │
-│    • HEARTBEAT_OK if everything clean                         │
-│    • Alert text → delivered to Philip via Telegram             │
+│  • Philip's sole gatekeeper — investigates before surfacing  │
+│  • Reads triage-status.md + worker-handoff.json              │
+│  • Surfaces concise alerts to Philip via Telegram             │
+│  • HEARTBEAT_OK only when truly nothing to report             │
 └──────────────────────────────┬────────────────────────────────┘
                                │
                                ▼
@@ -118,4 +135,20 @@ Content (any channel)
     └─ rag.py → long_term_memory (embeddings)
 ```
 
-Channels: discord, email, cli, api, telegram, camera
+Channels: discord, email, cli, api, telegram, camera, google_meet
+
+## CRM Enrichment Flow
+
+```
+contact_identifiers (bridge table)
+    │
+    ├─ memory_entity_id ← periodic_analysis.py Phase 4 (fuzzy match, 4x daily)
+    ├─ twenty_person_id ← contact discovery (create CRM records)
+    └─ CRM fields ← intelligence_pipeline.py Phase 2.5 (daily)
+         ├─ email domain → company (deterministic)
+         └─ memory facts + transcripts → job title, city (LLM)
+```
+
+---
+
+**Updated:** 2026-02-15
