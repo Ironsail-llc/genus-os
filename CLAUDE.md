@@ -98,12 +98,15 @@ Deep reference: `brain/VISION.md`
 | bridge.robothor.ai | Bridge service | 9100 | Cloudflare Access (email OTP) |
 | orchestrator.robothor.ai | RAG Orchestrator | 9099 | Cloudflare Access (email OTP) |
 | vision.robothor.ai | Vision API | 8600 | Cloudflare Access (email OTP) |
+| monitor.robothor.ai | Uptime Kuma | 3010 | Cloudflare Access (email OTP) |
+| vault.robothor.ai | Vaultwarden | 8222 | Cloudflare Access (email OTP) |
+| app.robothor.ai | Business layer | 3004 | Cloudflare Access (email OTP) |
 | Tailscale IP | 100.91.221.100 (ironsail tailnet) | — | — |
 
 All camera ports bound to `127.0.0.1`. Webcam only accessible externally via `cam.robothor.ai` (Cloudflare Access: `philip@ironsail.ai`, `robothor@ironsail.ai`).
 
 **Database:** PostgreSQL 16 + pgvector 0.6.0 (max_connections=200, Docker-accessible via 172.17.0.1)
-Databases: `robothor_memory` (facts, entities, contacts, memory blocks), `twenty_crm`, `chatwoot`
+Databases: `robothor_memory` (facts, entities, contacts, memory blocks), `twenty_crm`, `chatwoot`, `vaultwarden`
 Key tables: `memory_facts`, `memory_entities`, `memory_relations`, `contact_identifiers`, `agent_memory_blocks`
 
 **Redis:** Port 6379, maxmemory 2GB. Shared by Twenty CRM, Chatwoot, RAG orchestrator.
@@ -136,6 +139,10 @@ Deep reference: `INFRASTRUCTURE.md`
 | Cloudflare tunnel | cloudflared.service | system (`sudo`) | — | robothor.ai routes |
 | CRM stack | robothor-crm.service | system (`sudo`) | 3030, 3100 | Docker: Twenty CRM + Chatwoot (4 containers) |
 | Bridge service | robothor-bridge.service | system (`sudo`) | 9100 | Contact resolution, webhooks, CRM integration |
+| Vaultwarden | (Docker in robothor-crm) | Docker | 8222 | Password vault (vault.robothor.ai) |
+| Uptime Kuma | (Docker in robothor-crm) | Docker | 3010 | Service monitoring dashboard |
+| Business layer | robothor-app.service | system (`sudo`) | 3004 | Next.js + CopilotKit (app.robothor.ai) |
+| Samba | smbd.service, nmbd.service | system | 445 | Network file shares (local + Tailscale only) |
 | Tailscale | tailscaled.service | system (`sudo`) | — | VPN mesh (ironsail tailnet) |
 | Moltbot gateway | moltbot-gateway.service | system (`sudo`) | 18789 | OpenClaw messaging |
 
@@ -166,6 +173,16 @@ Three-tier architecture with structured facts and entity graph:
 
 **MCP tools (twenty-crm server):** `list_people`, `get_person`, `create_person`, `update_person`, `search_records`, `create_note`, etc.
 **MCP tools (chatwoot server):** `chatwoot_list_conversations`, `chatwoot_get_conversation`, `chatwoot_list_messages`, `chatwoot_create_message`
+**MCP tools (notebooklm server):** — Google NotebookLM research notebooks (on-demand via `uvx`)
+- `notebook_create`, `notebook_list`, `notebook_get`, `notebook_delete`, `notebook_rename` — notebook management
+- `source_add`, `source_list`, `source_get`, `source_delete`, `source_content` — add URLs, Drive docs, text, or files as sources
+- `notebook_query` — ask questions against notebook sources (AI-powered Q&A)
+- `research_start` — discover and add sources from the web on a topic
+- `studio_create`, `studio_list`, `studio_get`, `studio_delete` — generate artifacts (audio overviews, reports, quizzes, flashcards, mind maps, slides, infographics, videos, data tables)
+- `audio_create`, `report_create`, `quiz_create`, `video_create` — shortcut artifact creation
+- `share_notebook`, `export_artifact` — sharing and Google Docs/Sheets export
+- `download` — download generated audio/video files
+- **Auth:** Google cookies via `nlm login` (browser-based). Cookies stored at `~/.notebooklm-mcp-cli/profiles/default/auth.json`. Expire every 2-4 weeks — re-run `nlm login` to renew.
 
 **OpenClaw plugin (crm-tools):** — OpenClaw agent sessions (cron jobs, Telegram, Google Chat)
 Same tool names as MCP (`chatwoot_list_conversations`, `log_interaction`, `create_person`, `create_note`, etc.) but routed through Bridge REST proxy on :9100. Agent instructions work identically in both runtimes.
@@ -205,9 +222,45 @@ Deep reference: `crm/` directory, `INFRASTRUCTURE.md`
 | Log | `scripts/backup.log` |
 | Retention | 30 days (DB dumps) |
 
-**What's backed up:** All project dirs (`clawd`, `moltbot`, `garmin-sync`, `clawd-main`, `robothor`), config dirs (`.openclaw`, `.cloudflared`), systemd service files, credentials (`.bashrc`, `crm/.env`), 3x PostgreSQL dumps (`robothor_memory`, `twenty_crm`, `chatwoot`), Docker volumes (`crm_twenty-server-data`, `crm_twenty-docker-data`, `crm_chatwoot-storage`), crontab + ollama model list, verification manifest.
+**What's backed up:** All project dirs (`clawd`, `moltbot`, `garmin-sync`, `clawd-main`, `robothor`), config dirs (`.openclaw`, `.cloudflared`), systemd service files, credentials (`.bashrc`, `crm/.env`), 4x PostgreSQL dumps (`robothor_memory`, `twenty_crm`, `chatwoot`, `vaultwarden`), Docker volumes (`crm_twenty-server-data`, `crm_twenty-docker-data`, `crm_chatwoot-storage`, `crm_vaultwarden-data`), crontab + ollama model list, verification manifest.
 
 Deep reference: `scripts/backup-ssd.sh`
+
+## Secrets Management
+
+**SOPS + age** — all credentials encrypted at rest, decrypted at runtime.
+
+| Component | Location |
+|-----------|----------|
+| Age private key | `/etc/robothor/age.key` (root:philip 640) |
+| Encrypted secrets | `/etc/robothor/secrets.enc.json` (root:philip 640) |
+| Decrypted at runtime | `/run/robothor/secrets.env` (tmpfs, created by decrypt-secrets.sh) |
+| SOPS config | `/etc/robothor/.sops.yaml` |
+| Cron wrapper | `scripts/cron-wrapper.sh` (sources secrets.env before exec) |
+| Systemd wrapper | `scripts/decrypt-secrets.sh` (ExecStartPre in services) |
+
+**How services get credentials:**
+- Systemd services: `ExecStartPre=decrypt-secrets.sh` + `EnvironmentFile=/run/robothor/secrets.env`
+- Cron jobs: wrapped with `cron-wrapper.sh` which sources `/run/robothor/secrets.env`
+- Python scripts: `os.environ["KEY_NAME"]` (no hardcoded values)
+- Docker Compose: reads `crm/.env` directly (Docker env_file)
+
+**Adding/rotating a secret:**
+1. Decrypt: `sudo SOPS_AGE_KEY_FILE=/etc/robothor/age.key sops /etc/robothor/secrets.enc.json`
+2. Edit the value in the JSON editor
+3. Save — SOPS re-encrypts automatically
+4. Restart affected services: `sudo systemctl restart <service>`
+
+**Pre-commit hook:** `gitleaks` scans staged changes for leaked secrets before every commit.
+
+## Monitoring
+
+**Uptime Kuma** — HTTP/TCP health checks for all services, Telegram alerts on downtime.
+
+- **URL:** `https://monitor.robothor.ai` (Cloudflare Access protected)
+- **Container:** `uptime-kuma` in `crm/docker-compose.yml`
+- **Port:** 3010 (mapped from container's 3001)
+- **Data:** Docker volume `crm_uptime-kuma-data`
 
 ## Key Memory Files
 
@@ -271,15 +324,17 @@ Deep reference: `brain/CRON_DESIGN.md`, `docs/CRON_MAP.md`
 
 ## Cloudflare Credentials
 
+**Account:** `cloudflare@valhallavitality.com` (dashboard login in SOPS as `CLOUDFLARE_EMAIL`)
+
 Three API tokens for managing the Cloudflare tunnel, DNS, and Access:
 
-| Token Name | Permission | Use For |
-|------------|-----------|---------|
-| `robothor-tunnel-edit` | Tunnel Edit | Adding/modifying tunnel ingress routes |
-| `robothor-dns-edit` | Zone DNS Edit/Read | Creating DNS CNAME records for new subdomains |
-| `robothor-access-edit` | Access Apps/Policies Edit | Managing Zero Trust access policies |
+| Token Name | SOPS Key | Permission | Use For |
+|------------|----------|-----------|---------|
+| `robothor-tunnel-edit` | `CLOUDFLARE_API_TOKEN` | Tunnel Edit | Adding/modifying tunnel ingress routes |
+| `robothor-dns-edit` | `CLOUDFLARE_DNS_TOKEN` | Zone DNS Edit/Read | Creating DNS CNAME records for new subdomains |
+| `robothor-access-edit` | `CLOUDFLARE_ACCESS_TOKEN` | Access Apps/Policies Edit | Managing Zero Trust access policies |
 
-Token values stored in `brain/TOOLS.md` (Cloudflare section) and `~/.bashrc` (env vars).
+All token values stored in SOPS (`/etc/robothor/secrets.enc.json`). Available at runtime via `/run/robothor/secrets.env`.
 Zone ID: `ebd618c6c9edda6ec86f5168daeb8240`
 
 ## Task-Specific Reading Guide
@@ -307,6 +362,7 @@ Zone ID: `ebd618c6c9edda6ec86f5168daeb8240`
 | Hardware & infrastructure | `INFRASTRUCTURE.md` |
 | Writing or running tests | `docs/TESTING.md` + `brain/memory_system/conftest.py` |
 | Backup / SSD / restore | `scripts/backup-ssd.sh` + `INFRASTRUCTURE.md` (External Storage) |
+| Research notebooks (NotebookLM) | `nlm --help` (CLI) — auth: `nlm login`, check: `nlm login --check` |
 
 ## Rules
 
@@ -325,6 +381,7 @@ Zone ID: `ebd618c6c9edda6ec86f5168daeb8240`
 13. **Test AI by properties, not values** — Validate structure (fields present, types correct, values in valid ranges), not exact content. Golden datasets for regression (80%+ match). Mock LLMs in unit tests.
 14. **Tests live alongside code** — `<module>/tests/test_<feature>.py` with `conftest.py`. Gold standard: `brain/memory_system/conftest.py`.
 15. **Service test requirements** — FastAPI: `httpx.AsyncClient` + `ASGITransport`. MCP: tool schema validation. Systemd: smoke test (is-active + health 200). Cron: `freezegun` + output structure validation.
+16. **Never commit credentials** — All secrets live in SOPS-encrypted `/etc/robothor/secrets.enc.json`. Use `os.getenv()` in Python, `$VAR` in shell. The gitleaks pre-commit hook blocks commits containing secrets.
 
 ## Server Infrastructure Policy
 
