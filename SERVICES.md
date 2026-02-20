@@ -17,7 +17,7 @@ Logs: `journalctl -u <unit> -f`
 | robothor-dashboard.service | 3003 | brain/dashboard | Ops dashboard (ops.robothor.ai) |
 | robothor-privacy.service | 3002 | brain/privacy-policy | Privacy policy (privacy.robothor.ai) |
 | robothor-transcript.service | — | brain/memory_system | Voice transcript watcher |
-| robothor-crm.service | 3030, 3100, 3010, 8222 | crm/ | Docker Compose: Twenty CRM + Chatwoot + Uptime Kuma + Vaultwarden (6 containers) |
+| robothor-crm.service | 3010, 8222, 8880 | crm/ | Docker Compose: Vaultwarden, Uptime Kuma, Kokoro TTS (3 containers) |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
 | bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
 | robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.robothor.ai) |
@@ -59,12 +59,6 @@ curl -s http://localhost:3002 > /dev/null && echo "OK"
 
 # Moltbot gateway
 curl -s http://localhost:18789/health 2>/dev/null || echo "No health endpoint — check systemctl"
-
-# Twenty CRM
-curl -s http://localhost:3030/api/objects/people?limit=1 -H "Authorization: Bearer $TWENTY_API_KEY" | jq .
-
-# Chatwoot
-curl -s http://localhost:3100/auth/sign_in -o /dev/null -w "%{http_code}" && echo " OK"
 
 # Bridge service
 curl -s http://localhost:9100/health | jq .
@@ -110,8 +104,6 @@ psql -d robothor_memory -c "SELECT count(*) FROM long_term_memory;" 2>/dev/null
 | voice.robothor.ai | localhost:8765 | Public | Twilio voice |
 | sms.robothor.ai | localhost:8766 | Public | Twilio SMS webhook |
 | gateway.robothor.ai | localhost:18789 | Cloudflare Access (email OTP) | OpenClaw gateway |
-| crm.robothor.ai | localhost:3030 | Cloudflare Access (email OTP) | Twenty CRM web UI |
-| inbox.robothor.ai | localhost:3100 | Cloudflare Access (email OTP) | Chatwoot conversation inbox |
 | bridge.robothor.ai | localhost:9100 | Cloudflare Access (email OTP) | Bridge service API |
 | orchestrator.robothor.ai | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
 | vision.robothor.ai | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
@@ -147,8 +139,9 @@ Cron jobs that need credentials are wrapped with `scripts/cron-wrapper.sh` (sour
 | 30 3 * * * | Intelligence pipeline (Tier 3) | memory_system/logs/intelligence.log |
 | 0 4 * * * | Snapshot cleanup (>30 days) | — |
 | 0 * * * * | System health check | memory_system/logs/health-check.log |
-| 14,29,44,59 * * * * | Triage prep (1 min before worker) | memory_system/logs/triage-prep.log |
-| 5,20,35,50 * * * * | Triage cleanup (5 min after worker) | memory_system/logs/triage-cleanup.log |
+| 55 * * * * | Triage prep (hourly, prepares for next hour) | memory_system/logs/triage-prep.log |
+| 10 * * * * | Triage cleanup (hourly, 10 min after Classifier) | memory_system/logs/triage-cleanup.log |
+| 25 * * * * | Email response prep (hourly) | memory_system/logs/email-response-prep.log |
 | */10 6-23 * * * | Supervisor relay | memory_system/logs/supervisor-relay.log |
 | 0 4 * * 0 | Data archival (Sunday) | memory_system/logs/data-archival.log |
 | 30 4 * * * | SSD backup (daily, LUKS-encrypted) | ~/robothor/scripts/backup.log |
@@ -160,15 +153,21 @@ View: `cat ~/.openclaw/cron/jobs.json` | Model: **Kimi K2.5** (Opus 4.6 fallback
 
 | Schedule | Job | Delivery |
 |----------|-----|----------|
-| */15 * * * * | Triage Worker | announce (silent) |
-| 0 7-22 * * * | Supervisor Heartbeat | announce → telegram |
-| */10 7-23 * * * | Vision Monitor | announce → telegram |
+| 0 6-22 * * * | Email Classifier | none (silent) |
+| */15 6-22 * * * | Calendar Monitor | none (silent) |
+| 30 6-22 * * * | Email Analyst | none (silent) |
+| 45 6-22 * * * | Email Responder | none (silent) |
+| */17 6-22 * * * | Supervisor Heartbeat | announce → telegram |
+| */10 * * * * | Vision Monitor | none (silent) |
+| */30 6-22 * * * | Conversation Inbox Monitor | none (silent) |
+| 0 6-22/2 * * * | Conversation Resolver | none (silent) |
+| 0 10,18 * * * | CRM Steward | none (silent) |
 | 30 6 * * * | Morning Briefing | announce → telegram |
 | 0 21 * * * | Evening Wind-Down | announce → telegram |
 
 ## Startup Order After Reboot
 
-All 14 services are system-level, enabled, and start automatically. If anything fails:
+All services are system-level, enabled, and start automatically. If anything fails:
 
 ```bash
 # 1. Verify all services
@@ -182,8 +181,6 @@ done
 # 2. If orchestrator didn't start (depends on ollama + postgres + docker)
 sudo systemctl restart robothor-orchestrator
 
-# 3. If CRM containers are down
+# 3. If Docker containers are down (Vaultwarden, Uptime Kuma, Kokoro TTS)
 sudo systemctl restart robothor-crm
-# Wait for containers to be healthy, then:
-sudo systemctl restart robothor-bridge
 ```

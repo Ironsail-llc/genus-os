@@ -37,7 +37,7 @@ Full system running (all services, Docker containers, crons). Slowest, run least
 **Examples:**
 - Email arrives → email_sync.py → triage worker → Telegram notification
 - Voice call → transcription → memory ingestion → fact extraction
-- Chatwoot message → Bridge webhook → contact resolution → memory storage
+- CRM message → Bridge webhook → contact resolution → memory storage
 
 ### Smoke Tests (`@pytest.mark.smoke`)
 
@@ -201,17 +201,12 @@ async def test_client():
 from unittest.mock import AsyncMock, patch
 
 @pytest.fixture
-def mock_twenty():
-    """Mock Twenty CRM HTTP responses."""
-    with patch("twenty_client.gql") as m:
-        yield m
-
-@pytest.fixture
-def mock_chatwoot():
-    """Mock Chatwoot HTTP responses."""
-    with patch("chatwoot_client.search_contacts") as search, \
-         patch("chatwoot_client.create_contact") as create:
-        yield {"search": search, "create": create}
+def mock_crm_dal():
+    """Mock CRM data access layer (crm_dal) responses."""
+    with patch("crm_dal.list_people") as list_p, \
+         patch("crm_dal.create_person") as create_p, \
+         patch("crm_dal.list_conversations") as list_c:
+        yield {"list_people": list_p, "create_person": create_p, "list_conversations": list_c}
 ```
 
 ---
@@ -274,7 +269,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 | Orchestrator (unit) | `brain/memory_system/tests/test_orchestrator_unit.py` | ~8 | classify_query categories, format_merged_context truncation + ordering, RAG_PROFILES schema | TODO |
 
 **Fixtures needed:** `test_client` (ASGI), `mock_http_client`, `test_prefix`, `db_conn`, `cleanup_test_data`
-**Mocks:** `bridge_service.http_client`, `contact_resolver.get_db`, `twenty_client.*`, `chatwoot_client.*`
+**Mocks:** `bridge_service.http_client`, `contact_resolver.get_db`, `crm_dal.*`
 
 ### Phase 2 (Week 3-4): Communication Layer
 
@@ -282,21 +277,20 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 |-----------|-----------|-------|------------------|
 | Voice webhooks | `brain/voice-server/tests/test_voice_webhooks.py` | ~8 | Twilio signature validation, TwiML response format, ConversationRelay events |
 | Contact resolver (full) | `crm/bridge/tests/test_contact_resolver_integration.py` | ~6 | Real DB upserts, cross-system search with mocked APIs |
-| CRM data sync | `crm/tests/test_crm_sync.py` | ~5 | Twenty↔Chatwoot contact consistency, duplicate detection |
+| CRM data sync | `crm/tests/test_crm_sync.py` | ~5 | CRM contact consistency via crm_dal, duplicate detection |
 
 **Fixtures needed:** `db_conn` (real), `mock_twilio_signature`, sample webhook payloads
-**Mocks:** Twilio HTTP, Twenty GraphQL, Chatwoot REST
+**Mocks:** Twilio HTTP, crm_dal
 
 ### Phase 3 (Week 5-6): MCP + Plugin Tools
 
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
-| Twenty MCP tools | `crm/mcp-servers/twenty/tests/test_twenty_tools.py` | ~10 | Tool schema validation, argument mapping, GraphQL query construction |
-| Chatwoot MCP tools | `crm/mcp-servers/chatwoot/tests/test_chatwoot_tools.py` | ~6 | Tool schema, REST endpoint mapping, response normalization |
+| CRM MCP tools | `brain/memory_system/test_phase3_mcp_server.py` | ~10 | Tool schema validation, argument mapping, CRM CRUD via crm_dal |
 | OpenClaw CRM plugin | `runtime/extensions/crm-tools/tests/test_crm_plugin.py` | ~8 | Plugin registration, fetch→Bridge proxy calls, error handling |
 
 **Fixtures needed:** Mock MCP server context, mock Bridge HTTP
-**Mocks:** HTTP responses from Twenty/Chatwoot/Bridge
+**Mocks:** HTTP responses from Bridge, crm_dal
 
 ### Phase 4 (Week 7-8): AI Quality
 
@@ -326,7 +320,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 |-----------|-----------|-------|------------------|
 | Email→notification | `tests/e2e/test_email_to_notification.py` | ~3 | email_sync → triage → Telegram delivery (mock Telegram API) |
 | Voice→memory | `tests/e2e/test_voice_to_memory.py` | ~3 | Twilio webhook → transcription → memory ingestion → fact search |
-| Chatwoot flow | `tests/e2e/test_chatwoot_flow.py` | ~3 | Incoming message → Bridge → contact resolution → memory → response |
+| Conversation flow | `tests/e2e/test_conversation_flow.py` | ~3 | Incoming message → Bridge → contact resolution → memory → response |
 
 **Fixtures needed:** Full service mocks or real services, test data builders
 **Mocks:** External APIs (Telegram, Twilio), or use real services with test accounts

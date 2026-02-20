@@ -1,5 +1,5 @@
 """
-Robothor Bridge Service — Connects OpenClaw, Twenty CRM, Chatwoot, and Memory System.
+Robothor Bridge Service — Connects OpenClaw, CRM, and Memory System.
 FastAPI app on port 9100.
 """
 import json
@@ -12,9 +12,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 
 import config
-import contact_resolver
-import chatwoot_client
-import twenty_client
+import crm_dal
 
 http_client: httpx.AsyncClient | None = None
 
@@ -34,17 +32,12 @@ app = FastAPI(title="Robothor Bridge", version="1.0.0", lifespan=lifespan)
 async def health():
     """Check connectivity to all dependent services."""
     services = {}
-    try:
-        r = await http_client.get(f"{config.TWENTY_URL}/healthz")
-        services["twenty"] = "ok" if r.status_code == 200 else f"error:{r.status_code}"
-    except Exception as e:
-        services["twenty"] = f"error:{e}"
 
     try:
-        r = await http_client.get(f"{config.CHATWOOT_URL}/api")
-        services["chatwoot"] = "ok" if r.status_code == 200 else f"error:{r.status_code}"
+        h = crm_dal.check_health()
+        services["crm"] = "ok" if h["status"] == "ok" else f"error:{h.get('error', 'unknown')}"
     except Exception as e:
-        services["chatwoot"] = f"error:{e}"
+        services["crm"] = f"error:{e}"
 
     try:
         r = await http_client.get(f"{config.MEMORY_URL}/health")
@@ -74,7 +67,7 @@ async def resolve_contact(request: Request):
     if not channel or not identifier:
         return JSONResponse({"error": "channel and identifier required"}, status_code=400)
 
-    result = await contact_resolver.resolve(channel, identifier, name, http_client)
+    result = crm_dal.resolve_contact(channel, identifier, name)
     # Convert datetime fields to strings for JSON
     for k, v in result.items():
         if hasattr(v, "isoformat"):
@@ -85,51 +78,14 @@ async def resolve_contact(request: Request):
 @app.get("/timeline/{identifier}")
 async def timeline(identifier: str):
     """Get unified timeline for a contact across all systems."""
-    result = await contact_resolver.get_timeline(identifier, http_client)
+    result = crm_dal.get_timeline(identifier)
     return result
 
-
-@app.post("/webhooks/chatwoot")
-async def webhook_chatwoot(request: Request):
-    """Receive Chatwoot webhook events and ingest to memory system."""
-    body = await request.json()
-    event = body.get("event", "")
-
-    if event == "message_created":
-        content = body.get("content", {})
-        message_text = content.get("content", "") if isinstance(content, dict) else str(content)
-        sender = body.get("sender", {})
-        conversation = body.get("conversation", {})
-
-        # Ingest to memory system
-        try:
-            await http_client.post(f"{config.MEMORY_URL}/ingest", json={
-                "channel": "chatwoot",
-                "content": message_text,
-                "metadata": {
-                    "sender_name": sender.get("name", ""),
-                    "sender_email": sender.get("email", ""),
-                    "conversation_id": conversation.get("id"),
-                    "event": event,
-                },
-            })
-        except Exception:
-            pass  # Don't fail webhook on memory ingestion error
-
-    return {"status": "ok"}
-
-
-@app.post("/webhooks/twenty")
-async def webhook_twenty(request: Request):
-    """Receive Twenty CRM webhook events."""
-    body = await request.json()
-    # Log for now; expand as needed
-    return {"status": "ok", "event": body.get("event", "unknown")}
 
 
 @app.post("/webhooks/openclaw")
 async def webhook_openclaw(request: Request):
-    """Receive OpenClaw message events, push to Chatwoot and resolve contacts."""
+    """Receive OpenClaw message events, push to CRM and resolve contacts."""
     body = await request.json()
     channel = body.get("channel", "unknown")
     identifier = body.get("identifier", "")
@@ -137,27 +93,20 @@ async def webhook_openclaw(request: Request):
     content = body.get("content", "")
     direction = body.get("direction", "incoming")
 
-    # Resolve contact across systems
-    resolved = await contact_resolver.resolve(channel, identifier, name, http_client)
-
-    # Push to Chatwoot if we have a contact
-    chatwoot_contact_id = resolved.get("chatwoot_contact_id")
-    if chatwoot_contact_id and content:
-        # Find or create conversation
-        convos = await chatwoot_client.get_conversations(chatwoot_contact_id, http_client)
+    resolved = crm_dal.resolve_contact(channel, identifier, name)
+    person_id = resolved.get("person_id")
+    if person_id and content:
+        convos = crm_dal.get_conversations_for_contact(str(person_id))
         if convos:
             convo_id = convos[0].get("id")
         else:
-            convo = await chatwoot_client.create_conversation(chatwoot_contact_id, client=http_client)
+            convo = crm_dal.create_conversation(str(person_id))
             convo_id = convo.get("id") if convo else None
-
         if convo_id:
             msg_type = "incoming" if direction == "incoming" else "outgoing"
-            await chatwoot_client.send_message(convo_id, content, msg_type, client=http_client)
-
+            crm_dal.send_message(convo_id, content, msg_type)
     return {"status": "ok", "resolved": {
-        "twenty_person_id": resolved.get("twenty_person_id"),
-        "chatwoot_contact_id": resolved.get("chatwoot_contact_id"),
+        "person_id": person_id,
     }}
 
 
@@ -172,24 +121,19 @@ async def log_interaction(request: Request):
     content_summary = body.get("content_summary", "")
     channel_identifier = body.get("channel_identifier", contact_name)
 
-    # Resolve contact
-    resolved = await contact_resolver.resolve(channel, channel_identifier, contact_name, http_client)
-
-    # Create Chatwoot conversation record
-    chatwoot_contact_id = resolved.get("chatwoot_contact_id")
-    if chatwoot_contact_id and content_summary:
-        convos = await chatwoot_client.get_conversations(chatwoot_contact_id, http_client)
+    resolved = crm_dal.resolve_contact(channel, channel_identifier, contact_name)
+    person_id = resolved.get("person_id")
+    if person_id and content_summary:
+        convos = crm_dal.get_conversations_for_contact(str(person_id))
         if convos:
             convo_id = convos[0].get("id")
         else:
-            convo = await chatwoot_client.create_conversation(chatwoot_contact_id, client=http_client)
+            convo = crm_dal.create_conversation(str(person_id))
             convo_id = convo.get("id") if convo else None
-
         if convo_id:
             msg_type = "incoming" if direction == "incoming" else "outgoing"
-            await chatwoot_client.send_message(convo_id, content_summary, msg_type, client=http_client)
-
-    return {"status": "ok", "contact": contact_name, "resolved": bool(resolved.get("twenty_person_id"))}
+            crm_dal.send_message(convo_id, content_summary, msg_type)
+    return {"status": "ok", "contact": contact_name, "resolved": bool(person_id)}
 
 
 # ─── CRM Proxy Endpoints (for OpenClaw plugin) ───────────────────────────
@@ -200,15 +144,14 @@ async def api_list_conversations(
     status: str = Query("open"),
     page: int = Query(1),
 ):
-    """List Chatwoot conversations by status."""
-    result = await chatwoot_client.list_conversations(status, page, client=http_client)
-    return result
+    """List conversations by status."""
+    return crm_dal.list_conversations(status, page)
 
 
 @app.get("/api/conversations/{conversation_id}")
 async def api_get_conversation(conversation_id: int):
-    """Get a single Chatwoot conversation."""
-    result = await chatwoot_client.get_conversation(conversation_id, client=http_client)
+    """Get a single conversation."""
+    result = crm_dal.get_conversation(conversation_id)
     if not result:
         return JSONResponse({"error": "conversation not found"}, status_code=404)
     return result
@@ -216,14 +159,14 @@ async def api_get_conversation(conversation_id: int):
 
 @app.get("/api/conversations/{conversation_id}/messages")
 async def api_list_messages(conversation_id: int):
-    """List messages in a Chatwoot conversation."""
-    result = await chatwoot_client.list_messages(conversation_id, client=http_client)
+    """List messages in a conversation."""
+    result = crm_dal.list_messages(conversation_id)
     return {"payload": result}
 
 
 @app.post("/api/conversations/{conversation_id}/messages")
 async def api_create_message(conversation_id: int, request: Request):
-    """Create a message in a Chatwoot conversation."""
+    """Create a message in a conversation."""
     body = await request.json()
     content = body.get("content", "")
     message_type = body.get("message_type", "outgoing")
@@ -232,9 +175,7 @@ async def api_create_message(conversation_id: int, request: Request):
     if not content:
         return JSONResponse({"error": "content required"}, status_code=400)
 
-    result = await chatwoot_client.send_message(
-        conversation_id, content, message_type, client=http_client
-    )
+    result = crm_dal.send_message(conversation_id, content, message_type, private)
     return result or {"status": "ok"}
 
 
@@ -245,9 +186,7 @@ async def api_toggle_conversation_status(conversation_id: int, request: Request)
     status = body.get("status", "resolved")
     if status not in ("open", "resolved", "pending", "snoozed"):
         return JSONResponse({"error": "status must be open, resolved, pending, or snoozed"}, status_code=400)
-    result = await chatwoot_client.toggle_conversation_status(
-        conversation_id, status, client=http_client
-    )
+    result = crm_dal.toggle_conversation_status(conversation_id, status)
     if not result:
         return JSONResponse({"error": "failed to toggle status"}, status_code=500)
     return result
@@ -258,14 +197,14 @@ async def api_list_people(
     search: Optional[str] = Query(None),
     limit: int = Query(20),
 ):
-    """List or search people in Twenty CRM."""
-    result = await twenty_client.list_people(search, limit, client=http_client)
+    """List or search people."""
+    result = crm_dal.list_people(search, limit)
     return {"people": result}
 
 
 @app.post("/api/people")
 async def api_create_person(request: Request):
-    """Create a person in Twenty CRM."""
+    """Create a person."""
     body = await request.json()
     first_name = body.get("firstName", "")
     last_name = body.get("lastName", "")
@@ -276,17 +215,86 @@ async def api_create_person(request: Request):
     email = body.get("email")
     phone = body.get("phone")
 
-    person_id = await twenty_client.create_person(
-        first_name, last_name, email, phone, client=http_client
-    )
+    person_id = crm_dal.create_person(first_name, last_name, email, phone)
     if person_id:
         return {"id": person_id, "firstName": first_name, "lastName": last_name}
     return JSONResponse({"error": "failed to create person"}, status_code=500)
 
 
+@app.patch("/api/people/{person_id}")
+async def api_update_person(person_id: str, request: Request):
+    """Update a person's fields."""
+    body = await request.json()
+    result = crm_dal.update_person(
+        person_id,
+        job_title=body.get("jobTitle"),
+        company_id=body.get("companyId"),
+        city=body.get("city"),
+        linkedin_url=body.get("linkedinUrl"),
+        phone=body.get("phone"),
+        avatar_url=body.get("avatarUrl"),
+    )
+    if result:
+        return {"success": True, "id": person_id}
+    return JSONResponse({"error": "failed to update person"}, status_code=500)
+
+
+@app.patch("/api/companies/{company_id}")
+async def api_update_company(company_id: str, request: Request):
+    """Update a company's fields."""
+    body = await request.json()
+    result = crm_dal.update_company(
+        company_id,
+        domain_name=body.get("domainName"),
+        employees=body.get("employees"),
+        address=body.get("address"),
+        linkedin_url=body.get("linkedinUrl"),
+        ideal_customer_profile=body.get("idealCustomerProfile"),
+    )
+    if result:
+        return {"success": True, "id": company_id}
+    return JSONResponse({"error": "failed to update company"}, status_code=500)
+
+
+@app.post("/api/people/merge")
+async def api_merge_people(request: Request):
+    """Merge two people records. Keeper absorbs loser's data."""
+    body = await request.json()
+    keeper_id = body.get("primaryId") or body.get("keeper_id")
+    loser_id = body.get("secondaryId") or body.get("loser_id")
+
+    if not keeper_id or not loser_id:
+        return JSONResponse(
+            {"error": "primaryId and secondaryId required"}, status_code=400
+        )
+
+    result = crm_dal.merge_people(keeper_id, loser_id)
+    if result:
+        return {"success": True, "merged": result}
+    return JSONResponse({"error": "merge failed"}, status_code=500)
+
+
+@app.post("/api/companies/merge")
+async def api_merge_companies(request: Request):
+    """Merge two company records. Keeper absorbs loser's data."""
+    body = await request.json()
+    keeper_id = body.get("primaryId") or body.get("keeper_id")
+    loser_id = body.get("secondaryId") or body.get("loser_id")
+
+    if not keeper_id or not loser_id:
+        return JSONResponse(
+            {"error": "primaryId and secondaryId required"}, status_code=400
+        )
+
+    result = crm_dal.merge_companies(keeper_id, loser_id)
+    if result:
+        return {"success": True, "merged": result}
+    return JSONResponse({"error": "merge failed"}, status_code=500)
+
+
 @app.post("/api/notes")
 async def api_create_note(request: Request):
-    """Create a note in Twenty CRM."""
+    """Create a note."""
     body = await request.json()
     title = body.get("title", "")
     note_body = body.get("body", "")
@@ -294,7 +302,7 @@ async def api_create_note(request: Request):
     if not title:
         return JSONResponse({"error": "title required"}, status_code=400)
 
-    note_id = await twenty_client.create_note(title, note_body, client=http_client)
+    note_id = crm_dal.create_note(title, note_body)
     if note_id:
         return {"id": note_id, "title": title}
     return JSONResponse({"error": "failed to create note"}, status_code=500)

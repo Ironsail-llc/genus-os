@@ -11,21 +11,27 @@ Every 5 min    │ Calendar sync (crontab) — brain/scripts/calendar_sync.py
 Every 10 min   │ Continuous ingestion (crontab, Tier 1) — brain/memory_system/continuous_ingest.py
                │ Meet transcript sync (crontab) — brain/scripts/meet_transcript_sync.py
                │ Supervisor relay (crontab, 6-23h) — brain/scripts/supervisor_relay.py
-               │ Vision Monitor (OpenClaw, 7-23h) — check motion events, alert visitors
+               │ Vision Monitor (OpenClaw, 24/7, silent) — check motion events, write status file
 
 Every 15 min   │ Garmin health sync (crontab) — health/garmin_sync.py
-               │ Triage Worker (OpenClaw) — process triage-inbox, categorize, act, escalate
+               │ Calendar Monitor (OpenClaw, 6-22h, silent) — detect conflicts, cancellations, changes
 
-:14,:29,:44,:59│ Triage prep (crontab) — brain/scripts/triage_prep.py
-               │   Extract pending items + enrich with DB contact context
-
-:05,:20,:35,:50│ Triage cleanup (crontab) — brain/scripts/triage_cleanup.py
+Hourly email cron safety net (hooks are primary, crons catch stragglers):
+:00            │ Email Classifier (OpenClaw, 6-22h, silent) — classify emails, route or escalate
+:10            │ Triage cleanup (crontab) — brain/scripts/triage_cleanup.py
                │   Mark processed items in logs, update heartbeat
+:20            │ Email analysis cleanup (crontab) — clear stale response-analysis.json
+:25            │ Email response prep (crontab) — brain/scripts/email_response_prep.py
+               │   Enrich queued emails with thread + contact + topic RAG + calendar + CRM history + depth tag
+:30            │ Email Analyst (OpenClaw, 6-22h, silent) — analyze analytical items, write response-analysis.json
+:45            │ Email Responder (OpenClaw, 6-22h, silent) — compose and send replies (substantive for analytical)
+:55            │ Triage prep (crontab) — brain/scripts/triage_prep.py
+               │   Extract pending items + enrich with DB contact context (prepares for next hour)
 
 Every 30 min   │ Jira sync (crontab, 6-22h M-F) — brain/scripts/jira_sync.py
-  (M-F only)   │
+  (M-F only)   │ Conversation Inbox Monitor (OpenClaw, 6-22h, silent) — check urgent messages, write status file
 
-Hourly         │ Supervisor Heartbeat (OpenClaw, 7-22h, on Telegram) — investigate + surface
+Every 17 min   │ Supervisor Heartbeat (OpenClaw, 6-22h, → Telegram) — reads all status files, surfaces changes
                │ System health check (crontab) — brain/scripts/system_health_check.py
 
 03:00 AM       │ Memory maintenance (crontab) — brain/memory_system/maintenance.sh
@@ -42,6 +48,8 @@ Hourly         │ Supervisor Heartbeat (OpenClaw, 7-22h, on Telegram) — inves
 
 04:00 AM       │ Snapshot cleanup (crontab) — delete vision snapshots > 30 days
 
+Every 2h 6-22  │ Conversation Resolver (OpenClaw, silent) — auto-resolve stale conversations (>7d inactive)
+
 06:30 AM       │ Morning Briefing (OpenClaw) — calendar, email, weather, news → Telegram
 
 07:00, 11:00,  │ Periodic analysis (crontab, Tier 2) — brain/memory_system/periodic_analysis.py
@@ -49,6 +57,8 @@ Hourly         │ Supervisor Heartbeat (OpenClaw, 7-22h, on Telegram) — inves
                │   Phase 2: Memory block updates
                │   Phase 3: Entity graph enrichment
                │   Phase 4: Contact reconciliation + CRM discovery
+
+10:00, 18:00   │ CRM Steward (OpenClaw) — data hygiene + contact enrichment via sub-agents
 
 21:00          │ Evening Wind-Down (OpenClaw) — tomorrow preview, open items → Telegram
 
@@ -119,43 +129,63 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 # System Health Check - hourly
 0 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/system_health_check.py >> memory_system/logs/health-check.log 2>&1
 
-# Triage Prep - extract pending items 1 min before triage worker
-14,29,44,59 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/triage_prep.py >> memory_system/logs/triage-prep.log 2>&1
+# Triage Prep - extract pending items (hourly, prepares for next hour's Classifier)
+55 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/triage_prep.py >> memory_system/logs/triage-prep.log 2>&1
 
-# Triage Cleanup - mark processed items 5 min after worker
-5,20,35,50 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/triage_cleanup.py >> memory_system/logs/triage-cleanup.log 2>&1
+# Triage Cleanup - mark processed items (hourly, 10 min after Classifier)
+10 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/triage_cleanup.py >> memory_system/logs/triage-cleanup.log 2>&1
 
 # Supervisor Relay - meeting alerts + stale/CRM checks (6-23 EST = 7-00 AST)
 */10 6-23 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/supervisor_relay.py >> memory_system/logs/supervisor-relay.log 2>&1
+
+# Email Analysis Cleanup - clear stale analysis before enrichment (hourly :20)
+20 * * * * /home/philip/clawd/memory_system/venv/bin/python3 -c "import json,os; p=os.path.expanduser('~/clawd/memory/response-analysis.json'); open(p,'w').write(json.dumps({'analyses':{}}))" 2>/dev/null
 ```
 
 ## OpenClaw Cron Jobs (runtime/cron/jobs.json)
 
 | ID | Name | Schedule | Session | Delivery |
 |----|------|----------|---------|----------|
-| a1b2...0001 | Triage Worker | */15 * * * * | isolated | announce |
-| b7e3...0001 | Supervisor Heartbeat | 0 7-22 * * * | isolated | announce → telegram |
-| vision...0001 | Vision Monitor | */10 7-23 * * * | isolated | announce → telegram |
+| email-classifier-0001 | Email Classifier | 0 6-22 * * * | isolated | none (silent) |
+| calendar-monitor-0001 | Calendar Monitor | */15 6-22 * * * | isolated | none (silent) |
+| email-analyst-0001 | Email Analyst | 30 6-22 * * * | isolated | none (silent) |
+| email-responder-0001 | Email Responder | 45 6-22 * * * | isolated | none (silent) |
+| b7e3...0001 | Supervisor Heartbeat | */17 6-22 * * * | isolated | announce → telegram |
+| vision...0001 | Vision Monitor | */10 * * * * | isolated | none (silent) |
+| conversation-inbox-monitor-0001 | Conversation Inbox Monitor | */30 6-22 * * * | isolated | none (silent) |
+| conversation-resolver-0001 | Conversation Resolver | 0 6-22/2 * * * | isolated | none (silent) |
+| crm-steward-0001 | CRM Steward | 0 10,18 * * * | isolated | none (silent) |
 | 282b...b829 | Morning Briefing | 30 6 * * * | isolated | announce → telegram |
 | 88db...dca0 | Evening Wind-Down | 0 21 * * * | isolated | announce → telegram |
+
+### Retired Jobs (disabled)
+
+| ID | Name | Replaced By |
+|----|------|-------------|
+| a1b2...0001 | Triage Worker | Email Classifier + Calendar Monitor |
 
 ### One-Shot Jobs (deleteAfterRun)
 
 | Name | Scheduled | Status |
 |------|-----------|--------|
 | Reminder: Ask Dad to Feed the Eel | 2026-02-21 14:00 UTC | enabled |
+| Merrimack Loan Payment Reminder | 2026-03-02 14:00 UTC | disabled (moved to CRM tasks) |
+| Merrimack Follow-up Reminder | 2026-02-20 14:00 UTC | disabled (moved to CRM tasks) |
 
 ## Notes
 
 - All OpenClaw crons use **Kimi K2.5** (via OpenRouter). Opus 4.6 is first fallback.
-- Triage Worker runs silently — output suppressed unless escalation needed
-- Supervisor Heartbeat outputs to Telegram but suppresses HEARTBEAT_OK
-- Vision Monitor only alerts on noteworthy events (visitors, deliveries, anomalies)
-- Morning Briefing and Evening Wind-Down always deliver to Telegram
-- Triage Prep runs 1 min before worker, Triage Cleanup runs 5 min after
+- Sub-agent workers use `delivery.mode: "none"` (silent) — only the Supervisor delivers to Telegram
+- Supervisor runs every 17 min and reads all worker status files + worker-handoff.json
+- Workers output `HEARTBEAT_OK` when nothing to report (suppressed by framework)
+- Main session heartbeat has `activeHours: 06:00-22:00 AST` — no wakeups during quiet hours (10 PM - 6 AM)
+- Hook-based email pipeline is primary (~60s email-to-reply). Crons are hourly safety net.
+- Hourly email timeline: :00 Classifier → :10 cleanup → :20 analysis reset → :25 enrichment → :30 Analyst → :45 Responder → :55 triage prep
+- Duplicate prevention: filter_already_replied() in response prep, actionCompletedAt guard in cleanup, 5-min cooldown in sync
 - Supervisor Relay is Python (not LLM) — handles meeting alerts and stale/CRM checks
+- CRM Steward spawns research sub-agents for contact enrichment (max 3 per run)
 - System timezone is EST (UTC-5), Philip is AST (UTC-4) — 1 hour offset
 
 ---
 
-**Updated:** 2026-02-16
+**Updated:** 2026-02-20

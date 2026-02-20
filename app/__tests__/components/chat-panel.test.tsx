@@ -146,6 +146,45 @@ describe("ChatPanel", () => {
       };
     }
 
+    /**
+     * Simulate TCP chunk splitting: SSE data arrives in multiple read() calls.
+     * Splits between "event:" and "data:" lines to test the parser handles this.
+     */
+    function makeSplitChunkSSEResponse(events: Array<{ event: string; data: unknown }>) {
+      const encoder = new TextEncoder();
+      // Build each event as a separate chunk (simulates chunk split between event: and data: lines)
+      const chunks: Uint8Array[] = events.map((ev) =>
+        encoder.encode(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`)
+      );
+      // Further split the first chunk between the event: line and data: line
+      if (chunks.length > 0) {
+        const firstText = new TextDecoder().decode(chunks[0]);
+        const newlineIdx = firstText.indexOf("\n");
+        if (newlineIdx > 0) {
+          const part1 = encoder.encode(firstText.substring(0, newlineIdx + 1));
+          const part2 = encoder.encode(firstText.substring(newlineIdx + 1));
+          chunks.splice(0, 1, part1, part2);
+        }
+      }
+      let readIdx = 0;
+      return {
+        ok: true,
+        body: {
+          getReader() {
+            return {
+              read() {
+                if (readIdx < chunks.length) {
+                  const value = chunks[readIdx++];
+                  return Promise.resolve({ done: false, value });
+                }
+                return Promise.resolve({ done: true, value: undefined });
+              },
+            };
+          },
+        },
+      };
+    }
+
     it("calls notifyConversationUpdate with recent messages after assistant response", async () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
@@ -262,6 +301,80 @@ describe("ChatPanel", () => {
       await vi.waitFor(
         () => {
           expect(mockNotifyConversationUpdate).toHaveBeenCalled();
+        },
+        { timeout: 3000 }
+      );
+    });
+
+    it("handles SSE chunk splitting without duplicating messages", async () => {
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ messages: [] }),
+          });
+        }
+        // Use split chunks — event: and data: lines arrive in separate read() calls
+        return Promise.resolve(
+          makeSplitChunkSSEResponse([
+            { event: "delta", data: { text: "Hello Philip." } },
+            { event: "done", data: { text: "Hello Philip." } },
+          ])
+        );
+      });
+
+      const { getByTestId, getAllByTestId } = render(<ChatPanel />);
+      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+
+      const input = getByTestId("chat-input");
+      fireEvent.change(input, { target: { value: "Hi" } });
+      fireEvent.click(getByTestId("send-button"));
+
+      await vi.waitFor(
+        () => {
+          const assistantMsgs = getAllByTestId("message-assistant");
+          expect(assistantMsgs).toHaveLength(1);
+          // Should NOT contain duplicated text
+          expect(assistantMsgs[0].textContent).toBe("Hello Philip.");
+        },
+        { timeout: 3000 }
+      );
+    });
+
+    it("strips residual markers from final assistant message", async () => {
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ messages: [] }),
+          });
+        }
+        // Simulate marker text leaking through the interceptor
+        return Promise.resolve(
+          makeMockSSEResponse([
+            { event: "delta", data: { text: 'On it.[DASHBOARD:{"intent":"health"}]' } },
+            { event: "done", data: { text: 'On it.[DASHBOARD:{"intent":"health"}]' } },
+          ])
+        );
+      });
+
+      const { getByTestId, getAllByTestId } = render(<ChatPanel />);
+      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+
+      const input = getByTestId("chat-input");
+      fireEvent.change(input, { target: { value: "Check health" } });
+      fireEvent.click(getByTestId("send-button"));
+
+      await vi.waitFor(
+        () => {
+          const assistantMsgs = getAllByTestId("message-assistant");
+          expect(assistantMsgs).toHaveLength(1);
+          // Marker text should be stripped from final message
+          expect(assistantMsgs[0].textContent).toBe("On it.");
         },
         { timeout: 3000 }
       );

@@ -14,11 +14,16 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-/** Strip any residual markers from history messages (loaded from gateway) */
+/** Strip any residual markers from messages (history or live).
+ *  Handles both bracketed [RENDER:...] and un-bracketed RENDER:... forms
+ *  since the agent sometimes omits the opening bracket. */
 function stripResidualMarkers(text: string): string {
   return text
     .replace(/\[DASHBOARD:\{[^]*?\}\]/g, "")
     .replace(/\[RENDER:[a-z_]+:[^]*?\]/g, "")
+    // Un-bracketed variants (agent sometimes omits the opening [)
+    .replace(/\bRENDER:[a-z_]+:\{[^]*?\}\]?/g, "")
+    .replace(/\bDASHBOARD:\{[^]*?\}\]?/g, "")
     .trim();
 }
 
@@ -107,51 +112,58 @@ export function ChatPanel() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let sseBuffer = "";
+      let sseEventType = "";
+      let sseData = "";
       let fullResponse = "";
       const collectedAgentData: Record<string, unknown> = {};
 
+      const handleSSEEvent = (eventType: string, data: string) => {
+        try {
+          const parsed = JSON.parse(data);
+          if (eventType === "delta") {
+            fullResponse += parsed.text || "";
+            setStreamingText(fullResponse);
+          } else if (eventType === "dashboard") {
+            if (parsed.data && typeof parsed.data === "object") {
+              Object.assign(collectedAgentData, parsed.data as Record<string, unknown>);
+            }
+          } else if (eventType === "render") {
+            setRender({
+              component: parsed.component,
+              props: parsed.props,
+            });
+          } else if (eventType === "done") {
+            fullResponse = parsed.text || fullResponse;
+          }
+        } catch {
+          // Invalid JSON, skip
+        }
+      };
+
+      // Proper SSE parser: buffer event type + data until empty-line boundary.
+      // The old parser used lines[i-1] to detect event types, which broke when
+      // TCP chunks split between the "event:" and "data:" lines — the done event
+      // would be misidentified as a delta, doubling the message text.
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         sseBuffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events
         const lines = sseBuffer.split("\n");
         sseBuffer = lines.pop() || "";
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.startsWith("data: ")) {
-            const eventType =
-              i > 0 && lines[i - 1].startsWith("event: ")
-                ? lines[i - 1].slice(7)
-                : "delta";
-            const data = line.slice(6);
-            try {
-              const parsed = JSON.parse(data);
-
-              if (eventType === "delta") {
-                // Clean text — no markers, safe to display directly
-                fullResponse += parsed.text || "";
-                setStreamingText(fullResponse);
-              } else if (eventType === "dashboard") {
-                // Capture agent data from dashboard markers for passthrough
-                if (parsed.data && typeof parsed.data === "object") {
-                  Object.assign(collectedAgentData, parsed.data as Record<string, unknown>);
-                }
-              } else if (eventType === "render") {
-                // Render markers still trigger immediately
-                setRender({
-                  component: parsed.component,
-                  props: parsed.props,
-                });
-              } else if (eventType === "done") {
-                fullResponse = parsed.text || fullResponse;
-              }
-            } catch {
-              // Invalid JSON chunk, skip
+        for (const line of lines) {
+          if (line === "") {
+            // Empty line = SSE event boundary — dispatch accumulated event
+            if (sseData) {
+              handleSSEEvent(sseEventType || "delta", sseData);
             }
+            sseEventType = "";
+            sseData = "";
+          } else if (line.startsWith("event: ")) {
+            sseEventType = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            sseData += (sseData ? "\n" : "") + line.slice(6);
           }
         }
       }
@@ -164,26 +176,22 @@ export function ChatPanel() {
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: "assistant",
-        content: fullResponse.trim(),
+        content: stripResidualMarkers(fullResponse).trim(),
         timestamp: new Date(),
       };
-      setMessages((prev) => {
-        const updated = [...prev, assistantMsg];
+      setMessages((prev) => [...prev, assistantMsg]);
 
-        // Build recent messages for dashboard (last 3)
-        const recentMessages = updated
-          .filter((m) => m.content.trim())
-          .slice(-3)
-          .map((m) => ({ role: m.role, content: m.content }));
+      // Trigger dashboard update OUTSIDE the state updater (calling state setters
+      // inside another setState updater can cause React to drop the batched updates)
+      const recentMessages = [
+        { role: userMsg.role, content: userMsg.content },
+        { role: assistantMsg.role, content: assistantMsg.content },
+      ].filter((m) => m.content.trim());
 
-        // Auto-trigger conversation dashboard update (background, with triage)
-        notifyConversationUpdate(
-          recentMessages,
-          Object.keys(collectedAgentData).length > 0 ? collectedAgentData : undefined
-        );
-
-        return updated;
-      });
+      notifyConversationUpdate(
+        recentMessages,
+        Object.keys(collectedAgentData).length > 0 ? collectedAgentData : undefined
+      );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         const errorMsg: ChatMessage = {

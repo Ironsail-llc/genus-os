@@ -1,8 +1,7 @@
 """
 Shared test fixtures for the Bridge Service test suite.
 
-Provides async test client, database connections, test data isolation,
-and mock helpers for external HTTP calls.
+Provides async test client, mock helpers for crm_dal and external HTTP calls.
 """
 
 import sys
@@ -69,36 +68,3 @@ def mock_services_healthy(mock_http_client):
 
     mock_http_client.get = AsyncMock(side_effect=route_get)
     return mock_http_client
-
-
-@pytest.fixture
-def mock_db(test_prefix):
-    """Mock the database connection used by contact_resolver."""
-    mock_conn = MagicMock()
-    mock_cursor = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
-    mock_cursor.fetchone.return_value = None
-    mock_cursor.fetchall.return_value = []
-
-    with patch("contact_resolver.get_db", return_value=mock_conn):
-        yield {
-            "conn": mock_conn,
-            "cursor": mock_cursor,
-            "test_prefix": test_prefix,
-        }
-
-
-@pytest.fixture
-def sample_contact_row(test_prefix):
-    """A pre-built contact_identifiers row for testing."""
-    return {
-        "id": 1,
-        "channel": "email",
-        "identifier": f"{test_prefix}@test.com",
-        "display_name": f"{test_prefix} User",
-        "twenty_person_id": "twenty-abc-123",
-        "chatwoot_contact_id": 42,
-        "memory_entity_id": "entity-xyz-789",
-        "created_at": "2026-02-11T00:00:00",
-        "updated_at": "2026-02-11T00:00:00",
-    }

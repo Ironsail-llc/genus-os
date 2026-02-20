@@ -1,7 +1,7 @@
 # Robothor — System Architecture
 
 > Technical reference for the Robothor autonomous AI platform.
-> Last updated: 2026-02-16
+> Last updated: 2026-02-20
 
 ---
 
@@ -135,11 +135,11 @@ Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manag
 │  │  prep → worker (*/15) → cleanup → relay → supervisor (*/17)     │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
-│  │ Twenty CRM   │  │  Chatwoot    │  │  Web UIs     │                  │
-│  │ :3030        │  │  :3100       │  │ :3000-3003   │                  │
-│  │ (Docker)     │  │  (Docker)    │  │ (Node.js)    │                  │
-│  └──────────────┘  └──────────────┘  └──────────────┘                  │
+│  ┌──────────────────────────────────┐  ┌──────────────┐                  │
+│  │ CRM (native PostgreSQL tables)  │  │  Web UIs     │                  │
+│  │ crm_* in robothor_memory        │  │ :3000-3003   │                  │
+│  │                                  │  │ (Node.js)    │                  │
+│  └──────────────────────────────────┘  └──────────────┘                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -160,7 +160,7 @@ All services are **system-level systemd units** (`/etc/systemd/system/`), manage
 | Dashboard | robothor-status-dashboard.service | 3001 | Node.js | status.robothor.ai |
 | Ops dashboard | robothor-dashboard.service | 3003 | Node.js | ops.robothor.ai |
 | Privacy policy | robothor-privacy.service | 3002 | Node.js | privacy.robothor.ai |
-| CRM stack | robothor-crm.service | 3030, 3100 | Docker Compose | Twenty CRM + Chatwoot (4 containers) |
+| CRM stack | robothor-crm.service | 3010, 8222, 8880 | Docker Compose | Vaultwarden, Uptime Kuma, Kokoro TTS |
 | Bridge | robothor-bridge.service | 9100 | Python/FastAPI | Contact resolution, webhooks, REST proxy |
 | Gateway | moltbot-gateway.service | 18789 | Node.js | OpenClaw messaging (30+ channels) |
 | Transcript watcher | robothor-transcript.service | — | Python | Voice transcript processing |
@@ -192,8 +192,6 @@ Authorized emails: `philip@ironsail.ai`, `robothor@ironsail.ai`
 |-----------|------|---------|
 | cam.robothor.ai | 8890 | Live webcam HLS stream |
 | ops.robothor.ai | 3003 | Ops dashboard |
-| crm.robothor.ai | 3030 | Twenty CRM web UI |
-| inbox.robothor.ai | 3100 | Chatwoot web UI |
 | bridge.robothor.ai | 9100 | Bridge API |
 | gateway.robothor.ai | 18789 | OpenClaw gateway |
 | orchestrator.robothor.ai | 9099 | RAG orchestrator API |
@@ -216,13 +214,12 @@ Docker containers reach host services via `172.17.0.1` (Docker bridge). PostgreS
 
 ### PostgreSQL 16 + pgvector 0.6.0
 
-Three databases, all on the same instance:
+Two databases on the same instance:
 
 | Database | Owner | Purpose |
 |----------|-------|---------|
-| `robothor_memory` | philip | Facts, entities, contacts, memory blocks, ingestion state |
-| `twenty_crm` | philip | Twenty CRM data (managed by Twenty) |
-| `chatwoot` | philip | Chatwoot data (managed by Chatwoot) |
+| `robothor_memory` | philip | Facts, entities, contacts, memory blocks, ingestion state, CRM data |
+| `vaultwarden` | philip | Vaultwarden password vault |
 
 **Key tables in `robothor_memory`:**
 
@@ -231,16 +228,20 @@ Three databases, all on the same instance:
 | `memory_facts` | Categorized facts with confidence, lifecycle, embeddings (1024-dim) |
 | `memory_entities` | Knowledge graph nodes (people, projects, tech) |
 | `memory_relations` | Knowledge graph edges |
-| `contact_identifiers` | Cross-system identity: channel+identifier → Twenty ID + Chatwoot ID + entity ID |
+| `contact_identifiers` | Cross-system identity: channel+identifier → person_id + entity ID |
 | `agent_memory_blocks` | 5 named text blocks (persona, user\_profile, working\_context, operational\_findings, contacts\_summary) |
 | `ingestion_watermarks` | Per-source ingestion state for dedup |
 | `ingested_items` | Item-level dedup (content hashes) |
+| `crm_people` | CRM contacts |
+| `crm_companies` | CRM companies |
+| `crm_notes` | CRM notes |
+| `crm_tasks` | CRM tasks |
+| `crm_conversations` | CRM conversations |
+| `crm_messages` | CRM messages |
 
 ### Redis
 
 Port 6379, 2 GB max. Shared by:
-- Twenty CRM (session cache)
-- Chatwoot (job queue, cache)
 - RAG orchestrator (query cache)
 
 ---
@@ -264,7 +265,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 `continuous_ingest.py` reads JSON logs incrementally, deduplicates via content hashes, and ingests into pgvector.
 
 - ~10 minute freshness from API event to searchable fact
-- Sources: email, calendar, Jira, Meet transcripts, Chatwoot conversations, CRM updates
+- Sources: email, calendar, Jira, Meet transcripts, CRM conversations, CRM updates
 - Dedup: `ingested_items` table (content\_hash) + `ingestion_watermarks` (per-source cursor)
 
 ### Tier 2 — Periodic Analysis (4x daily: 07:00, 11:00, 15:00, 19:00)
@@ -274,7 +275,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 1. **Meeting prep** — Briefs for upcoming meetings (participants, recent context, open items)
 2. **Memory block updates** — Refreshes the 5 structured working memory blocks
 3. **Entity extraction** — Discovers new people, projects, technologies from recent facts
-4. **Contact reconciliation & discovery** — Fuzzy name matching to link memory entities to CRM contacts; creates Twenty CRM records for high-mention entities (>=5 mentions) and meeting attendees
+4. **Contact reconciliation & discovery** — Fuzzy name matching to link memory entities to CRM contacts; creates CRM records for high-mention entities (>=5 mentions) and meeting attendees
 
 ### Tier 3 — Deep Analysis (daily, 03:30)
 
@@ -422,54 +423,37 @@ Always-on computer vision with three operational modes:
 
 ## CRM Stack
 
-Three components provide unified contact and conversation management:
+CRM data lives in native PostgreSQL tables (`crm_*`) in the `robothor_memory` database. The Bridge service provides REST proxy access and contact resolution.
 
 ```
   ┌───────────────────────────────────────────────────────────────┐
-  │                     CRM Stack (Docker Compose)                │
+  │                  CRM (Native PostgreSQL)                      │
   │                                                               │
-  │  ┌──────────────────┐    ┌──────────────────┐    ┌────────┐  │
-  │  │   Twenty CRM     │    │    Chatwoot       │    │ Redis  │  │
-  │  │   :3030          │    │    :3100          │    │ :6379  │  │
-  │  │                  │    │                   │    │        │  │
-  │  │  Contacts        │    │  Conversations    │    │ Shared │  │
-  │  │  Companies       │    │  Messages         │    │ cache  │  │
-  │  │  Notes           │    │  Unified inbox    │    │        │  │
-  │  │  Tasks           │    │  (all channels)   │    │        │  │
-  │  └────────┬─────────┘    └─────────┬─────────┘    └────────┘  │
-  │           │                        │                          │
-  │           └───────────┬────────────┘                          │
-  │                       │                                       │
-  └───────────────────────┼───────────────────────────────────────┘
-                          │
-                          ▼
+  │  crm_people         crm_companies        crm_notes           │
+  │  crm_tasks          crm_conversations    crm_messages        │
+  │                                                               │
+  │  All in robothor_memory database                              │
+  └───────────────────────────────┬───────────────────────────────┘
+                                  │
+                                  ▼
   ┌───────────────────────────────────────────────────────────────┐
   │  Bridge Service :9100 (native Python, not Docker)             │
   │                                                               │
   │  - Contact resolution (cross-system identity via              │
   │    contact_identifiers table)                                 │
-  │  - REST proxy for OpenClaw plugin access                      │
+  │  - REST proxy for OpenClaw plugin access (via crm_dal)        │
   │  - Webhook endpoints                                          │
-  │  - Data sync between Twenty + Chatwoot + memory system        │
+  │  - Data sync between CRM tables + memory system               │
   └───────────────────────────────────────────────────────────────┘
 ```
 
 ### Cross-System Identity
 
 The `contact_identifiers` table maps every channel+identifier tuple to:
-- Twenty CRM person ID
-- Chatwoot contact ID
+- CRM person ID (`person_id`)
 - Memory system entity ID
 
 This allows a single person to be recognized whether they email, call, text, or appear on camera.
-
-### Software Versions
-
-| Component | Image/Version |
-|-----------|---------------|
-| Twenty CRM | `twentycrm/twenty:v0.43.0` |
-| Chatwoot | `chatwoot/chatwoot:v3.16.0-ce` |
-| Bridge | Custom Python/FastAPI |
 
 ---
 
@@ -580,15 +564,15 @@ Two runtime environments access the same underlying services through different m
         stdio MCP                            HTTP plugin
              │                                     │
   ┌──────────┴──────────┐              ┌───────────┴─────────┐
-  │   MCP Servers        │              │  crm-tools plugin   │
+  │   MCP Server         │              │  crm-tools plugin   │
   │                      │              │  (fetch → Bridge)   │
   │  robothor-memory     │              └───────────┬─────────┘
-  │   12 tools           │                          │
-  │  twenty-crm          │                          ▼
-  │   23 tools           │              Bridge REST API :9100
-  │  chatwoot            │              /api/conversations
-  │   4 tools            │              /api/people
-  └──────────────────────┘              /api/notes
+  │   28 tools           │                          │
+  │   (memory + CRM +    │                          ▼
+  │    vision)            │              Bridge REST API :9100
+  └──────────────────────┘              /api/conversations
+                                        /api/people
+                                        /api/notes
                                         /api/conversations/{id}/messages
 
   Tool names are IDENTICAL in both runtimes.
@@ -599,9 +583,7 @@ Two runtime environments access the same underlying services through different m
 
 | Server | Runtime | Tools |
 |--------|---------|-------|
-| robothor-memory | Python (stdio) | search\_memory, store\_memory, get\_stats, get\_entity, memory\_block\_read/write/list, log\_interaction, look, who\_is\_here, enroll\_face, set\_vision\_mode |
-| twenty-crm | Node.js (stdio) | CRUD for people, companies, tasks, notes + search\_records + metadata |
-| chatwoot | Node.js (stdio) | list\_conversations, get\_conversation, list\_messages, create\_message |
+| robothor-memory | Python (stdio) | search\_memory, store\_memory, get\_stats, get\_entity, memory\_block\_read/write/list, log\_interaction, look, who\_is\_here, enroll\_face, set\_vision\_mode, CRUD for people/companies/tasks/notes, search\_records, metadata, conversations, messages (28 tools total) |
 
 ---
 
@@ -638,7 +620,7 @@ Two runtime environments access the same underlying services through different m
 | `*/10 7-23 * * *` | Vision Monitor | Check motion events, alert on visitors |
 | `30 6 * * *` | Morning Briefing | Daily briefing → Telegram |
 | `0 21 * * *` | Evening Wind-Down | Tomorrow preview, open items → Telegram |
-| `*/30 * * * *` | Chatwoot Inbox Monitor | Check unread messages |
+| `*/30 * * * *` | Conversation Inbox Monitor | Check unread messages |
 
 ---
 
@@ -659,8 +641,8 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 | Project directories | `clawd/`, `moltbot/`, `garmin-sync/`, `clawd-main/`, `robothor/` |
 | Config directories | `.openclaw/`, `.cloudflared/` |
 | Credentials | `.bashrc`, `crm/.env` |
-| Databases | 3x `pg_dump`: robothor\_memory, twenty\_crm, chatwoot |
-| Docker volumes | twenty-server-data, twenty-docker-data, chatwoot-storage |
+| Databases | 2x `pg_dump`: robothor\_memory, vaultwarden |
+| Docker volumes | vaultwarden-data, uptime-kuma-data |
 | System state | crontab export, Ollama model list, systemd service files |
 | Verification | SHA256 manifest of all backed-up files |
 
@@ -687,25 +669,17 @@ robothor/                                 Project root (git repo)
 │   └── backup.log
 │
 ├── crm/                                  CRM stack
-│   ├── docker-compose.yml                Twenty + Chatwoot + Redis
-│   ├── .env                              CRM secrets
+│   ├── docker-compose.yml                Vaultwarden + Uptime Kuma + Kokoro TTS
+│   ├── .env                              Docker secrets
 │   ├── migrate_contacts.py               Contact migration tool
-│   ├── backfill_chatwoot.py              Chatwoot backfill tool
 │   ├── contact_id_map.json               Migration mapping
 │   ├── bridge/                           Bridge service (:9100)
 │   │   ├── bridge_service.py             FastAPI app (webhooks, REST proxy)
 │   │   ├── contact_resolver.py           Cross-system identity resolution
-│   │   ├── chatwoot_client.py            Chatwoot REST client
-│   │   ├── twenty_client.py              Twenty GraphQL client
+│   │   ├── crm_dal.py                    CRM data access layer (native SQL)
 │   │   ├── config.py                     Bridge configuration
 │   │   ├── requirements.txt
 │   │   └── tests/
-│   ├── chatwoot-mcp/                     Chatwoot MCP server (Node.js)
-│   │   ├── src/                          TypeScript source
-│   │   ├── dist/                         Compiled output
-│   │   └── test/
-│   ├── twenty-mcp/                       Twenty CRM MCP server (Node.js)
-│   │   └── index.js
 │   └── tests/                            CRM integration & regression tests
 │       ├── test_phase0_prerequisites.sh
 │       ├── test_phase1_services.sh
@@ -775,7 +749,7 @@ robothor/                                 Project root (git repo)
 │   │   ├── lifecycle.py                  Fact lifecycle management
 │   │   ├── llm_client.py                 Ollama client wrapper
 │   │   ├── contact_matching.py           Fuzzy name matching
-│   │   ├── crm_fetcher.py               Chatwoot + Twenty data fetching
+│   │   ├── crm_fetcher.py               CRM data fetching via crm_dal
 │   │   ├── web_search.py                 SearXNG integration
 │   │   ├── transcript_watcher.py         Voice transcript processing
 │   │   ├── transcript_sync.py            Transcript sync
@@ -865,4 +839,4 @@ robothor/                                 Project root (git repo)
 
 ---
 
-*Generated 2026-02-16. For questions, contact philip@ironsail.ai.*
+*Generated 2026-02-20. For questions, contact philip@ironsail.ai.*

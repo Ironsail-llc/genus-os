@@ -1,117 +1,8 @@
-# Robothor CRM Stack — Twenty CRM + Chatwoot
+# Robothor Docker Services — Vaultwarden, Uptime Kuma, Kokoro TTS
 # All containers use host PostgreSQL (172.17.0.1:5432) and Redis (host.docker.internal:6379)
 # Ports bound to 127.0.0.1 — external access only via Cloudflare tunnel
 
-x-twenty-common: &twenty-common
-  image: twentycrm/twenty:v0.43.0
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
-  env_file: .env
-  environment:
-    APP_SECRET: ${TWENTY_APP_SECRET}
-    PG_DATABASE_URL: postgres://${PG_USER}:${PG_PASSWORD}@host.docker.internal:${PG_PORT}/twenty_crm
-    REDIS_URL: ${REDIS_URL}
-    SERVER_URL: ${TWENTY_SERVER_URL}
-    STORAGE_TYPE: local
-    NODE_PORT: "3000"
-    ENABLE_DB_MIGRATIONS: "true"
-    IS_SIGN_UP_DISABLED: "true"
-  restart: unless-stopped
-  deploy:
-    resources:
-      limits:
-        memory: 4g
-
-x-chatwoot-common: &chatwoot-common
-  image: chatwoot/chatwoot:v3.16.0-ce
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
-  env_file: .env
-  environment:
-    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE}
-    FRONTEND_URL: ${CHATWOOT_FRONTEND_URL}
-    RAILS_ENV: production
-    NODE_ENV: production
-    INSTALLATION_ENV: docker
-    POSTGRES_HOST: host.docker.internal
-    POSTGRES_PORT: ${PG_PORT}
-    POSTGRES_DATABASE: chatwoot
-    POSTGRES_USERNAME: ${PG_USER}
-    POSTGRES_PASSWORD: ${PG_PASSWORD}
-    REDIS_URL: ${REDIS_URL}
-    ENABLE_ACCOUNT_SIGNUP: "false"
-    ACTIVE_STORAGE_SERVICE: local
-    RAILS_LOG_TO_STDOUT: "true"
-    LOG_LEVEL: info
-  restart: unless-stopped
-  deploy:
-    resources:
-      limits:
-        memory: 4g
-
 services:
-  # --- Twenty CRM ---
-  twenty-server:
-    <<: *twenty-common
-    container_name: twenty-server
-    ports:
-      - "127.0.0.1:3030:3000"
-    volumes:
-      - twenty-server-data:/app/packages/twenty-server/.local-storage
-      - twenty-docker-data:/app/docker-data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-      start_period: 60s
-
-  twenty-worker:
-    <<: *twenty-common
-    container_name: twenty-worker
-    command: ["yarn", "worker:prod"]
-    volumes:
-      - twenty-server-data:/app/packages/twenty-server/.local-storage
-      - twenty-docker-data:/app/docker-data
-    environment:
-      APP_SECRET: ${TWENTY_APP_SECRET}
-      PG_DATABASE_URL: postgres://${PG_USER}:${PG_PASSWORD}@host.docker.internal:${PG_PORT}/twenty_crm
-      REDIS_URL: ${REDIS_URL}
-      SERVER_URL: ${TWENTY_SERVER_URL}
-      STORAGE_TYPE: local
-      DISABLE_DB_MIGRATIONS: "true"
-      DISABLE_CRON_JOBS_REGISTRATION: "true"
-    depends_on:
-      twenty-server:
-        condition: service_healthy
-
-  # --- Chatwoot ---
-  chatwoot-rails:
-    <<: *chatwoot-common
-    container_name: chatwoot-rails
-    entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
-    ports:
-      - "127.0.0.1:3100:3000"
-    volumes:
-      - chatwoot-storage:/app/storage
-    healthcheck:
-      test: ["CMD", "ruby", "-e", "require 'net/http'; Net::HTTP.get(URI('http://localhost:3000/api'))"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 120s
-
-  chatwoot-sidekiq:
-    <<: *chatwoot-common
-    container_name: chatwoot-sidekiq
-    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
-    volumes:
-      - chatwoot-storage:/app/storage
-    depends_on:
-      chatwoot-rails:
-        condition: service_healthy
-
   # --- Vaultwarden (password vault) ---
   vaultwarden:
     image: vaultwarden/server:latest
@@ -180,9 +71,6 @@ services:
           memory: 512m
 
 volumes:
-  twenty-server-data:
-  twenty-docker-data:
-  chatwoot-storage:
   vaultwarden-data:
   uptime-kuma-data:
   kokoro-models:

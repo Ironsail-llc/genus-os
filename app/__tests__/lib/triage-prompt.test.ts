@@ -113,7 +113,7 @@ describe("triageDashboard", () => {
     expect(result.shouldUpdate).toBe(false);
   });
 
-  it("returns shouldUpdate=false on network error", async () => {
+  it("defaults to shouldUpdate=true on network error (graceful fallback)", async () => {
     mockFetch.mockRejectedValue(new Error("Network error"));
 
     const result = await triageDashboard(
@@ -121,7 +121,9 @@ describe("triageDashboard", () => {
       "test-api-key"
     );
 
-    expect(result.shouldUpdate).toBe(false);
+    // On triage error, default to updating — better to show something than silently skip
+    expect(result.shouldUpdate).toBe(true);
+    expect(result.dataNeeds).toContain("overview");
   });
 
   it("handles markdown-wrapped JSON response", async () => {

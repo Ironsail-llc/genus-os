@@ -20,7 +20,7 @@
 - Filesystem label: `robothor-backup`
 - Ownership: `philip:philip`
 - Backup script: `scripts/backup-ssd.sh` (daily 4:30 AM)
-- Contents: project dirs, config, 3x DB dumps (30-day retention), Docker volumes, credentials, manifest
+- Contents: project dirs, config, 2x DB dumps (30-day retention), Docker volumes, credentials, manifest
 
 ## Networking
 
@@ -42,8 +42,6 @@ Config: `tunnel/config.yml`
 | voice.robothor.ai | localhost:8765 | Public | Twilio voice server |
 | sms.robothor.ai | localhost:8766 | Public | Twilio SMS webhook |
 | gateway.robothor.ai | localhost:18789 | Cloudflare Access (email OTP) | OpenClaw gateway |
-| crm.robothor.ai | localhost:3030 | Cloudflare Access (email OTP) | Twenty CRM web UI |
-| inbox.robothor.ai | localhost:3100 | Cloudflare Access (email OTP) | Chatwoot conversation inbox |
 | bridge.robothor.ai | localhost:9100 | Cloudflare Access (email OTP) | Bridge service API |
 | orchestrator.robothor.ai | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
 | vision.robothor.ai | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
@@ -51,7 +49,7 @@ Config: `tunnel/config.yml`
 | vault.robothor.ai | localhost:8222 | Cloudflare Access (email OTP) | Vaultwarden password vault |
 | * (catch-all) | http_status:404 | — | — |
 
-**Cloudflare Access (Zero Trust):** 10 apps protected with email OTP — only `philip@ironsail.ai` and `robothor@ironsail.ai` can access. 24h sessions. Protected apps: cam, gateway, ops, crm, inbox, bridge, orchestrator, vision, monitor, vault.
+**Cloudflare Access (Zero Trust):** 8 apps protected with email OTP — only `philip@ironsail.ai` and `robothor@ironsail.ai` can access. 24h sessions. Protected apps: cam, gateway, ops, bridge, orchestrator, vision, monitor, vault.
 
 API tokens documented in `brain/TOOLS.md` (tunnel-edit, DNS-edit, Access-edit).
 
@@ -83,21 +81,17 @@ User: `philip` (local peer auth) + `postgres` (legacy tables)
 | memory_facts | philip | Structured facts (categorized, confidence-scored) |
 | memory_entities | philip | Knowledge graph nodes (people, projects, tech) |
 | memory_relations | philip | Knowledge graph edges |
-| contact_identifiers | philip | Cross-system contact resolution (channel → Twenty + Chatwoot + entity) |
+| contact_identifiers | philip | Cross-system contact resolution (channel → person_id + entity) |
+| crm_people | philip | CRM contacts (replaces Twenty CRM) |
+| crm_companies | philip | CRM companies |
+| crm_notes | philip | CRM notes |
+| crm_tasks | philip | CRM tasks |
+| crm_conversations | philip | CRM conversations |
+| crm_messages | philip | CRM messages |
 | agent_memory_blocks | philip | Structured working memory blocks (persona, user_profile, working_context, etc.) |
 | audit_log | postgres | System audit trail |
 
 Embeddings: 1024-dim vectors via Qwen3-Embedding, indexed with pgvector ivfflat.
-
-### twenty_crm
-
-Used by Twenty CRM Docker containers. Contact/company/relationship store.
-Web UI: `crm.robothor.ai` (Cloudflare Access protected)
-
-### chatwoot
-
-Used by Chatwoot Docker containers. Unified conversation inbox.
-Web UI: `inbox.robothor.ai` (Cloudflare Access protected)
 
 ### vaultwarden
 
@@ -109,7 +103,7 @@ Web UI: `vault.robothor.ai` (Cloudflare Access protected)
 **Redis 7** on `127.0.0.1:6379` + `172.17.0.1:6379` (Docker bridge)
 
 Config: `maxmemory 2gb`, `protected-mode no` (localhost + Docker only)
-Shared by: Twenty CRM, Chatwoot, RAG orchestrator cache
+Shared by: RAG orchestrator cache
 Service: `redis-server.service` (system-level, auto-starts)
 
 ## Ollama (localhost:11434)
@@ -161,7 +155,7 @@ Deep reference: `brain/VISION.md`
 
 **Age public key:** `age186mguvnypf7mun49dhn83cm59dva4vvdv3lp2sjch4jj4vdhhalq6uwgt3`
 
-**Credentials stored (35 keys):** GOG keyring, Telegram bot token + chat ID, PostgreSQL password, GitHub token, Jira token, Cloudflare account email + tunnel/DNS/Access tokens + account/tunnel IDs, ElevenLabs key, Twenty CRM keys (app secret, API key, workspace ID, login), Chatwoot token + secret key, N8N keys (API, REST JWT, MCP JWT), OpenAI/OpenRouter/Anthropic/Gemini API keys, gateway token, Vaultwarden admin token, Samba password.
+**Credentials stored (~30 keys):** GOG keyring, Telegram bot token + chat ID, PostgreSQL password, GitHub token, Jira token, Cloudflare account email + tunnel/DNS/Access tokens + account/tunnel IDs, ElevenLabs key, N8N keys (API, REST JWT, MCP JWT), OpenAI/OpenRouter/Anthropic/Gemini API keys, gateway token, Vaultwarden admin token, Samba password.
 
 **How it works:**
 - `scripts/decrypt-secrets.sh` decrypts JSON → KEY=VALUE env file at `/run/robothor/secrets.env`
@@ -227,53 +221,46 @@ Now managed by: `robothor-orchestrator.service` (auto-starts)
 
 ## CRM Stack
 
-**Twenty CRM + Chatwoot + Bridge** — Unified contact/conversation management.
+**Native PostgreSQL tables + Bridge** — Unified contact/conversation management. CRM data lives in `crm_*` tables in `robothor_memory` (replaced former Twenty CRM + Chatwoot Docker containers, both removed).
 
 ### Docker Containers (managed by `robothor-crm.service`)
 
 | Container | Image | Port | Purpose |
 |-----------|-------|------|---------|
-| twenty-server | twentycrm/twenty:v0.43.0 | 3030 | Twenty CRM web app + REST/GraphQL API |
-| twenty-worker | twentycrm/twenty:v0.43.0 | — | Twenty background jobs |
-| chatwoot-rails | chatwoot/chatwoot:v3.16.0-ce | 3100 | Chatwoot web app + REST API |
-| chatwoot-sidekiq | chatwoot/chatwoot:v3.16.0-ce | — | Chatwoot background jobs (Sidekiq) |
 | vaultwarden | vaultwarden/server:latest | 8222 | Password vault (Vaultwarden) |
 | uptime-kuma | louislam/uptime-kuma:1 | 3010 | Service monitoring (Uptime Kuma) |
+| kokoro-tts | ghcr.io/remsky/kokoro-fastapi | 8880 | Local TTS (Kokoro) |
 
 Docker Compose: `crm/docker-compose.yml`
 Secrets: `crm/.env` (Docker reads directly) + SOPS-encrypted `/etc/robothor/secrets.enc.json` (services)
 
 ### Bridge Service (port 9100)
 
-FastAPI app connecting Twenty, Chatwoot, and Memory System.
+FastAPI app connecting CRM tables and Memory System. Queries native PostgreSQL `crm_*` tables via `crm_dal`.
 Managed by: `robothor-bridge.service`
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | /health | GET | Connectivity check to all dependent services |
-| /resolve-contact | POST | Channel + identifier → Twenty ID + Chatwoot ID + entity ID |
+| /resolve-contact | POST | Channel + identifier → person_id + entity ID |
 | /timeline/{identifier} | GET | Unified timeline across all systems |
-| /webhooks/chatwoot | POST | Chatwoot message events → memory ingestion |
-| /webhooks/twenty | POST | Twenty CRM events (future) |
-| /webhooks/openclaw | POST | OpenClaw messages → Chatwoot + contact resolution |
+| /webhooks/openclaw | POST | OpenClaw messages → CRM + contact resolution |
 | /log-interaction | POST | Agent interaction logging → CRM |
-| /api/conversations | GET | List Chatwoot conversations (query: status, page) |
-| /api/conversations/{id} | GET | Get single Chatwoot conversation |
+| /api/conversations | GET | List conversations (query: status, page) |
+| /api/conversations/{id} | GET | Get single conversation |
 | /api/conversations/{id}/messages | GET | List messages in a conversation |
 | /api/conversations/{id}/messages | POST | Create message in a conversation |
-| /api/people | GET | List/search Twenty CRM people (query: search, limit) |
-| /api/people | POST | Create person in Twenty CRM |
-| /api/notes | POST | Create note in Twenty CRM |
+| /api/people | GET | List/search CRM people (query: search, limit) |
+| /api/people | POST | Create person in CRM |
+| /api/notes | POST | Create note in CRM |
 
-The `/api/*` endpoints are REST proxies used by the OpenClaw `crm-tools` plugin. They wrap Chatwoot REST and Twenty GraphQL APIs so the agent doesn't need direct API credentials.
+The `/api/*` endpoints are REST proxies used by the OpenClaw `crm-tools` plugin. They query native PostgreSQL CRM tables via `crm_dal` so the agent doesn't need direct database credentials.
 
 ### MCP Servers (configured in `.claude.json`) — Claude Code only
 
 | Server | Transport | Purpose |
 |--------|-----------|---------|
-| robothor-memory | stdio (Python) | Memory facts, entities, memory blocks, vision, interaction logging |
-| twenty-crm | stdio (Node.js) | Twenty CRM CRUD: people, companies, tasks, notes, search |
-| chatwoot | stdio (Node.js) | Chatwoot conversations, messages |
+| robothor-memory | stdio (Python) | Memory facts, entities, memory blocks, vision, interaction logging, CRM CRUD (people, companies, tasks, notes, conversations, messages, search) — all 28 tools |
 
 ### OpenClaw CRM Plugin — OpenClaw agent sessions only
 
@@ -284,14 +271,14 @@ OpenClaw agent sessions (cron jobs, Telegram, Google Chat) can't use MCP servers
 
 | Plugin Tool | Bridge Endpoint | Equivalent MCP Tool |
 |-------------|----------------|---------------------|
-| `chatwoot_list_conversations` | GET /api/conversations | mcp__chatwoot__chatwoot_list_conversations |
-| `chatwoot_get_conversation` | GET /api/conversations/{id} | mcp__chatwoot__chatwoot_get_conversation |
-| `chatwoot_list_messages` | GET /api/conversations/{id}/messages | mcp__chatwoot__chatwoot_list_messages |
-| `chatwoot_create_message` | POST /api/conversations/{id}/messages | mcp__chatwoot__chatwoot_create_message |
+| `list_conversations` | GET /api/conversations | mcp__robothor-memory__list_conversations |
+| `get_conversation` | GET /api/conversations/{id} | mcp__robothor-memory__get_conversation |
+| `list_messages` | GET /api/conversations/{id}/messages | mcp__robothor-memory__list_messages |
+| `create_message` | POST /api/conversations/{id}/messages | mcp__robothor-memory__create_message |
 | `log_interaction` | POST /log-interaction | mcp__robothor-memory__log_interaction |
-| `create_person` | POST /api/people | mcp__twenty-crm__create_person |
-| `list_people` | GET /api/people | mcp__twenty-crm__list_people |
-| `create_note` | POST /api/notes | mcp__twenty-crm__create_note |
+| `create_person` | POST /api/people | mcp__robothor-memory__create_person |
+| `list_people` | GET /api/people | mcp__robothor-memory__list_people |
+| `create_note` | POST /api/notes | mcp__robothor-memory__create_note |
 | `crm_health` | GET /health | — |
 
 Tool names are intentionally identical between MCP and plugin so agent instructions (WORKER.md, HEARTBEAT.md, jobs.json) work unchanged regardless of runtime.

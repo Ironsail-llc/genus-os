@@ -118,8 +118,14 @@ export async function triageDashboard(
         : [],
       summary: String(parsed.summary || "").replace(/[^\w\s\-.,():/]/g, "").slice(0, 200),
     };
-  } catch {
-    // On any error, don't update (safe default)
-    return { shouldUpdate: false, dataNeeds: [], summary: "" };
+  } catch (err) {
+    // On triage error, default to updating — better to show something than silently skip
+    console.warn("[dashboard triage] Error, defaulting to update:", String(err));
+    // Extract a reasonable summary from the last assistant message for the fallback
+    const lastAssistant = messages.filter((m) => m.role === "assistant").pop();
+    const fallbackSummary = lastAssistant
+      ? lastAssistant.content.slice(0, 100)
+      : "conversation update";
+    return { shouldUpdate: true, dataNeeds: ["overview"], summary: fallbackSummary };
   }
 }

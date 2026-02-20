@@ -84,12 +84,14 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
   const assistantTrivial = !lastAssistant || isTrivialResponse(lastAssistant.content);
 
   if (userTrivial && assistantTrivial) {
+    console.log("[dashboard] Skipped: both sides trivial");
     return new Response(null, { status: 204 });
   }
 
   // Phase 1: Triage — should dashboard update?
   const apiKey = OPENROUTER_API_KEY();
   const triage = await triageDashboard(messages, apiKey);
+  console.log("[dashboard] Triage:", JSON.stringify({ shouldUpdate: triage.shouldUpdate, dataNeeds: triage.dataNeeds, summary: triage.summary }));
 
   if (!triage.shouldUpdate) {
     return new Response(null, { status: 204 });
@@ -99,8 +101,10 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
   const unsatisfiedNeeds = triage.dataNeeds.filter(
     (need) => !isNeedSatisfied(need, agentData)
   );
+  console.log("[dashboard] Fetching:", unsatisfiedNeeds, "| Agent provided:", agentData ? Object.keys(agentData) : "none");
   const fetchedData = await fetchDataForNeeds(unsatisfiedNeeds);
   const enrichedData = { ...fetchedData, ...agentData };
+  console.log("[dashboard] Data keys:", Object.keys(enrichedData));
 
   // Phase 3: Generate dashboard HTML (buffered, not streamed)
   const systemPrompt = getDashboardSystemPrompt();

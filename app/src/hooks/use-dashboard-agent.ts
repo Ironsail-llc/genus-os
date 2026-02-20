@@ -42,6 +42,8 @@ export function useDashboardAgent() {
           body.agentData = agentData;
         }
 
+        console.log("[dashboard-agent] Requesting update, messages:", messages.length, "agentData:", agentData ? Object.keys(agentData) : "none");
+
         const res = await fetch("/api/dashboard/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -52,13 +54,13 @@ export function useDashboardAgent() {
         if (abort.signal.aborted) return;
 
         if (res.status === 204) {
-          // Triage says no update needed — clear spinner, keep current dashboard
+          console.log("[dashboard-agent] Triage: no update needed (204)");
           setIsUpdating(false);
           return;
         }
 
         if (!res.ok) {
-          // Error — clear spinner, keep current dashboard
+          console.warn("[dashboard-agent] Generate failed:", res.status, await res.text().catch(() => ""));
           setIsUpdating(false);
           return;
         }
@@ -68,15 +70,19 @@ export function useDashboardAgent() {
         if (abort.signal.aborted) return;
 
         if (data.html) {
-          // Validate before swapping
           const validation = validateDashboardCode(data.html);
           if (validation.valid) {
+            console.log("[dashboard-agent] Dashboard updated:", data.html.length, "chars");
             setDashboardCode(validation.code, data.type || "html");
+          } else {
+            console.warn("[dashboard-agent] Client validation failed:", validation.errors);
           }
+        } else {
+          console.warn("[dashboard-agent] Response missing html field:", Object.keys(data));
         }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
-          // Network error — silently keep current dashboard
+          console.error("[dashboard-agent] Error:", err);
         }
       } finally {
         if (!abort.signal.aborted) {
@@ -98,6 +104,7 @@ export function useDashboardAgent() {
 
     // Capture agentData at debounce time so it's consistent with the messages
     const agentDataSnapshot = pendingAgentData;
+    console.log("[dashboard-agent] Scheduling update in", DEBOUNCE_MS, "ms for", pendingMessages.length, "messages");
     debounceRef.current = setTimeout(() => {
       handleUpdate(pendingMessages, agentDataSnapshot);
     }, DEBOUNCE_MS);

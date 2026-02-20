@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-02-20T12:54:53.857225+00:00",
+  "issues_count": 1,
+  "issues": [
+    "Cannot import crm_dal: No module named 'dotenv'"
+  ],
+  "status": "FAIL"
+}
