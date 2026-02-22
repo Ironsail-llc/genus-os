@@ -270,10 +270,32 @@ merge_people(keeper_id=person_id, loser_id=duplicate_id)
 
 ## Requirements
 
+### Software
+
 - **Python 3.11+**
 - **PostgreSQL 16+** with pgvector 0.6+ extension
 - **Redis 7+**
-- **Ollama** (for LLM features — embeddings, reranking, generation)
+- **Ollama** (for local LLM features — embeddings, reranking, generation; optional if using cloud APIs)
+
+### System Requirements
+
+Robothor's resource footprint scales with your configuration. Using cloud APIs instead of local models eliminates the largest memory requirement. Disabling the vision module removes camera and model dependencies. Cron job frequency is configurable — reduce polling intervals to lower CPU usage on lighter hardware.
+
+| | Minimal | Recommended | Full Stack |
+|--|---------|-------------|------------|
+| **Use case** | Cloud APIs, no vision, basic memory | Local small models, RAG, agents | Local 70B+ models, vision, all services |
+| **RAM** | 8 GB | 32 GB | 128 GB (unified memory preferred) |
+| **Storage** | 256 GB | 512 GB | 1 TB+ |
+| **GPU** | None needed | Optional (speeds inference) | Integrated or discrete |
+| **CPU** | 4 cores | 8+ cores | 16+ cores |
+| **Local models** | None (API only) | 7-13B quantized | Up to 80B on-demand |
+| **Estimated hardware** | Any modern PC | ~$500-$1,500 | ~$3,000-$15,000 |
+
+**Minimal** — Memory, RAG, CRM, and event bus running against cloud LLM APIs (OpenAI, Anthropic, etc.). No local model inference. Suitable for getting started on any modern machine.
+
+**Recommended** — Local inference with small models (Llama 3.2 8B, Qwen3 7B) via Ollama. Full RAG pipeline with local embeddings and reranking. Agent cron jobs running on regular intervals.
+
+**Full Stack** — Everything local: large language models (70B+), real-time vision (YOLOv8 + InsightFace), local TTS, full agent fleet, and 20+ concurrent services. This is the configuration running in 24/7 production on an NVIDIA Grace Blackwell GB10 (128 GB unified memory) at ~41% memory utilization.
 
 ## Configuration
 
