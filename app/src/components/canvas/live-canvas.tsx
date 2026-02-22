@@ -23,15 +23,18 @@ export function LiveCanvas() {
     setDashboardCode,
     clearDashboard,
     isUpdating,
+    submitAction,
+    resolveAction,
   } = useVisualState();
 
   const [error, setError] = useState<string | null>(null);
   const [welcomeLoaded, setWelcomeLoaded] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Background dashboard agent — handles conversation-driven updates
   useDashboardAgent();
 
-  // Welcome dashboard on first load (buffered fetch)
+  // Welcome dashboard on first load — try restore first, then generate
   useEffect(() => {
     if (welcomeLoaded) return;
     setWelcomeLoaded(true);
@@ -42,20 +45,31 @@ export function LiveCanvas() {
     const abort = new AbortController();
     setCanvasMode("loading");
 
-    fetch("/api/dashboard/welcome", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-      signal: abort.signal,
-    })
+    // Try to restore saved session first
+    fetch("/api/session", { signal: abort.signal })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (data.html) {
-          setDashboardCode(data.html, data.type || "html");
-        } else {
-          setCanvasMode("idle");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.html) {
+            setDashboardCode(data.html, "html");
+            return; // Restored — skip welcome generation
+          }
         }
+        // No saved session — generate welcome dashboard
+        return fetch("/api/dashboard/welcome", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+          signal: abort.signal,
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (data.html) {
+            setDashboardCode(data.html, data.type || "html");
+          } else {
+            setCanvasMode("idle");
+          }
+        });
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
@@ -67,6 +81,53 @@ export function LiveCanvas() {
       abort.abort();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save dashboard to session when it changes
+  const lastSavedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dashboardCode || dashboardCode === lastSavedRef.current) return;
+    lastSavedRef.current = dashboardCode;
+    // Fire-and-forget save
+    fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ html: dashboardCode }),
+    }).catch(() => {
+      // Non-critical — session save is best-effort
+    });
+  }, [dashboardCode]);
+
+  // Handle actions from dashboard iframes
+  const handleAction = useCallback(
+    async (action: { tool: string; params: Record<string, unknown>; id: string }) => {
+      submitAction({ ...action });
+      try {
+        const res = await fetch("/api/actions/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: action.tool, params: action.params }),
+        });
+        const data = await res.json();
+        const result = {
+          id: action.id,
+          success: res.ok && data.success,
+          data: data.data,
+          error: data.error,
+        };
+        resolveAction(result);
+        // Send result back to iframe
+        iframeRef.current?.querySelector("iframe")?.contentWindow?.postMessage(
+          { type: "robothor:action-result", ...result },
+          "*"
+        );
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Action failed";
+        const result = { id: action.id, success: false, error: errorMsg };
+        resolveAction(result);
+      }
+    },
+    [submitAction, resolveAction]
+  );
 
   const handleRetry = useCallback(() => {
     setError(null);
@@ -136,8 +197,8 @@ export function LiveCanvas() {
 
         {/* Dashboard code rendered — always use srcdoc (HTML-first) */}
         {canvasMode === "dashboard" && dashboardCode && (
-          <div className="h-full">
-            <SrcdocRenderer html={dashboardCode} />
+          <div className="h-full" ref={iframeRef}>
+            <SrcdocRenderer html={dashboardCode} onAction={handleAction} />
           </div>
         )}
 

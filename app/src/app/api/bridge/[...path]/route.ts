@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BRIDGE_URL = "http://localhost:9100";
+import { getServiceUrl } from "@/lib/services/registry";
+const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 
 async function proxy(
   req: NextRequest,

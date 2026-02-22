@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const VISION_URL = "http://localhost:8600";
+import { getServiceUrl } from "@/lib/services/registry";
+const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
 
 async function proxy(
   req: NextRequest,

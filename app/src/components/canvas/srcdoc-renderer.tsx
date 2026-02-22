@@ -1,24 +1,43 @@
 "use client";
 
-import { useMemo, useEffect, useRef, useState } from "react";
+import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import DOMPurify from "dompurify";
+
+/**
+ * Tools that dashboard actions can invoke.
+ * Must match tools available to the helm-user agent in agent_capabilities.json.
+ */
+export const ACTION_ALLOWLIST = new Set([
+  // CRM read
+  "list_conversations",
+  "get_conversation",
+  "list_messages",
+  "list_people",
+  "crm_health",
+  // CRM write (limited)
+  "create_note",
+  "create_message",
+  "toggle_conversation_status",
+  "log_interaction",
+]);
 
 interface SrcdocRendererProps {
   html: string;
+  onAction?: (action: { tool: string; params: Record<string, unknown>; id: string }) => void;
 }
 
-export function SrcdocRenderer({ html }: SrcdocRendererProps) {
+export function SrcdocRenderer({ html, onAction }: SrcdocRendererProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(400);
 
   const srcdoc = useMemo(() => {
     const sanitized = DOMPurify.sanitize(html, {
-      ADD_TAGS: ["canvas", "svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop"],
-      ADD_ATTR: ["data-chart", "data-testid", "data-tab", "data-sort-dir", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width"],
+      ADD_TAGS: ["canvas", "svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop", "form", "textarea", "select", "input"],
+      ADD_ATTR: ["data-chart", "data-testid", "data-tab", "data-sort-dir", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width", "onclick", "onsubmit", "placeholder", "rows", "required", "disabled"],
       ALLOW_DATA_ATTR: true,
       ALLOW_UNKNOWN_PROTOCOLS: false,
-      FORBID_TAGS: ["iframe", "object", "embed", "form", "textarea", "select", "meta"],
-      FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur"],
+      FORBID_TAGS: ["iframe", "object", "embed", "meta"],
+      FORBID_ATTR: ["onerror", "onload", "onmouseover", "onfocus", "onblur"],
     });
 
     return `<!DOCTYPE html>
@@ -201,6 +220,57 @@ export function SrcdocRenderer({ html }: SrcdocRendererProps) {
 <\/script>
 ${sanitized}
 <script>
+  // ─── Robothor Action API ──────────────────────────────────────
+  // Provides robothor.action() and robothor.submit() for dashboard interactivity.
+  // Actions are sent to the parent via postMessage and executed via Bridge API.
+  window.robothor = {
+    _actionId: 0,
+    _callbacks: {},
+    action: function(tool, params) {
+      var id = 'action-' + (++this._actionId) + '-' + Date.now();
+      var self = this;
+      return new Promise(function(resolve, reject) {
+        self._callbacks[id] = { resolve: resolve, reject: reject };
+        window.parent.postMessage({
+          type: 'robothor:action',
+          tool: tool,
+          params: params || {},
+          id: id
+        }, '*');
+        // Timeout after 30s
+        setTimeout(function() {
+          if (self._callbacks[id]) {
+            self._callbacks[id].reject(new Error('Action timed out'));
+            delete self._callbacks[id];
+          }
+        }, 30000);
+      });
+    },
+    submit: function(tool, formSelector) {
+      var form = document.querySelector(formSelector);
+      if (!form) return Promise.reject(new Error('Form not found: ' + formSelector));
+      var formData = new FormData(form);
+      var params = {};
+      formData.forEach(function(value, key) { params[key] = value; });
+      return this.action(tool, params);
+    },
+    _handleResult: function(id, success, data, error) {
+      var cb = this._callbacks[id];
+      if (cb) {
+        if (success) cb.resolve(data);
+        else cb.reject(new Error(error || 'Action failed'));
+        delete this._callbacks[id];
+      }
+    }
+  };
+  // Listen for action results from parent
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'robothor:action-result') {
+      window.robothor._handleResult(e.data.id, e.data.success, e.data.data, e.data.error);
+    }
+  });
+<\/script>
+<script>
   function reportHeight() {
     var h = document.body.scrollHeight;
     window.parent.postMessage({ type: 'srcdoc-height', height: h }, '*');
@@ -216,6 +286,17 @@ ${sanitized}
 </html>`;
   }, [html]);
 
+  // Send action result back to iframe
+  const sendActionResult = useCallback(
+    (id: string, success: boolean, data?: unknown, error?: string) => {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "robothor:action-result", id, success, data, error },
+        "*"
+      );
+    },
+    []
+  );
+
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       // srcdoc iframes have origin "null" (string), so accept that
@@ -223,10 +304,23 @@ ${sanitized}
       if (e.data?.type === "srcdoc-height" && typeof e.data.height === "number") {
         setHeight(Math.max(200, Math.min(e.data.height + 32, 5000)));
       }
+      // Handle action requests from dashboard
+      if (e.data?.type === "robothor:action" && typeof e.data.tool === "string") {
+        const { tool, params, id } = e.data;
+        if (!ACTION_ALLOWLIST.has(tool)) {
+          sendActionResult(id, false, undefined, `Tool '${tool}' not in action allowlist`);
+          return;
+        }
+        if (onAction) {
+          onAction({ tool, params: params || {}, id });
+        } else {
+          sendActionResult(id, false, undefined, "No action handler configured");
+        }
+      }
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [onAction, sendActionResult]);
 
   return (
     <iframe

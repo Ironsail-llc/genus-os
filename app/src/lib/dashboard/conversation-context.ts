@@ -3,10 +3,11 @@
  * Server-side only — called from the dashboard generate API route.
  */
 
-const BRIDGE_URL = "http://localhost:9100";
-const ORCHESTRATOR_URL = "http://localhost:9099";
-const VISION_URL = "http://localhost:8600";
-const SEARXNG_URL = "http://localhost:8888";
+import { getServiceUrl } from "@/lib/services/registry";
+const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
+const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
+const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
+const SEARXNG_URL = getServiceUrl("searxng") || "http://localhost:8888";
 const FETCH_TIMEOUT = 3000;
 
 export interface ConversationContext {

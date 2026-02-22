@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const ORCHESTRATOR_URL = "http://localhost:9099";
+import { getServiceUrl } from "@/lib/services/registry";
+const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
 
 async function proxy(
   req: NextRequest,

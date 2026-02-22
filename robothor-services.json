@@ -1,0 +1,188 @@
+{
+  "version": "1.0.0",
+  "description": "Robothor service manifest — single source of truth for all service endpoints",
+  "services": {
+    "bridge": {
+      "name": "Bridge Service",
+      "port": 9100,
+      "host": "127.0.0.1",
+      "health": "/health",
+      "systemd_unit": "robothor-bridge.service",
+      "tunnel_route": "bridge.robothor.ai",
+      "dependencies": ["postgres", "redis"]
+    },
+    "orchestrator": {
+      "name": "RAG Orchestrator",
+      "port": 9099,
+      "host": "0.0.0.0",
+      "health": "/health",
+      "systemd_unit": "robothor-orchestrator.service",
+      "tunnel_route": "orchestrator.robothor.ai",
+      "dependencies": ["postgres", "redis", "ollama"]
+    },
+    "vision": {
+      "name": "Vision Service",
+      "port": 8600,
+      "host": "0.0.0.0",
+      "health": "/health",
+      "systemd_unit": "robothor-vision.service",
+      "tunnel_route": "vision.robothor.ai",
+      "dependencies": ["mediamtx"]
+    },
+    "helm": {
+      "name": "Helm Dashboard",
+      "port": 3004,
+      "host": "0.0.0.0",
+      "health": "/api/health",
+      "systemd_unit": "robothor-app.service",
+      "tunnel_route": "app.robothor.ai",
+      "dependencies": ["bridge", "orchestrator"]
+    },
+    "gateway": {
+      "name": "OpenClaw Gateway",
+      "port": 18789,
+      "host": "0.0.0.0",
+      "health": null,
+      "protocol": "ws",
+      "systemd_unit": "moltbot-gateway.service",
+      "tunnel_route": "gateway.robothor.ai",
+      "dependencies": []
+    },
+    "ollama": {
+      "name": "Ollama LLM Server",
+      "port": 11434,
+      "host": "127.0.0.1",
+      "health": "/api/tags",
+      "systemd_unit": null,
+      "tunnel_route": null,
+      "dependencies": []
+    },
+    "mediamtx": {
+      "name": "MediaMTX RTSP/HLS",
+      "port": 8554,
+      "host": "127.0.0.1",
+      "health": null,
+      "extra_ports": { "hls": 8890 },
+      "systemd_unit": "mediamtx-webcam.service",
+      "tunnel_route": "cam.robothor.ai",
+      "dependencies": []
+    },
+    "redis": {
+      "name": "Redis",
+      "port": 6379,
+      "host": "127.0.0.1",
+      "health": null,
+      "systemd_unit": "redis-server.service",
+      "tunnel_route": null,
+      "dependencies": []
+    },
+    "postgres": {
+      "name": "PostgreSQL",
+      "port": 5432,
+      "host": "127.0.0.1",
+      "health": null,
+      "systemd_unit": "postgresql.service",
+      "tunnel_route": null,
+      "dependencies": []
+    },
+    "status": {
+      "name": "Status Server",
+      "port": 3000,
+      "host": "0.0.0.0",
+      "health": "/",
+      "systemd_unit": "robothor-status.service",
+      "tunnel_route": "robothor.ai",
+      "dependencies": []
+    },
+    "status_dashboard": {
+      "name": "Status Dashboard",
+      "port": 3001,
+      "host": "0.0.0.0",
+      "health": "/",
+      "systemd_unit": "robothor-status-dashboard.service",
+      "tunnel_route": "status.robothor.ai",
+      "dependencies": []
+    },
+    "voice": {
+      "name": "Voice Server",
+      "port": 8765,
+      "host": "0.0.0.0",
+      "health": null,
+      "systemd_unit": "robothor-voice.service",
+      "tunnel_route": "voice.robothor.ai",
+      "dependencies": []
+    },
+    "sms": {
+      "name": "SMS Webhook",
+      "port": 8766,
+      "host": "0.0.0.0",
+      "health": null,
+      "systemd_unit": "robothor-sms.service",
+      "tunnel_route": "sms.robothor.ai",
+      "dependencies": []
+    },
+    "searxng": {
+      "name": "SearXNG Search",
+      "port": 8888,
+      "host": "127.0.0.1",
+      "health": "/healthz",
+      "systemd_unit": null,
+      "tunnel_route": null,
+      "dependencies": []
+    },
+    "vaultwarden": {
+      "name": "Vaultwarden",
+      "port": 8222,
+      "host": "127.0.0.1",
+      "health": "/alive",
+      "systemd_unit": null,
+      "tunnel_route": "vault.robothor.ai",
+      "dependencies": ["postgres"]
+    },
+    "uptime_kuma": {
+      "name": "Uptime Kuma",
+      "port": 3010,
+      "host": "127.0.0.1",
+      "health": "/api/status-page/heartbeat",
+      "systemd_unit": null,
+      "tunnel_route": "monitor.robothor.ai",
+      "dependencies": []
+    },
+    "kokoro_tts": {
+      "name": "Kokoro TTS",
+      "port": 8880,
+      "host": "127.0.0.1",
+      "health": "/v1/models",
+      "systemd_unit": null,
+      "tunnel_route": "tts.robothor.ai",
+      "dependencies": []
+    },
+    "impetus_one": {
+      "name": "Impetus One",
+      "port": 8000,
+      "host": "127.0.0.1",
+      "health": "/api/health",
+      "systemd_unit": null,
+      "tunnel_route": null,
+      "dependencies": []
+    },
+    "ops_dashboard": {
+      "name": "Ops Dashboard",
+      "port": 3003,
+      "host": "0.0.0.0",
+      "health": "/",
+      "systemd_unit": "robothor-dashboard.service",
+      "tunnel_route": "ops.robothor.ai",
+      "dependencies": []
+    },
+    "privacy": {
+      "name": "Privacy Policy",
+      "port": 3002,
+      "host": "0.0.0.0",
+      "health": "/",
+      "systemd_unit": "robothor-privacy.service",
+      "tunnel_route": "privacy.robothor.ai",
+      "dependencies": []
+    }
+  }
+}

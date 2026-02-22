@@ -4,6 +4,7 @@ FastAPI app on port 9100.
 """
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -13,6 +14,11 @@ from fastapi.responses import JSONResponse
 
 import config
 import crm_dal
+
+sys.path.insert(0, "/home/philip/clawd/memory_system")
+import audit
+import capabilities
+import event_bus
 
 http_client: httpx.AsyncClient | None = None
 
@@ -26,6 +32,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Robothor Bridge", version="1.0.0", lifespan=lifespan)
+
+# Load agent capabilities manifest on startup
+capabilities.load_capabilities()
+
+
+@app.middleware("http")
+async def rbac_middleware(request: Request, call_next):
+    """Check agent capabilities via X-Agent-Id header.
+
+    Missing header → full access (backward compatible).
+    Known agent → check endpoint access, deny with 403 if unauthorized.
+    Unknown agent → default policy (allow).
+    """
+    agent_id = request.headers.get("x-agent-id")
+    if agent_id:
+        method = request.method
+        path = request.url.path
+        if not capabilities.check_endpoint_access(agent_id, method, path):
+            audit.log_event(
+                "auth.denied",
+                f"Agent '{agent_id}' denied {method} {path}",
+                actor=agent_id,
+                details={"method": method, "path": path},
+                status="denied",
+            )
+            return JSONResponse(
+                status_code=403,
+                content={"error": f"Agent '{agent_id}' not authorized for {method} {path}"},
+            )
+    response = await call_next(request)
+    return response
 
 
 @app.get("/health")
@@ -105,6 +142,18 @@ async def webhook_openclaw(request: Request):
         if convo_id:
             msg_type = "incoming" if direction == "incoming" else "outgoing"
             crm_dal.send_message(convo_id, content, msg_type)
+    audit.log_event(
+        "ipc.webhook", f"openclaw webhook: {channel}:{identifier}",
+        category="bridge", source_channel=channel,
+        target=f"person:{person_id}" if person_id else None,
+        details={"channel": channel, "identifier": identifier,
+                 "direction": direction, "has_content": bool(content)},
+    )
+    # Dual-write: publish to event bus
+    event_bus.publish("crm", "ipc.webhook", {
+        "channel": channel, "identifier": identifier,
+        "direction": direction, "person_id": person_id,
+    }, source="bridge")
     return {"status": "ok", "resolved": {
         "person_id": person_id,
     }}
@@ -133,6 +182,18 @@ async def log_interaction(request: Request):
         if convo_id:
             msg_type = "incoming" if direction == "incoming" else "outgoing"
             crm_dal.send_message(convo_id, content_summary, msg_type)
+    audit.log_event(
+        "ipc.interaction", f"log_interaction: {contact_name} via {channel}",
+        category="bridge", source_channel=channel,
+        target=f"person:{person_id}" if person_id else None,
+        details={"contact_name": contact_name, "channel": channel,
+                 "direction": direction, "resolved": bool(person_id)},
+    )
+    # Dual-write: publish to event bus
+    event_bus.publish("crm", "ipc.interaction", {
+        "contact_name": contact_name, "channel": channel,
+        "direction": direction, "person_id": person_id,
+    }, source="bridge")
     return {"status": "ok", "contact": contact_name, "resolved": bool(person_id)}
 
 
@@ -306,6 +367,47 @@ async def api_create_note(request: Request):
     if note_id:
         return {"id": note_id, "title": title}
     return JSONResponse({"error": "failed to create note"}, status_code=500)
+
+
+# ─── Audit & Telemetry Query API ────────────────────────────────────────
+
+
+@app.get("/api/audit")
+async def api_query_audit(
+    event_type: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    actor: Optional[str] = Query(None),
+    target: Optional[str] = Query(None),
+    since: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50),
+):
+    """Query audit log with optional filters."""
+    results = audit.query_log(
+        limit=limit, event_type=event_type, category=category,
+        actor=actor, target=target, since=since, status=status,
+    )
+    return {"events": results, "count": len(results)}
+
+
+@app.get("/api/audit/stats")
+async def api_audit_stats():
+    """Get audit log statistics."""
+    return audit.stats()
+
+
+@app.get("/api/telemetry")
+async def api_query_telemetry(
+    service: Optional[str] = Query(None),
+    metric: Optional[str] = Query(None),
+    since: Optional[str] = Query(None),
+    limit: int = Query(100),
+):
+    """Query telemetry data points."""
+    results = audit.query_telemetry(
+        service=service, metric=metric, since=since, limit=limit,
+    )
+    return {"data": results, "count": len(results)}
 
 
 # ─── Vault Endpoints ────────────────────────────────────────────────────
@@ -724,6 +826,63 @@ async def api_impetus_transmit(rx_id: str, request: Request):
     except Exception as e:
         _get_impetus_mcp().reset()
         return JSONResponse({"error": str(e)}, status_code=502)
+
+
+# ─── Memory Block Endpoints ─────────────────────────────────────
+
+@app.get("/api/memory-blocks/{block_name}")
+async def get_memory_block(block_name: str):
+    """Read a named memory block."""
+    try:
+        conn = crm_dal._conn()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT content, last_written_at, metadata
+               FROM agent_memory_blocks WHERE block_name = %s""",
+            (block_name,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return JSONResponse({"error": "Block not found"}, status_code=404)
+        return {
+            "block_name": block_name,
+            "content": row[0],
+            "last_written_at": row[1].isoformat() if row[1] else None,
+            "metadata": row[2],
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.put("/api/memory-blocks/{block_name}")
+async def put_memory_block(block_name: str, request: Request):
+    """Write/update a named memory block."""
+    try:
+        body = await request.json()
+        content = body.get("content", "")
+        conn = crm_dal._conn()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO agent_memory_blocks (block_name, content, last_written_at, write_count)
+               VALUES (%s, %s, NOW(), 1)
+               ON CONFLICT (block_name) DO UPDATE
+               SET content = EXCLUDED.content,
+                   last_written_at = NOW(),
+                   write_count = agent_memory_blocks.write_count + 1
+               RETURNING id""",
+            (block_name, content),
+        )
+        conn.commit()
+        conn.close()
+        audit.log_event(
+            "crm.update",
+            f"Memory block '{block_name}' updated",
+            details={"block_name": block_name, "size": len(content)},
+        )
+        return {"success": True, "block_name": block_name}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 if __name__ == "__main__":

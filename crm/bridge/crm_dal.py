@@ -9,8 +9,10 @@ Uses psycopg2 + RealDictCursor, matching existing codebase patterns.
 
 import json
 import logging
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import psycopg2
@@ -18,7 +20,20 @@ from psycopg2.extras import RealDictCursor
 
 import config
 
+# Audit logging — import from memory_system
+sys.path.insert(0, "/home/philip/clawd/memory_system")
+import audit
+
 logger = logging.getLogger(__name__)
+
+
+def _safe_audit(operation, entity_type, entity_id, **kwargs):
+    """Wrap audit.log_crm_mutation so it never propagates exceptions."""
+    try:
+        return audit.log_crm_mutation(operation, entity_type, entity_id, **kwargs)
+    except Exception as e:
+        logger.warning("Audit call failed (non-fatal): %s", e)
+        return None
 
 
 # ─── Blocklists & Validation ──────────────────────────────────────────────
@@ -160,10 +175,20 @@ def create_person(first_name: str, last_name: str,
             VALUES (%s, %s, %s, %s, %s)
         """, (person_id, first_name, last_name, email, phone))
         conn.commit()
+        _safe_audit(
+            "create", "person", person_id,
+            details={"first_name": first_name, "last_name": last_name,
+                     "email": email, "phone": phone},
+        )
         return person_id
     except Exception as e:
         conn.rollback()
         logger.error("Failed to create person: %s", e)
+        _safe_audit(
+            "create", "person", None,
+            details={"first_name": first_name, "error": str(e)},
+            status="error",
+        )
         return None
     finally:
         conn.close()
@@ -236,6 +261,11 @@ def update_person(person_id: str, **fields) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit(
+                "update", "person", person_id,
+                details={"fields": list(fields.keys())},
+            )
         return ok
     except Exception as e:
         conn.rollback()
@@ -256,6 +286,8 @@ def delete_person(person_id: str) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit("delete", "person", person_id)
         return ok
     except Exception as e:
         conn.rollback()
@@ -331,6 +363,10 @@ def find_or_create_company(name: str) -> str | None:
             (company_id, name),
         )
         conn.commit()
+        _safe_audit(
+            "create", "company", company_id,
+            details={"name": name, "via": "find_or_create"},
+        )
         return company_id
     except Exception as e:
         conn.rollback()
@@ -356,6 +392,10 @@ def create_company(name: str, domain_name: str | None = None,
         """, (company_id, name, domain_name, employees, address,
               linkedin_url, ideal_customer_profile))
         conn.commit()
+        _safe_audit(
+            "create", "company", company_id,
+            details={"name": name, "domain_name": domain_name},
+        )
         return company_id
     except Exception as e:
         conn.rollback()
@@ -413,6 +453,11 @@ def update_company(company_id: str, **fields) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit(
+                "update", "company", company_id,
+                details={"fields": list(fields.keys())},
+            )
         return ok
     except Exception as e:
         conn.rollback()
@@ -433,6 +478,8 @@ def delete_company(company_id: str) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit("delete", "company", company_id)
         return ok
     except Exception as e:
         conn.rollback()
@@ -591,12 +638,28 @@ def merge_people(keeper_id: str, loser_id: str) -> dict | None:
 
         conn.commit()
 
+        _safe_audit(
+            "merge", "person", keeper_id,
+            details={
+                "loser_id": loser_id,
+                "loser_name": loser_name,
+                "fields_filled": [u.split(" = ")[0] for u in updates if "=" in u and "updated_at" not in u],
+                "emails_collected": existing_emails,
+                "phones_collected": existing_phones,
+            },
+        )
+
         # Return updated keeper
         return get_person(keeper_id)
 
     except Exception as e:
         conn.rollback()
         logger.error("Failed to merge person %s into %s: %s", loser_id, keeper_id, e)
+        _safe_audit(
+            "merge", "person", keeper_id,
+            details={"loser_id": loser_id, "error": str(e)},
+            status="error",
+        )
         return None
     finally:
         conn.close()
@@ -664,11 +727,27 @@ def merge_companies(keeper_id: str, loser_id: str) -> dict | None:
         )
 
         conn.commit()
+
+        loser_name = loser.get("name", "")
+        _safe_audit(
+            "merge", "company", keeper_id,
+            details={
+                "loser_id": loser_id,
+                "loser_name": loser_name,
+                "fields_filled": [u.split(" = ")[0] for u in updates if "=" in u and "updated_at" not in u],
+            },
+        )
+
         return get_company(keeper_id)
 
     except Exception as e:
         conn.rollback()
         logger.error("Failed to merge company %s into %s: %s", loser_id, keeper_id, e)
+        _safe_audit(
+            "merge", "company", keeper_id,
+            details={"loser_id": loser_id, "error": str(e)},
+            status="error",
+        )
         return None
     finally:
         conn.close()
@@ -701,6 +780,10 @@ def create_note(title: str, body: str, person_id: str | None = None,
             VALUES (%s, %s, %s, %s, %s)
         """, (note_id, title, body, person_id, company_id))
         conn.commit()
+        _safe_audit(
+            "create", "note", note_id,
+            details={"title": title, "person_id": person_id, "company_id": company_id},
+        )
         return note_id
     except Exception as e:
         conn.rollback()
@@ -742,6 +825,11 @@ def update_note(note_id: str, **fields) -> bool:
         cur.execute(f"UPDATE crm_notes SET {', '.join(sets)} WHERE id = %s AND deleted_at IS NULL", vals)
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit(
+                "update", "note", note_id,
+                details={"fields": list(fields.keys())},
+            )
         return ok
     except Exception as e:
         conn.rollback()
@@ -762,6 +850,8 @@ def delete_note(note_id: str) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit("delete", "note", note_id)
         return ok
     except Exception as e:
         conn.rollback()
@@ -823,6 +913,10 @@ def create_task(title: str, body: str | None = None, status: str = "TODO",
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (task_id, title, body, status, due_at, person_id, company_id))
         conn.commit()
+        _safe_audit(
+            "create", "task", task_id,
+            details={"title": title, "status": status, "person_id": person_id},
+        )
         return task_id
     except Exception as e:
         conn.rollback()
@@ -867,6 +961,11 @@ def update_task(task_id: str, **fields) -> bool:
         cur.execute(f"UPDATE crm_tasks SET {', '.join(sets)} WHERE id = %s AND deleted_at IS NULL", vals)
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit(
+                "update", "task", task_id,
+                details={"fields": list(fields.keys())},
+            )
         return ok
     except Exception as e:
         conn.rollback()
@@ -887,6 +986,8 @@ def delete_task(task_id: str) -> bool:
         )
         ok = cur.rowcount > 0
         conn.commit()
+        if ok:
+            _safe_audit("delete", "task", task_id)
         return ok
     except Exception as e:
         conn.rollback()
@@ -1043,6 +1144,11 @@ def send_message(conversation_id: int, content: str,
         """, (conversation_id,))
 
         conn.commit()
+        _safe_audit(
+            "create", "message", str(msg["id"]),
+            details={"conversation_id": conversation_id, "message_type": message_type,
+                     "private": private, "content_length": len(content)},
+        )
         return {
             "id": msg["id"],
             "content": msg["content"],
@@ -1072,6 +1178,10 @@ def toggle_conversation_status(conversation_id: int, status: str) -> dict | None
         row = cur.fetchone()
         conn.commit()
         if row:
+            _safe_audit(
+                "update", "conversation", str(row["id"]),
+                details={"new_status": status},
+            )
             return {"id": row["id"], "current_status": row["status"]}
         return None
     except Exception as e:
@@ -1108,6 +1218,11 @@ def create_conversation(person_id: str, inbox_name: str = "Robothor Bridge") -> 
         """, (person_id, inbox_name))
         row = cur.fetchone()
         conn.commit()
+        if row:
+            _safe_audit(
+                "create", "conversation", str(row["id"]),
+                details={"person_id": person_id, "inbox_name": inbox_name},
+            )
         return _conversation_to_dict(row) if row else None
     except Exception as e:
         conn.rollback()
@@ -1169,6 +1284,16 @@ def resolve_contact(channel: str, identifier: str, name: str | None = None) -> d
     result = cur.fetchone()
     conn.commit()
     conn.close()
+
+    if result:
+        audit.log_event(
+            "crm.resolve", f"resolve_contact {channel}:{identifier}",
+            category="crm",
+            target=f"person:{person_id}" if person_id else None,
+            details={"channel": channel, "identifier": identifier,
+                     "name": name, "person_id": person_id,
+                     "existed": existing is not None},
+        )
 
     return dict(result) if result else {}
 

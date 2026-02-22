@@ -23,6 +23,21 @@ export interface RenderRequest {
 
 export type CanvasMode = "idle" | "loading" | "native" | "dashboard" | "error";
 
+/** An action request from a dashboard button/form. */
+export interface ActionRequest {
+  tool: string;
+  params: Record<string, unknown>;
+  /** Unique ID for tracking the action lifecycle */
+  id: string;
+}
+
+export interface ActionResult {
+  id: string;
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
 interface VisualStateContextType {
   // Legacy view stack (for native component rendering)
   viewStack: ViewEntry[];
@@ -58,6 +73,12 @@ interface VisualStateContextType {
   pendingMessages: Array<{ role: string; content: string }> | null;
   pendingAgentData: Record<string, unknown> | null;
   notifyConversationUpdate: (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => void;
+
+  // Canvas actions (Phase 4)
+  pendingAction: ActionRequest | null;
+  lastActionResult: ActionResult | null;
+  submitAction: (action: ActionRequest) => void;
+  resolveAction: (result: ActionResult) => void;
 }
 
 const VisualStateContext = createContext<VisualStateContextType | null>(null);
@@ -85,6 +106,20 @@ export function VisualStateProvider({
   const [pendingAgentData, setPendingAgentData] = useState<
     Record<string, unknown> | null
   >(null);
+
+  // Phase 4: Canvas actions
+  const [pendingAction, setPendingAction] = useState<ActionRequest | null>(null);
+  const [lastActionResult, setLastActionResult] = useState<ActionResult | null>(null);
+
+  const submitAction = useCallback((action: ActionRequest) => {
+    setPendingAction(action);
+    setLastActionResult(null);
+  }, []);
+
+  const resolveAction = useCallback((result: ActionResult) => {
+    setLastActionResult(result);
+    setPendingAction(null);
+  }, []);
 
   const pushView = useCallback((view: ViewEntry) => {
     setViewStack((prev) => [...prev, view]);
@@ -184,6 +219,10 @@ export function VisualStateProvider({
         pendingMessages,
         pendingAgentData,
         notifyConversationUpdate,
+        pendingAction,
+        lastActionResult,
+        submitAction,
+        resolveAction,
       },
     },
     children

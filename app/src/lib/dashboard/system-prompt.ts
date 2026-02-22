@@ -290,11 +290,40 @@ document.querySelectorAll('#sortTable1 th[data-col]').forEach(function(th) {
 </script>
 \`\`\`
 
+### Action Buttons (Server-Side Actions)
+Dashboards can trigger server-side actions via \`robothor.action(tool, params)\`. This returns a Promise with the result. Available tools:
+- \`list_conversations\`, \`get_conversation\`, \`list_messages\`, \`list_people\`, \`crm_health\` (read)
+- \`create_note\`, \`create_message\`, \`toggle_conversation_status\`, \`log_interaction\` (write)
+
+\`\`\`html
+<button class="text-xs px-4 py-2 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors"
+        onclick="this.disabled=true; this.textContent='Working...';
+        robothor.action('toggle_conversation_status', {conversation_id: 42, status: 'resolved'})
+          .then(function(r) { this.textContent='Done \\u2713'; this.className+=' bg-emerald-500/20 text-emerald-400'; }.bind(this))
+          .catch(function(e) { this.textContent='Error'; this.className+=' bg-rose-500/20 text-rose-400'; }.bind(this))">
+  Resolve Conversation #42
+</button>
+\`\`\`
+
+### Action Form (Submit Form Data as Action)
+\`\`\`html
+<form id="noteForm" onsubmit="event.preventDefault();
+  robothor.submit('create_note', '#noteForm')
+    .then(function() { document.getElementById('noteForm').innerHTML='<p class=\\'text-emerald-400 text-sm\\'>Note saved \\u2713</p>'; })
+    .catch(function(e) { alert('Error: ' + e.message); })">
+  <input name="title" placeholder="Note title" class="w-full bg-zinc-800 rounded px-3 py-1.5 text-sm text-zinc-200 mb-2" required>
+  <textarea name="body" placeholder="Note content..." class="w-full bg-zinc-800 rounded px-3 py-1.5 text-sm text-zinc-200 mb-2" rows="3" required></textarea>
+  <button type="submit" class="text-xs px-4 py-2 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30">Save Note</button>
+</form>
+\`\`\`
+
 Use interactivity when:
 - Data has 2+ categories or views (use tabs)
 - Items have detail content (use expandable cards)
 - Tables have >3 rows (make headers sortable)
-- Lists are long (add a simple text filter input)`;
+- Lists are long (add a simple text filter input)
+- User might want to take action on displayed items (use action buttons)
+- Data entry is useful (use action forms — notes, messages)`;
 }
 
 /**

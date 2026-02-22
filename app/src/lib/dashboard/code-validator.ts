@@ -19,7 +19,8 @@ const BLOCKED_PATTERNS = [
   /\bdangerouslySetInnerHTML\b/,
   /\bsetTimeout\s*\(\s*["'`]/i,
   /\bsetInterval\s*\(\s*["'`]/i,
-  /\bon\w+\s*=\s*["']/i,
+  // Allow onclick/onsubmit for robothor.action() calls, block other inline handlers
+  /\bon(?!click|submit)\w+\s*=\s*["']/i,
   /\bwindow\s*\[\s*["']/,
   /\(\s*0\s*,\s*eval\s*\)/,
   /\bXMLHttpRequest\b/i,

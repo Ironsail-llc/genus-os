@@ -3,8 +3,9 @@
  * Server-side only — called from the welcome API route.
  */
 
-const BRIDGE_URL = "http://localhost:9100";
-const ORCHESTRATOR_URL = "http://localhost:9099";
+import { getServiceUrl } from "@/lib/services/registry";
+const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
+const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
 
 interface WelcomeContext {
   timestamp: string;
@@ -24,6 +25,10 @@ interface WelcomeContext {
     unreadCount: number;
   } | null;
   calendar: string | null;
+  eventBus: {
+    streams: Record<string, number>;
+    total: number;
+  } | null;
 }
 
 export async function fetchWelcomeContext(): Promise<WelcomeContext> {
@@ -38,10 +43,11 @@ export async function fetchWelcomeContext(): Promise<WelcomeContext> {
   else greeting = "Hey";
 
   // Fetch context in parallel — all are optional
-  const [health, inbox, calendar] = await Promise.all([
+  const [health, inbox, calendar, eventBus] = await Promise.all([
     fetchHealth(),
     fetchInbox(),
     fetchCalendar(),
+    fetchEventBusStats(),
   ]);
 
   return {
@@ -52,6 +58,7 @@ export async function fetchWelcomeContext(): Promise<WelcomeContext> {
     health,
     inbox,
     calendar,
+    eventBus,
   };
 }
 
@@ -60,7 +67,7 @@ async function fetchHealth() {
     const checks = await Promise.allSettled([
       fetchJson(`${BRIDGE_URL}/health`),
       fetchJson(`${ORCHESTRATOR_URL}/health`),
-      fetchJson("http://localhost:8600/health"),
+      fetchJson(`${getServiceUrl("vision") || "http://localhost:8600"}/health`),
     ]);
     const names = ["bridge", "orchestrator", "vision"];
     const services = checks.map((c, i) => ({
@@ -112,6 +119,17 @@ async function fetchCalendar() {
       3000 // tight timeout — calendar is optional
     );
     return data?.answer || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchEventBusStats() {
+  try {
+    const { streamLengths } = await import("@/lib/event-bus/redis-client");
+    const streams = await streamLengths();
+    const total = Object.values(streams).reduce((sum, n) => sum + n, 0);
+    return { streams, total };
   } catch {
     return null;
   }

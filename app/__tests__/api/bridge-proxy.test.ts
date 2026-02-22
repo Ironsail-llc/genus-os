@@ -37,7 +37,7 @@ describe("Bridge Proxy", () => {
     const body = await res.json();
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:9100/health",
+      "http://127.0.0.1:9100/health",
       expect.objectContaining({ method: "GET" })
     );
     expect(body).toEqual({ status: "ok" });
@@ -57,7 +57,7 @@ describe("Bridge Proxy", () => {
     await GET(req, makeContext(["api", "people"]));
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("http://localhost:9100/api/people?search=john"),
+      expect.stringContaining("http://127.0.0.1:9100/api/people?search=john"),
       expect.any(Object)
     );
   });
@@ -76,7 +76,7 @@ describe("Bridge Proxy", () => {
 
     expect(res.status).toBe(201);
     expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:9100/api/notes",
+      "http://127.0.0.1:9100/api/notes",
       expect.objectContaining({ method: "POST" })
     );
   });
