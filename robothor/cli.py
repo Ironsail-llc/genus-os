@@ -283,7 +283,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             password=cfg.redis.password or None,
             socket_connect_timeout=3,
         )
-        info = r.info("server")
+        info: dict = r.info("server")  # type: ignore[assignment]
         print(f"               Connected — Redis {info.get('redis_version', '?')}")
     except Exception as e:
         print(f"               UNREACHABLE — {e}")

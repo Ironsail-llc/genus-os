@@ -325,7 +325,8 @@ def run_migration(db_config: DatabaseConfig) -> int:
             cur.execute(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
             )
-            count = cur.fetchone()[0]
+            row = cur.fetchone()
+            count: int = row[0] if row else 0
         conn.close()
         return count
     except Exception:
