@@ -312,7 +312,7 @@ async def test_merge_people_endpoint_missing_params(test_client):
 @pytest.mark.asyncio
 async def test_merge_people_endpoint_success(test_client):
     """Successful merge returns 200 with merged record."""
-    with patch("crm_dal.merge_people", return_value={"id": "keeper-id", "name": "Test"}):
+    with patch("routers.people.merge_people", return_value={"id": "keeper-id", "name": "Test"}):
         r = await test_client.post("/api/people/merge", json={
             "primaryId": "keeper-id",
             "secondaryId": "loser-id",
@@ -332,7 +332,7 @@ async def test_merge_companies_endpoint_missing_params(test_client):
 @pytest.mark.asyncio
 async def test_merge_companies_endpoint_success(test_client):
     """Successful company merge returns 200."""
-    with patch("crm_dal.merge_companies", return_value={"id": "keep-co"}):
+    with patch("routers.people.merge_companies", return_value={"id": "keep-co"}):
         r = await test_client.post("/api/companies/merge", json={
             "primaryId": "keep-co",
             "secondaryId": "lose-co",

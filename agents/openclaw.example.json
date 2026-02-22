@@ -1,0 +1,144 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/$MODEL_ID",
+        "fallbacks": [
+          "anthropic/claude-opus-4-6"
+        ]
+      },
+      "workspace": "$WORKSPACE_DIR",
+      "contextTokens": 175000,
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "12h",
+        "keepLastAssistants": 5
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "heartbeat": {
+        "every": "0",
+        "ackMaxChars": 500,
+        "activeHours": {
+          "start": "06:00",
+          "end": "22:00",
+          "timezone": "$TIMEZONE"
+        }
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8,
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 5
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "workspace": "$WORKSPACE_DIR",
+        "heartbeat": {
+          "every": "0"
+        }
+      },
+      {
+        "id": "supervisor",
+        "name": "Supervisor",
+        "workspace": "$WORKSPACE_DIR",
+        "heartbeat": {
+          "every": "17m",
+          "activeHours": {
+            "start": "06:00",
+            "end": "22:00",
+            "timezone": "$TIMEZONE"
+          }
+        },
+        "tools": {
+          "deny": [
+            "create_person",
+            "update_person",
+            "delete_person",
+            "merge_contacts",
+            "merge_companies",
+            "create_note",
+            "update_note",
+            "delete_note",
+            "create_task",
+            "update_task",
+            "delete_task"
+          ]
+        }
+      },
+      {
+        "id": "email",
+        "name": "Email Pipeline",
+        "workspace": "$WORKSPACE_DIR",
+        "tools": {
+          "deny": [
+            "message",
+            "sessions_spawn"
+          ]
+        }
+      },
+      {
+        "id": "calendar",
+        "name": "Calendar Monitor",
+        "workspace": "$WORKSPACE_DIR",
+        "tools": {
+          "deny": [
+            "create_person",
+            "update_person",
+            "delete_person",
+            "merge_contacts",
+            "merge_companies",
+            "create_note",
+            "update_note",
+            "delete_note",
+            "create_task",
+            "update_task",
+            "delete_task",
+            "message",
+            "web_search",
+            "web_fetch",
+            "sessions_spawn"
+          ]
+        }
+      },
+      {
+        "id": "crm",
+        "name": "CRM Operations",
+        "workspace": "$WORKSPACE_DIR",
+        "tools": {
+          "deny": [
+            "message"
+          ]
+        }
+      },
+      {
+        "id": "vision",
+        "name": "Vision Monitor",
+        "workspace": "$WORKSPACE_DIR",
+        "tools": {
+          "deny": [
+            "create_person",
+            "update_person",
+            "delete_person",
+            "merge_contacts",
+            "merge_companies",
+            "create_note",
+            "update_note",
+            "delete_note",
+            "create_task",
+            "update_task",
+            "delete_task",
+            "message",
+            "web_search",
+            "web_fetch",
+            "sessions_spawn"
+          ]
+        }
+      }
+    ]
+  }
+}

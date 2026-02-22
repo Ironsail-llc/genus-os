@@ -36,9 +36,16 @@ PG_DSN = "dbname=robothor_memory user=philip host=/var/run/postgresql"
 
 @pytest.fixture(autouse=True)
 def use_real_dsn():
-    """Ensure audit module uses real database."""
+    """Ensure both audit modules use real database."""
+    import psycopg2
+    from robothor.audit import logger as oss_audit
+
     audit.set_dsn(PG_DSN)
+    oss_audit.set_connection_factory(
+        lambda: psycopg2.connect(PG_DSN)
+    )
     yield
+    oss_audit.reset_connection_factory()
 
 
 @pytest_asyncio.fixture
@@ -354,7 +361,7 @@ class TestAuditErrorResilience:
     @pytest.mark.asyncio
     async def test_audit_failure_doesnt_break_bridge_webhook(self, client):
         """Mock audit to raise; webhook endpoint should still return 200."""
-        with patch("bridge_service.audit.log_event", side_effect=Exception("Audit DB down")):
+        with patch("routers.integration.log_event", side_effect=Exception("Audit DB down")):
             # The webhook endpoint calls audit.log_event — if it raises,
             # the endpoint should still function (return 200 or handle gracefully).
             # Send a minimal webhook payload

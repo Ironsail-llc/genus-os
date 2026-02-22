@@ -1,0 +1,50 @@
+# Robothor Bridge Service — systemd service template
+#
+# Glue service providing contact resolution, webhooks, CRM integration,
+# and merge operations. Exposes REST API for agent tools.
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/robothor-bridge.service
+#   2. Edit User= to match your system user
+#   3. Ensure /etc/robothor/robothor.env exists (see robothor.env.example)
+#   4. Run: sudo systemctl daemon-reload
+#   5. Run: sudo systemctl enable --now robothor-bridge
+#
+# Logs: journalctl -u robothor-bridge -f
+# Health: curl http://localhost:9100/health
+
+[Unit]
+Description=Robothor Bridge Service (CRM + Contact Resolution)
+Documentation=https://github.com/robothor-ai/robothor
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+# Set User to the system user that runs Robothor
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+
+ExecStart=/usr/bin/env python -m robothor.bridge.service
+
+EnvironmentFile=/etc/robothor/robothor.env
+
+Restart=always
+RestartSec=5
+KillMode=control-group
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/log/robothor
+
+LimitNOFILE=65536
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,123 @@
+# Robothor Full Stack
+#
+# Complete development stack with PostgreSQL + pgvector, Redis, Ollama,
+# and the Robothor API service.
+#
+# Usage:
+#   cp .env.example .env
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen3-embedding:0.6b
+#   docker compose exec ollama ollama pull qwen3-next:latest
+
+services:
+  # --- PostgreSQL 16 with pgvector extension ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ROBOTHOR_DB_NAME:-robothor_memory}
+      POSTGRES_USER: ${ROBOTHOR_DB_USER:-robothor}
+      POSTGRES_PASSWORD: ${ROBOTHOR_DB_PASSWORD:?Set ROBOTHOR_DB_PASSWORD in .env}
+    ports:
+      - "${ROBOTHOR_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ROBOTHOR_DB_USER:-robothor} -d ${ROBOTHOR_DB_NAME:-robothor_memory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis 7 ---
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "${ROBOTHOR_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Ollama LLM server ---
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "${ROBOTHOR_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # Uncomment the following for GPU acceleration (requires NVIDIA Container Toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Robothor API service ---
+  robothor:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install --quiet robothor[api,llm] &&
+        python -m robothor.api.server
+      "
+    ports:
+      - "${ROBOTHOR_API_PORT:-9099}:9099"
+    environment:
+      # Database
+      ROBOTHOR_DB_HOST: postgres
+      ROBOTHOR_DB_PORT: "5432"
+      ROBOTHOR_DB_NAME: ${ROBOTHOR_DB_NAME:-robothor_memory}
+      ROBOTHOR_DB_USER: ${ROBOTHOR_DB_USER:-robothor}
+      ROBOTHOR_DB_PASSWORD: ${ROBOTHOR_DB_PASSWORD:?Set ROBOTHOR_DB_PASSWORD in .env}
+      # Redis
+      ROBOTHOR_REDIS_HOST: redis
+      ROBOTHOR_REDIS_PORT: "6379"
+      # Ollama
+      ROBOTHOR_OLLAMA_HOST: ollama
+      ROBOTHOR_OLLAMA_PORT: "11434"
+      # Models
+      ROBOTHOR_EMBEDDING_MODEL: ${ROBOTHOR_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      ROBOTHOR_RERANKER_MODEL: ${ROBOTHOR_RERANKER_MODEL:-dengcao/Qwen3-Reranker-0.6B:F16}
+      ROBOTHOR_GENERATION_MODEL: ${ROBOTHOR_GENERATION_MODEL:-qwen3-next:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9099/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  pgdata:
+    driver: local
+  redis-data:
+    driver: local
+  ollama-models:
+    driver: local

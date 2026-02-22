@@ -1,0 +1,8 @@
+{
+  "name": "crm-tools",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for CRM, memory, and pipeline tools via Bridge HTTP API",
+  "main": "index.ts",
+  "type": "module",
+  "dependencies": {}
+}

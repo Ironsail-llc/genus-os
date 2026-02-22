@@ -6,6 +6,11 @@ health/
 templates/
 tunnel/
 
+# Sensitive docs (symlinked from ~/clawd/, tracked there)
+CLAUDE.md
+SERVICES.md
+INFRASTRUCTURE.md
+
 # Backup logs
 scripts/backup.log
 
@@ -40,3 +45,26 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Python packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+
+# Personal data patterns (safety net)
+*.key
+*.pem
+secrets.json
+secrets.enc.json
+credentials.json

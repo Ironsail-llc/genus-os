@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "morning-briefing-0001",
+      "agentId": "main",
+      "name": "Morning Briefing",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 6 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "MORNING BRIEFING: Generate the daily briefing.\n\n1. Check calendar (memory/calendar-log.json) for today's schedule\n2. Check email-log.json for urgent or unread items\n3. Include 2-3 relevant news items\n\nWEATHER (customize coordinates for your location):\n- Use Open-Meteo API: latitude=$LATITUDE, longitude=$LONGITUDE\n- Use fahrenheit and mph (or adjust to your preference)\n\nCRM ACTIVITY:\n- Use list_conversations (status=open) to count open conversations\n- Summarize: \"X open conversations, Y with unread messages\"\n- Mention notable contacts with open threads\n\nFormat a concise briefing and deliver via your configured channel.",
+        "timeoutSeconds": 300
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "evening-wind-down-0001",
+      "agentId": "main",
+      "name": "Evening Wind-Down",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 21 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "EVENING WIND-DOWN: Generate the evening summary.\n\n1. Check tomorrow's calendar (memory/calendar-log.json)\n2. Review any open tasks or unresolved escalations\n3. Summarize today's activity\n\nWEATHER (customize coordinates for your location):\n- Use Open-Meteo API: latitude=$LATITUDE, longitude=$LONGITUDE\n- Use fahrenheit and mph (or adjust to your preference)\n\nCRM DAY SUMMARY:\n- Use list_conversations (status=all) to count resolved today\n- Summarize: \"X interactions logged, Y conversations resolved\"\n\nFormat a concise summary and deliver via your configured channel.",
+        "timeoutSeconds": 300
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "email-classifier-0001",
+      "agentId": "email",
+      "name": "Email Classifier",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "EMAIL CLASSIFIER: Process email items from memory/triage-inbox.json.\n\n1. Read memory/triage-inbox.json\n2. If counts.emails is 0: output HEARTBEAT_OK, stop\n3. Check activeEscalationIds -- do NOT re-escalate items already listed\n4. For each email: dismiss junk, route reply-worthy from known contacts to response-queue.json, escalate unknowns/complex to worker-handoff.json\n5. Use CRM tools (log_interaction, create_person) as needed\n\nDo NOT process calendar or jira items.\nDo NOT reply to emails -- route to response-queue.json.\n\nOUTPUT: ZERO emails -> HEARTBEAT_OK\nOtherwise -> categorized summary per email.",
+        "timeoutSeconds": 300
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "email-analyst-0001",
+      "agentId": "email",
+      "name": "Email Analyst",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "EMAIL ANALYST: Analyze complex emails that need substantive replies.\n\n1. Read memory/response-inbox.json\n2. For each item with depth: \"analytical\", produce structured analysis (content summary, relationship context, action items, suggested approach)\n3. Write findings to memory/response-analysis.json\n4. Skip items where depth: \"quick\" -- nothing to analyze\n\nZERO analytical items -> write email-analyst-status.md, then HEARTBEAT_OK\nOtherwise -> N emails analyzed\nALWAYS write email-analyst-status.md before finishing.",
+        "timeoutSeconds": 240
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "email-responder-0001",
+      "agentId": "email",
+      "name": "Email Responder",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "45 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "EMAIL RESPONDER: Compose and send replies to queued emails.\n\n1. Read memory/response-inbox.json -- each item has the full email thread, contact info, CRM context, and depth classification\n2. For analytical items (depth: \"analytical\"): also read memory/response-analysis.json for structured analysis\n3. For each item: compose a reply, send via your email tool, log via log_interaction\n4. If you cannot handle an item, add to worker-handoff.json\n\nZERO items -> write response-status.md (\"Inbox empty\"), then HEARTBEAT_OK\nOtherwise -> categorized completion summary\nALWAYS write response-status.md before finishing.",
+        "timeoutSeconds": 300
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "supervisor-heartbeat-0001",
+      "agentId": "supervisor",
+      "name": "Supervisor Heartbeat",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "*/17 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "SUPERVISOR HEARTBEAT: Check in and report status.\n\nReport what was handled, ask for help on what is stuck, remind about stale asks.\n\nRead these worker status files:\n- memory/email-classifier-status.md\n- memory/calendar-monitor-status.md\n- memory/response-status.md\n- memory/conversation-resolver-status.md\n- memory/crm-steward-status.md\n- memory/vision-monitor-status.md\n- memory/conversation-inbox-status.md\n\nRead memory/worker-handoff.json for escalations. Apply surfacing rules:\n- resolvedAt set -> SKIP\n- surfacedAt set and <6h -> SKIP (already shown)\n- surfacedAt set and >6h -> stale reminder\n- surfacedAt null -> NEW, investigate and surface\n\nNEVER re-surface items already known about. HEARTBEAT_OK only when truly nothing happened.\n\nKeep total output under 500 chars.",
+        "timeoutSeconds": 300
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "calendar-monitor-0001",
+      "agentId": "calendar",
+      "name": "Calendar Monitor",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "*/15 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "CALENDAR MONITOR: Process calendar items from memory/triage-inbox.json.\n\n1. Read memory/triage-inbox.json\n2. If counts.calendar is 0: output HEARTBEAT_OK, stop\n3. Check activeEscalationIds -- do NOT re-escalate items already listed\n4. For each calendar item: note routine additions, detect conflicts, escalate problems\n\nDo NOT process email or jira items.\n\nOUTPUT: ZERO calendar items -> HEARTBEAT_OK\nOtherwise -> categorized calendar summary.",
+        "timeoutSeconds": 180
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "vision-monitor-0001",
+      "agentId": "vision",
+      "name": "Vision Monitor",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "*/10 * * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "VISION MONITOR: Check for new motion events.\n\nIf events exist:\n1. Read the latest snapshot image from the event\n2. Analyze what triggered the motion using the vision model\n3. Categorize: routine (resident moving around), visitor (unknown person), pet, delivery, or anomaly\n4. If visitor/delivery/anomaly: write to memory/worker-handoff.json with source \"vision\" and urgency \"high\"\n5. Clear processed events from the log\n\nIf NO events: respond with just HEARTBEAT_OK\n\nAfter processing, write status to memory/vision-monitor-status.md:\n# Vision Monitor Status\nLast run: <ISO timestamp>\nEvents processed: <N>\nEscalations: <N> (visitor/delivery/anomaly)\n\nKeep responses minimal. Do NOT message the user directly -- the supervisor handles that.",
+        "timeoutSeconds": 120
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "conversation-inbox-monitor-0001",
+      "agentId": "crm",
+      "name": "Conversation Inbox Monitor",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "*/30 6-22 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "CONVERSATION INBOX MONITOR: Check for NEW urgent messages only.\n\n1. Use list_conversations (status=open)\n2. If ZERO open conversations: output HEARTBEAT_OK, stop\n3. For each OPEN conversation: check for unread incoming messages from the LAST 2 HOURS only\n4. If urgent (key contacts or keywords: urgent/asap/emergency/cancellation/payment due): escalate to worker-handoff.json\n5. If no new urgent messages in last 2h: HEARTBEAT_OK\n\nIMPORTANT: Do NOT count total unread messages. Only alert on NEW messages (last 2h) in OPEN conversations.\n\nAfter processing, write status to memory/conversation-inbox-status.md:\n# Conversation Inbox Status\nLast run: <ISO timestamp>\nOpen conversations checked: <N>\nUrgent escalations: <N>",
+        "timeoutSeconds": 120
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "conversation-resolver-0001",
+      "agentId": "crm",
+      "name": "Conversation Resolver",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 6-22/2 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "CONVERSATION RESOLVER: Auto-resolve stale conversations.\n\n1. list_conversations(status=open) -- paginate all pages\n2. For each: check last message timestamp via list_messages\n3. Resolve if last message >7 days ago AND no unread incoming <48h\n4. Check worker-handoff.json for resolved conversation escalations\n5. Write memory/conversation-resolver-status.md\n\nNEVER resolve conversations with recent unread incoming messages.\nNEVER resolve key contacts unless >14d old.\n\nOUTPUT: ZERO resolved -> HEARTBEAT_OK\nOtherwise -> N stale conversations resolved",
+        "timeoutSeconds": 180
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    },
+    {
+      "id": "crm-steward-0001",
+      "agentId": "crm",
+      "name": "CRM Steward",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 10,18 * * *",
+        "tz": "$TIMEZONE"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "next-heartbeat",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "CRM STEWARD: Two phases -- hygiene + enrichment.\n\nPhase 1 -- Hygiene:\n1. crm_health() -- if degraded, output HEARTBEAT_OK and stop\n2. list_people(limit=200) -- duplicate detection\n3. Orphan detection -- find contact_identifiers with no linked person\n4. Completeness audit -- count missing company, jobTitle, phone, linkedinUrl\n\nPhase 2 -- Enrichment:\n5. Pick top 3 least-complete contacts\n6. Research each contact via web search\n7. Apply results: update_person for LinkedIn/phone/jobTitle, update_company for domain/employees\n8. Create CRM notes with bio context\n9. Write memory/crm-steward-status.md\n\nNEVER overwrite existing fields. NEVER merge duplicates (escalate only). Max 3 enrichments per run.\n\nOUTPUT: Nothing done -> HEARTBEAT_OK\nOtherwise -> N duplicates flagged, M orphans fixed, K contacts enriched",
+        "timeoutSeconds": 600
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "$DELIVERY_CHANNEL",
+        "to": "$DELIVERY_TARGET"
+      }
+    }
+  ]
+}

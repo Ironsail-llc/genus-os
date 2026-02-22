@@ -1,0 +1,47 @@
+# Robothor API Server — systemd service template
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/robothor-api.service
+#   2. Edit User= to match your system user
+#   3. Ensure /etc/robothor/robothor.env exists (see robothor.env.example)
+#   4. Run: sudo systemctl daemon-reload
+#   5. Run: sudo systemctl enable --now robothor-api
+#
+# Logs: journalctl -u robothor-api -f
+
+[Unit]
+Description=Robothor API Server (RAG Orchestrator)
+Documentation=https://github.com/robothor-ai/robothor
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+# Set User to the system user that runs Robothor
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+
+ExecStart=/usr/bin/env robothor serve --host 0.0.0.0 --port 9099
+
+EnvironmentFile=/etc/robothor/robothor.env
+
+Restart=always
+RestartSec=5
+KillMode=control-group
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/log/robothor
+
+# Resource limits
+LimitNOFILE=65536
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

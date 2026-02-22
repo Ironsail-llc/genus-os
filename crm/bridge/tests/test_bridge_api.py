@@ -1,7 +1,7 @@
 """
 Tests for bridge_service.py endpoints.
 
-All CRM operations are mocked via crm_dal patches.
+All CRM operations are mocked via robothor.crm.dal patches (through routers).
 External HTTP calls (Memory) are mocked via mock_http_client fixture.
 """
 
@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-# ─── Health Endpoint ─────────────────────────────────────────────────
+# ─── Health Endpoint ─────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_health_all_services_ok(test_client, mock_http_client):
         return_value=MagicMock(spec=httpx.Response, status_code=200)
     )
 
-    with patch("crm_dal.check_health", return_value={"status": "ok"}):
+    with patch("routers.health.check_health", return_value={"status": "ok"}):
         r = await test_client.get("/health")
         assert r.status_code == 200
         data = r.json()
@@ -42,7 +42,7 @@ async def test_health_degraded_when_crm_down(test_client, mock_http_client):
         return_value=MagicMock(spec=httpx.Response, status_code=200)
     )
 
-    with patch("crm_dal.check_health", return_value={"status": "error", "error": "connection refused"}):
+    with patch("routers.health.check_health", return_value={"status": "error", "error": "connection refused"}):
         r = await test_client.get("/health")
         data = r.json()
         assert data["status"] == "degraded"
@@ -58,26 +58,24 @@ async def test_health_degraded_when_memory_down(test_client, mock_http_client):
 
     mock_http_client.get = AsyncMock(side_effect=route_get)
 
-    with patch("crm_dal.check_health", return_value={"status": "ok"}):
+    with patch("routers.health.check_health", return_value={"status": "ok"}):
         r = await test_client.get("/health")
         data = r.json()
         assert data["status"] == "degraded"
         assert "error" in data["services"]["memory"]
 
 
-# ─── Resolve Contact ────────────────────────────────────────────────
+# ─── Resolve Contact ────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_resolve_contact_missing_fields(test_client):
-    """Missing channel or identifier returns 400."""
+    """Missing required fields returns 422 (Pydantic validation)."""
     r = await test_client.post("/resolve-contact", json={"channel": "email"})
-    assert r.status_code == 400
-    assert "identifier" in r.json()["error"]
+    assert r.status_code == 422
 
     r = await test_client.post("/resolve-contact", json={"identifier": "x@y.com"})
-    assert r.status_code == 400
-    assert "channel" in r.json()["error"]
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -100,15 +98,15 @@ async def test_resolve_contact_existing(test_client):
         assert data["person_id"] == "abc-123"
 
 
-# ─── CRM Proxy Endpoints ────────────────────────────────────────────
+# ─── CRM Proxy Endpoints ────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_api_list_conversations(test_client):
     """Proxy list_conversations returns CRM data."""
-    mock_result = {"data": {"payload": [{"id": 1}], "meta": {}}}
+    mock_result = [{"id": 1, "status": "open"}]
 
-    with patch("crm_dal.list_conversations", return_value=mock_result):
+    with patch("routers.conversations.list_conversations", return_value=mock_result):
         r = await test_client.get("/api/conversations?status=open")
         assert r.status_code == 200
         assert r.json() == mock_result
@@ -117,42 +115,42 @@ async def test_api_list_conversations(test_client):
 @pytest.mark.asyncio
 async def test_api_get_conversation_not_found(test_client):
     """When conversation doesn't exist, returns 404."""
-    with patch("crm_dal.get_conversation", return_value=None):
+    with patch("routers.conversations.get_conversation", return_value=None):
         r = await test_client.get("/api/conversations/9999")
         assert r.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_api_create_message_empty_content(test_client):
-    """Empty content returns 400."""
+    """Empty content returns 422 (Pydantic requires non-empty)."""
     r = await test_client.post("/api/conversations/1/messages", json={
         "content": "",
     })
+    # Pydantic model accepts empty string but route validates
+    # The route checks `if not body.content` and returns 400
     assert r.status_code == 400
     assert "content" in r.json()["error"]
 
 
 @pytest.mark.asyncio
 async def test_api_create_person_missing_name(test_client):
-    """Missing firstName returns 400."""
+    """Missing firstName returns 422 (Pydantic validation)."""
     r = await test_client.post("/api/people", json={
         "lastName": "Smith",
     })
-    assert r.status_code == 400
-    assert "firstName" in r.json()["error"]
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_api_create_note_missing_title(test_client):
-    """Missing title returns 400."""
+    """Missing title returns 422 (Pydantic validation)."""
     r = await test_client.post("/api/notes", json={
         "body": "some note body",
     })
-    assert r.status_code == 400
-    assert "title" in r.json()["error"]
+    assert r.status_code == 422
 
 
-# ─── Log Interaction ─────────────────────────────────────────────────
+# ─── Log Interaction ─────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

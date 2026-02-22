@@ -1,0 +1,58 @@
+# Robothor Vision Service — systemd service template
+#
+# Provides always-on vision with YOLO object detection and InsightFace
+# face recognition. Three modes: disarmed, basic, armed.
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/robothor-vision.service
+#   2. Edit User= to match your system user
+#   3. Ensure /etc/robothor/robothor.env exists (see robothor.env.example)
+#   4. Ensure the camera device is accessible to the service user
+#   5. Run: sudo systemctl daemon-reload
+#   6. Run: sudo systemctl enable --now robothor-vision
+#
+# Logs: journalctl -u robothor-vision -f
+# Health: curl http://localhost:8600/health
+# Mode switch: curl -X POST http://localhost:8600/mode -d '{"mode":"armed"}'
+
+[Unit]
+Description=Robothor Vision Service (YOLO + InsightFace)
+Documentation=https://github.com/robothor-ai/robothor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Set User to the system user that runs Robothor
+# Note: user must have access to the camera device (e.g., in 'video' group)
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+
+ExecStart=/usr/bin/env python -m robothor.vision.service
+
+EnvironmentFile=/etc/robothor/robothor.env
+
+Restart=always
+RestartSec=5
+KillMode=control-group
+
+# Camera device access — adjust path if needed
+# If using a USB webcam, ensure the user is in the 'video' group:
+#   sudo usermod -aG video robothor
+SupplementaryGroups=video
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/log/robothor
+
+# Vision models can use significant memory
+LimitNOFILE=65536
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -14,9 +14,10 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport
 
-# Add bridge source directory to path so imports resolve
+# Add bridge source directory and memory system to path so imports resolve
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BRIDGE_DIR))
+sys.path.insert(0, "/home/philip/clawd/memory_system")
 
 import bridge_service  # noqa: E402
 from bridge_service import app  # noqa: E402

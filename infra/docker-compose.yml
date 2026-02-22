@@ -1,0 +1,74 @@
+# Robothor Infrastructure Stack
+# Usage: docker compose up -d
+#
+# Provides PostgreSQL (pgvector), Redis, and Ollama for the Robothor AI brain.
+# Copy robothor.env.example to .env and customize before starting.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: robothor-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${ROBOTHOR_DB_NAME:-robothor_memory}
+      POSTGRES_USER: ${ROBOTHOR_DB_USER:-robothor}
+      POSTGRES_PASSWORD: ${ROBOTHOR_DB_PASSWORD:?Set ROBOTHOR_DB_PASSWORD in .env}
+    ports:
+      - "${ROBOTHOR_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ROBOTHOR_DB_USER:-robothor} -d ${ROBOTHOR_DB_NAME:-robothor_memory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: robothor-redis
+    restart: always
+    command: >
+      redis-server
+      --maxmemory ${ROBOTHOR_REDIS_MAXMEMORY:-2gb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "${ROBOTHOR_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: robothor-ollama
+    restart: always
+    ports:
+      - "${ROBOTHOR_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # If no GPU is available, comment out the deploy.resources block above
+    # and uncomment the following line:
+    # deploy: {}
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local

@@ -7,6 +7,7 @@ import sys
 import os
 
 import pytest
+from unittest.mock import patch, MagicMock
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -23,6 +24,7 @@ def client():
 
 # ─── No Header (Backward Compatibility) ─────────────────────────────
 
+
 class TestNoAgentHeader:
     @pytest.mark.asyncio
     async def test_no_header_allows_health(self, client):
@@ -33,31 +35,34 @@ class TestNoAgentHeader:
     @pytest.mark.asyncio
     async def test_no_header_allows_people(self, client):
         """No header → can access any endpoint."""
-        resp = await client.get("/api/people")
-        assert resp.status_code == 200
+        with patch("routers.people.list_people", return_value=[]):
+            resp = await client.get("/api/people")
+            assert resp.status_code == 200
 
 
 # ─── Known Agent: Authorized ────────────────────────────────────────
+
 
 class TestAuthorizedAgent:
     @pytest.mark.asyncio
     async def test_email_classifier_reads_conversations(self, client):
         """Email classifier can GET /api/conversations."""
-        resp = await client.get(
-            "/api/conversations",
-            headers={"X-Agent-Id": "email-classifier"},
-        )
-        # Should not be 403 (may be 200 or other depending on service state)
-        assert resp.status_code != 403
+        with patch("routers.conversations.list_conversations", return_value=[]):
+            resp = await client.get(
+                "/api/conversations",
+                headers={"X-Agent-Id": "email-classifier"},
+            )
+            assert resp.status_code != 403
 
     @pytest.mark.asyncio
     async def test_crm_steward_reads_people(self, client):
         """CRM steward can GET /api/people."""
-        resp = await client.get(
-            "/api/people",
-            headers={"X-Agent-Id": "crm-steward"},
-        )
-        assert resp.status_code != 403
+        with patch("routers.people.list_people", return_value=[]):
+            resp = await client.get(
+                "/api/people",
+                headers={"X-Agent-Id": "crm-steward"},
+            )
+            assert resp.status_code != 403
 
     @pytest.mark.asyncio
     async def test_all_agents_access_health(self, client):
@@ -72,6 +77,7 @@ class TestAuthorizedAgent:
 
 
 # ─── Known Agent: Denied ────────────────────────────────────────────
+
 
 class TestDeniedAgent:
     @pytest.mark.asyncio
@@ -117,35 +123,35 @@ class TestDeniedAgent:
 
 # ─── Unknown Agent ──────────────────────────────────────────────────
 
+
 class TestUnknownAgent:
     @pytest.mark.asyncio
     async def test_unknown_agent_allowed(self, client):
         """Unknown agent ID gets default policy (allow)."""
-        resp = await client.get(
-            "/api/people",
-            headers={"X-Agent-Id": "rogue-agent-xyz"},
-        )
-        # Default policy is "allow" — should not be 403
-        assert resp.status_code != 403
+        with patch("routers.people.list_people", return_value=[]):
+            resp = await client.get(
+                "/api/people",
+                headers={"X-Agent-Id": "rogue-agent-xyz"},
+            )
+            assert resp.status_code != 403
 
 
 # ─── Audit on Deny ─────────────────────────────────────────────────
+
 
 class TestAuditOnDeny:
     @pytest.mark.asyncio
     async def test_denied_request_logged(self, client):
         """Denied requests should create auth.denied audit events."""
-        from unittest.mock import patch
-
-        with patch("bridge_service.audit") as mock_audit:
+        with patch("middleware.log_event") as mock_log:
             resp = await client.get(
                 "/api/people",
                 headers={"X-Agent-Id": "vision-monitor"},
             )
             assert resp.status_code == 403
-            mock_audit.log_event.assert_called_once()
-            args = mock_audit.log_event.call_args
+            mock_log.assert_called_once()
+            args = mock_log.call_args
             assert args[0][0] == "auth.denied"
-            assert "vision-monitor" in args[0][1]  # action string
+            assert "vision-monitor" in args[0][1]
             assert args[1]["actor"] == "vision-monitor"
             assert args[1]["details"]["path"] == "/api/people"

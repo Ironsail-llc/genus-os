@@ -333,6 +333,19 @@ class TestCrmDalAudit:
 # ─── Cleanup ──────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def configure_robothor_audit():
+    """Configure robothor.audit.logger to use the same DSN as the raw audit module."""
+    import psycopg2
+    from robothor.audit import logger as oss_audit
+
+    oss_audit.set_connection_factory(
+        lambda: psycopg2.connect("dbname=robothor_memory user=philip host=/var/run/postgresql")
+    )
+    yield
+    oss_audit.reset_connection_factory()
+
+
 @pytest.fixture(autouse=True, scope="session")
 def cleanup_test_audit_entries():
     """Clean up test audit entries after the session."""
