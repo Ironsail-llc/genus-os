@@ -340,7 +340,7 @@ mypy robothor/ --ignore-missing-imports
 ## Development
 
 ```bash
-git clone https://github.com/Ironsail-Philip/robothor.git
+git clone https://github.com/Ironsail-llc/robothor.git
 cd robothor
 pip install -e ".[dev]"
 pytest

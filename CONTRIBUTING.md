@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Robothor! This document covers th
 
 ```bash
 # Clone and install
-git clone https://github.com/Ironsail-Philip/robothor.git
+git clone https://github.com/Ironsail-llc/robothor.git
 cd robothor
 pip install -e ".[dev]"
 

@@ -60,8 +60,8 @@ robothor = "robothor.cli:main"
 
 [project.urls]
 Homepage = "https://robothor.ai"
-Repository = "https://github.com/Ironsail-Philip/robothor"
-Issues = "https://github.com/Ironsail-Philip/robothor/issues"
+Repository = "https://github.com/Ironsail-llc/robothor"
+Issues = "https://github.com/Ironsail-llc/robothor/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["robothor"]
