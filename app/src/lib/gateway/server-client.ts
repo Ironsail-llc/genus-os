@@ -377,8 +377,8 @@ class GatewayClient {
             while (buffer.length === 0 && !done) {
               await new Promise<void>((resolve) => {
                 waitResolve = resolve;
-                // Safety timeout to prevent infinite hang
-                setTimeout(resolve, 120000);
+                // Safety timeout to prevent infinite hang (5 min for long responses)
+                setTimeout(resolve, 300000);
               });
             }
             if (buffer.length > 0) {

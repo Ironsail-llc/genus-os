@@ -128,12 +128,48 @@ export async function create_task(data: { title: string; body?: string; dueAt?: 
   return result;
 }
 
-export async function list_tasks({ status, personId }: { status?: string; personId?: string } = {}) {
+export async function list_tasks({
+  status,
+  personId,
+  assignedToAgent,
+  createdByAgent,
+  tags,
+  priority,
+  excludeResolved,
+  limit,
+}: {
+  status?: string;
+  personId?: string;
+  assignedToAgent?: string;
+  createdByAgent?: string;
+  tags?: string[];
+  priority?: string;
+  excludeResolved?: boolean;
+  limit?: number;
+} = {}) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (personId) params.set("personId", personId);
+  if (assignedToAgent) params.set("assignedToAgent", assignedToAgent);
+  if (createdByAgent) params.set("createdByAgent", createdByAgent);
+  if (tags && tags.length > 0) params.set("tags", tags.join(","));
+  if (priority) params.set("priority", priority);
+  if (excludeResolved) params.set("excludeResolved", "true");
+  if (limit) params.set("limit", String(limit));
   const qs = params.toString();
   return bridgeCall("GET", `/api/tasks${qs ? `?${qs}` : ""}`);
+}
+
+export async function get_task({ taskId }: { taskId: string }) {
+  return bridgeCall("GET", `/api/tasks/${taskId}`);
+}
+
+export async function update_task({ taskId, ...data }: { taskId: string; [key: string]: unknown }) {
+  return bridgeCall("PATCH", `/api/tasks/${taskId}`, data);
+}
+
+export async function delete_task({ taskId }: { taskId: string }) {
+  return bridgeCall("DELETE", `/api/tasks/${taskId}`);
 }
 
 // ── CRM: Conversations ──────────────────────────────────────────────────────

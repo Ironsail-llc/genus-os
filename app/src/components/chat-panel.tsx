@@ -146,6 +146,21 @@ export function ChatPanel() {
       // The old parser used lines[i-1] to detect event types, which broke when
       // TCP chunks split between the "event:" and "data:" lines — the done event
       // would be misidentified as a delta, doubling the message text.
+      const processLine = (line: string) => {
+        if (line === "") {
+          // Empty line = SSE event boundary — dispatch accumulated event
+          if (sseData) {
+            handleSSEEvent(sseEventType || "delta", sseData);
+          }
+          sseEventType = "";
+          sseData = "";
+        } else if (line.startsWith("event: ")) {
+          sseEventType = line.slice(7);
+        } else if (line.startsWith("data: ")) {
+          sseData += (sseData ? "\n" : "") + line.slice(6);
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -155,19 +170,21 @@ export function ChatPanel() {
         sseBuffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line === "") {
-            // Empty line = SSE event boundary — dispatch accumulated event
-            if (sseData) {
-              handleSSEEvent(sseEventType || "delta", sseData);
-            }
-            sseEventType = "";
-            sseData = "";
-          } else if (line.startsWith("event: ")) {
-            sseEventType = line.slice(7);
-          } else if (line.startsWith("data: ")) {
-            sseData += (sseData ? "\n" : "") + line.slice(6);
-          }
+          processLine(line);
         }
+      }
+
+      // Flush TextDecoder and process any remaining buffer data
+      sseBuffer += decoder.decode();
+      if (sseBuffer.length > 0) {
+        const remaining = sseBuffer.split("\n");
+        for (const line of remaining) {
+          processLine(line);
+        }
+      }
+      // Dispatch any accumulated event that wasn't terminated by an empty line
+      if (sseData) {
+        handleSSEEvent(sseEventType || "delta", sseData);
       }
 
       // Clear streaming state BEFORE adding the message to avoid duplicate display

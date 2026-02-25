@@ -274,7 +274,7 @@
         "activeHours": {
           "start": "06:00",
           "end": "22:00",
-          "timezone": "America/Grenada"
+          "timezone": "America/New_York"
         }
       },
       "maxConcurrent": 4,
@@ -583,7 +583,7 @@
           "enabled": true
         },
         "crm-bridge-forwarder": {
-          "enabled": true
+          "enabled": false
         }
       }
     }

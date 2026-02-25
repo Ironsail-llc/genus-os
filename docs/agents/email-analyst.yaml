@@ -5,7 +5,7 @@ version: "2026-02-24"
 department: email
 
 reports_to: supervisor
-creates_tasks_for: []
+creates_tasks_for: [email-responder]
 receives_tasks_from: [email-classifier]
 escalates_to: supervisor
 
@@ -71,6 +71,8 @@ tags_produced: []
 tags_consumed: [email, analytical]
 
 changelog:
+  - date: "2026-02-24"
+    change: Add follow-up task creation for email-responder after analysis
   - date: "2026-02-24"
     change: Initial manifest creation from existing config
   - date: "2026-02-23"

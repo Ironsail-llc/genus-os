@@ -96,6 +96,13 @@ class CreateTaskRequest(BaseModel):
     tags: list[str] | None = None
     parentTaskId: str | None = None
 
+    @field_validator("assignedToAgent", mode="before")
+    @classmethod
+    def normalize_assigned_to_agent(cls, v: str | None) -> str | None:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
     @field_validator("personId", "companyId", "parentTaskId", mode="before")
     @classmethod
     def validate_uuids(cls, v: str | None, info: object) -> str | None:
@@ -114,6 +121,13 @@ class UpdateTaskRequest(BaseModel):
     tags: list[str] | None = None
     parentTaskId: str | None = None
     resolution: str | None = None
+
+    @field_validator("assignedToAgent", mode="before")
+    @classmethod
+    def normalize_assigned_to_agent(cls, v: str | None) -> str | None:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
     @field_validator("personId", "companyId", "parentTaskId", mode="before")
     @classmethod

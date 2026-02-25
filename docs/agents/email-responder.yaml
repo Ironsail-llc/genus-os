@@ -32,6 +32,7 @@ tools_allowed:
   - create_person
   - list_people
   - create_task
+  - get_task
   - list_my_tasks
   - resolve_task
   - update_task
@@ -46,6 +47,7 @@ bridge_endpoints:
   - "POST /api/people"
   - "GET /api/people"
   - "POST /api/tasks"
+  - "GET /api/tasks/*"
   - "PATCH /api/tasks/*"
   - "GET /api/tasks/agent/*"
   - "POST /api/tasks/*/resolve"
@@ -77,6 +79,8 @@ tags_produced: []
 tags_consumed: [email, reply-needed]
 
 changelog:
+  - date: "2026-02-24"
+    change: Add get_task for task detail fetches
   - date: "2026-02-24"
     change: Initial manifest creation from existing config
   - date: "2026-02-23"

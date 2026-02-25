@@ -32,6 +32,7 @@ tools_allowed:
   - log_interaction
   - create_person
   - create_task
+  - list_tasks
   - list_my_tasks
   - resolve_task
   - update_task
@@ -44,6 +45,7 @@ bridge_endpoints:
   - "POST /log-interaction"
   - "POST /api/people"
   - "POST /api/tasks"
+  - "GET /api/tasks"
   - "PATCH /api/tasks/*"
   - "GET /api/tasks/agent/*"
   - "POST /api/tasks/*/resolve"
@@ -73,6 +75,8 @@ tags_produced: [email, reply-needed, analytical, escalation, needs-philip]
 tags_consumed: []
 
 changelog:
+  - date: "2026-02-24"
+    change: Add list_tasks for dedup check; fix analytical routing to email-analyst
   - date: "2026-02-24"
     change: Initial manifest creation from existing config
   - date: "2026-02-23"

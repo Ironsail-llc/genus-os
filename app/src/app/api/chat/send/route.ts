@@ -30,6 +30,7 @@ export async function POST(req: Request) {
 
     const stream = new ReadableStream({
       async start(controller) {
+        let sentDone = false;
         try {
           for await (const event of events) {
             const cumulativeText = extractEventText(event);
@@ -86,6 +87,7 @@ export async function POST(req: Request) {
                   `event: done\ndata: ${JSON.stringify({ text: fullCleanText })}\n\n`
                 )
               );
+              sentDone = true;
             } else if (event.state === "error") {
               controller.enqueue(
                 encoder.encode(
@@ -100,6 +102,7 @@ export async function POST(req: Request) {
                   `event: done\ndata: ${JSON.stringify({ text: fullCleanText, aborted: true })}\n\n`
                 )
               );
+              sentDone = true;
             }
           }
         } catch (err) {
@@ -109,6 +112,24 @@ export async function POST(req: Request) {
             )
           );
         } finally {
+          // Guarantee done event is sent even if iterator exits without final/aborted
+          // (e.g., WS disconnect, timeout). Flush interceptor to recover buffered text.
+          if (!sentDone) {
+            const flushed = interceptor.flush();
+            if (flushed.text) {
+              fullCleanText += flushed.text;
+              controller.enqueue(
+                encoder.encode(
+                  `event: delta\ndata: ${JSON.stringify({ text: flushed.text })}\n\n`
+                )
+              );
+            }
+            controller.enqueue(
+              encoder.encode(
+                `event: done\ndata: ${JSON.stringify({ text: fullCleanText })}\n\n`
+              )
+            );
+          }
           controller.close();
         }
       },
