@@ -31,9 +31,9 @@ Not another agent framework. An AI *brain* — persistent memory that decays and
 
 ```bash
 pip install robothor
-robothor init            # Interactive setup: DB config, migrations, Ollama models
-robothor status
-robothor serve
+robothor init            # Interactive setup: DB, migrations, Ollama, gateway build
+robothor status          # Check all components including gateway
+robothor serve           # Start orchestrator + gateway
 ```
 
 ### Full Stack (Docker)
@@ -44,12 +44,30 @@ robothor init --docker   # Starts PostgreSQL+pgvector, Redis, Ollama in Docker
 robothor serve
 ```
 
+### Gateway Management
+
+The gateway (OpenClaw) is included as a git subtree and managed via CLI:
+
+```bash
+robothor gateway build   # Build the TypeScript gateway
+robothor gateway status  # Version, build status, health
+robothor gateway start   # Start the gateway process
+robothor gateway config  # Regenerate config from agent manifests
+robothor gateway sync    # Pull upstream OpenClaw updates
+```
+
 ## Package Structure
 
 ```
 robothor/
 ├── config.py              # Env-based configuration with validation
-├── cli.py                 # Command-line interface (init, status, serve, migrate)
+├── cli.py                 # Command-line interface (init, status, serve, migrate, gateway)
+├── gateway/
+│   ├── manager.py         # Build, status, version, plugin management
+│   ├── process.py         # Start/stop/restart, systemd unit generation
+│   ├── config_gen.py      # Generate openclaw.json from YAML manifests
+│   ├── migrate.py         # One-time migration from ~/moltbot/ layout
+│   └── prerequisites.py   # Node.js/pnpm checks
 ├── db/
 │   └── connection.py      # PostgreSQL connection factory with pooling
 ├── memory/

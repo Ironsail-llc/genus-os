@@ -1,0 +1,16 @@
+{
+  "id": "crm-tools",
+  "name": "CRM Tools",
+  "description": "Agent tools for Chatwoot conversations and Twenty CRM (contacts, notes) via Bridge API",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bridgeUrl": {
+        "type": "string",
+        "description": "Bridge service URL",
+        "default": "http://127.0.0.1:9100"
+      }
+    }
+  }
+}
