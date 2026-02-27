@@ -20,6 +20,7 @@ class TriggerType(str, Enum):
     EVENT = "event"
     MANUAL = "manual"
     TELEGRAM = "telegram"
+    WEBCHAT = "webchat"
 
 
 class RunStatus(str, Enum):

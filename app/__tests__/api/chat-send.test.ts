@@ -8,25 +8,34 @@ vi.mock("@/lib/config", () => ({
   SESSION_KEY: "agent:main:webchat-user",
 }));
 
-// Mock the gateway client module
+// Mock the engine client module
 const mockChatSend = vi.fn();
 const mockChatInject = vi.fn();
-const mockEnsureConnected = vi.fn();
 vi.mock("@/lib/gateway/server-client", () => ({
-  getGatewayClient: () => ({
+  getEngineClient: () => ({
     chatSend: mockChatSend,
     chatInject: mockChatInject,
-    ensureConnected: mockEnsureConnected,
   }),
 }));
 
 import { POST } from "@/app/api/chat/send/route";
 
+/** Helper: create a Response with SSE body from events */
+function makeSseResponse(events: Array<{ event: string; data: Record<string, unknown> }>, status = 200): Response {
+  const encoder = new TextEncoder();
+  const body = events
+    .map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`)
+    .join("");
+  return new Response(encoder.encode(body), {
+    status,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
 describe("POST /api/chat/send", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnsureConnected.mockResolvedValue(undefined);
-    mockChatInject.mockResolvedValue({ ok: true, messageId: "test" });
+    mockChatInject.mockResolvedValue({ ok: true });
   });
 
   it("returns 400 when no message provided", async () => {
@@ -43,27 +52,12 @@ describe("POST /api/chat/send", () => {
   });
 
   it("returns SSE stream on successful send", async () => {
-    // Create async iterable that yields one delta and one final
-    const events = {
-      async *[Symbol.asyncIterator]() {
-        yield {
-          runId: "r1",
-          sessionKey: "agent:main:webchat-philip",
-          seq: 0,
-          state: "delta" as const,
-          message: { role: "assistant" as const, content: "Hello" },
-        };
-        yield {
-          runId: "r1",
-          sessionKey: "agent:main:webchat-philip",
-          seq: 1,
-          state: "final" as const,
-          message: { role: "assistant" as const, content: "Hello Philip" },
-        };
-      },
-    };
-
-    mockChatSend.mockResolvedValue({ runId: "r1", events });
+    const engineRes = makeSseResponse([
+      { event: "delta", data: { text: "Hello" } },
+      { event: "delta", data: { text: " Philip" } },
+      { event: "done", data: { text: "Hello Philip" } },
+    ]);
+    mockChatSend.mockResolvedValue(engineRes);
 
     const req = new Request("http://localhost:3004/api/chat/send", {
       method: "POST",
@@ -75,7 +69,6 @@ describe("POST /api/chat/send", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/event-stream");
 
-    // Read the stream
     const text = await res.text();
     expect(text).toContain("event: delta");
     expect(text).toContain("event: done");
@@ -83,29 +76,11 @@ describe("POST /api/chat/send", () => {
   });
 
   it("intercepts DASHBOARD markers and emits as separate events", async () => {
-    const events = {
-      async *[Symbol.asyncIterator]() {
-        yield {
-          runId: "r1",
-          sessionKey: "agent:main:webchat-philip",
-          seq: 0,
-          state: "delta" as const,
-          message: {
-            role: "assistant" as const,
-            content: 'Here are your contacts. [DASHBOARD:{"intent":"contacts"}] Let me know.',
-          },
-        };
-        yield {
-          runId: "r1",
-          sessionKey: "agent:main:webchat-philip",
-          seq: 1,
-          state: "final" as const,
-          message: { role: "assistant" as const, content: "" },
-        };
-      },
-    };
-
-    mockChatSend.mockResolvedValue({ runId: "r1", events });
+    const engineRes = makeSseResponse([
+      { event: "delta", data: { text: 'Here are your contacts. [DASHBOARD:{"intent":"contacts"}] Let me know.' } },
+      { event: "done", data: { text: 'Here are your contacts. [DASHBOARD:{"intent":"contacts"}] Let me know.' } },
+    ]);
+    mockChatSend.mockResolvedValue(engineRes);
 
     const req = new Request("http://localhost:3004/api/chat/send", {
       method: "POST",
@@ -129,8 +104,8 @@ describe("POST /api/chat/send", () => {
     expect(text).toContain("event: done");
   });
 
-  it("returns 502 when gateway is unreachable", async () => {
-    mockEnsureConnected.mockRejectedValue(new Error("Connection refused"));
+  it("returns 502 when engine is unreachable", async () => {
+    mockChatSend.mockRejectedValue(new Error("Connection refused"));
 
     const req = new Request("http://localhost:3004/api/chat/send", {
       method: "POST",
@@ -140,5 +115,22 @@ describe("POST /api/chat/send", () => {
 
     const res = await POST(req);
     expect(res.status).toBe(502);
+  });
+
+  it("returns 409 when session is busy", async () => {
+    const busyRes = new Response(JSON.stringify({ error: "Session is busy" }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    });
+    mockChatSend.mockResolvedValue(busyRes);
+
+    const req = new Request("http://localhost:3004/api/chat/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(409);
   });
 });

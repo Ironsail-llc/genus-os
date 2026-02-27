@@ -1,15 +1,14 @@
 import { NextResponse } from "next/server";
-import { getGatewayClient } from "@/lib/gateway/server-client";
+import { getEngineClient } from "@/lib/gateway/server-client";
 import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/gateway/session-state";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const limit = parseInt(url.searchParams.get("limit") || "50", 10);
 
-  const client = getGatewayClient();
+  const client = getEngineClient();
 
   try {
-    await client.ensureConnected();
     const result = await client.chatHistory(SESSION_KEY, limit);
 
     // Eagerly inject visual canvas prompt in background while returning history
@@ -21,7 +20,7 @@ export async function GET(req: Request) {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `Gateway error: ${String(err)}`, messages: [] },
+      { error: `Engine error: ${String(err)}`, messages: [] },
       { status: 502 }
     );
   }

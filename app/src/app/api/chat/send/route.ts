@@ -1,6 +1,4 @@
-import { getGatewayClient } from "@/lib/gateway/server-client";
-import { extractText } from "@/lib/gateway/types";
-import type { ChatEvent } from "@/lib/gateway/types";
+import { getEngineClient } from "@/lib/gateway/server-client";
 import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/gateway/session-state";
 import { MarkerInterceptor } from "@/lib/gateway/marker-interceptor";
 
@@ -15,94 +13,120 @@ export async function POST(req: Request) {
     });
   }
 
-  const client = getGatewayClient();
+  const client = getEngineClient();
 
   try {
-    await client.ensureConnected();
     await ensureCanvasPromptInjected();
 
-    const { events } = await client.chatSend(SESSION_KEY, message);
+    const engineRes = await client.chatSend(SESSION_KEY, message);
+
+    // 409 = session busy
+    if (engineRes.status === 409) {
+      return new Response(
+        JSON.stringify({ error: "Session is busy" }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!engineRes.body) {
+      return new Response(
+        JSON.stringify({ error: "No response body from engine" }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     const encoder = new TextEncoder();
     const interceptor = new MarkerInterceptor();
     let fullCleanText = "";
-    let previousCumulative = ""; // Gateway sends cumulative text — track for delta extraction
 
     const stream = new ReadableStream({
       async start(controller) {
         let sentDone = false;
         try {
-          for await (const event of events) {
-            const cumulativeText = extractEventText(event);
+          const reader = engineRes.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-            if (event.state === "delta" && cumulativeText) {
-              // Gateway sends cumulative text (full response so far) — extract only the new delta
-              const deltaText = cumulativeText.substring(previousCumulative.length);
-              previousCumulative = cumulativeText;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-              if (!deltaText) continue;
+            buffer += decoder.decode(value, { stream: true });
 
-              // Run DELTA text through marker interceptor
-              const result = interceptor.addChunk(deltaText);
+            // Parse SSE events from buffer
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || ""; // Keep incomplete line in buffer
 
-              // Emit clean text delta
-              if (result.text) {
-                fullCleanText += result.text;
-                controller.enqueue(
-                  encoder.encode(
-                    `event: delta\ndata: ${JSON.stringify({ text: result.text })}\n\n`
-                  )
-                );
+            let eventType = "";
+            for (const line of lines) {
+              if (line.startsWith("event: ")) {
+                eventType = line.slice(7).trim();
+              } else if (line.startsWith("data: ")) {
+                const dataStr = line.slice(6);
+                let data: Record<string, unknown>;
+                try {
+                  data = JSON.parse(dataStr);
+                } catch {
+                  continue;
+                }
+
+                if (eventType === "delta" && data.text) {
+                  const deltaText = data.text as string;
+
+                  // Run delta through marker interceptor
+                  const result = interceptor.addChunk(deltaText);
+
+                  if (result.text) {
+                    fullCleanText += result.text;
+                    controller.enqueue(
+                      encoder.encode(
+                        `event: delta\ndata: ${JSON.stringify({ text: result.text })}\n\n`
+                      )
+                    );
+                  }
+
+                  for (const marker of result.markers) {
+                    controller.enqueue(
+                      encoder.encode(
+                        `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
+                      )
+                    );
+                  }
+                } else if (eventType === "done") {
+                  // Flush any buffered text/markers
+                  const flushed = interceptor.flush();
+                  if (flushed.text) {
+                    fullCleanText += flushed.text;
+                    controller.enqueue(
+                      encoder.encode(
+                        `event: delta\ndata: ${JSON.stringify({ text: flushed.text })}\n\n`
+                      )
+                    );
+                  }
+                  for (const marker of flushed.markers) {
+                    controller.enqueue(
+                      encoder.encode(
+                        `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
+                      )
+                    );
+                  }
+
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: done\ndata: ${JSON.stringify({ text: fullCleanText, ...((data.aborted) ? { aborted: true } : {}) })}\n\n`
+                    )
+                  );
+                  sentDone = true;
+                } else if (eventType === "error") {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: error\ndata: ${JSON.stringify({ error: data.error || "Unknown error" })}\n\n`
+                    )
+                  );
+                }
+
+                eventType = "";
               }
-
-              // Emit any extracted markers as separate events
-              for (const marker of result.markers) {
-                controller.enqueue(
-                  encoder.encode(
-                    `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
-                  )
-                );
-              }
-            } else if (event.state === "final") {
-              // Flush any buffered text/markers
-              const flushed = interceptor.flush();
-              if (flushed.text) {
-                fullCleanText += flushed.text;
-                controller.enqueue(
-                  encoder.encode(
-                    `event: delta\ndata: ${JSON.stringify({ text: flushed.text })}\n\n`
-                  )
-                );
-              }
-              for (const marker of flushed.markers) {
-                controller.enqueue(
-                  encoder.encode(
-                    `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
-                  )
-                );
-              }
-
-              controller.enqueue(
-                encoder.encode(
-                  `event: done\ndata: ${JSON.stringify({ text: fullCleanText })}\n\n`
-                )
-              );
-              sentDone = true;
-            } else if (event.state === "error") {
-              controller.enqueue(
-                encoder.encode(
-                  `event: error\ndata: ${JSON.stringify({ error: event.errorMessage || "Unknown error" })}\n\n`
-                )
-              );
-            } else if (event.state === "aborted") {
-              const flushed = interceptor.flush();
-              if (flushed.text) fullCleanText += flushed.text;
-              controller.enqueue(
-                encoder.encode(
-                  `event: done\ndata: ${JSON.stringify({ text: fullCleanText, aborted: true })}\n\n`
-                )
-              );
-              sentDone = true;
             }
           }
         } catch (err) {
@@ -112,8 +136,6 @@ export async function POST(req: Request) {
             )
           );
         } finally {
-          // Guarantee done event is sent even if iterator exits without final/aborted
-          // (e.g., WS disconnect, timeout). Flush interceptor to recover buffered text.
           if (!sentDone) {
             const flushed = interceptor.flush();
             if (flushed.text) {
@@ -144,13 +166,8 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: `Gateway error: ${String(err)}` }),
+      JSON.stringify({ error: `Engine error: ${String(err)}` }),
       { status: 502, headers: { "Content-Type": "application/json" } }
     );
   }
-}
-
-function extractEventText(event: ChatEvent): string {
-  if (!event.message) return "";
-  return extractText(event.message);
 }

@@ -8,13 +8,13 @@ vi.mock("@/lib/config", () => ({
   SESSION_KEY: "agent:main:webchat-user",
 }));
 
-// Mock the gateway client module
+// Mock the engine client module
 const mockChatHistory = vi.fn();
-const mockEnsureConnected = vi.fn();
+const mockChatInject = vi.fn();
 vi.mock("@/lib/gateway/server-client", () => ({
-  getGatewayClient: () => ({
+  getEngineClient: () => ({
     chatHistory: mockChatHistory,
-    ensureConnected: mockEnsureConnected,
+    chatInject: mockChatInject,
   }),
 }));
 
@@ -23,10 +23,10 @@ import { GET } from "@/app/api/chat/history/route";
 describe("GET /api/chat/history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnsureConnected.mockResolvedValue(undefined);
+    mockChatInject.mockResolvedValue({ ok: true });
   });
 
-  it("returns messages from gateway", async () => {
+  it("returns messages from engine", async () => {
     const messages = [
       { role: "user", content: "hi" },
       { role: "assistant", content: "hello" },
@@ -45,8 +45,8 @@ describe("GET /api/chat/history", () => {
     expect(body.sessionKey).toBe("agent:main:webchat-user");
   });
 
-  it("returns 502 when gateway is unreachable", async () => {
-    mockEnsureConnected.mockRejectedValue(new Error("Connection refused"));
+  it("returns 502 when engine is unreachable", async () => {
+    mockChatHistory.mockRejectedValue(new Error("Connection refused"));
 
     const req = new Request("http://localhost:3004/api/chat/history");
     const res = await GET(req);

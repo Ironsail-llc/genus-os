@@ -1,43 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { extractText } from "@/lib/gateway/types";
 import type { ChatMessage } from "@/lib/gateway/types";
 
-describe("extractText", () => {
-  it("extracts text from string content", () => {
+describe("ChatMessage", () => {
+  it("has role and content fields", () => {
     const msg: ChatMessage = { role: "assistant", content: "Hello world" };
-    expect(extractText(msg)).toBe("Hello world");
+    expect(msg.role).toBe("assistant");
+    expect(msg.content).toBe("Hello world");
   });
 
-  it("extracts text from content blocks", () => {
-    const msg: ChatMessage = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Hello " },
-        { type: "text", text: "world" },
-      ],
-    };
-    expect(extractText(msg)).toBe("Hello world");
+  it("accepts user role", () => {
+    const msg: ChatMessage = { role: "user", content: "Hi" };
+    expect(msg.role).toBe("user");
   });
 
-  it("ignores non-text blocks", () => {
-    const msg: ChatMessage = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Hello" },
-        { type: "tool_use", id: "t1", name: "test", input: {} },
-        { type: "text", text: " world" },
-      ],
-    };
-    expect(extractText(msg)).toBe("Hello world");
-  });
-
-  it("handles empty content array", () => {
-    const msg: ChatMessage = { role: "assistant", content: [] };
-    expect(extractText(msg)).toBe("");
+  it("accepts system role", () => {
+    const msg: ChatMessage = { role: "system", content: "You are helpful" };
+    expect(msg.role).toBe("system");
   });
 
   it("handles empty string content", () => {
     const msg: ChatMessage = { role: "assistant", content: "" };
-    expect(extractText(msg)).toBe("");
+    expect(msg.content).toBe("");
   });
 });

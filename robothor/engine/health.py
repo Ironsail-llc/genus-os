@@ -13,15 +13,22 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
+    from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 
 
-def create_health_app(config: EngineConfig):
+def create_health_app(config: EngineConfig, runner: AgentRunner | None = None):
     """Create a lightweight FastAPI health app."""
     from fastapi import FastAPI
 
     app = FastAPI(title="Robothor Agent Engine", docs_url=None, redoc_url=None)
+
+    # Mount chat endpoints when runner is available
+    if runner is not None:
+        from robothor.engine.chat import init_chat, router as chat_router
+        init_chat(runner, config)
+        app.include_router(chat_router)
 
     @app.get("/health")
     async def health():
@@ -121,11 +128,11 @@ def create_health_app(config: EngineConfig):
     return app
 
 
-async def serve_health(config: EngineConfig) -> None:
+async def serve_health(config: EngineConfig, runner: AgentRunner | None = None) -> None:
     """Start the health endpoint server."""
     import uvicorn
 
-    app = create_health_app(config)
+    app = create_health_app(config, runner=runner)
     uvi_config = uvicorn.Config(
         app,
         host="127.0.0.1",

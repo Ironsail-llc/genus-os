@@ -55,7 +55,7 @@ async def main() -> None:
         asyncio.create_task(bot.start_polling(), name="telegram"),
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
-        asyncio.create_task(serve_health(config), name="health"),
+        asyncio.create_task(serve_health(config, runner=runner), name="health"),
         asyncio.create_task(_watchdog(config), name="watchdog"),
     ]
 

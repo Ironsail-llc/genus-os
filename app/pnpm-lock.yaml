@@ -65,9 +65,6 @@ importers:
       tailwind-merge:
         specifier: ^3.4.1
         version: 3.4.1
-      ws:
-        specifier: ^8.18.0
-        version: 8.19.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -96,9 +93,6 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.2.3(@types/react@19.2.14)
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
       '@vitejs/plugin-react':
         specifier: ^5.1.4
         version: 5.1.4(vite@7.3.1(@types/node@20.19.33)(jiti@2.6.1)(lightningcss@1.30.2))
