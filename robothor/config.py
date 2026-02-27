@@ -22,7 +22,7 @@ from pathlib import Path
 class DatabaseConfig:
     """PostgreSQL connection parameters."""
 
-    host: str = "127.0.0.1"
+    host: str = ""  # empty = Unix socket (peer auth); set to 127.0.0.1 for TCP
     port: int = 5432
     name: str = "robothor_memory"
     user: str = "robothor"
@@ -31,7 +31,10 @@ class DatabaseConfig:
     @property
     def dsn(self) -> str:
         """Return a psycopg2-compatible DSN string."""
-        parts = [f"dbname={self.name}", f"host={self.host}", f"port={self.port}"]
+        parts = [f"dbname={self.name}"]
+        if self.host:
+            parts.append(f"host={self.host}")
+        parts.append(f"port={self.port}")
         if self.user:
             parts.append(f"user={self.user}")
         if self.password:
@@ -43,9 +46,10 @@ class DatabaseConfig:
         """Return a psycopg2.connect() kwargs dict."""
         d: dict[str, str | int] = {
             "dbname": self.name,
-            "host": self.host,
             "port": self.port,
         }
+        if self.host:
+            d["host"] = self.host
         if self.user:
             d["user"] = self.user
         if self.password:
@@ -85,18 +89,17 @@ class OllamaConfig:
 
 
 @dataclass(frozen=True)
-class GatewayConfig:
-    """OpenClaw gateway configuration."""
+class GarminConfig:
+    """Garmin health sync configuration."""
 
-    gateway_dir: Path = field(
-        default_factory=lambda: Path(__file__).parent.parent / "gateway"
-    )
-    config_dir: Path = field(
+    token_dir: Path = field(
         default_factory=lambda: Path(
-            os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")
+            os.environ.get(
+                "GARMIN_TOKEN_DIR",
+                Path.home() / ".openclaw" / "garmin_tokens",
+            )
         )
     )
-    port: int = 18789
 
 
 @dataclass(frozen=True)
@@ -115,14 +118,14 @@ class Config:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
-    gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    garmin: GarminConfig = field(default_factory=GarminConfig)
 
     # Service ports (override via env or service registry)
     bridge_port: int = 9100
     orchestrator_port: int = 9099
     vision_port: int = 8600
     helm_port: int = 3004
-    gateway_port: int = 18789
+    engine_port: int = 18800
     tts_port: int = 8880
 
     @property
@@ -157,7 +160,7 @@ def _load_from_env() -> Config:
     memory_dir = Path(os.environ.get("ROBOTHOR_MEMORY_DIR", workspace / "memory"))
 
     db = DatabaseConfig(
-        host=os.environ.get("ROBOTHOR_DB_HOST", "127.0.0.1"),
+        host=os.environ.get("ROBOTHOR_DB_HOST", ""),
         port=int(os.environ.get("ROBOTHOR_DB_PORT", "5432")),
         name=os.environ.get("ROBOTHOR_DB_NAME", "robothor_memory"),
         user=os.environ.get("ROBOTHOR_DB_USER", os.environ.get("USER", "robothor")),
@@ -180,17 +183,6 @@ def _load_from_env() -> Config:
         vision_model=os.environ.get("ROBOTHOR_VISION_MODEL", "llama3.2-vision:11b"),
     )
 
-    gateway_dir = Path(
-        os.environ.get("ROBOTHOR_GATEWAY_DIR", Path(__file__).parent.parent / "gateway")
-    )
-    gateway_cfg = GatewayConfig(
-        gateway_dir=gateway_dir,
-        config_dir=Path(
-            os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")
-        ),
-        port=int(os.environ.get("ROBOTHOR_GATEWAY_PORT", "18789")),
-    )
-
     return Config(
         workspace=workspace,
         memory_dir=memory_dir,
@@ -199,12 +191,11 @@ def _load_from_env() -> Config:
         db=db,
         redis=redis_cfg,
         ollama=ollama_cfg,
-        gateway=gateway_cfg,
         bridge_port=int(os.environ.get("ROBOTHOR_BRIDGE_PORT", "9100")),
         orchestrator_port=int(os.environ.get("ROBOTHOR_ORCHESTRATOR_PORT", "9099")),
         vision_port=int(os.environ.get("ROBOTHOR_VISION_PORT", "8600")),
         helm_port=int(os.environ.get("ROBOTHOR_HELM_PORT", "3004")),
-        gateway_port=int(os.environ.get("ROBOTHOR_GATEWAY_PORT", "18789")),
+        engine_port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
         tts_port=int(os.environ.get("ROBOTHOR_TTS_PORT", "8880")),
     )
 

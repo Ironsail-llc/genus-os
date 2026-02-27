@@ -22,14 +22,14 @@ Layer 1: Data Collection (Python crons)
   vision_service (YOLO + InsightFace, always-on)
 
 Layer 1 Hook: Email Pipeline (event-driven, ~60s email-to-reply)
-  email_sync → email_hook → triage → classify → analyze → respond
+  email_sync → Redis stream → Engine hooks → classify → analyze → respond
 
 Layer 1.5: Intelligence Pipeline (3 tiers, all local LLM + pgvector)
   Tier 1: continuous_ingest (*/10 min) — incremental dedup
   Tier 2: periodic_analysis (4x daily) — meeting prep, memory blocks, entities
   Tier 3: intelligence_pipeline (daily) — relationships, patterns, quality
 
-Layer 2: Agent Orchestration (OpenClaw + Kimi K2.5)
+Layer 2: Agent Orchestration (Python Engine + Kimi K2.5)
   Email Classifier, Calendar Monitor, Email Analyst, Email Responder
   Supervisor Heartbeat, Vision Monitor, CRM Steward, Conversation Resolver
 
@@ -88,7 +88,7 @@ Native PostgreSQL tables with cross-channel identity:
 Agent-driven live dashboard:
 - Next.js 16 + Dockview, HTML-first rendering (iframe srcdoc)
 - Gemini Flash generates dashboards, Canvas Action Protocol for two-way interaction
-- Custom SSE chat via OpenClaw Gateway WebSocket bridge
+- Custom SSE chat via Python Agent Engine
 - Session persistence across reloads
 
 ### Audit & Observability
@@ -104,7 +104,7 @@ Structured audit trail across all operations:
 | Bridge | 9100 | CRM glue service, contact resolution, webhooks |
 | Orchestrator | 9099 | RAG endpoints, vision proxy |
 | Helm | 3004 | Live dashboard (app.robothor.ai) |
-| Gateway | 18789 | OpenClaw messaging |
+| Engine | 18800 | Python Agent Engine (agents, Telegram, scheduler) |
 | Vision | 8600 | YOLO + InsightFace detection |
 | Voice | 8765 | Twilio ConversationRelay |
 | SMS | 8766 | Twilio SMS webhooks |
@@ -161,12 +161,11 @@ The system passes all 6 fork criteria (verified by `scripts/verify-fork-readines
 | Path | Purpose |
 |------|---------|
 | `brain/` → `~/clawd/` | Core: memory system, scripts, voice, vision, dashboards |
-| `gateway/` | OpenClaw messaging gateway (git subtree from upstream) |
-| `runtime/` | OpenClaw runtime config templates (git-tracked, secrets scrubbed) |
+| `robothor/engine/` | Python Agent Engine (agents, Telegram, cron scheduler, event hooks) |
 | `app/` | The Helm — Next.js 16 live dashboard |
 | `crm/` | CRM stack: Bridge service, migrations, Docker Compose |
 | `scripts/` | Boot orchestrator, backup, verification |
-| `health/` → `~/garmin-sync/` | Garmin health data sync |
+| `robothor/health/` | Garmin health sync → PostgreSQL |
 | `docs/` | Data flow, cron map, testing strategy |
 
 ## License

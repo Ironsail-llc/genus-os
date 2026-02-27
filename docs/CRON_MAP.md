@@ -12,26 +12,26 @@ Every 10 min   │ Continuous ingestion (crontab, Tier 1) — brain/memory_syste
                │ Meet transcript sync (crontab) — brain/scripts/meet_transcript_sync.py
                │ Supervisor relay (crontab, 6-23h) — brain/scripts/supervisor_relay.py
 
-Every 15 min   │ Garmin health sync (crontab) — health/garmin_sync.py
+Every 15 min   │ Garmin health sync (crontab) — robothor.health.sync
 
-05:15, 19:45   │ Health summary (crontab) — brain/scripts/health_summary.py
-               │   Reads garmin.db → writes memory/garmin-health.md (before briefing agents)
+05:15, 19:45   │ Health summary (crontab) — robothor.health.summary
+               │   Reads PostgreSQL → writes memory/garmin-health.md (before briefing agents)
 
 Every 30 min   │ Jira sync (crontab, 6-22h M-F) — brain/scripts/jira_sync.py
                │ Cron health check (crontab) — brain/scripts/cron_health_check.py
 
-Hourly         │ Email Classifier (OpenClaw, every 2h 6-22, announce) — classify emails, route or escalate
-               │ Calendar Monitor (OpenClaw, every 2h 6-22, announce) — detect conflicts, cancellations, changes
-               │ Supervisor Heartbeat (OpenClaw, every 2h 6-22, → Telegram) — reads all status files, surfaces changes
-               │ Vision Monitor (OpenClaw, hourly 24/7, silent) — check motion events, write status file
-               │ Conversation Inbox Monitor (OpenClaw, hourly 6-22, silent) — check urgent messages, write status file
+Hourly         │ Email Classifier (Engine, every 2h 6-22, announce) — classify emails, route or escalate
+               │ Calendar Monitor (Engine, every 2h 6-22, announce) — detect conflicts, cancellations, changes
+               │ Supervisor Heartbeat (Engine, every 2h 6-22, → Telegram) — reads all status files, surfaces changes
+               │ Vision Monitor (Engine, hourly 24/7, silent) — check motion events, write status file
+               │ Conversation Inbox Monitor (Engine, hourly 6-22, silent) — check urgent messages, write status file
                │ System health check (crontab) — brain/scripts/system_health_check.py
 :10            │ Triage cleanup (crontab) — brain/scripts/triage_cleanup.py
                │   Mark processed items in logs, update heartbeat
 :20            │ Email analysis cleanup (crontab) — clear stale response-analysis.json
 :25            │ Email response prep (crontab) — brain/scripts/email_response_prep.py
                │   Enrich queued emails with thread + contact + topic RAG + calendar + CRM history + depth tag
-:30            │ Email Analyst (OpenClaw, every 2h 8-20, announce) — analyze analytical items
+:30            │ Email Analyst (Engine, every 2h 8-20, announce) — analyze analytical items
 :55            │ Triage prep (crontab) — brain/scripts/triage_prep.py
                │   Extract pending items + enrich with DB contact context (prepares for next hour)
 
@@ -52,11 +52,11 @@ Hourly         │ Email Classifier (OpenClaw, every 2h 6-22, announce) — clas
 Every 4h 6-22  │ Task Cleanup (crontab) — brain/scripts/task_cleanup.py
                │   Delete test data, resolve past-date calendar tasks, reset stuck IN_PROGRESS, resolve orphan TODOs
 
-Every 4h 8-20  │ Email Responder (OpenClaw, announce) — compose and send replies (substantive for analytical)
+Every 4h 8-20  │ Email Responder (Engine, announce) — compose and send replies (substantive for analytical)
 
-8, 14, 20      │ Conversation Resolver (OpenClaw, silent) — auto-resolve stale conversations (>7d inactive)
+8, 14, 20      │ Conversation Resolver (Engine, silent) — auto-resolve stale conversations (>7d inactive)
 
-06:30 AM       │ Morning Briefing (OpenClaw) — calendar, email, weather, news → Telegram
+06:30 AM       │ Morning Briefing (Engine) — calendar, email, weather, news → Telegram
 
 07:00, 11:00,  │ Periodic analysis (crontab, Tier 2) — brain/memory_system/periodic_analysis.py
 15:00, 19:00   │   Phase 1: Meeting prep briefs
@@ -64,9 +64,9 @@ Every 4h 8-20  │ Email Responder (OpenClaw, announce) — compose and send rep
                │   Phase 3: Entity graph enrichment
                │   Phase 4: Contact reconciliation + CRM discovery
 
-10:00          │ CRM Steward (OpenClaw, daily) — data hygiene + contact enrichment via sub-agents
+10:00          │ CRM Steward (Engine, daily) — data hygiene + contact enrichment via sub-agents
 
-21:00          │ Evening Wind-Down (OpenClaw) — tomorrow preview, open items → Telegram
+21:00          │ Evening Wind-Down (Engine) — tomorrow preview, open items → Telegram
 
 Sunday 04:00   │ Data archival (crontab) — brain/scripts/data_archival.py
 
@@ -98,12 +98,12 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 # Jira Sync - every 30 min during work hours (M-F)
 */30 6-22 * * 1-5 cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/jira_sync.py >> memory_system/logs/jira-sync.log 2>&1
 
-# Garmin health sync - every 15 min
-*/15 * * * * /home/philip/garmin-sync/venv/bin/python /home/philip/garmin-sync/garmin_sync.py >> /home/philip/garmin-sync/sync.log 2>&1
+# Garmin health sync - every 15 min (PostgreSQL via robothor.health.sync)
+*/15 * * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.sync >> memory_system/logs/garmin-sync.log 2>&1
 
 # Health Summary — garmin-health.md for briefing agents (before 6:30 AST briefing + 21:00 AST winddown)
-15 5 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/health_summary.py >> memory_system/logs/health-summary.log 2>&1
-45 19 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/health_summary.py >> memory_system/logs/health-summary.log 2>&1
+15 5 * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
+45 19 * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
 
 # Google Meet Transcript Sync - every 10 min
 */10 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/meet_transcript_sync.py >> memory_system/logs/meet-transcript-sync.log 2>&1

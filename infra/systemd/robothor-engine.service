@@ -1,0 +1,22 @@
+[Unit]
+Description=Robothor Agent Engine (Python)
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+User=philip
+Group=philip
+ExecStartPre=/home/philip/robothor/scripts/decrypt-secrets.sh
+EnvironmentFile=/run/robothor/secrets.env
+ExecStart=/home/philip/robothor/venv/bin/python -m robothor.engine.daemon
+WorkingDirectory=/home/philip/robothor
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+Environment=HOME=/home/philip
+Environment="PATH=/home/philip/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment=ROBOTHOR_ENGINE_PORT=18800
+
+[Install]
+WantedBy=multi-user.target

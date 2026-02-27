@@ -50,25 +50,22 @@ EXCLUDES=(
 
 # ── Project directories ─────────────────────────────────────────
 
-for dir in clawd garmin-sync; do
+for dir in clawd; do
     if [ -d "$HOME/$dir" ]; then
         rsync -a --delete "${EXCLUDES[@]}" \
             "$HOME/$dir/" "$BACKUP_ROOT/latest/$dir/" 2>> "$LOG"
     fi
 done
 
-# robothor root (excluding symlinks to avoid duplicating clawd/garmin-sync/etc)
+# robothor root (excluding symlinks to avoid duplicating clawd/etc)
 rsync -a --delete "${EXCLUDES[@]}" \
     --exclude='brain' \
-    --exclude='health' \
     --exclude='tunnel' \
-    --exclude='gateway/node_modules' \
-    --exclude='gateway/dist' \
     "$HOME/robothor/" "$BACKUP_ROOT/latest/robothor/" 2>> "$LOG"
 
 # ── Hidden config directories ───────────────────────────────────
 
-rsync -a --delete "$HOME/.openclaw/" "$BACKUP_ROOT/latest/openclaw/" 2>> "$LOG"
+rsync -a --delete "$HOME/.openclaw/" "$BACKUP_ROOT/latest/openclaw/" 2>> "$LOG"  # includes garmin_tokens/
 rsync -a --delete "$HOME/.cloudflared/" "$BACKUP_ROOT/latest/cloudflared/" 2>> "$LOG"
 
 # ── System service files ────────────────────────────────────────

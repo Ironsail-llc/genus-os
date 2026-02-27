@@ -37,7 +37,7 @@ Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manag
 - Unified CRM across email, Telegram, Google Chat, SMS, voice, and video meetings
 - RAG-powered memory with structured facts, entity graph, and working memory blocks
 - Autonomous triage: categorizes, handles routine items, escalates complex ones
-- Voice calling and SMS via Twilio, 30+ messaging channels via OpenClaw
+- Voice calling and SMS via Twilio, Telegram delivery via Python Agent Engine
 
 **Key constraints:**
 
@@ -109,8 +109,8 @@ Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manag
 │                         SERVICE LAYER                                   │
 │                                                                         │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐     │
-│  │ Vision   │ │ Voice    │ │ SMS      │ │ Gateway  │ │ Bridge   │     │
-│  │ :8600    │ │ :8765    │ │ :8766    │ │ :18789   │ │ :9100    │     │
+│  │ Vision   │ │ Voice    │ │ SMS      │ │ Engine   │ │ Bridge   │     │
+│  │ :8600    │ │ :8765    │ │ :8766    │ │ :18800   │ │ :9100    │     │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘     │
 │       │             │            │             │            │           │
 │  ┌────┴─────────────┴────────────┴─────────────┴────────────┴─────┐    │
@@ -162,7 +162,7 @@ All services are **system-level systemd units** (`/etc/systemd/system/`), manage
 | Privacy policy | robothor-privacy.service | 3002 | Node.js | privacy.robothor.ai |
 | CRM stack | robothor-crm.service | 3010, 8222, 8880 | Docker Compose | Vaultwarden, Uptime Kuma, Kokoro TTS |
 | Bridge | robothor-bridge.service | 9100 | Python/FastAPI | Contact resolution, webhooks, REST proxy |
-| Gateway | robothor-gateway.service | 18789 | Node.js | OpenClaw messaging (30+ channels) |
+| Agent Engine | robothor-engine.service | 18800 | Python/FastAPI | Agent orchestration, Telegram, cron scheduler |
 | Transcript watcher | robothor-transcript.service | — | Python | Voice transcript processing |
 | Tunnel | cloudflared.service | — | Go binary | Cloudflare Tunnel (all external routing) |
 | VPN | tailscaled.service | — | Go binary | Tailscale mesh (ironsail tailnet) |
@@ -193,7 +193,7 @@ Authorized emails: `philip@ironsail.ai`, `robothor@ironsail.ai`
 | cam.robothor.ai | 8890 | Live webcam HLS stream |
 | ops.robothor.ai | 3003 | Ops dashboard |
 | bridge.robothor.ai | 9100 | Bridge API |
-| gateway.robothor.ai | 18789 | OpenClaw gateway |
+| engine.robothor.ai | 18800 | Agent Engine API |
 | orchestrator.robothor.ai | 9099 | RAG orchestrator API |
 | vision.robothor.ai | 8600 | Vision API |
 
@@ -325,7 +325,7 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
                               │
                               ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │  Layer 2: Triage Worker (Kimi K2.5, */15 via OpenClaw)          │
+  │  Layer 2: Triage Worker (Kimi K2.5, */15 via Engine)             │
   │  - Reads triage-inbox.json                                      │
   │  - Categorizes: routine / needs-attention / escalate            │
   │  - Handles routine items autonomously                           │
@@ -363,7 +363,7 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
 **Design principles:**
 - LLM supervisor never sends directly to Telegram via API — it runs as a Telegram agent session
 - Python relay is the only script that calls the Telegram Bot API (meeting alerts only)
-- Only 3 OpenClaw jobs deliver to Telegram: Morning Briefing, Evening Wind-Down, SMS Status Check
+- Only 3 Engine jobs deliver to Telegram: Morning Briefing, Evening Wind-Down, SMS Status Check
 - Calendar items older than 24h auto-expire in triage_prep
 
 ---
@@ -441,7 +441,7 @@ CRM data lives in native PostgreSQL tables (`crm_*`) in the `robothor_memory` da
   │                                                               │
   │  - Contact resolution (cross-system identity via              │
   │    contact_identifiers table)                                 │
-  │  - REST proxy for OpenClaw plugin access (via crm_dal)        │
+  │  - REST API for CRM data access (via crm_dal)                 │
   │  - Webhook endpoints                                          │
   │  - Data sync between CRM tables + memory system               │
   └───────────────────────────────────────────────────────────────┘
@@ -529,16 +529,16 @@ Data enters through `POST /ingest` on the orchestrator (:9099):
 
 ## Communications Layer
 
-### OpenClaw Framework (comms/)
+### Python Agent Engine
 
-Open-source messaging framework supporting 30+ channels through a unified gateway.
+Single daemon handling agent orchestration, Telegram delivery, and cron scheduling.
 
 | Component | Port | Purpose |
 |-----------|------|---------|
-| Gateway | 18789 | Message routing (Telegram, Google Chat, SMS, etc.) |
-| Agents | — | Profiles: main, supervisor, health, test |
-| Cron | — | Scheduled agent jobs (jobs.json) |
-| CRM Plugin | — | HTTP bridge to CRM tools |
+| Engine | 18800 | Agent execution, Telegram bot, health API |
+| Scheduler | — | APScheduler cron jobs from YAML manifests |
+| Event Hooks | — | Redis Stream consumers (email, calendar triggers) |
+| Tool Registry | — | 54 tools, direct DAL calls (no HTTP roundtrip) |
 
 ### Voice & SMS (Twilio)
 
@@ -553,37 +553,34 @@ Voice uses ElevenLabs (Daniel voice) for text-to-speech, Twilio ConversationRela
 
 ## Tool Access Topology
 
-Two runtime environments access the same underlying services through different mechanisms:
+Two runtime environments access the same underlying DAL:
 
 ```
   ┌─────────────────────┐              ┌─────────────────────┐
-  │    Claude Code       │              │   OpenClaw Agent    │
+  │    Claude Code       │              │   Engine Agent      │
   │    (interactive)     │              │   (Kimi K2.5)      │
   └──────────┬──────────┘              └──────────┬──────────┘
              │                                     │
-        stdio MCP                            HTTP plugin
+        stdio MCP                          direct DAL calls
              │                                     │
   ┌──────────┴──────────┐              ┌───────────┴─────────┐
-  │   MCP Server         │              │  crm-tools plugin   │
-  │                      │              │  (fetch → Bridge)   │
-  │  robothor-memory     │              └───────────┬─────────┘
-  │   28 tools           │                          │
-  │   (memory + CRM +    │                          ▼
-  │    vision)            │              Bridge REST API :9100
-  └──────────────────────┘              /api/conversations
-                                        /api/people
-                                        /api/notes
-                                        /api/conversations/{id}/messages
+  │   MCP Server         │              │  ToolRegistry       │
+  │                      │              │  54 tools           │
+  │  robothor-memory     │              │  (CRM, memory,      │
+  │   44 tools           │              │   vision, web, I/O) │
+  │   (memory + CRM +    │              └─────────────────────┘
+  │    vision)            │
+  └──────────────────────┘
 
   Tool names are IDENTICAL in both runtimes.
-  Agent instructions work unchanged across Claude Code and OpenClaw.
+  Agent instructions work unchanged across Claude Code and Engine.
 ```
 
 ### MCP Servers
 
 | Server | Runtime | Tools |
 |--------|---------|-------|
-| robothor-memory | Python (stdio) | search\_memory, store\_memory, get\_stats, get\_entity, memory\_block\_read/write/list, log\_interaction, look, who\_is\_here, enroll\_face, set\_vision\_mode, CRUD for people/companies/tasks/notes, search\_records, metadata, conversations, messages (28 tools total) |
+| robothor-memory | Python (stdio) | search\_memory, store\_memory, get\_stats, get\_entity, memory\_block\_read/write/list, log\_interaction, look, who\_is\_here, enroll\_face, set\_vision\_mode, CRUD for people/companies/tasks/notes, search\_records, metadata, conversations, messages (44 tools total) |
 
 ---
 
@@ -611,16 +608,16 @@ Two runtime environments access the same underlying services through different m
 | `30 4 * * *` | backup-ssd.sh | Daily LUKS SSD backup |
 | `0 5 * * 0` | weekly\_review.py | Sunday deep synthesis |
 
-### OpenClaw Crons (Kimi K2.5, Layer 2 — LLM agent jobs)
+### Engine Crons (Kimi K2.5, Layer 2 — LLM agent jobs via APScheduler)
 
 | Schedule | Job | Purpose |
 |----------|-----|---------|
-| `*/15 * * * *` | Triage Worker | Process inbox, categorize, act, escalate |
-| `*/17 7-22 * * *` | Supervisor Heartbeat | Surface escalations, audit logs |
-| `*/10 7-23 * * *` | Vision Monitor | Check motion events, alert on visitors |
+| `0 6-22 * * *` | Email Classifier | Classify emails, route or escalate |
+| `*/17 6-22 * * *` | Supervisor Heartbeat | Surface escalations, audit logs |
+| `*/10 * * * *` | Vision Monitor | Check motion events, alert on visitors |
 | `30 6 * * *` | Morning Briefing | Daily briefing → Telegram |
 | `0 21 * * *` | Evening Wind-Down | Tomorrow preview, open items → Telegram |
-| `*/30 * * * *` | Conversation Inbox Monitor | Check unread messages |
+| `*/30 6-22 * * *` | Conversation Inbox Monitor | Check unread messages |
 
 ---
 
@@ -638,7 +635,7 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 
 | Category | Contents |
 |----------|----------|
-| Project directories | `clawd/`, `garmin-sync/`, `robothor/` (including `gateway/`, `templates/`) |
+| Project directories | `clawd/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
 | Config directories | `.openclaw/`, `.cloudflared/` |
 | Credentials | `.bashrc`, `crm/.env` |
 | Databases | 2x `pg_dump`: robothor\_memory, vaultwarden |
@@ -798,23 +795,21 @@ robothor/                                 Project root (git repo)
 │   ├── welcome/                          Welcome page
 │   └── gap-analysis/                     Architecture analysis
 │
-├── gateway/                               OpenClaw messaging gateway (git subtree)
-│   ├── src/                              TypeScript source (patched locally)
-│   ├── dist/                             Built gateway + CLI
-│   ├── skills/                           Built-in skills (gog, etc.)
-│   ├── packages/                         Sub-packages
-│   └── package.json
+├── robothor/engine/                      Python Agent Engine
+│   ├── daemon.py                         Main entry: Telegram + scheduler + hooks + health
+│   ├── runner.py                         Core LLM conversation loop (litellm)
+│   ├── tools.py                          54-tool registry with direct DAL calls
+│   ├── telegram.py                       aiogram v3 Telegram bot
+│   ├── scheduler.py                      APScheduler cron from YAML manifests
+│   ├── hooks.py                          Redis Stream event-driven triggers
+│   ├── tracking.py                       agent_runs + agent_run_steps DAL
+│   └── tests/                            89 unit tests
 │
-├── runtime/                              OpenClaw runtime config templates (git-tracked)
-│   ├── openclaw.json                     Main config (secrets scrubbed with $SOPS:)
-│   └── cron/
-│       └── jobs.json                     All scheduled agent jobs
-│
-├── health/ → ~/garmin-sync/              Garmin health data
-│   ├── garmin_sync.py                    */15 — Garmin API sync
-│   ├── garmin_cli.py                     CLI tool
-│   ├── database.py                       SQLite schema
-│   ├── garmin.db                         Health data store
+├── robothor/health/                      Garmin health package (PostgreSQL)
+│   ├── sync.py                           */15 — Garmin API → health_* tables
+│   ├── summary.py                        2x daily — health_* → garmin-health.md
+│   ├── dal.py                            Data access layer (upsert/query)
+│   ├── migrate_sqlite.py                 One-time SQLite→PG migration
 │   └── .garmin_tokens/                   OAuth credentials
 │
 ├── templates/                             Bootstrap templates
@@ -826,4 +821,4 @@ robothor/                                 Project root (git repo)
 
 ---
 
-*Generated 2026-02-20. For questions, contact philip@ironsail.ai.*
+*Updated 2026-02-27. For questions, contact philip@ironsail.ai.*

@@ -20,6 +20,7 @@ schedule:
   cron: "0 8,14,20 * * *"
   timezone: America/Grenada
   timeout_seconds: 480
+  max_iterations: 5
   session_target: isolated
 
 delivery:

@@ -239,3 +239,145 @@ class TestAgentRunnerExecute:
 
         assert run.trigger_type == TriggerType.CRON
         assert run.trigger_detail == "0 * * * *"
+
+
+class TestBrokenModelTracking:
+    """Tests for rate-limited / permanently-failed model tracking."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_model_skipped_on_subsequent_iterations(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """A model that returns 403 is skipped on the next iteration."""
+        sample_agent_config.model_primary = "model-a"
+        sample_agent_config.model_fallbacks = ["model-b"]
+
+        # Track which models are actually called
+        models_called: list[str] = []
+        call_count = 0
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            model = kwargs["model"]
+            models_called.append(model)
+            call_count += 1
+
+            if model == "model-a":
+                err = Exception("Rate limited")
+                err.status_code = 403
+                raise err
+
+            # model-b succeeds
+            if call_count <= 2:
+                # First call: return tool call to force a second iteration
+                resp = mock_litellm_response(content=None, tool_calls=[tc], model="model-b")
+                resp.choices[0].message.content = None
+                return resp
+            else:
+                return mock_litellm_response(content="Done", model="model-b")
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        run = await runner.execute(
+                            "test-agent", "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        assert run.status == RunStatus.COMPLETED
+        # model-a should only be tried once (iteration 1), then skipped
+        assert models_called.count("model-a") == 1
+        # model-b handles both iterations
+        assert models_called.count("model-b") >= 2
+
+    @pytest.mark.asyncio
+    async def test_all_models_broken_immediate_failure(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """When all models hit permanent errors, run fails without retrying."""
+        sample_agent_config.model_primary = "model-a"
+        sample_agent_config.model_fallbacks = ["model-b"]
+        sample_agent_config.max_iterations = 10
+
+        call_count = 0
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            err = Exception("Forbidden")
+            err.status_code = 403
+            raise err
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        run = await runner.execute(
+                            "test-agent", "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        assert run.status == RunStatus.FAILED
+        assert "All models failed" in (run.error_message or "")
+        # Should only try each model once — NOT 10 iterations x 2 models = 20
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_per_agent_max_iterations_respected(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Agent uses its own max_iterations, not the engine default."""
+        sample_agent_config.max_iterations = 3
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        # Always return tool calls so the loop keeps going
+        async def mock_completion(**kwargs):
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        llm_call_count = 0
+        original_mock = mock_completion
+
+        async def counting_mock(**kwargs):
+            nonlocal llm_call_count
+            llm_call_count += 1
+            return await original_mock(**kwargs)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=counting_mock):
+                        run = await runner.execute(
+                            "test-agent", "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        # Should hit max iterations (3), not the engine default (5 from conftest)
+        assert llm_call_count == 3
+        # Max iterations error is recorded as a step
+        error_steps = [s for s in run.steps if s.error_message and "Max iterations" in s.error_message]
+        assert len(error_steps) == 1
+        assert "(3)" in error_steps[0].error_message

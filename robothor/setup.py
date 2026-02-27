@@ -97,10 +97,8 @@ def run_init(args) -> int:
 
     # 1. Check prerequisites
     print("  Checking prerequisites...")
-    skip_gateway = getattr(args, "skip_gateway", False)
     prereqs = check_prerequisites(
         docker_required=getattr(args, "docker", False),
-        skip_gateway=skip_gateway,
     )
     _print_prerequisites(prereqs)
     print()
@@ -179,25 +177,7 @@ def run_init(args) -> int:
             if not yes:
                 print("  Continuing with remaining setup steps...")
 
-    # 8. Build gateway
-    if not skip_gateway:
-        print("  Building gateway...")
-        from robothor.gateway.manager import GatewayManager
-
-        gw_mgr = GatewayManager()
-        gw_prereqs = gw_mgr.check_prerequisites()
-        if all(p.ok for p in gw_prereqs):
-            if gw_mgr.build():
-                print(f"    Built v{gw_mgr.get_version()}")
-                gw_mgr.install_plugins()
-                print("    Plugins installed")
-            else:
-                print("    Build failed — skipping gateway")
-        else:
-            missing = [p.name for p in gw_prereqs if not p.ok]
-            print(f"    Skipping — missing: {', '.join(missing)}")
-
-    # 9. Pull Ollama models
+    # 8. Pull Ollama models
     if not skip_models:
         pull_ollama_models(ollama_config.base_url, REQUIRED_MODELS)
 
@@ -225,7 +205,7 @@ def run_init(args) -> int:
     return 0
 
 
-def check_prerequisites(*, docker_required: bool = False, skip_gateway: bool = False) -> list[dict]:
+def check_prerequisites(*, docker_required: bool = False) -> list[dict]:
     """Check for required and optional tools.
 
     Returns a list of dicts: {name, found, detail, required, hint}.
@@ -242,20 +222,6 @@ def check_prerequisites(*, docker_required: bool = False, skip_gateway: bool = F
             "hint": "",
         }
     )
-
-    if not skip_gateway:
-        from robothor.gateway.prerequisites import check_all as check_gw_prereqs
-
-        for p in check_gw_prereqs():
-            results.append(
-                {
-                    "name": p.name,
-                    "found": p.ok,
-                    "detail": p.version if p.ok else "not found",
-                    "required": False,
-                    "hint": p.hint,
-                }
-            )
 
     # psql
     psql = shutil.which("psql")

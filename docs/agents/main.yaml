@@ -12,8 +12,8 @@ escalates_to: null
 model:
   primary: anthropic/claude-sonnet-4-6
   fallbacks:
-    - gemini/gemini-2.5-pro
     - openrouter/moonshotai/kimi-k2.5
+    - gemini/gemini-2.5-pro
   payload_alias: sonnet
   temperature: 0.5
 

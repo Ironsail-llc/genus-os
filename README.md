@@ -21,10 +21,10 @@ Three layers, one repo:
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
-│  Agent Orchestration (OpenClaw gateway)                  │
-│  11 autonomous agents · Telegram + Google Chat delivery  │
+│  Agent Orchestration (Python Engine)                     │
+│  11 autonomous agents · Telegram delivery                │
 │  YAML-defined manifests · task-based coordination        │
-│  Port 18789 · gateway.robothor.ai                        │
+│  Port 18800 · engine.robothor.ai                         │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
@@ -70,18 +70,14 @@ pip install -e ".[all]"
 # Interactive setup: DB, migrations, Redis, Ollama
 robothor init
 
-# Build the OpenClaw messaging gateway
-robothor gateway build
-
 # Start the system
-robothor serve           # Orchestrator + gateway
+robothor serve           # Orchestrator + engine
 ```
 
 ### Full Stack (Docker)
 
 ```bash
 robothor init --docker   # PostgreSQL+pgvector, Redis, Ollama in Docker
-robothor gateway build
 robothor serve
 ```
 
@@ -89,20 +85,18 @@ robothor serve
 
 ```bash
 robothor init            # Interactive setup wizard
-robothor serve           # Start orchestrator + gateway
+robothor serve           # Start orchestrator + engine
 robothor status          # System health overview
 robothor migrate         # Run database migrations
 robothor mcp             # Start MCP server (44 tools, stdio transport)
 
-# Gateway management
-robothor gateway build   # Build the TypeScript gateway from source
-robothor gateway status  # Version, build status, health
-robothor gateway start   # Start the gateway process
-robothor gateway stop    # Stop the gateway
-robothor gateway restart # Restart the gateway
-robothor gateway config  # Regenerate config from YAML agent manifests
-robothor gateway sync    # Pull upstream OpenClaw updates
-robothor gateway install-service  # Generate systemd unit
+# Engine management
+robothor engine start    # Start the agent engine daemon
+robothor engine stop     # Stop the engine
+robothor engine status   # Engine health, scheduler, bot status
+robothor engine run <id> # Run an agent manually
+robothor engine list     # List all scheduled agents
+robothor engine history  # Recent agent run history
 ```
 
 ## Project Structure
@@ -115,7 +109,7 @@ robothor/
 │   ├── crm/                # Contact validation, models, blocklists
 │   ├── vision/             # YOLO detection, InsightFace recognition, alerts
 │   ├── events/             # Redis Streams, RBAC, consumer workers
-│   ├── gateway/            # Gateway manager: build, process, config gen, migrate
+│   ├── engine/             # Agent Engine: runner, tools, Telegram, scheduler, hooks
 │   ├── api/                # MCP server (44 tools), RAG orchestrator
 │   ├── db/                 # PostgreSQL connection factory with pooling
 │   ├── llm/                # Ollama client (chat, embeddings, model management)
@@ -123,8 +117,6 @@ robothor/
 │   ├── services/           # Service registry with topology sort and health checks
 │   ├── config.py           # Env-based configuration with validation
 │   └── cli.py              # CLI entry point
-│
-├── gateway/                # OpenClaw messaging gateway (git subtree, TypeScript)
 │
 ├── app/                    # The Helm — live dashboard (Next.js 16, React 19)
 │   └── src/
@@ -137,15 +129,11 @@ robothor/
 │   ├── migrations/         # SQL schema (native PostgreSQL, no ORM)
 │   └── docker-compose.yml  # Vaultwarden, Kokoro TTS, Uptime Kuma
 │
-├── runtime/                # Gateway runtime config (git-tracked, secrets scrubbed)
-│   ├── openclaw.json       # Gateway configuration
-│   └── cron/jobs.json      # Agent cron schedules
-│
 ├── docs/                   # Documentation + agent manifests
 │   └── agents/             # 11 YAML agent manifests + PLAYBOOK.md
 │
 ├── brain/                  # → ~/clawd/ (symlink) — scripts, voice, vision, identity
-├── health/                 # → ~/garmin-sync/ (symlink) — Garmin health data
+├── robothor/health/        # Garmin health sync → PostgreSQL
 ├── infra/                  # Docker Compose, migrations, systemd templates
 ├── examples/               # 4 usage examples
 ├── scripts/                # Backup, utilities, validation
@@ -274,7 +262,7 @@ subscribe("email", "classifier-group", "worker-1", handler=handle_email)
 
 ## The Agent Fleet
 
-11 autonomous agents defined as YAML manifests in `docs/agents/`, with config generated via `robothor gateway config`:
+11 autonomous agents defined as YAML manifests in `docs/agents/`, loaded by the Engine scheduler:
 
 | Agent | Model | Schedule | Purpose |
 |-------|-------|----------|---------|
@@ -313,7 +301,7 @@ tools:
 
 A live control plane dashboard at `app.robothor.ai` (Next.js 16 + Dockview):
 
-- **Chat** — Direct conversation with agents via the gateway
+- **Chat** — Direct conversation with agents via the Engine
 - **Task Board** — Kanban view with approve/reject workflow
 - **Event Streams** — Real-time SSE feed from all Redis Streams
 - **Agent Status** — Live health and run status for all cron agents
@@ -329,7 +317,7 @@ A live control plane dashboard at `app.robothor.ai` (Next.js 16 + Dockview):
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| robothor-gateway | 18789 | OpenClaw messaging gateway |
+| robothor-engine | 18800 | Agent Engine (Telegram, scheduler, tools) |
 | robothor-orchestrator | 9099 | RAG + vision API |
 | robothor-bridge | 9100 | CRM API, contact resolution, webhooks |
 | robothor-vision | 8600 | YOLO + InsightFace detection loop |
@@ -411,7 +399,7 @@ python scripts/validate_agents.py
 - **203** Bridge integration tests (RBAC, multi-tenancy, task coordination, notifications, review workflow)
 - **209** system script tests (email pipeline, cron jobs, task cleanup, data archival)
 - **143** memory system tests (ingestion, analysis, vision)
-- **39** gateway manager tests (config gen, build, process lifecycle)
+- **89** engine tests (runner, tools, config, session, tracking, telegram)
 - **354** Helm vitest tests (35 suites — components, hooks, API routes, event bus)
 
 ## Development
@@ -435,7 +423,7 @@ Robothor's path from AI brain to AI operating system. See [ROADMAP.md](ROADMAP.m
 - **v0.4** — Process model. Agent lifecycle management with supervised execution.
 - **v0.5** — Capabilities. Per-agent rate limiting, data scoping, resource quotas.
 - **v0.6** — Scheduler. Unified cron + event-driven scheduling.
-- **v0.7** — Channel drivers. Messaging abstraction beyond OpenClaw.
+- **v0.7** — Channel drivers. Messaging abstraction for additional channels.
 - **v0.8** — Device abstraction. Cameras, microphones, sensors as first-class resources.
 - **v0.9** — The Helm as shell. Process manager, file browser, resource monitor.
 - **v1.0** — Unified syscall interface. The complete AI operating system.

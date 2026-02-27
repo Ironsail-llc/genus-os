@@ -3,12 +3,12 @@ Robothor CLI — entry point for all operations.
 
 Usage:
     robothor init           # Interactive setup wizard
-    robothor serve          # Start the API server (+ gateway)
+    robothor serve          # Start the API server
+    robothor engine         # Manage the agent engine
     robothor status         # Show system status
     robothor mcp            # Start the MCP server
     robothor version        # Show version
     robothor migrate        # Run database migrations
-    robothor gateway        # Manage the OpenClaw gateway
     robothor pipeline       # (coming in v0.2)
 """
 
@@ -67,35 +67,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Pipeline tier (1=ingest, 2=analysis, 3=deep)",
     )
 
-    # gateway
-    gw_parser = subparsers.add_parser("gateway", help="Manage the OpenClaw gateway")
-    gw_sub = gw_parser.add_subparsers(dest="gateway_command")
-    gw_sub.add_parser("build", help="Build gateway (pnpm install && pnpm build)")
-    gw_sub.add_parser("rebuild", help="Clean build")
-    gw_sub.add_parser("status", help="Show gateway status")
-    gw_start = gw_sub.add_parser("start", help="Start gateway process")
-    gw_start.add_argument("--foreground", action="store_true", help="Run in foreground")
-    gw_sub.add_parser("stop", help="Stop gateway process")
-    gw_sub.add_parser("restart", help="Restart gateway process")
-    gw_config = gw_sub.add_parser("config", help="Regenerate config from manifests")
-    gw_config.add_argument("--dry-run", action="store_true", help="Print without writing")
-    gw_sub.add_parser("sync", help="Pull upstream OpenClaw changes")
-    gw_sub.add_parser("install-service", help="Install systemd service unit")
-    gw_migrate = gw_sub.add_parser("migrate", help="Migrate from ~/moltbot/ layout")
-    gw_migrate.add_argument("--dry-run", action="store_true", help="Print without executing")
-
-    # init flags
-    init_parser.add_argument(
-        "--skip-gateway", action="store_true", help="Skip gateway build"
-    )
-
-    # serve flags
-    serve_parser.add_argument(
-        "--no-gateway", action="store_true", help="Don't start gateway alongside orchestrator"
-    )
 
     # version
     subparsers.add_parser("version", help="Show version")
+
+    # engine
+    eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
+    eng_sub = eng_parser.add_subparsers(dest="engine_command")
+    eng_run = eng_sub.add_parser("run", help="Run a single agent")
+    eng_run.add_argument("agent_id", help="Agent ID (from YAML manifest)")
+    eng_run.add_argument("--message", "-m", default=None, help="User message (default: cron payload)")
+    eng_run.add_argument("--trigger", default="manual", help="Trigger type")
+    eng_sub.add_parser("start", help="Start the engine daemon")
+    eng_sub.add_parser("stop", help="Stop the engine daemon")
+    eng_sub.add_parser("status", help="Show engine status")
+    eng_sub.add_parser("list", help="List configured agents")
+    eng_history = eng_sub.add_parser("history", help="Show recent agent runs")
+    eng_history.add_argument("--agent", help="Filter by agent ID")
+    eng_history.add_argument("--limit", type=int, default=20, help="Max results")
 
     args = parser.parse_args(argv)
 
@@ -117,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_status(args)
     elif args.command == "pipeline":
         return _cmd_pipeline(args)
-    elif args.command == "gateway":
-        return _cmd_gateway(args)
+    elif args.command == "engine":
+        return _cmd_engine(args)
     else:
         parser.print_help()
         return 0
@@ -245,41 +234,15 @@ def _cmd_migrate_check() -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    import signal
-
     try:
         import uvicorn
     except ImportError:
         print("Error: uvicorn is required. Install with: pip install robothor[api]")
         return 1
 
-    gw_proc = None
-    if not getattr(args, "no_gateway", False):
-        from robothor.gateway.process import GatewayProcess
-
-        gw = GatewayProcess()
-        try:
-            pid = gw.start(foreground=False)
-            print(f"  Gateway started (PID {pid})")
-            gw_proc = gw
-        except FileNotFoundError as e:
-            print(f"  Gateway not available: {e}")
-            print("  Continuing without gateway. Run 'robothor gateway build' first.")
-
-    def _cleanup(signum, frame):
-        if gw_proc:
-            gw_proc.stop()
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, _cleanup)
-    signal.signal(signal.SIGINT, _cleanup)
-
     print(f"Starting Robothor RAG Orchestrator on {args.host}:{args.port}...")
-    try:
-        uvicorn.run("robothor.api.orchestrator:app", host=args.host, port=args.port)
-    finally:
-        if gw_proc:
-            gw_proc.stop()
+    print("Agent engine runs separately: robothor engine start")
+    uvicorn.run("robothor.api.orchestrator:app", host=args.host, port=args.port)
     return 0
 
 
@@ -357,166 +320,217 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"               UNREACHABLE — {e}")
 
-    # Gateway
-    from robothor.gateway.manager import GatewayManager
-    from robothor.gateway.process import GatewayProcess
+    # Engine
+    print(f"  Engine:      port 18800")
+    try:
+        import httpx as _httpx
 
-    gw_mgr = GatewayManager(
-        gateway_dir=cfg.gateway.gateway_dir,
-        config_dir=cfg.gateway.config_dir,
-    )
-    gw_status = gw_mgr.status()
-    gw_proc = GatewayProcess(
-        gateway_dir=cfg.gateway.gateway_dir,
-        config_dir=cfg.gateway.config_dir,
-        port=cfg.gateway.port,
-    )
-    health = gw_proc.health_check()
-
-    print(f"  Gateway:     v{gw_status.version} (OpenClaw)")
-    if health["healthy"]:
-        print(f"               Port {cfg.gateway.port}, healthy")
-    elif gw_status.built:
-        print(f"               Built, not running")
-    else:
-        print(f"               Not built — run 'robothor gateway build'")
+        resp = _httpx.get("http://127.0.0.1:18800/health", timeout=3)
+        resp.raise_for_status()
+        data = resp.json()
+        agent_count = len(data.get("agents", {}))
+        print(f"               {data.get('status', '?')} — {agent_count} agents, bot={'yes' if data.get('bot_configured') else 'no'}")
+    except Exception:
+        print(f"               Not running — start with: robothor engine start")
 
     print()
     print(f"  Workspace:   {cfg.workspace}")
     return 0
 
 
-def _cmd_gateway(args: argparse.Namespace) -> int:
-    from robothor.config import get_config
-    from robothor.gateway.manager import GatewayManager
-    from robothor.gateway.process import GatewayProcess
-
-    cfg = get_config()
-    mgr = GatewayManager(
-        gateway_dir=cfg.gateway.gateway_dir,
-        config_dir=cfg.gateway.config_dir,
-    )
-    proc = GatewayProcess(
-        gateway_dir=cfg.gateway.gateway_dir,
-        config_dir=cfg.gateway.config_dir,
-        port=cfg.gateway.port,
-    )
-
-    sub = getattr(args, "gateway_command", None)
-
-    if sub == "build":
-        print("Building gateway...")
-        prereqs = mgr.check_prerequisites()
-        for p in prereqs:
-            mark = "+" if p.ok else "x"
-            print(f"  {mark} {p.name} {p.version}" if p.ok else f"  {mark} {p.name}: {p.hint}")
-        if not all(p.ok for p in prereqs):
-            print("Prerequisites not met.")
-            return 1
-        if mgr.build():
-            print(f"Build complete — v{mgr.get_version()}")
-            return 0
-        else:
-            print("Build failed. Check logs.")
-            return 1
-
-    elif sub == "rebuild":
-        print("Rebuilding gateway (clean)...")
-        if mgr.rebuild():
-            print(f"Rebuild complete — v{mgr.get_version()}")
-            return 0
-        else:
-            print("Rebuild failed.")
-            return 1
-
-    elif sub == "status":
-        status = mgr.status()
-        health = proc.health_check()
-        print(f"  Version:     {status.version}")
-        print(f"  Built:       {'yes' if status.built else 'no'}")
-        print(f"  Running:     {'yes' if proc.is_running() else 'no'}")
-        print(f"  Healthy:     {'yes' if health['healthy'] else 'no'}")
-        print(f"  Gateway dir: {status.gateway_dir}")
-        print(f"  Config dir:  {status.config_dir}")
-        for p in status.prereqs:
-            mark = "+" if p.ok else "x"
-            detail = p.version if p.ok else p.hint
-            print(f"  {mark} {p.name}: {detail}")
-        return 0
-
-    elif sub == "start":
-        fg = getattr(args, "foreground", False)
-        try:
-            pid = proc.start(foreground=fg)
-            if not fg:
-                print(f"Gateway started (PID {pid})")
-        except FileNotFoundError as e:
-            print(f"Error: {e}")
-            return 1
-        return 0
-
-    elif sub == "stop":
-        if proc.stop():
-            print("Gateway stopped.")
-        else:
-            print("Gateway not running.")
-        return 0
-
-    elif sub == "restart":
-        proc.stop()
-        try:
-            pid = proc.start()
-            print(f"Gateway restarted (PID {pid})")
-        except FileNotFoundError as e:
-            print(f"Error: {e}")
-            return 1
-        return 0
-
-    elif sub == "config":
-        dry_run = getattr(args, "dry_run", False)
-        try:
-            from robothor.gateway.config_gen import generate_and_deploy
-
-            return generate_and_deploy(
-                manifest_dir=cfg.workspace / "docs" / "agents",
-                config_dir=cfg.gateway.config_dir,
-                dry_run=dry_run,
-            )
-        except ImportError:
-            print("Config generator not available.")
-            return 1
-
-    elif sub == "sync":
-        print("Syncing upstream OpenClaw...")
-        if mgr.sync_upstream():
-            print("Sync complete.")
-            return 0
-        else:
-            print("Sync failed — check for merge conflicts.")
-            return 1
-
-    elif sub == "install-service":
-        try:
-            path = proc.install_systemd_unit()
-            print(f"Service installed: {path}")
-            print("Start with: sudo systemctl start robothor-gateway")
-            return 0
-        except Exception as e:
-            print(f"Error: {e}")
-            return 1
-
-    elif sub == "migrate":
-        from robothor.gateway.migrate import migrate
-
-        return migrate(dry_run=getattr(args, "dry_run", False))
-
-    else:
-        print("Usage: robothor gateway {build|rebuild|status|start|stop|restart|config|sync|install-service|migrate}")
-        return 0
-
 
 def _cmd_pipeline(args: argparse.Namespace) -> int:
     print(f"Pipeline tier {args.tier} not yet implemented. Coming in v0.2.")
+    return 0
+
+
+def _cmd_engine(args: argparse.Namespace) -> int:
+    sub = getattr(args, "engine_command", None)
+
+    if sub == "run":
+        return _cmd_engine_run(args)
+    elif sub == "start":
+        return _cmd_engine_start()
+    elif sub == "stop":
+        return _cmd_engine_stop()
+    elif sub == "status":
+        return _cmd_engine_status()
+    elif sub == "list":
+        return _cmd_engine_list()
+    elif sub == "history":
+        return _cmd_engine_history(args)
+    else:
+        print("Usage: robothor engine {run|start|stop|status|list|history}")
+        return 0
+
+
+def _cmd_engine_run(args: argparse.Namespace) -> int:
+    """Run a single agent and print the result."""
+    import asyncio
+    from datetime import UTC, datetime
+
+    from robothor.engine.config import EngineConfig, build_system_prompt, load_agent_config
+    from robothor.engine.models import TriggerType
+
+    config = EngineConfig.from_env()
+    agent_id = args.agent_id
+    trigger = TriggerType(args.trigger) if args.trigger != "manual" else TriggerType.MANUAL
+
+    agent_config = load_agent_config(agent_id, config.manifest_dir)
+    if not agent_config:
+        print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}")
+        return 1
+
+    # Build message
+    message = args.message
+    if not message:
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        message = (
+            f"Current time: {now}\n\n"
+            f"You are {agent_config.name} ({agent_config.id}). "
+            f"Execute your scheduled tasks as described in your instructions."
+        )
+
+    print(f"Running agent: {agent_config.name} ({agent_id})")
+    print(f"Model: {agent_config.model_primary}")
+    print(f"Tools: {len(agent_config.tools_allowed)} allowed")
+    print()
+
+    async def _run():
+        from robothor.engine.runner import AgentRunner
+        runner = AgentRunner(config)
+        return await runner.execute(
+            agent_id=agent_id,
+            message=message,
+            trigger_type=trigger,
+            agent_config=agent_config,
+        )
+
+    run = asyncio.run(_run())
+
+    print(f"Status: {run.status.value}")
+    print(f"Duration: {run.duration_ms}ms")
+    print(f"Model: {run.model_used}")
+    print(f"Tokens: {run.input_tokens} in / {run.output_tokens} out")
+    print(f"Steps: {len(run.steps)}")
+    print()
+
+    if run.output_text:
+        print("─── Output ───")
+        print(run.output_text)
+    if run.error_message:
+        print("─── Error ───")
+        print(run.error_message)
+
+    return 0 if run.status.value == "completed" else 1
+
+
+def _cmd_engine_start() -> int:
+    """Start the engine daemon."""
+    from robothor.engine.daemon import run
+    run()
+    return 0
+
+
+def _cmd_engine_stop() -> int:
+    """Stop the engine daemon via systemctl."""
+    import subprocess
+    result = subprocess.run(
+        ["sudo", "systemctl", "stop", "robothor-engine"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("Engine stopped.")
+    else:
+        print(f"Failed to stop engine: {result.stderr}")
+    return result.returncode
+
+
+def _cmd_engine_status() -> int:
+    """Show engine daemon status."""
+    import httpx
+
+    from robothor.engine.config import EngineConfig
+
+    config = EngineConfig.from_env()
+    url = f"http://127.0.0.1:{config.port}/health"
+
+    try:
+        resp = httpx.get(url, timeout=3)
+        resp.raise_for_status()
+        data = resp.json()
+        print(f"Engine:    {data.get('status', 'unknown')}")
+        print(f"Version:   {data.get('engine_version', '?')}")
+        print(f"Tenant:    {data.get('tenant_id', '?')}")
+        print(f"Bot:       {'configured' if data.get('bot_configured') else 'disabled'}")
+        print()
+        agents = data.get("agents", {})
+        if agents:
+            print(f"{'Agent':<25} {'Status':<12} {'Last Run':<20} {'Duration':<10} {'Errors'}")
+            print("─" * 80)
+            for aid, info in agents.items():
+                print(
+                    f"{aid:<25} {info.get('last_status', '-'):<12} "
+                    f"{info.get('last_run_at', '-'):<20} "
+                    f"{info.get('last_duration_ms', '-')!s:<10} "
+                    f"{info.get('consecutive_errors', 0)}"
+                )
+        return 0
+    except Exception as e:
+        print(f"Engine not running or unreachable: {e}")
+        return 1
+
+
+def _cmd_engine_list() -> int:
+    """List configured agents from YAML manifests."""
+    from robothor.engine.config import EngineConfig, load_all_manifests, manifest_to_agent_config
+
+    config = EngineConfig.from_env()
+    manifests = load_all_manifests(config.manifest_dir)
+
+    if not manifests:
+        print(f"No manifests found in {config.manifest_dir}")
+        return 1
+
+    print(f"{'Agent ID':<25} {'Name':<25} {'Cron':<20} {'Model':<35} {'Delivery'}")
+    print("─" * 120)
+    for m in manifests:
+        ac = manifest_to_agent_config(m)
+        model_short = ac.model_primary.split("/")[-1] if ac.model_primary else "-"
+        print(
+            f"{ac.id:<25} {ac.name:<25} {ac.cron_expr or '-':<20} "
+            f"{model_short:<35} {ac.delivery_mode.value}"
+        )
+
+    print(f"\n{len(manifests)} agents configured")
+    return 0
+
+
+def _cmd_engine_history(args: argparse.Namespace) -> int:
+    """Show recent agent runs."""
+    from robothor.engine.tracking import list_runs
+
+    try:
+        runs = list_runs(agent_id=getattr(args, "agent", None), limit=args.limit)
+    except Exception as e:
+        print(f"Error: Cannot query runs: {e}")
+        return 1
+
+    if not runs:
+        print("No runs found.")
+        return 0
+
+    print(f"{'Agent':<25} {'Status':<12} {'Duration':<10} {'Trigger':<10} {'Model':<20} {'Created'}")
+    print("─" * 100)
+    for r in runs:
+        duration = f"{r.get('duration_ms', 0) or 0}ms"
+        model_short = (r.get("model_used") or "-").split("/")[-1]
+        created = str(r.get("created_at", ""))[:19]
+        print(
+            f"{r['agent_id']:<25} {r['status']:<12} {duration:<10} "
+            f"{r.get('trigger_type', '-'):<10} {model_short:<20} {created}"
+        )
+
     return 0
 
 
