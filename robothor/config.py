@@ -85,6 +85,21 @@ class OllamaConfig:
 
 
 @dataclass(frozen=True)
+class GatewayConfig:
+    """OpenClaw gateway configuration."""
+
+    gateway_dir: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "gateway"
+    )
+    config_dir: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")
+        )
+    )
+    port: int = 18789
+
+
+@dataclass(frozen=True)
 class Config:
     """Top-level Robothor configuration."""
 
@@ -100,6 +115,7 @@ class Config:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    gateway: GatewayConfig = field(default_factory=GatewayConfig)
 
     # Service ports (override via env or service registry)
     bridge_port: int = 9100
@@ -164,6 +180,17 @@ def _load_from_env() -> Config:
         vision_model=os.environ.get("ROBOTHOR_VISION_MODEL", "llama3.2-vision:11b"),
     )
 
+    gateway_dir = Path(
+        os.environ.get("ROBOTHOR_GATEWAY_DIR", Path(__file__).parent.parent / "gateway")
+    )
+    gateway_cfg = GatewayConfig(
+        gateway_dir=gateway_dir,
+        config_dir=Path(
+            os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")
+        ),
+        port=int(os.environ.get("ROBOTHOR_GATEWAY_PORT", "18789")),
+    )
+
     return Config(
         workspace=workspace,
         memory_dir=memory_dir,
@@ -172,6 +199,7 @@ def _load_from_env() -> Config:
         db=db,
         redis=redis_cfg,
         ollama=ollama_cfg,
+        gateway=gateway_cfg,
         bridge_port=int(os.environ.get("ROBOTHOR_BRIDGE_PORT", "9100")),
         orchestrator_port=int(os.environ.get("ROBOTHOR_ORCHESTRATOR_PORT", "9099")),
         vision_port=int(os.environ.get("ROBOTHOR_VISION_PORT", "8600")),

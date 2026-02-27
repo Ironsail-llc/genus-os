@@ -225,7 +225,7 @@ Safety net crons:
 5. Create `brain/<INSTRUCTION>.md` (or payload-only if simple)
 6. `python scripts/validate_agents.py --agent <id>`
 7. `python scripts/sync_runtime.py`
-8. `sudo systemctl restart moltbot-gateway`
+8. `sudo systemctl restart robothor-gateway`
 9. Monitor first cron run via `jobs.json` state
 10. Commit all files: `agent(<id>): add new agent`
 
@@ -249,7 +249,7 @@ Edit manifest FIRST, then update configs to match.
 2. `git checkout <commit> -- docs/agents/<id>.yaml`
 3. AI reads restored manifest, updates configs to match
 4. `python scripts/validate_agents.py --agent <id>`
-5. `python scripts/sync_runtime.py && sudo systemctl restart moltbot-gateway`
+5. `python scripts/sync_runtime.py && sudo systemctl restart robothor-gateway`
 
 **Nuclear (all agents):**
 
@@ -352,7 +352,7 @@ cat ~/.openclaw/cron/jobs.json | python3 -c "import json,sys; [print(f'{j[\"agen
 curl -s http://localhost:9100/health | python3 -m json.tool
 
 # Gateway logs
-journalctl -u moltbot-gateway --since "5 min ago" --no-pager | tail -20
+journalctl -u robothor-gateway --since "5 min ago" --no-pager | tail -20
 
 # Agent tasks
 curl -s http://localhost:9100/api/tasks/agent/<agent-id> | python3 -m json.tool
