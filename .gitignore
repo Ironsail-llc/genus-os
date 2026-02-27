@@ -1,6 +1,10 @@
 # Symlinked directories (tracked in their own repos)
 brain/
-comms/
+
+# Gateway (OpenClaw subtree) build artifacts
+gateway/node_modules/
+gateway/dist/
+gateway/.env
 # runtime/ is now a real directory with scrubbed configs (git-tracked)
 # runtime/openclaw.secrets.json is the local-only overlay with real keys
 runtime/openclaw.secrets.json
