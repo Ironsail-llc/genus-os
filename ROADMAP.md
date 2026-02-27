@@ -40,7 +40,7 @@ Event-driven architecture and self-describing infrastructure.
 - [x] Event consumers (email, calendar, health, vision) with graceful shutdown
 - [x] Service registry (topology sort, health checks, env overrides)
 - [x] Audit logging with typed events and telemetry table
-- [x] API layer (FastAPI orchestrator, MCP server with 35 tools)
+- [x] API layer (FastAPI orchestrator, MCP server with 44 tools)
 - [x] Infrastructure templates (Docker Compose, systemd, env config)
 - [ ] Documentation site (MkDocs or similar)
 - [ ] PyPI release
@@ -120,4 +120,4 @@ The complete operating system. Every capability accessible through one interface
 
 ---
 
-**Current status:** v0.1-0.3 implemented (411 tests passing). The intelligence layer is solid. Next: extracting the process model from the production system into the open-source package.
+**Current status:** v0.1-0.3 implemented (1,400+ tests passing). The intelligence layer, agent orchestration, and control plane are production-validated. Next: formalizing the process model.

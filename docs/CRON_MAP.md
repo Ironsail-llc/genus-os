@@ -14,6 +14,9 @@ Every 10 min   │ Continuous ingestion (crontab, Tier 1) — brain/memory_syste
 
 Every 15 min   │ Garmin health sync (crontab) — health/garmin_sync.py
 
+05:15, 19:45   │ Health summary (crontab) — brain/scripts/health_summary.py
+               │   Reads garmin.db → writes memory/garmin-health.md (before briefing agents)
+
 Every 30 min   │ Jira sync (crontab, 6-22h M-F) — brain/scripts/jira_sync.py
                │ Cron health check (crontab) — brain/scripts/cron_health_check.py
 
@@ -97,6 +100,10 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 # Garmin health sync - every 15 min
 */15 * * * * /home/philip/garmin-sync/venv/bin/python /home/philip/garmin-sync/garmin_sync.py >> /home/philip/garmin-sync/sync.log 2>&1
+
+# Health Summary — garmin-health.md for briefing agents (before 6:30 AST briefing + 21:00 AST winddown)
+15 5 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/health_summary.py >> memory_system/logs/health-summary.log 2>&1
+45 19 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/health_summary.py >> memory_system/logs/health-summary.log 2>&1
 
 # Google Meet Transcript Sync - every 10 min
 */10 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/meet_transcript_sync.py >> memory_system/logs/meet-transcript-sync.log 2>&1
@@ -194,4 +201,4 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ---
 
-**Updated:** 2026-02-26
+**Updated:** 2026-02-27

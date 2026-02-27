@@ -126,13 +126,13 @@ Use conventional commit prefixes:
 
 ## Architecture Overview
 
-Robothor is a three-layer system:
+Robothor is a three-layer system in a single repo:
 
-1. **Intelligence Layer** (`robothor/`) - Python package: memory, RAG, knowledge graph, CRM, vision
-2. **Agent Orchestration** - OpenClaw or any agent framework (consumes `robothor` as a library)
-3. **Infrastructure** - PostgreSQL+pgvector, Redis, Ollama, systemd
+1. **Intelligence Layer** (`robothor/`) — Python package: memory, RAG, knowledge graph, CRM, vision, events
+2. **Agent Orchestration** (`gateway/`) — OpenClaw messaging gateway with 11 autonomous agents defined as YAML manifests
+3. **Control Plane** (`app/`) — The Helm, a Next.js 16 live dashboard with chat, task board, and event streams
 
-The `robothor` package is the intelligence layer. It provides the brain. Agent frameworks provide the body.
+Supporting services: Bridge (`crm/bridge/`) for CRM API, PostgreSQL+pgvector, Redis, Ollama, 19 systemd units.
 
 ## Getting Help
 

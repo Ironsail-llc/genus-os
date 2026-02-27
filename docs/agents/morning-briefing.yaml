@@ -59,5 +59,7 @@ tags_produced: []
 tags_consumed: []
 
 changelog:
+  - date: "2026-02-27"
+    change: "Add health section in payload (garmin-health.md)"
   - date: "2026-02-24"
     change: "Initial manifest creation; agentId changed from 'main' to 'morning-briefing'"
