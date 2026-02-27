@@ -1,0 +1,115 @@
+id: main
+name: Robothor (Interactive)
+description: Primary interactive agent — Philip talks to Robothor via Telegram
+version: "2026-02-27"
+department: core
+
+reports_to: null
+creates_tasks_for: [email-classifier, email-responder, crm-steward]
+receives_tasks_from: []
+escalates_to: null
+
+model:
+  primary: anthropic/claude-sonnet-4-6
+  fallbacks:
+    - gemini/gemini-2.5-pro
+    - openrouter/moonshotai/kimi-k2.5
+  payload_alias: sonnet
+  temperature: 0.5
+
+schedule:
+  cron: ""
+  timezone: America/Grenada
+  timeout_seconds: 600
+  max_iterations: 30
+  session_target: persistent
+
+delivery:
+  mode: none
+  channel: telegram
+  to: "7636850023"
+
+tools_allowed:
+  - list_conversations
+  - get_conversation
+  - list_messages
+  - create_message
+  - toggle_conversation_status
+  - log_interaction
+  - create_person
+  - update_person
+  - list_people
+  - get_person
+  - delete_person
+  - create_company
+  - update_company
+  - list_companies
+  - get_company
+  - delete_company
+  - create_note
+  - list_notes
+  - update_note
+  - delete_note
+  - create_task
+  - update_task
+  - get_task
+  - delete_task
+  - list_tasks
+  - list_my_tasks
+  - resolve_task
+  - approve_task
+  - reject_task
+  - send_notification
+  - get_inbox
+  - ack_notification
+  - search_memory
+  - store_memory
+  - get_entity
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - append_to_block
+  - search_records
+  - get_metadata_objects
+  - get_object_metadata
+  - merge_people
+  - merge_companies
+  - look
+  - who_is_here
+  - enroll_face
+  - set_vision_mode
+  - web_search
+  - web_fetch
+  - read_file
+  - write_file
+  - exec
+  - list_agent_runs
+  - get_agent_run
+  - list_agent_schedules
+  - get_agent_stats
+tools_denied: []
+
+streams:
+  read: [email, calendar, crm, vision, health, agent, system]
+  write: [agent, system]
+
+sla:
+  urgent: 30m
+  high: 2h
+  normal: 8h
+  low: 24h
+
+task_protocol: true
+review_workflow: true
+notification_inbox: true
+status_file: null
+shared_working_state: true
+
+instruction_file: brain/SOUL.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+changelog:
+  - date: "2026-02-27"
+    change: "Created for Python Agent Engine — interactive Telegram chat"

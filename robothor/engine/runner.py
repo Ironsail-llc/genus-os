@@ -161,11 +161,13 @@ class AgentRunner:
                 response = await self._call_llm_streaming(
                     session.messages, models, tool_schemas, on_content,
                     broken_models=broken_models,
+                    temperature=agent_config.temperature,
                 )
             else:
                 response = await self._call_llm(
                     session.messages, models, tool_schemas,
                     broken_models=broken_models,
+                    temperature=agent_config.temperature,
                 )
             elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -250,6 +252,7 @@ class AgentRunner:
         models: list[str],
         tools: list[dict],
         broken_models: set[str] | None = None,
+        temperature: float = 0.3,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
         last_error = None
@@ -262,7 +265,7 @@ class AgentRunner:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
-                    "temperature": 0.3,
+                    "temperature": temperature,
                     "max_tokens": 8192,
                 }
                 if tools:
@@ -295,6 +298,7 @@ class AgentRunner:
         tools: list[dict],
         on_content: Callable[[str], Awaitable[None]],
         broken_models: set[str] | None = None,
+        temperature: float = 0.3,
     ) -> Any:
         """Call LLM with streaming. Streams text content via on_content callback.
 
@@ -311,7 +315,7 @@ class AgentRunner:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
-                    "temperature": 0.3,
+                    "temperature": temperature,
                     "max_tokens": 8192,
                     "stream": True,
                 }

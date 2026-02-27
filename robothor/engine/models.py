@@ -96,7 +96,8 @@ class AgentConfig:
     warmup_context_files: list[str] = field(default_factory=list)
     warmup_peer_agents: list[str] = field(default_factory=list)
 
-    # Limits
+    # LLM parameters
+    temperature: float = 0.3
     max_iterations: int = 20
 
     # Downstream agents to trigger after successful cron run

@@ -119,6 +119,7 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         timezone=schedule.get("timezone", "America/Grenada"),
         timeout_seconds=schedule.get("timeout_seconds", 600),
         max_iterations=schedule.get("max_iterations", 20),
+        temperature=float(model.get("temperature", 0.3)),
         session_target=schedule.get("session_target", "isolated"),
         delivery_mode=delivery_mode,
         delivery_channel=delivery.get("channel", ""),
