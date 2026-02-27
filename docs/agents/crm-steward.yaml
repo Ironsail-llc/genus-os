@@ -13,7 +13,7 @@ model:
   primary: openrouter/moonshotai/kimi-k2.5
   fallbacks:
     - openrouter/minimax/minimax-m2.5
-    - google/gemini-2.5-pro
+    - gemini/gemini-2.5-pro
   payload_alias: kimi
 
 schedule:
@@ -28,7 +28,6 @@ delivery:
   to: "7636850023"
 
 tools_allowed:
-  - crm_health
   - list_people
   - update_person
   - update_company

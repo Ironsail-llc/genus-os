@@ -13,7 +13,7 @@ model:
   primary: openrouter/moonshotai/kimi-k2.5
   fallbacks:
     - openrouter/anthropic/claude-sonnet-4.6
-    - google/gemini-2.5-pro
+    - gemini/gemini-2.5-pro
   payload_alias: kimi
 
 schedule:
@@ -29,7 +29,6 @@ delivery:
 
 tools_allowed:
   - list_conversations
-  - crm_health
   - list_tasks
   - get_task
   - list_my_tasks
@@ -41,6 +40,10 @@ tools_allowed:
   - get_inbox
   - ack_notification
   - append_to_block
+  - list_agent_runs
+  - get_agent_run
+  - list_agent_schedules
+  - get_agent_stats
 tools_denied:
   - create_person
   - update_person
