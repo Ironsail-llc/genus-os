@@ -37,12 +37,12 @@ class EngineClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def check_health(self) -> dict | None:
+    async def check_health(self) -> dict[str, Any] | None:
         """GET /health — returns health dict or None if unreachable."""
         try:
             resp = await self._client.get("/health", timeout=5)
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
         except Exception:
             return None
 
@@ -75,12 +75,12 @@ class EngineClient:
                         data = {"raw": line[6:]}
                     yield SSEEvent(event=current_event, data=data)
 
-    async def get_history(self) -> list[dict]:
+    async def get_history(self) -> list[dict[str, Any]]:
         """GET /chat/history — return session message history."""
         try:
             resp = await self._client.get("/chat/history", params={"session_key": self.session_key})
             resp.raise_for_status()
-            return resp.json().get("messages", [])
+            return list(resp.json().get("messages", []))
         except Exception:
             return []
 
@@ -89,7 +89,7 @@ class EngineClient:
         try:
             resp = await self._client.post("/chat/abort", json={"session_key": self.session_key})
             resp.raise_for_status()
-            return resp.json().get("aborted", False)
+            return bool(resp.json().get("aborted", False))
         except Exception:
             return False
 
@@ -98,24 +98,24 @@ class EngineClient:
         try:
             resp = await self._client.post("/chat/clear", json={"session_key": self.session_key})
             resp.raise_for_status()
-            return resp.json().get("ok", False)
+            return bool(resp.json().get("ok", False))
         except Exception:
             return False
 
-    async def get_runs(self, limit: int = 20) -> list[dict]:
+    async def get_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         """GET /runs — return recent agent runs."""
         try:
             resp = await self._client.get("/runs", params={"limit": limit})
             resp.raise_for_status()
-            return resp.json().get("runs", [])
+            return list(resp.json().get("runs", []))
         except Exception:
             return []
 
-    async def get_costs(self, hours: int = 24) -> dict:
+    async def get_costs(self, hours: int = 24) -> dict[str, Any]:
         """GET /costs — return cost breakdown."""
         try:
             resp = await self._client.get("/costs", params={"hours": hours})
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
         except Exception:
             return {}

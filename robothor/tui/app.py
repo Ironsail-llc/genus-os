@@ -197,13 +197,13 @@ class RobothorApp(App):
 
                 elif event.event == "tool_end":
                     call_id = event.data.get("call_id", "")
-                    card = tool_cards.get(call_id)
-                    if card:
+                    end_card = tool_cards.get(call_id)
+                    if end_card is not None:
                         error = event.data.get("error")
                         if error:
-                            card.mark_error(error)
+                            end_card.mark_error(error)
                         else:
-                            card.mark_complete(event.data.get("duration_ms", 0))
+                            end_card.mark_complete(event.data.get("duration_ms", 0))
 
                 elif event.event == "done":
                     # Update with final text if we missed any deltas

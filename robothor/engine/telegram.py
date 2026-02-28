@@ -12,6 +12,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import re
@@ -31,6 +32,12 @@ from aiogram.types import (
     Message,
 )
 
+from robothor.engine.chat_store import (
+    clear_session_async,
+    load_all_sessions,
+    save_exchange_async,
+    update_model_override_async,
+)
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.models import TriggerType
 
@@ -150,6 +157,12 @@ class TelegramBot:
         async def cmd_clear(message: Message) -> None:
             chat_id = str(message.chat.id)
             self._chat_history.pop(chat_id, None)
+            asyncio.create_task(
+                clear_session_async(
+                    self._session_key(chat_id),
+                    tenant_id=self.config.tenant_id,
+                )
+            )
             await message.answer("Conversation history cleared.")
 
         @self.dp.message(Command("reset"))
@@ -157,6 +170,12 @@ class TelegramBot:
             chat_id = str(message.chat.id)
             self._model_override.pop(chat_id, None)
             self._chat_history.pop(chat_id, None)
+            asyncio.create_task(
+                clear_session_async(
+                    self._session_key(chat_id),
+                    tenant_id=self.config.tenant_id,
+                )
+            )
             primary = self._get_manifest_primary()
             name = MODEL_DISPLAY_NAMES.get(primary, primary)
             await message.answer(
@@ -237,15 +256,24 @@ class TelegramBot:
                 return
 
             self._model_override[chat_id] = model_id
+            asyncio.create_task(
+                update_model_override_async(
+                    self._session_key(chat_id),
+                    model_id,
+                    tenant_id=self.config.tenant_id,
+                )
+            )
             display = MODEL_DISPLAY_NAMES[model_id]
 
             # Update the keyboard to reflect selection
             kb = self._build_model_keyboard(model_id)
             try:
-                await callback.message.edit_text(
-                    f"<b>Model switched to:</b> {html.escape(display)}",
-                    reply_markup=kb,
-                )
+                msg = callback.message
+                if msg and hasattr(msg, "edit_text"):
+                    await msg.edit_text(  # type: ignore[union-attr]
+                        f"<b>Model switched to:</b> {html.escape(display)}",
+                        reply_markup=kb,
+                    )
             except Exception:
                 pass
             await callback.answer(f"Switched to {display}")
@@ -273,12 +301,10 @@ class TelegramBot:
 
             async def typing_loop() -> None:
                 while typing_active:
-                    try:
+                    with contextlib.suppress(Exception):
                         await self.bot.send_chat_action(
                             chat_id=int(chat_id), action=ChatAction.TYPING
                         )
-                    except Exception:
-                        pass
                     await asyncio.sleep(TYPING_INTERVAL)
 
             typing_task = asyncio.create_task(typing_loop())
@@ -365,6 +391,18 @@ class TelegramBot:
                         if len(chat_hist) > self._max_history:
                             self._chat_history[chat_id] = chat_hist[-self._max_history :]
 
+                        # Persist to DB (fire-and-forget)
+                        asyncio.create_task(
+                            save_exchange_async(
+                                self._session_key(chat_id),
+                                user_text,
+                                run.output_text,
+                                channel="telegram",
+                                model_override=model,
+                                tenant_id=self.config.tenant_id,
+                            )
+                        )
+
                     if run.output_text:
                         if stream_msg_id is not None:
                             await self._edit_final(chat_id, stream_msg_id, run.output_text)
@@ -387,15 +425,13 @@ class TelegramBot:
                 except asyncio.CancelledError:
                     # /stop was called
                     if stream_msg_id is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             await self.bot.edit_message_text(
                                 chat_id=int(chat_id),
                                 message_id=stream_msg_id,
                                 text="Stopped.",
                                 parse_mode=None,
                             )
-                        except Exception:
-                            pass
                 except Exception as e:
                     logger.error("Failed to process message: %s", e, exc_info=True)
                     await self.send_message(chat_id, f"Internal error: {html.escape(str(e))}")
@@ -407,6 +443,34 @@ class TelegramBot:
 
             task = asyncio.create_task(run_agent())
             self._active_tasks[chat_id] = task
+
+    def _session_key(self, chat_id: str) -> str:
+        """Return a DB session key for a Telegram chat."""
+        return f"telegram:{chat_id}"
+
+    def _load_persisted_history(self) -> None:
+        """Restore chat history and model overrides from PostgreSQL."""
+        try:
+            sessions = load_all_sessions(
+                limit_per_session=self._max_history,
+                tenant_id=self.config.tenant_id,
+            )
+            restored = 0
+            for key, data in sessions.items():
+                if not key.startswith("telegram:"):
+                    continue
+                chat_id = key.removeprefix("telegram:")
+                history = data.get("history", [])
+                if history:
+                    self._chat_history[chat_id] = history
+                model = data.get("model_override")
+                if model:
+                    self._model_override[chat_id] = model
+                restored += 1
+            if restored:
+                logger.info("Restored %d Telegram chat sessions from DB", restored)
+        except Exception as e:
+            logger.warning("Failed to load persisted chat history: %s", e)
 
     def _get_manifest_primary(self) -> str:
         """Get the main agent's manifest primary model."""
@@ -440,10 +504,8 @@ class TelegramBot:
     async def _edit_final(self, chat_id: str, message_id: int, text: str) -> None:
         """Edit a streamed message with the final text. Tries HTML, falls back to plain."""
         if len(text) > MAX_MESSAGE_LENGTH:
-            try:
+            with contextlib.suppress(Exception):
                 await self.bot.delete_message(chat_id=int(chat_id), message_id=message_id)
-            except Exception:
-                pass
             await self.send_message(chat_id, text)
             return
 
@@ -521,6 +583,9 @@ class TelegramBot:
             while True:
                 await asyncio.sleep(3600)
 
+        # Restore persisted chat history from DB
+        self._load_persisted_history()
+
         # Register command menu with Telegram
         try:
             await self.bot.set_my_commands(
@@ -551,7 +616,5 @@ class TelegramBot:
             task.cancel()
         self._active_tasks.clear()
 
-        try:
+        with contextlib.suppress(Exception):
             await self.bot.session.close()
-        except Exception:
-            pass

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import TriggerType
 
@@ -184,7 +184,10 @@ def create_health_app(
                 cols = [d[0] for d in cur.description]
                 return {
                     "runs": [
-                        {c: str(v) if v is not None else None for c, v in zip(cols, row)}
+                        {
+                            c: str(v) if v is not None else None
+                            for c, v in zip(cols, row, strict=False)
+                        }
                         for row in rows
                     ]
                 }
@@ -212,7 +215,10 @@ def create_health_app(
                 if not run_row:
                     return {"error": "Run not found"}
                 cols = [d[0] for d in cur.description]
-                run_data = {c: str(v) if v is not None else None for c, v in zip(cols, run_row)}
+                run_data: dict[str, Any] = {
+                    c: str(v) if v is not None else None
+                    for c, v in zip(cols, run_row, strict=False)
+                }
 
                 # Get steps
                 cur.execute(
@@ -226,7 +232,10 @@ def create_health_app(
                 step_rows = cur.fetchall()
                 step_cols = [d[0] for d in cur.description]
                 run_data["steps"] = [
-                    {c: str(v) if v is not None else None for c, v in zip(step_cols, row)}
+                    {
+                        c: str(v) if v is not None else None
+                        for c, v in zip(step_cols, row, strict=False)
+                    }
                     for row in step_rows
                 ]
 

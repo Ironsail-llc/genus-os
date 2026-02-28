@@ -172,7 +172,6 @@ def migrate_table(
 
     # Build the INSERT ... ON CONFLICT DO NOTHING statement
     col_list = ", ".join(columns)
-    placeholders = ", ".join(["%s"] * len(columns))
 
     if key_type == "serial":
         # For sync_log, skip the id column — let PG auto-generate

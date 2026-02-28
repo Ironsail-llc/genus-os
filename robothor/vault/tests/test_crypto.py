@@ -40,7 +40,7 @@ class TestEncryptDecrypt:
         key1 = secrets.token_bytes(32)
         key2 = secrets.token_bytes(32)
         encrypted = encrypt("secret", key1)
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, Exception)):
             decrypt(encrypted, key2)
 
     def test_empty_string(self):

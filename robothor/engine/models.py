@@ -10,11 +10,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class TriggerType(str, Enum):
+class TriggerType(StrEnum):
     CRON = "cron"
     HOOK = "hook"
     EVENT = "event"
@@ -24,7 +24,7 @@ class TriggerType(str, Enum):
     WORKFLOW = "workflow"
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -33,7 +33,7 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class StepType(str, Enum):
+class StepType(StrEnum):
     LLM_CALL = "llm_call"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
@@ -46,7 +46,7 @@ class StepType(str, Enum):
     GUARDRAIL = "guardrail"
 
 
-class DeliveryMode(str, Enum):
+class DeliveryMode(StrEnum):
     ANNOUNCE = "announce"
     NONE = "none"
     LOG = "log"
@@ -220,7 +220,7 @@ class AgentRun:
 # ─── Workflow Engine Models ────────────────────────────────────────────
 
 
-class WorkflowStepType(str, Enum):
+class WorkflowStepType(StrEnum):
     AGENT = "agent"
     TOOL = "tool"
     CONDITION = "condition"
@@ -228,7 +228,7 @@ class WorkflowStepType(str, Enum):
     NOOP = "noop"
 
 
-class WorkflowStepStatus(str, Enum):
+class WorkflowStepStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"

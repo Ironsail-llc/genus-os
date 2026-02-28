@@ -130,12 +130,14 @@ async def main() -> None:
 
 
 async def _watchdog(config: EngineConfig) -> None:
-    """Subsystem watchdog — pings PostgreSQL and Redis every 60s."""
+    """Subsystem watchdog — pings PostgreSQL and Redis every 60s, cleans stale chat sessions daily."""
     pg_failures = 0
     redis_failures = 0
+    tick_count = 0
 
     while True:
         await asyncio.sleep(60)
+        tick_count += 1
 
         # Ping PostgreSQL
         try:
@@ -168,6 +170,18 @@ async def _watchdog(config: EngineConfig) -> None:
         except Exception as e:
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
+
+        # Daily chat session TTL cleanup (every 1440 ticks = 24h)
+        if tick_count % 1440 == 0:
+            try:
+                from robothor.engine.chat_store import cleanup_stale_sessions
+
+                loop = asyncio.get_running_loop()
+                deleted = await loop.run_in_executor(None, cleanup_stale_sessions)
+                if deleted:
+                    logger.info("Watchdog: cleaned up %d stale chat sessions", deleted)
+            except Exception as e:
+                logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
         # Alert after 3 consecutive PG failures
         if pg_failures == 3:

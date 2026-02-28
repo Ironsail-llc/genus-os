@@ -11,6 +11,8 @@ Public API:
 
 from __future__ import annotations
 
+import builtins
+
 from robothor.vault.crypto import get_master_key, init_master_key
 from robothor.vault.dal import (
     delete_secret,
@@ -42,7 +44,9 @@ def delete(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     return delete_secret(key, tenant_id=tenant_id)
 
 
-def list(*, category: str | None = None, tenant_id: str = DEFAULT_TENANT) -> list[str]:
+def list(  # type: ignore[override]  # noqa: A001
+    *, category: str | None = None, tenant_id: str = DEFAULT_TENANT
+) -> builtins.list[str]:
     """List all secret keys, optionally filtered by category."""
     return list_keys(category=category, tenant_id=tenant_id)
 

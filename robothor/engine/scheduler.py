@@ -8,6 +8,7 @@ max_instances=1 prevents concurrent runs of the same agent.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ CIRCUIT_BREAKER_THRESHOLD = 5
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
+    from robothor.engine.models import AgentConfig
     from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
@@ -208,10 +210,8 @@ class CronScheduler:
                 consecutive_errors = 0
                 if run.status.value in ("failed", "timeout"):
                     prev_schedule = None
-                    try:
+                    with contextlib.suppress(Exception):
                         prev_schedule = get_schedule(agent_id)
-                    except Exception:
-                        pass
                     consecutive_errors = (
                         (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
                     )

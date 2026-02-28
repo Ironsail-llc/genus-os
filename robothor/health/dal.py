@@ -428,7 +428,7 @@ def get_resting_hr(today: str, yesterday: str) -> int | None:
                 )
                 row = cur.fetchone()
                 if row and row[0] is not None:
-                    return row[0]
+                    return int(row[0])
     return None
 
 

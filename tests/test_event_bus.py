@@ -63,12 +63,14 @@ class TestPublish:
         mock_redis.xadd.assert_called_once()
 
     def test_publish_invalid_stream(self):
+        """Invalid streams are warned about but still published."""
         mock_redis = MagicMock()
+        mock_redis.xadd.return_value = "1-0"
         set_redis_client(mock_redis)
 
         msg_id = publish("invalid_stream", "test", {}, source="test")
-        assert msg_id is None
-        mock_redis.xadd.assert_not_called()
+        assert msg_id == "1-0"
+        mock_redis.xadd.assert_called_once()
 
     @patch("robothor.events.bus.EVENT_BUS_ENABLED", False)
     def test_publish_disabled(self):

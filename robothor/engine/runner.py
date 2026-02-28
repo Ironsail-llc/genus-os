@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -205,7 +206,7 @@ class AgentRunner:
 
         # ── [TELEMETRY] Publish run metrics ──
         if trace:
-            try:
+            with contextlib.suppress(Exception):
                 trace.publish_metrics(
                     {
                         "status": "completed",
@@ -214,8 +215,6 @@ class AgentRunner:
                         "output_tokens": session.run.output_tokens,
                     }
                 )
-            except Exception:
-                pass
 
         return self._finish_run(session.complete(output_text), trace=trace)
 
@@ -258,7 +257,7 @@ class AgentRunner:
         if plan_result and hasattr(plan_result, "estimated_steps"):
             plan_steps = plan_result.estimated_steps
 
-        for iteration in range(max_iterations):
+        for _iteration in range(max_iterations):
             # ── [BUDGET] Check token/cost budget ──
             budget_status = session.check_budget(
                 agent_config.token_budget, agent_config.cost_budget_usd
@@ -343,24 +342,24 @@ class AgentRunner:
                         tool_name, tool_args, agent_id=agent_config.id
                     )
                     if not gr.allowed:
-                        error_msg = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
+                        gr_error_msg = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
                         session.record_tool_call(
                             tool_name=tool_name,
                             tool_input=tool_args,
-                            tool_output={"error": error_msg, "guardrail": gr.guardrail_name},
+                            tool_output={"error": gr_error_msg, "guardrail": gr.guardrail_name},
                             tool_call_id=tc.id,
-                            error_message=error_msg,
+                            error_message=gr_error_msg,
                         )
-                        iteration_errors.append((tool_name, error_msg))
+                        iteration_errors.append((tool_name, gr_error_msg))
                         if scratchpad:
-                            scratchpad.record_tool_call(tool_name, error=error_msg)
+                            scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                         if escalation:
                             escalation.record_error()
                         continue
 
                 # Emit tool_start event
                 if on_tool:
-                    try:
+                    with contextlib.suppress(Exception):
                         await on_tool(
                             {
                                 "event": "tool_start",
@@ -369,8 +368,6 @@ class AgentRunner:
                                 "call_id": tc.id,
                             }
                         )
-                    except Exception:
-                        pass  # Never block tool execution
 
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
@@ -393,7 +390,7 @@ class AgentRunner:
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
-                error_msg = result.get("error") if isinstance(result, dict) else None
+                error_msg: str | None = result.get("error") if isinstance(result, dict) else None
 
                 # ── [GUARDRAILS] Post-execution check ──
                 if guardrail_engine and not error_msg:
@@ -409,7 +406,7 @@ class AgentRunner:
                             result_preview = result_preview[:2000] + "..."
                     except Exception:
                         result_preview = str(result)[:2000]
-                    try:
+                    with contextlib.suppress(Exception):
                         await on_tool(
                             {
                                 "event": "tool_end",
@@ -420,8 +417,6 @@ class AgentRunner:
                                 "error": error_msg,
                             }
                         )
-                    except Exception:
-                        pass  # Never block tool execution
 
                 session.record_tool_call(
                     tool_name=tool_name,
@@ -619,9 +614,7 @@ class AgentRunner:
         """Determine if planning phase should run."""
         if agent_config.planning_enabled:
             return True
-        if route and route.planning is True:
-            return True
-        return False
+        return bool(route and route.planning is True)
 
     async def _run_planner(
         self,
@@ -720,9 +713,7 @@ class AgentRunner:
         """Determine if verification step should run."""
         if agent_config.verification_enabled:
             return True
-        if route and route.verification is True:
-            return True
-        return False
+        return bool(route and route.verification is True)
 
     async def _run_verification(
         self,
@@ -898,10 +889,8 @@ class AgentRunner:
                         accumulated_content += delta.content
                         # Stream to callback only if no tool calls detected yet
                         if not has_tool_calls:
-                            try:
+                            with contextlib.suppress(Exception):
                                 await on_content(accumulated_content)
-                            except Exception:
-                                pass
                     # Track tool call presence
                     if getattr(delta, "tool_calls", None):
                         has_tool_calls = True

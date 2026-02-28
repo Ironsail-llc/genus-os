@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from robothor.engine.models import (
     ConditionBranch,
@@ -55,16 +55,16 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
     Safe because workflow YAMLs are checked into git (same trust as agent manifests).
     """
 
-    def _replace(match: re.Match) -> str:
+    def _replace(match: re.Match[str]) -> str:
         expr = match.group(1)
         try:
             result = eval(expr, {"__builtins__": {}}, context)
             return str(result) if result is not None else ""
         except Exception as e:
             logger.warning("Template eval failed for '%s': %s", expr, e)
-            return match.group(0)
+            return str(match.group(0))
 
-    return _TEMPLATE_RE.sub(_replace, template)
+    return str(_TEMPLATE_RE.sub(_replace, template))
 
 
 def _eval_condition(expression: str, value: Any) -> bool:
@@ -183,10 +183,13 @@ class WorkflowEngine:
         matches = []
         for wf in self._workflows.values():
             for trigger in wf.triggers:
-                if trigger.type == "hook":
-                    if trigger.stream == stream and trigger.event_type == event_type:
-                        matches.append(wf)
-                        break
+                if (
+                    trigger.type == "hook"
+                    and trigger.stream == stream
+                    and trigger.event_type == event_type
+                ):
+                    matches.append(wf)
+                    break
         return matches
 
     def get_workflows_for_cron(self) -> list[tuple[WorkflowDef, WorkflowTriggerDef]]:

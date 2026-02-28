@@ -562,15 +562,15 @@ def _cmd_vault(args: argparse.Namespace) -> int:
         return 0
 
     if sub == "list":
-        from robothor.vault import list as vault_list
         from robothor.vault.crypto import get_master_key
+        from robothor.vault.dal import list_keys as vault_list_keys
 
         try:
             get_master_key(workspace)
         except FileNotFoundError:
             print("Error: No vault master key. Run 'robothor vault init' first.")
             return 1
-        keys = vault_list(category=args.category)
+        keys = vault_list_keys(category=args.category)
         if not keys:
             print("Vault is empty.")
         else:

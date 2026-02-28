@@ -28,8 +28,11 @@ class TestCli:
         assert "Ollama" in out
 
     def test_no_args(self, capsys):
-        rc = main([])
-        assert rc == 0
+        """No args launches TUI — mock _cmd_tui to avoid blocking."""
+        with patch("robothor.cli._cmd_tui", return_value=0) as mock_tui:
+            rc = main([])
+            assert rc == 0
+            mock_tui.assert_called_once()
 
     def test_pipeline(self, capsys):
         rc = main(["pipeline", "--tier", "1"])

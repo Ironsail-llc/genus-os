@@ -215,5 +215,5 @@ class AgentSession:
         """Extract the final assistant text from the conversation."""
         for msg in reversed(self.messages):
             if msg.get("role") == "assistant" and msg.get("content"):
-                return msg["content"]
+                return str(msg["content"])
         return None

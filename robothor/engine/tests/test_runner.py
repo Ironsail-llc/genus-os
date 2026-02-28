@@ -613,7 +613,7 @@ class TestOnToolCallback:
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
-                        run = await runner.execute(
+                        await runner.execute(
                             "test-agent",
                             "hello",
                             agent_config=sample_agent_config,
