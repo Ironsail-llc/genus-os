@@ -1,0 +1,192 @@
+# Agent Manifest Schema — the strict contract for building agents.
+# Every agent manifest MUST validate against this schema.
+# Used by: validate_agents.py, robothor agent scaffold, Claude Code, onboarding agents.
+#
+# Field categories:
+#   required    — Must be present. Engine rejects the manifest without them.
+#   recommended — Should be present. Validator warns if missing.
+#   optional    — Enhance coordination, hooks, warmup, SLA, changelog.
+
+required:
+  id:
+    type: string
+    format: kebab-case
+    description: Unique agent identifier
+    example: "ticket-router"
+  name:
+    type: string
+    description: Human-readable display name
+  description:
+    type: string
+    description: One-line purpose statement
+  version:
+    type: string
+    format: "YYYY-MM-DD"
+    description: Date of last manifest change
+  department:
+    type: string
+    enum: [email, calendar, operations, security, communications, crm, briefings, core, custom]
+
+recommended:
+  model:
+    primary:
+      type: string
+      description: Full LiteLLM model path
+      example: "openrouter/moonshotai/kimi-k2.5"
+    fallbacks:
+      type: list[string]
+  schedule:
+    cron:
+      type: string
+      description: APScheduler cron expression. Empty for hook-only or interactive agents.
+    timezone:
+      type: string
+      default: UTC
+    timeout_seconds:
+      type: integer
+      default: 300
+    max_iterations:
+      type: integer
+      default: 10
+    session_target:
+      type: string
+      enum: [isolated, persistent]
+      default: isolated
+  delivery:
+    mode:
+      type: string
+      enum: [none, announce, log]
+      default: none
+    channel:
+      type: string
+      description: Required when mode=announce
+    to:
+      type: string
+      description: Channel-specific target (e.g., Telegram chat ID)
+  tools_allowed:
+    type: list[string]
+    description: >
+      STRICT — if set, ONLY these tools are available.
+      Always include exec, read_file, write_file for file I/O.
+  tools_denied:
+    type: list[string]
+    default: []
+  instruction_file:
+    type: string
+    description: Path to .md file loaded as system prompt
+  bootstrap_files:
+    type: list[string]
+    description: Shared context files appended after instruction
+
+optional:
+  reports_to:
+    type: string
+    description: Agent ID this reports to
+  creates_tasks_for:
+    type: list[string]
+  receives_tasks_from:
+    type: list[string]
+  escalates_to:
+    type: string
+  downstream_agents:
+    type: list[string]
+  hooks:
+    type: list[Hook]
+    description: Event triggers — when these fire, this agent runs
+    items:
+      stream:
+        type: string
+        description: Redis Stream name (e.g., "email", "support")
+      event_type:
+        type: string
+        description: Event type filter (e.g., "email.new")
+      message:
+        type: string
+        description: Initial prompt sent to agent when triggered
+  streams:
+    read:
+      type: list[string]
+    write:
+      type: list[string]
+  task_protocol:
+    type: boolean
+    default: false
+    description: Agent must check inbox, process tasks, resolve
+  review_workflow:
+    type: boolean
+    default: false
+  notification_inbox:
+    type: boolean
+    default: false
+  status_file:
+    type: string
+  shared_working_state:
+    type: boolean
+    default: false
+  warmup:
+    memory_blocks:
+      type: list[string]
+    context_files:
+      type: list[string]
+    peer_agents:
+      type: list[string]
+  sla:
+    urgent: { type: string, example: "30m" }
+    high: { type: string, example: "2h" }
+    normal: { type: string, example: "8h" }
+    low: { type: string, example: "24h" }
+  tags_produced:
+    type: list[string]
+  tags_consumed:
+    type: list[string]
+  changelog:
+    type: "list[{date: string, change: string}]"
+
+  # ── v2 Engine Enhancements (all default off) ──────────────────────
+  # Nest under a `v2:` key in the manifest. All fields are optional.
+  v2:
+    error_feedback:
+      type: boolean
+      default: true
+      description: Inject error analysis prompt when tools fail
+    token_budget:
+      type: integer
+      default: 0
+      description: Max tokens per run (0 = unlimited)
+    cost_budget_usd:
+      type: number
+      default: 0.0
+      description: Max cost per run in USD (0 = unlimited)
+    planning_enabled:
+      type: boolean
+      default: false
+      description: Pre-execution planning phase via separate LLM call
+    planning_model:
+      type: string
+      description: Cheap model for planning (defaults to primary model)
+    scratchpad_enabled:
+      type: boolean
+      default: false
+      description: Periodic working state injection for long sessions
+    guardrails:
+      type: list[string]
+      default: []
+      description: >
+        Named policies: no_destructive_writes, no_external_http,
+        no_sensitive_data, rate_limit
+    checkpoint_enabled:
+      type: boolean
+      default: false
+      description: Mid-run state persistence for resume
+    verification_enabled:
+      type: boolean
+      default: false
+      description: Post-execution self-validation step
+    verification_prompt:
+      type: string
+      description: Custom success criteria for verification
+    difficulty_class:
+      type: string
+      enum: [simple, moderate, complex, ""]
+      default: ""
+      description: Manual difficulty override (empty = auto)

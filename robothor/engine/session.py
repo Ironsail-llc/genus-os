@@ -190,6 +190,24 @@ class AgentSession:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
 
+    def check_budget(self, token_budget: int = 0, cost_budget_usd: float = 0.0) -> str:
+        """Check if budget is exhausted, approaching, or ok.
+
+        Returns: "exhausted", "warning", or "ok"
+        """
+        if token_budget > 0:
+            total_tokens = self.run.input_tokens + self.run.output_tokens
+            if total_tokens >= token_budget:
+                return "exhausted"
+            if total_tokens >= token_budget * 0.8:
+                return "warning"
+        if cost_budget_usd > 0:
+            if self.run.total_cost_usd >= cost_budget_usd:
+                return "exhausted"
+            if self.run.total_cost_usd >= cost_budget_usd * 0.8:
+                return "warning"
+        return "ok"
+
     def get_final_text(self) -> str | None:
         """Extract the final assistant text from the conversation."""
         for msg in reversed(self.messages):

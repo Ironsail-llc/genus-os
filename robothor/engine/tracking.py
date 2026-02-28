@@ -89,6 +89,9 @@ def update_run(
     delivery_status: str | None = None,
     delivered_at: datetime | None = None,
     delivery_channel: str | None = None,
+    token_budget: int | None = None,
+    cost_budget_usd: float | None = None,
+    budget_exhausted: bool | None = None,
 ) -> bool:
     """Update an existing run with new fields."""
     updates: list[str] = []
@@ -109,6 +112,9 @@ def update_run(
         "delivery_status": delivery_status,
         "delivered_at": delivered_at,
         "delivery_channel": delivery_channel,
+        "token_budget": token_budget,
+        "cost_budget_usd": cost_budget_usd,
+        "budget_exhausted": budget_exhausted,
     }
 
     for col, val in field_map.items():

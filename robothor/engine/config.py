@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from robothor.engine.models import AgentConfig, DeliveryMode
+from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,9 @@ class EngineConfig:
     # LLM
     max_iterations: int = 20
 
+    # Default agent for interactive chat (Telegram + webchat)
+    default_chat_agent: str = "main"
+
     @classmethod
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
@@ -72,6 +75,7 @@ class EngineConfig:
             ),
             default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/Grenada"),
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
+            default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
         )
 
 
@@ -115,6 +119,28 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
     except ValueError:
         delivery_mode = DeliveryMode.NONE
 
+    # Parse hooks
+    raw_hooks = manifest.get("hooks", [])
+    parsed_hooks: list[AgentHook] = []
+    for h in raw_hooks:
+        if isinstance(h, dict) and h.get("stream") and h.get("event_type"):
+            parsed_hooks.append(
+                AgentHook(
+                    stream=h["stream"],
+                    event_type=h["event_type"],
+                    message=h.get("message", ""),
+                )
+            )
+        else:
+            logger.warning(
+                "Invalid hook entry in %s (needs stream + event_type): %s",
+                manifest.get("id", "?"),
+                h,
+            )
+
+    # v2 enhancement fields
+    v2 = manifest.get("v2", {})
+
     return AgentConfig(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
@@ -148,6 +174,19 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         warmup_context_files=warmup.get("context_files", []),
         warmup_peer_agents=warmup.get("peer_agents", []),
         downstream_agents=manifest.get("downstream_agents", []),
+        hooks=parsed_hooks,
+        # v2 enhancements
+        error_feedback=v2.get("error_feedback", True),
+        token_budget=int(v2.get("token_budget", 0)),
+        cost_budget_usd=float(v2.get("cost_budget_usd", 0.0)),
+        planning_enabled=v2.get("planning_enabled", False),
+        planning_model=v2.get("planning_model", ""),
+        scratchpad_enabled=v2.get("scratchpad_enabled", False),
+        guardrails=v2.get("guardrails", []),
+        checkpoint_enabled=v2.get("checkpoint_enabled", False),
+        verification_enabled=v2.get("verification_enabled", False),
+        verification_prompt=v2.get("verification_prompt", ""),
+        difficulty_class=v2.get("difficulty_class", ""),
     )
 
 
