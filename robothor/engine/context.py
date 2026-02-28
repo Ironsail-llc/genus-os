@@ -105,7 +105,6 @@ async def _summarize_messages(
     """Summarize a list of messages via LLM. Falls back to static placeholder."""
     # Count stats for the fallback message
     msg_count = len(messages)
-    char_count = sum(len(m.get("content", "") or "") for m in messages)
     token_est = estimate_tokens(messages)
 
     fallback = (

@@ -14,7 +14,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from robothor.engine.hooks import (
     _LEGACY_EVENT_TRIGGERS,

@@ -68,16 +68,6 @@ async def test_error_feedback_injected_on_tool_failure(engine_config, mock_db):
         run = await runner.execute("err-test", "do stuff", agent_config=agent_config)
 
     assert run.status.value == "completed"
-    # Check that an error feedback message was injected
-    has_feedback = (
-        any(
-            "[SYSTEM]" in m.get("content", "") and "tool calls failed" in m.get("content", "")
-            for m in runner._last_messages
-            if isinstance(m, dict)
-        )
-        if hasattr(runner, "_last_messages")
-        else True
-    )  # messages are in session
 
 
 @pytest.mark.asyncio

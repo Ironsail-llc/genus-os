@@ -98,7 +98,7 @@ async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> b
         publish(
             stream="agent",
             event_type="agent.run.output",
-            data={
+            payload={
                 "agent_id": config.id,
                 "run_id": run.id,
                 "output": text[:2000],

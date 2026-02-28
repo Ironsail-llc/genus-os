@@ -20,7 +20,7 @@ from robothor.config import reset_config
 
 reset_config()  # Force config reload with test DB name
 
-from robothor.db.connection import close_pool, get_connection
+from robothor.db.connection import close_pool, get_connection  # noqa: E402
 
 MIGRATION_SQL = (
     Path(__file__).parent.parent.parent.parent / "crm" / "migrations" / "010_health_tables.sql"

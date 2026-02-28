@@ -24,6 +24,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
+from robothor.engine.chat_store import (
+    clear_session_async,
+    load_all_sessions,
+    save_exchange_async,
+    save_message_async,
+)
 from robothor.engine.models import TriggerType
 
 if TYPE_CHECKING:
@@ -61,16 +67,43 @@ def _get_session(session_key: str) -> ChatSession:
     return _sessions[session_key]
 
 
+def _restore_sessions(config: EngineConfig) -> None:
+    """Restore webchat sessions from PostgreSQL at startup."""
+    try:
+        sessions = load_all_sessions(
+            limit_per_session=MAX_HISTORY,
+            tenant_id=config.tenant_id,
+        )
+        restored = 0
+        for key, data in sessions.items():
+            # Skip Telegram sessions — those are restored by TelegramBot
+            if key.startswith("telegram:"):
+                continue
+            session = _get_session(key)
+            history = data.get("history", [])
+            if history:
+                session.history = history
+            model = data.get("model_override")
+            if model:
+                session.model_override = model
+            restored += 1
+        if restored:
+            logger.info("Restored %d webchat sessions from DB", restored)
+    except Exception as e:
+        logger.warning("Failed to load persisted webchat sessions: %s", e)
+
+
 def init_chat(runner: AgentRunner, config: EngineConfig) -> None:
     """Initialize module with shared runner and config. Called once from daemon."""
     global _runner, _config
     _runner = runner
     _config = config
+    _restore_sessions(config)
     logger.info("Chat endpoints initialized")
 
 
-@router.post("/send")
-async def chat_send(request: Request) -> StreamingResponse:
+@router.post("/send", response_model=None)
+async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     """Accept a message and return an SSE stream of deltas."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
@@ -133,6 +166,19 @@ async def chat_send(request: Request) -> StreamingResponse:
                 # Trim history
                 if len(session.history) > MAX_HISTORY:
                     session.history = session.history[-MAX_HISTORY:]
+
+                # Persist to DB (fire-and-forget)
+                if run.output_text and _config:
+                    asyncio.create_task(
+                        save_exchange_async(
+                            session_key,
+                            message,
+                            run.output_text,
+                            channel="webchat",
+                            model_override=session.model_override,
+                            tenant_id=_config.tenant_id,
+                        )
+                    )
 
                 # Signal completion with metadata
                 await queue.put(
@@ -212,6 +258,18 @@ async def chat_inject(request: Request) -> JSONResponse:
     session = _get_session(session_key)
     session.history.append({"role": "system", "content": message})
 
+    # Persist to DB (fire-and-forget)
+    if _config:
+        asyncio.create_task(
+            save_message_async(
+                session_key,
+                "system",
+                message,
+                channel="webchat",
+                tenant_id=_config.tenant_id,
+            )
+        )
+
     logger.debug("Injected system message into %s (label=%s)", session_key, label)
     return JSONResponse({"ok": True})
 
@@ -252,5 +310,14 @@ async def chat_clear(request: Request) -> JSONResponse:
 
     session.history.clear()
     session.model_override = None
+
+    # Persist to DB (fire-and-forget)
+    if _config:
+        asyncio.create_task(
+            clear_session_async(
+                session_key,
+                tenant_id=_config.tenant_id,
+            )
+        )
 
     return JSONResponse({"ok": True})

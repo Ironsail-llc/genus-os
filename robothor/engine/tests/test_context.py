@@ -101,7 +101,7 @@ class TestMaybeCompress:
     @pytest.mark.asyncio
     async def test_system_prompt_always_preserved(self):
         messages = [{"role": "system", "content": "IMPORTANT SYSTEM PROMPT"}]
-        for i in range(100):
+        for _i in range(100):
             messages.append({"role": "user", "content": "x" * 4000})
             messages.append({"role": "assistant", "content": "y" * 4000})
 
@@ -136,7 +136,7 @@ class TestMaybeCompress:
     @pytest.mark.asyncio
     async def test_llm_failure_fallback(self):
         messages = [{"role": "system", "content": "sys"}]
-        for i in range(100):
+        for _i in range(100):
             messages.append({"role": "user", "content": "x" * 4000})
             messages.append({"role": "assistant", "content": "y" * 4000})
 

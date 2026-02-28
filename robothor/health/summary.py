@@ -10,6 +10,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from datetime import datetime, timedelta
@@ -127,10 +128,8 @@ def write_summary(content: str, output_path: Path = OUTPUT_PATH) -> None:
         os.close(fd)
         os.replace(tmp, output_path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise

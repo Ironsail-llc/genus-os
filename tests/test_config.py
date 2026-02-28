@@ -24,7 +24,7 @@ def clean_config():
 class TestDatabaseConfig:
     def test_defaults(self):
         db = DatabaseConfig()
-        assert db.host == "127.0.0.1"
+        assert db.host == ""
         assert db.port == 5432
         assert db.name == "robothor_memory"
 

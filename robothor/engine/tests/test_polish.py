@@ -56,7 +56,6 @@ class TestDownstreamAgentChains:
         run.output_tokens = 5
 
         created_coros = []
-        original_create_task = _asyncio.create_task
 
         def track_create_task(coro, **kwargs):
             created_coros.append(True)

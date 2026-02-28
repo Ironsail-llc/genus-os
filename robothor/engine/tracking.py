@@ -131,7 +131,7 @@ def update_run(
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, values)
-        return cur.rowcount > 0
+        return bool(cur.rowcount > 0)
 
 
 def get_run(run_id: str) -> dict | None:
@@ -327,7 +327,7 @@ def update_schedule_state(
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, values)
-        return cur.rowcount > 0
+        return bool(cur.rowcount > 0)
 
 
 def list_schedules(

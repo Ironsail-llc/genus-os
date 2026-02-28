@@ -573,7 +573,7 @@ async def _execute_tool(
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(f"{VISION_URL}/look", json={"prompt": prompt})
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     if name == "who_is_here":
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -594,7 +594,7 @@ async def _execute_tool(
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{VISION_URL}/enroll", json={"name": face_name})
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     if name == "set_vision_mode":
         mode = args.get("mode", "")
@@ -603,7 +603,7 @@ async def _execute_tool(
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{VISION_URL}/mode", json={"mode": mode})
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     # ── Memory block tools (direct DAL) ──
 
@@ -899,28 +899,28 @@ async def _execute_tool(
     if name == "approve_task":
         from robothor.crm.dal import approve_task
 
-        result = approve_task(
+        approve_result = approve_task(
             task_id=args["id"],
             resolution=args.get("resolution", "Approved"),
             reviewer=agent_id or "engine",
             tenant_id=tenant_id,
         )
-        if isinstance(result, dict) and "error" in result:
-            return result
+        if isinstance(approve_result, dict) and "error" in approve_result:
+            return approve_result
         return {"success": True, "id": args["id"]}
 
     if name == "reject_task":
         from robothor.crm.dal import reject_task
 
-        result = reject_task(
+        reject_result = reject_task(
             task_id=args["id"],
             reason=args.get("reason", ""),
             reviewer=agent_id or "engine",
             change_requests=args.get("changeRequests"),
             tenant_id=tenant_id,
         )
-        if isinstance(result, dict) and "error" in result:
-            return result
+        if isinstance(reject_result, dict) and "error" in reject_result:
+            return reject_result
         return {"success": True, "id": args["id"]}
 
     # ── Notifications ──
@@ -981,7 +981,7 @@ async def _execute_tool(
                 },
             )
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     # ── CRM Metadata ──
 
@@ -1219,7 +1219,7 @@ async def _execute_tool(
         if not command:
             return {"error": "No command provided"}
         try:
-            result = subprocess.run(
+            proc = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
@@ -1227,13 +1227,10 @@ async def _execute_tool(
                 timeout=30,
                 cwd=workspace or None,
             )
-            output = result.stdout
-            if result.stderr:
-                output += f"\nSTDERR:\n{result.stderr}"
             return {
-                "stdout": result.stdout[:4000],
-                "stderr": result.stderr[:2000],
-                "exit_code": result.returncode,
+                "stdout": proc.stdout[:4000],
+                "stderr": proc.stderr[:2000],
+                "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:
             return {"error": "Command timed out (30s limit)"}
@@ -1357,7 +1354,7 @@ async def _execute_tool(
                     json={"to": to_number, "recipient": recipient, "purpose": purpose},
                 )
                 resp.raise_for_status()
-                return resp.json()
+                return dict(resp.json())
         except Exception as e:
             return {"error": f"Call failed: {e}"}
 
@@ -1370,6 +1367,6 @@ async def _execute_tool(
                 json={"name": name, "arguments": args},
             )
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     return {"error": f"Unknown tool: {name}"}

@@ -40,7 +40,7 @@ class TestAppPilot:
         app.client.get_history = AsyncMock(return_value=[])
         app.client.close = AsyncMock()
 
-        async with app.run_test() as pilot:
+        async with app.run_test() as _pilot:
             status_bar = app.query_one("#status-bar")
             assert "disconnected" in status_bar._format()
 
@@ -57,7 +57,7 @@ class TestAppPilot:
         app.client.get_history = AsyncMock(return_value=[])
         app.client.close = AsyncMock()
 
-        async with app.run_test() as pilot:
+        async with app.run_test() as _pilot:
             banners = app.query(WelcomeBanner)
             assert len(banners) > 0
 

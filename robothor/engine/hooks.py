@@ -11,6 +11,7 @@ This consumer subscribes to those same prefixed keys.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -150,7 +151,7 @@ class EventHooks:
                 db=cfg.redis.db,
                 password=cfg.redis.password or None,
             )
-            await r.ping()
+            await r.ping()  # type: ignore[misc]
             logger.info("Event hooks connected to Redis")
         except Exception as e:
             logger.warning("Redis not available, event hooks disabled: %s", e)
@@ -170,10 +171,8 @@ class EventHooks:
 
         # Create consumer groups on the prefixed keys
         for prefixed in prefixed_streams:
-            try:
+            with contextlib.suppress(Exception):
                 await r.xgroup_create(prefixed, consumer_group, id="$", mkstream=True)
-            except Exception:
-                pass  # Group already exists
 
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
 
@@ -184,7 +183,7 @@ class EventHooks:
                 results = await r.xreadgroup(
                     consumer_group,
                     consumer_name,
-                    stream_keys,
+                    stream_keys,  # type: ignore[arg-type]
                     count=5,
                     block=5000,
                 )

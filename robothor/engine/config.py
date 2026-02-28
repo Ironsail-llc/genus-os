@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode
 
@@ -75,13 +75,13 @@ class EngineConfig:
         )
 
 
-def load_manifest(manifest_path: Path) -> dict | None:
+def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     """Load a single YAML manifest file."""
     try:
         with open(manifest_path) as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
-            return data
+            return data  # type: ignore[no-any-return]
         return None
     except Exception as e:
         logger.error("Failed to load manifest %s: %s", manifest_path, e)
@@ -90,7 +90,7 @@ def load_manifest(manifest_path: Path) -> dict | None:
 
 def load_all_manifests(manifest_dir: Path) -> list[dict]:
     """Load all YAML manifests from a directory."""
-    manifests = []
+    manifests: list[dict] = []
     if not manifest_dir.is_dir():
         logger.warning("Manifest directory not found: %s", manifest_dir)
         return manifests

@@ -29,7 +29,7 @@ class TestTraceContext:
     def test_span_error_status(self):
         ctx = TraceContext()
         try:
-            with ctx.span("failing") as s:
+            with ctx.span("failing"):
                 raise ValueError("boom")
         except ValueError:
             pass

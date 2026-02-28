@@ -91,7 +91,7 @@ def delete_secret(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
                 "DELETE FROM vault_secrets WHERE tenant_id = %s AND key = %s",
                 (tenant_id, key),
             )
-            deleted = cur.rowcount > 0
+            deleted = bool(cur.rowcount > 0)
         conn.commit()
         return deleted
     finally:
