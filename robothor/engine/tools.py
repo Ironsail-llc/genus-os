@@ -164,6 +164,34 @@ class ToolRegistry:
             },
         }
 
+        # ── Voice / outbound calling ──
+
+        self._schemas["make_call"] = {
+            "type": "function",
+            "function": {
+                "name": "make_call",
+                "description": "Make an outbound phone call via Robothor's voice server. The call connects to Gemini Live for real-time AI conversation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {
+                            "type": "string",
+                            "description": "Phone number to call in E.164 format (e.g. +12125551234)",
+                        },
+                        "recipient": {
+                            "type": "string",
+                            "description": "Name of person being called (for conversation context)",
+                        },
+                        "purpose": {
+                            "type": "string",
+                            "description": "Why Robothor is calling (used in the AI's system prompt)",
+                        },
+                    },
+                    "required": ["to", "purpose"],
+                },
+            },
+        }
+
         # ── Agent observability tools ──
 
         self._schemas["list_agent_runs"] = {
@@ -1202,6 +1230,27 @@ async def _execute_tool(
         if result:
             return {"success": True, "keeper": result}
         return {"error": "Merge failed — one or both IDs not found"}
+
+    # ── Voice / outbound calling ──
+
+    if name == "make_call":
+        to_number = args.get("to", "")
+        recipient = args.get("recipient", "someone")
+        purpose = args.get("purpose", "")
+        if not to_number:
+            return {"error": "Missing 'to' phone number"}
+        if not purpose:
+            return {"error": "Missing 'purpose' for the call"}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "http://127.0.0.1:8765/call",
+                    json={"to": to_number, "recipient": recipient, "purpose": purpose},
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Call failed: {e}"}
 
     # ── Impetus One (Bridge MCP passthrough) ──
 
