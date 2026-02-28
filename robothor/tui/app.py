@@ -68,7 +68,7 @@ class RobothorApp(App):
 
     @property
     def status_bar(self) -> StatusBar:
-        return self.query_one("#status-bar", StatusBar)
+        return self.query_one("#status-bar", StatusBar)  # type: ignore[no-any-return]
 
     async def on_mount(self) -> None:
         """Connect to engine on startup."""
