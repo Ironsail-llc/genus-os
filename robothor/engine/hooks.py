@@ -29,10 +29,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Event → agent mapping
-# Keys are bare stream names (email, calendar, vision).
-# event_type values must match what publishers actually emit.
-EVENT_TRIGGERS: dict[str, list[dict]] = {
+# Legacy fallback — used only when no manifests define hooks.
+# Once all hooks are in manifests, this dict can be removed.
+_LEGACY_EVENT_TRIGGERS: dict[str, list[dict]] = {
     "email": [
         {
             "event_type": "email.new",
@@ -67,6 +66,54 @@ EVENT_TRIGGERS: dict[str, list[dict]] = {
 }
 
 
+def build_event_triggers(manifest_dir) -> dict[str, list[dict]]:
+    """Build event trigger map from agent manifests.
+
+    Scans all manifests for `hooks` entries and aggregates them into a
+    stream → triggers dict. Falls back to _LEGACY_EVENT_TRIGGERS if no
+    manifests define hooks.
+    """
+    from pathlib import Path
+
+    from robothor.engine.config import load_all_manifests, manifest_to_agent_config
+
+    triggers: dict[str, list[dict]] = {}
+    manifest_dir = Path(manifest_dir)
+
+    if not manifest_dir.is_dir():
+        logger.warning("Manifest dir not found for hooks: %s", manifest_dir)
+        return dict(_LEGACY_EVENT_TRIGGERS)
+
+    manifests = load_all_manifests(manifest_dir)
+    for raw in manifests:
+        config = manifest_to_agent_config(raw)
+        for hook in config.hooks:
+            entry = {
+                "event_type": hook.event_type,
+                "agent_id": config.id,
+                "message": hook.message,
+            }
+            triggers.setdefault(hook.stream, []).append(entry)
+
+    if triggers:
+        total = sum(len(v) for v in triggers.values())
+        logger.info(
+            "Built %d event triggers from manifests (%d streams)",
+            total,
+            len(triggers),
+        )
+        return triggers
+
+    # Fallback: no manifests define hooks yet
+    logger.info("No manifest hooks found, using legacy event triggers")
+    return dict(_LEGACY_EVENT_TRIGGERS)
+
+
+# Module-level reference for backward compatibility with tests
+# Populated at import time from legacy; overridden at runtime by start()
+EVENT_TRIGGERS = dict(_LEGACY_EVENT_TRIGGERS)
+
+
 class EventHooks:
     """Redis Stream consumer that triggers agent runs on events."""
 
@@ -81,6 +128,7 @@ class EventHooks:
         self.workflow_engine = workflow_engine
         self._stop_event = asyncio.Event()
         self._prefixed_to_bare: dict[str, str] = {}
+        self._event_triggers: dict[str, list[dict]] = {}
 
     async def start(self) -> None:
         """Start consuming Redis streams."""
@@ -111,7 +159,10 @@ class EventHooks:
 
         consumer_group = "engine"
         consumer_name = f"engine-{self.config.tenant_id}"
-        bare_streams = list(EVENT_TRIGGERS.keys())
+
+        # Build triggers from manifests (with legacy fallback)
+        self._event_triggers = build_event_triggers(self.config.manifest_dir)
+        bare_streams = list(self._event_triggers.keys())
 
         # Build prefixed stream keys and a reverse lookup
         prefixed_streams = [f"{STREAM_PREFIX}{s}" for s in bare_streams]
@@ -182,9 +233,9 @@ class EventHooks:
         # event_bus._make_envelope() stores the event type under "type"
         event_type = decoded.get("type", "")
 
-        # Strip prefix to get bare stream name for EVENT_TRIGGERS lookup
+        # Strip prefix to get bare stream name for trigger lookup
         bare_stream = self._prefixed_to_bare.get(stream, stream)
-        triggers = EVENT_TRIGGERS.get(bare_stream, [])
+        triggers = self._event_triggers.get(bare_stream, [])
 
         failed = False
         for trigger in triggers:

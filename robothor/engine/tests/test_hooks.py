@@ -16,8 +16,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.hooks import EVENT_TRIGGERS, STREAM_PREFIX, EventHooks
-from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode, RunStatus, TriggerType
+import yaml
+
+from robothor.engine.hooks import EVENT_TRIGGERS, STREAM_PREFIX, EventHooks, _LEGACY_EVENT_TRIGGERS, build_event_triggers
+from robothor.engine.models import AgentConfig, AgentHook, AgentRun, DeliveryMode, RunStatus, TriggerType
 
 
 def _make_run(status: str = "completed") -> MagicMock:
@@ -90,7 +92,8 @@ class TestHandleEvent:
     def hooks(self, engine_config):
         runner = MagicMock()
         hooks = EventHooks(engine_config, runner)
-        # Initialize the prefix mapping (normally done in start())
+        # Initialize the prefix mapping and triggers (normally done in start())
+        hooks._event_triggers = dict(EVENT_TRIGGERS)
         hooks._prefixed_to_bare = {
             f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
         }
@@ -185,6 +188,7 @@ class TestDownstreamTriggers:
     def hooks(self, engine_config):
         runner = MagicMock()
         hooks = EventHooks(engine_config, runner)
+        hooks._event_triggers = dict(EVENT_TRIGGERS)
         hooks._prefixed_to_bare = {
             f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
         }
@@ -291,6 +295,7 @@ class TestDedup:
     def hooks(self, engine_config):
         runner = MagicMock()
         hooks = EventHooks(engine_config, runner)
+        hooks._event_triggers = dict(EVENT_TRIGGERS)
         hooks._prefixed_to_bare = {
             f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
         }
@@ -380,3 +385,145 @@ class TestTriggerDownstream:
 
             await hooks._trigger_downstream("email-analyst", "email", "email.new")
             mock_release.assert_called_once_with("email-analyst")
+
+
+class TestBuildEventTriggers:
+    """Test build_event_triggers() — manifest-driven hook aggregation."""
+
+    def test_from_manifests(self, tmp_path):
+        """Hooks defined in manifests produce correct trigger map."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        # Agent with one hook
+        (agents_dir / "my-agent.yaml").write_text(yaml.dump({
+            "id": "my-agent",
+            "name": "My Agent",
+            "description": "Test",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [
+                {"stream": "email", "event_type": "email.new", "message": "Process emails"},
+            ],
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        assert "email" in triggers
+        assert len(triggers["email"]) == 1
+        assert triggers["email"][0]["agent_id"] == "my-agent"
+        assert triggers["email"][0]["event_type"] == "email.new"
+        assert triggers["email"][0]["message"] == "Process emails"
+
+    def test_legacy_fallback(self, tmp_path):
+        """When no manifests define hooks, falls back to legacy triggers."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        # Agent with NO hooks
+        (agents_dir / "bare-agent.yaml").write_text(yaml.dump({
+            "id": "bare-agent",
+            "name": "Bare Agent",
+            "description": "No hooks",
+            "version": "2026-02-28",
+            "department": "custom",
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        # Should fall back to legacy triggers
+        assert triggers == _LEGACY_EVENT_TRIGGERS
+
+    def test_legacy_fallback_nonexistent_dir(self, tmp_path):
+        """Non-existent manifest dir falls back to legacy triggers."""
+        triggers = build_event_triggers(tmp_path / "nonexistent")
+        assert triggers == _LEGACY_EVENT_TRIGGERS
+
+    def test_multi_hook_agent(self, tmp_path):
+        """Agent with multiple hooks across different streams."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        (agents_dir / "multi.yaml").write_text(yaml.dump({
+            "id": "multi-hook",
+            "name": "Multi Hook",
+            "description": "Multiple hooks",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [
+                {"stream": "calendar", "event_type": "calendar.new", "message": "New event"},
+                {"stream": "calendar", "event_type": "calendar.modified", "message": "Modified event"},
+                {"stream": "email", "event_type": "email.new", "message": "New email"},
+            ],
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        assert len(triggers["calendar"]) == 2
+        assert len(triggers["email"]) == 1
+
+    def test_multi_agent_same_stream(self, tmp_path):
+        """Multiple agents hooking the same stream/event_type."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        (agents_dir / "agent-a.yaml").write_text(yaml.dump({
+            "id": "agent-a",
+            "name": "Agent A",
+            "description": "First",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [{"stream": "email", "event_type": "email.new", "message": "A handles email"}],
+        }))
+        (agents_dir / "agent-b.yaml").write_text(yaml.dump({
+            "id": "agent-b",
+            "name": "Agent B",
+            "description": "Second",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [{"stream": "email", "event_type": "email.new", "message": "B handles email"}],
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        assert len(triggers["email"]) == 2
+        agent_ids = {t["agent_id"] for t in triggers["email"]}
+        assert agent_ids == {"agent-a", "agent-b"}
+
+    def test_invalid_hooks_skipped(self, tmp_path):
+        """Invalid hook entries (missing stream/event_type) are silently skipped."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        (agents_dir / "bad-hooks.yaml").write_text(yaml.dump({
+            "id": "bad-hooks",
+            "name": "Bad Hooks",
+            "description": "Invalid hooks",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [
+                {"stream": "email"},  # Missing event_type
+                {"event_type": "email.new"},  # Missing stream
+                "not-a-dict",  # Not a dict at all
+                {"stream": "email", "event_type": "email.new", "message": "Valid"},  # Valid
+            ],
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        # Only the valid hook should produce a trigger
+        assert "email" in triggers
+        assert len(triggers["email"]) == 1
+        assert triggers["email"][0]["message"] == "Valid"
+
+    def test_empty_hooks_list_fallback(self, tmp_path):
+        """Agent with empty hooks list still falls back to legacy."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        (agents_dir / "empty-hooks.yaml").write_text(yaml.dump({
+            "id": "empty-hooks",
+            "name": "Empty Hooks",
+            "description": "Empty hooks list",
+            "version": "2026-02-28",
+            "department": "custom",
+            "hooks": [],
+        }))
+
+        triggers = build_event_triggers(agents_dir)
+        assert triggers == _LEGACY_EVENT_TRIGGERS

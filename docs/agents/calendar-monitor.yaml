@@ -81,6 +81,17 @@ bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
 
+hooks:
+  - stream: calendar
+    event_type: calendar.new
+    message: "New calendar event. Check for conflicts, cancellations, and changes."
+  - stream: calendar
+    event_type: calendar.rescheduled
+    message: "Calendar event rescheduled. Check for conflicts and update accordingly."
+  - stream: calendar
+    event_type: calendar.modified
+    message: "Calendar event modified. Check for conflicts, cancellations, and changes."
+
 tags_produced: [calendar, conflict, cancellation]
 tags_consumed: []
 

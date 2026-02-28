@@ -80,6 +80,11 @@ bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
 
+hooks:
+  - stream: email
+    event_type: email.new
+    message: "New email received. Process the triage inbox and classify emails."
+
 downstream_agents:
   - email-analyst
   - email-responder

@@ -57,8 +57,12 @@ EVENT_BUS_ENABLED = os.environ.get("EVENT_BUS_ENABLED", "true").lower() in (
 # Stream prefix
 STREAM_PREFIX = "robothor:events:"
 
-# Valid stream names
-VALID_STREAMS = {"email", "calendar", "crm", "vision", "health", "agent", "system"}
+# Base stream names (always valid)
+_BASE_STREAMS = {"email", "calendar", "crm", "vision", "health", "agent", "system"}
+
+# Dynamic: extend with ROBOTHOR_EXTRA_STREAMS env var (comma-separated)
+_extra = os.environ.get("ROBOTHOR_EXTRA_STREAMS", "")
+VALID_STREAMS = _BASE_STREAMS | {s.strip() for s in _extra.split(",") if s.strip()}
 
 # Max stream length per stream (circular buffer)
 MAXLEN = int(os.environ.get("EVENT_BUS_MAXLEN", "10000"))
@@ -174,8 +178,11 @@ def publish(
             pass  # capabilities module not available — allow (backward compat)
 
     if stream not in VALID_STREAMS:
-        logger.warning("Event bus: invalid stream '%s', must be one of %s", stream, VALID_STREAMS)
-        return None
+        logger.warning(
+            "Event bus: stream '%s' not in VALID_STREAMS %s — publishing anyway",
+            stream,
+            VALID_STREAMS,
+        )
 
     try:
         r = _get_redis()

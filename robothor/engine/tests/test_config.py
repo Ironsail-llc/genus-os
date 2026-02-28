@@ -16,7 +16,7 @@ from robothor.engine.config import (
     load_manifest,
     manifest_to_agent_config,
 )
-from robothor.engine.models import AgentConfig, DeliveryMode
+from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode
 
 
 class TestEngineConfig:
@@ -39,6 +39,22 @@ class TestEngineConfig:
         assert config.bot_token == "my-token"
         assert config.port == 19000
         assert config.tenant_id == "custom-tenant"
+
+    def test_default_chat_agent_default(self, monkeypatch):
+        """default_chat_agent defaults to 'main'."""
+        monkeypatch.delenv("ROBOTHOR_DEFAULT_CHAT_AGENT", raising=False)
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        config = EngineConfig.from_env()
+        assert config.default_chat_agent == "main"
+
+    def test_default_chat_agent_from_env(self, monkeypatch):
+        """default_chat_agent reads from ROBOTHOR_DEFAULT_CHAT_AGENT."""
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "custom-chat")
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        config = EngineConfig.from_env()
+        assert config.default_chat_agent == "custom-chat"
 
 
 class TestManifestLoading:
@@ -145,6 +161,48 @@ class TestManifestToAgentConfig:
         """max_iterations defaults to 20 when not specified."""
         config = manifest_to_agent_config({"id": "bare"})
         assert config.max_iterations == 20
+
+    def test_hooks_parsed_from_manifest(self):
+        """Hooks are parsed from manifest into AgentHook dataclasses."""
+        manifest = {
+            "id": "hooked-agent",
+            "hooks": [
+                {"stream": "email", "event_type": "email.new", "message": "New mail"},
+                {"stream": "calendar", "event_type": "calendar.new"},
+            ],
+        }
+        config = manifest_to_agent_config(manifest)
+        assert len(config.hooks) == 2
+        assert isinstance(config.hooks[0], AgentHook)
+        assert config.hooks[0].stream == "email"
+        assert config.hooks[0].event_type == "email.new"
+        assert config.hooks[0].message == "New mail"
+        assert config.hooks[1].message == ""  # Default
+
+    def test_hooks_invalid_entries_skipped(self):
+        """Invalid hook entries are silently skipped."""
+        manifest = {
+            "id": "bad-hooks",
+            "hooks": [
+                {"stream": "email"},  # Missing event_type
+                {"event_type": "email.new"},  # Missing stream
+                "not-a-dict",
+                {"stream": "email", "event_type": "email.new", "message": "Valid"},
+            ],
+        }
+        config = manifest_to_agent_config(manifest)
+        assert len(config.hooks) == 1
+        assert config.hooks[0].event_type == "email.new"
+
+    def test_hooks_empty_list(self):
+        """Empty hooks list produces empty hooks field."""
+        config = manifest_to_agent_config({"id": "bare", "hooks": []})
+        assert config.hooks == []
+
+    def test_hooks_missing(self):
+        """No hooks field produces empty hooks field."""
+        config = manifest_to_agent_config({"id": "bare"})
+        assert config.hooks == []
 
 
 class TestLoadAgentConfig:

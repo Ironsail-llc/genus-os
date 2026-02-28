@@ -110,8 +110,8 @@ async def chat_send(request: Request) -> StreamingResponse:
                 async def on_tool(event: dict) -> None:
                     await queue.put({"event": event["event"], "data": event})
 
-                # Determine agent ID from session key or default to "main"
-                agent_id = "main"
+                # Determine agent ID from session key or default
+                agent_id = _config.default_chat_agent if _config else "main"
                 parts = session_key.split(":")
                 if len(parts) >= 2:
                     agent_id = parts[1]

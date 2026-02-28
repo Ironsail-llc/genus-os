@@ -2,7 +2,57 @@
 
 > AI-consumable reference for building, modifying, and debugging Robothor agents.
 > Manifests in `docs/agents/*.yaml` are the **single source of truth** for each agent.
+> Contracts: `docs/agents/schema.yaml` (manifest schema) + `docs/agents/INSTRUCTION_CONTRACT.md` (instruction file format).
 > Run `python scripts/validate_agents.py` to check for drift.
+
+---
+
+## 0. Building Your First Agent
+
+The fastest path from zero to a running agent:
+
+```bash
+# 1. Scaffold — creates manifest + instruction file from templates
+robothor agent scaffold my-first-agent --description "A test agent to learn the framework"
+
+# 2. Edit the manifest — choose model, schedule, tools
+#    → docs/agents/my-first-agent.yaml
+
+# 3. Write the instruction file — follow the contract (docs/agents/INSTRUCTION_CONTRACT.md)
+#    → brain/MY_FIRST_AGENT.md
+
+# 4. Validate — schema + structure + file existence + tool registration
+python scripts/validate_agents.py --agent my-first-agent
+
+# 5. Restart the engine to pick up the new agent
+sudo systemctl restart robothor-engine
+
+# 6. Monitor — run manually or wait for cron
+robothor engine run my-first-agent         # Manual test
+robothor engine history --agent my-first-agent  # Check run history
+```
+
+### What the scaffold creates
+
+| File | Purpose |
+|------|---------|
+| `docs/agents/my-first-agent.yaml` | Manifest — model, schedule, tools, delivery, coordination |
+| `brain/MY_FIRST_AGENT.md` | Instruction file — loaded as system prompt |
+
+### Key decisions to make
+
+1. **Model** — `openrouter/moonshotai/kimi-k2.5` (cheap, reliable tool calling) or `openrouter/anthropic/claude-sonnet-4.6` (quality-critical)
+2. **Schedule** — Cron expression for periodic runs, or leave empty for hook-only / interactive agents
+3. **Tools** — Whitelist via `tools_allowed`. Always include `exec`, `read_file`, `write_file` for file I/O.
+4. **Hooks** — Event triggers from Redis Streams (e.g., trigger on `email.new`). Primary fast path; crons as safety net.
+5. **Delivery** — `none` (silent worker), `announce` (delivers to user via Telegram), or `log`
+
+### Contracts
+
+Every agent must satisfy two contracts:
+
+- **Manifest schema** (`docs/agents/schema.yaml`) — Machine-readable. Enforced by `validate_agents.py` and at engine startup. Required fields: `id`, `name`, `description`, `version`, `department`.
+- **Instruction file contract** (`docs/agents/INSTRUCTION_CONTRACT.md`) — Defines the required sections (Identity, Your Role, Tasks, Output) and behaviors for agents with `task_protocol: true`.
 
 ---
 
@@ -65,7 +115,7 @@ id: string                    # kebab-case agent ID
 name: string                  # Human-readable name
 description: string           # What this agent does (one line)
 version: "YYYY-MM-DD"        # Date of last manifest change
-department: string            # email | calendar | operations | security | communications | crm | briefings | core
+department: string            # email | calendar | operations | security | communications | crm | briefings | core | custom
 
 # Hierarchy
 reports_to: string            # Agent ID this reports to (usually "supervisor")
@@ -120,6 +170,12 @@ bootstrap_files: [string]     # Shared bootstrap files (typically AGENTS.md + TO
 # Downstream
 downstream_agents: [string]   # Agents to trigger after successful cron run
 
+# Event hooks — Redis Stream triggers (parsed at engine startup)
+hooks:
+  - stream: string            # Redis Stream name (e.g., "email", "calendar")
+    event_type: string        # Event type filter (e.g., "email.new")
+    message: string           # Initial prompt sent to agent when triggered
+
 # Tags
 tags_produced: [string]       # Task tags this agent creates
 tags_consumed: [string]       # Task tags this agent processes
@@ -139,7 +195,10 @@ changelog:
 
 ---
 
-## 3. Fleet Registry
+## 3. Fleet Registry (Example: Robothor's Deployment)
+
+> This section documents the specific agent fleet deployed for Robothor.
+> Your deployment will have different agents. Use this as a reference for structure and conventions.
 
 ### 3.1 Active Fleet
 
@@ -420,3 +479,7 @@ robothor engine workflow run <id>  # Manual trigger
 ---
 
 Updated: 2026-02-28
+
+---
+
+*Contracts: `docs/agents/schema.yaml` · `docs/agents/INSTRUCTION_CONTRACT.md` · Templates: `templates/agent-manifest.yaml` · `templates/agent-instructions.md`*

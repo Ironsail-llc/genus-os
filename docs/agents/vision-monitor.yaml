@@ -34,7 +34,11 @@ tools_allowed:
   - look
   - who_is_here
   - set_vision_mode
+  - search_memory
+  - get_entity
+  - store_memory
   - create_task
+  - update_task
   - list_my_tasks
   - resolve_task
   - append_to_block
@@ -77,15 +81,22 @@ warmup:
   context_files:
     - brain/memory/vision-monitor-status.md
 
-instruction_file: null
+instruction_file: brain/VISION_MONITOR.md
 bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
+
+hooks:
+  - stream: vision
+    event_type: vision.person_unknown
+    message: "Unknown person detected. Check vision events and escalate if needed."
 
 tags_produced: [vision, unknown-person]
 tags_consumed: []
 
 changelog:
+  - date: "2026-02-28"
+    change: "Add VISION_MONITOR.md instruction file, memory tools (search_memory, get_entity, store_memory), update_task"
   - date: "2026-02-28"
     change: "CRITICAL FIX: Add exec, read_file, write_file — agent couldn't write status files"
   - date: "2026-02-27"

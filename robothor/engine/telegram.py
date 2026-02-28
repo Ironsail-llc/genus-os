@@ -344,7 +344,7 @@ class TelegramBot:
                 nonlocal stream_msg_id
                 try:
                     run = await self.runner.execute(
-                        agent_id="main",
+                        agent_id=self.config.default_chat_agent,
                         message=user_text,
                         trigger_type=TriggerType.TELEGRAM,
                         trigger_detail=f"chat:{chat_id}",
