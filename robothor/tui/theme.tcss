@@ -1,0 +1,54 @@
+/* Robothor TUI — dark terminal aesthetic */
+
+Screen {
+    background: $background;
+}
+
+#chat-scroll {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+}
+
+#input-area {
+    dock: bottom;
+    height: 3;
+    padding: 0 1;
+}
+
+#message-input {
+    width: 1fr;
+}
+
+MessageDisplay {
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+ToolCard {
+    height: auto;
+    margin: 0 0 0 2;
+}
+
+StatusBar {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+WelcomeBanner {
+    margin: 1 2;
+    padding: 1 2;
+    border: solid $accent;
+    height: auto;
+}
+
+Header {
+    dock: top;
+}
+
+Footer {
+    dock: bottom;
+}
