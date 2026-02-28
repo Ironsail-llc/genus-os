@@ -36,9 +36,7 @@ class EngineConfig:
 
     # Paths
     workspace: Path = field(default_factory=lambda: Path.home() / "robothor")
-    manifest_dir: Path = field(
-        default_factory=lambda: Path.home() / "robothor" / "docs" / "agents"
-    )
+    manifest_dir: Path = field(default_factory=lambda: Path.home() / "robothor" / "docs" / "agents")
     workflow_dir: Path = field(
         default_factory=lambda: Path.home() / "robothor" / "docs" / "workflows"
     )
@@ -70,9 +68,7 @@ class EngineConfig:
             workflow_dir=Path(
                 os.environ.get("ROBOTHOR_WORKFLOW_DIR", workspace / "docs" / "workflows")
             ),
-            max_concurrent_agents=int(
-                os.environ.get("ROBOTHOR_MAX_CONCURRENT_AGENTS", "3")
-            ),
+            max_concurrent_agents=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_AGENTS", "3")),
             default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/Grenada"),
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
             default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
@@ -245,9 +241,7 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
         max_this_file = min(BOOTSTRAP_MAX_CHARS_PER_FILE, remaining)
         if len(content) > max_this_file:
             content = content[:max_this_file]
-            logger.warning(
-                "Bootstrap file %s truncated to %d chars", bs_file, max_this_file
-            )
+            logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
         parts.append(content)
         total_chars += len(content)
 

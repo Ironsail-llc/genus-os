@@ -80,9 +80,7 @@ async def chat_send(request: Request) -> StreamingResponse:
     message: str = body.get("message", "")
 
     if not session_key or not message:
-        return JSONResponse(
-            {"error": "session_key and message required"}, status_code=400
-        )
+        return JSONResponse({"error": "session_key and message required"}, status_code=400)
 
     session = _get_session(session_key)
 
@@ -130,9 +128,7 @@ async def chat_send(request: Request) -> StreamingResponse:
                 # Append to session history
                 session.history.append({"role": "user", "content": message})
                 if run.output_text:
-                    session.history.append(
-                        {"role": "assistant", "content": run.output_text}
-                    )
+                    session.history.append({"role": "assistant", "content": run.output_text})
 
                 # Trim history
                 if len(session.history) > MAX_HISTORY:
@@ -152,9 +148,7 @@ async def chat_send(request: Request) -> StreamingResponse:
                     }
                 )
             except asyncio.CancelledError:
-                await queue.put(
-                    {"event": "done", "data": {"text": "", "aborted": True}}
-                )
+                await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
             except Exception as e:
                 logger.error("Chat agent error: %s", e, exc_info=True)
                 await queue.put({"event": "error", "data": {"error": str(e)}})
@@ -201,9 +195,7 @@ async def chat_history(session_key: str = "", limit: int = 50) -> JSONResponse:
     session = _get_session(session_key)
     messages = session.history[-limit:] if limit > 0 else session.history
 
-    return JSONResponse(
-        {"sessionKey": session_key, "messages": messages}
-    )
+    return JSONResponse({"sessionKey": session_key, "messages": messages})
 
 
 @router.post("/inject")
@@ -215,9 +207,7 @@ async def chat_inject(request: Request) -> JSONResponse:
     label: str = body.get("label", "")
 
     if not session_key or not message:
-        return JSONResponse(
-            {"error": "session_key and message required"}, status_code=400
-        )
+        return JSONResponse({"error": "session_key and message required"}, status_code=400)
 
     session = _get_session(session_key)
     session.history.append({"role": "system", "content": message})

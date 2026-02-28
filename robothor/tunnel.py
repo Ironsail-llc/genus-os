@@ -54,17 +54,25 @@ def generate_tunnel_config(
 
     if provider == "cloudflare":
         return _generate_cloudflare(
-            domain, output_dir,
-            tts_enabled=tts_enabled, tts_port=tts_port,
-            monitoring_enabled=monitoring_enabled, monitoring_port=monitoring_port,
-            camera_enabled=camera_enabled, camera_port=camera_port,
+            domain,
+            output_dir,
+            tts_enabled=tts_enabled,
+            tts_port=tts_port,
+            monitoring_enabled=monitoring_enabled,
+            monitoring_port=monitoring_port,
+            camera_enabled=camera_enabled,
+            camera_port=camera_port,
         )
     elif provider == "caddy":
         return _generate_caddy(
-            domain, output_dir,
-            tts_enabled=tts_enabled, tts_port=tts_port,
-            monitoring_enabled=monitoring_enabled, monitoring_port=monitoring_port,
-            camera_enabled=camera_enabled, camera_port=camera_port,
+            domain,
+            output_dir,
+            tts_enabled=tts_enabled,
+            tts_port=tts_port,
+            monitoring_enabled=monitoring_enabled,
+            monitoring_port=monitoring_port,
+            camera_enabled=camera_enabled,
+            camera_port=camera_port,
         )
     else:
         raise ValueError(f"Unknown tunnel provider: {provider}. Use 'cloudflare' or 'caddy'.")
@@ -88,7 +96,9 @@ def _generate_cloudflare(
 
     tts_ingress = ""
     if tts_enabled:
-        tts_ingress = f"  # ── TTS ──\n  - hostname: tts.{domain}\n    service: http://localhost:{tts_port}\n"
+        tts_ingress = (
+            f"  # ── TTS ──\n  - hostname: tts.{domain}\n    service: http://localhost:{tts_port}\n"
+        )
 
     monitoring_ingress = ""
     if monitoring_enabled:
@@ -129,7 +139,9 @@ def _generate_caddy(
 
     monitoring_block = ""
     if monitoring_enabled:
-        monitoring_block = f"status.{domain} {{\n    reverse_proxy localhost:{monitoring_port}\n}}\n"
+        monitoring_block = (
+            f"status.{domain} {{\n    reverse_proxy localhost:{monitoring_port}\n}}\n"
+        )
 
     camera_block = ""
     if camera_enabled:
@@ -148,6 +160,7 @@ def _generate_caddy(
 def check_tunnel_status(provider: str) -> dict:
     """Check if the tunnel service is running."""
     import socket
+
     result: dict = {"provider": provider, "connected": False}
     if provider == "cloudflare":
         try:

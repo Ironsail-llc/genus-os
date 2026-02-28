@@ -10,7 +10,6 @@ Schemas extracted from robothor/api/mcp.py. Executors call robothor/crm/dal.py d
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from typing import Any
@@ -28,21 +27,23 @@ VISION_URL = "http://127.0.0.1:8600"
 BRIDGE_URL = "http://127.0.0.1:9100"
 
 # Impetus One tools — routed via Bridge MCP passthrough
-IMPETUS_TOOLS = frozenset({
-    "search_patients",
-    "get_patient_details",
-    "get_patient_clinical_notes",
-    "get_patient_prescriptions",
-    "search_prescriptions",
-    "get_prescription_status",
-    "search_medications",
-    "search_pharmacies",
-    "get_appointments",
-    "list_actable_providers",
-    "create_prescription_draft",
-    "schedule_appointment",
-    "transmit_prescription",
-})
+IMPETUS_TOOLS = frozenset(
+    {
+        "search_patients",
+        "get_patient_details",
+        "get_patient_clinical_notes",
+        "get_patient_prescriptions",
+        "search_prescriptions",
+        "get_prescription_status",
+        "search_medications",
+        "search_pharmacies",
+        "get_appointments",
+        "list_actable_providers",
+        "create_prescription_draft",
+        "schedule_appointment",
+        "transmit_prescription",
+    }
+)
 
 
 class ToolRegistry:
@@ -484,7 +485,8 @@ class ToolRegistry:
         """
         try:
             return await _execute_tool(
-                tool_name, arguments,
+                tool_name,
+                arguments,
                 agent_id=agent_id,
                 tenant_id=tenant_id,
                 workspace=workspace,
@@ -523,6 +525,7 @@ async def _execute_tool(
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
+
         results = await search_facts(args.get("query", ""), limit=args.get("limit", 10))
         return {
             "results": [
@@ -538,6 +541,7 @@ async def _execute_tool(
 
     if name == "store_memory":
         from robothor.memory.facts import extract_facts, store_fact
+
         content = args.get("content", "")
         content_type = args.get("content_type", "conversation")
         facts = await extract_facts(content)
@@ -550,10 +554,12 @@ async def _execute_tool(
 
     if name == "get_stats":
         from robothor.memory.tiers import get_memory_stats
+
         return get_memory_stats()
 
     if name == "get_entity":
         from robothor.memory.entities import get_entity
+
         try:
             result = await get_entity(args.get("name", ""))
             return result or {"name": args.get("name", ""), "found": False}
@@ -603,18 +609,22 @@ async def _execute_tool(
 
     if name == "memory_block_read":
         from robothor.memory.blocks import read_block
+
         return read_block(args.get("block_name", ""))
 
     if name == "memory_block_write":
         from robothor.memory.blocks import write_block
+
         return write_block(args.get("block_name", ""), args.get("content", ""))
 
     if name == "memory_block_list":
         from robothor.memory.blocks import list_blocks
+
         return list_blocks()
 
     if name == "append_to_block":
         from robothor.crm.dal import append_to_block
+
         ok = append_to_block(
             block_name=args.get("block_name", ""),
             entry=args.get("entry", ""),
@@ -626,6 +636,7 @@ async def _execute_tool(
 
     if name == "create_person":
         from robothor.crm.dal import create_person
+
         person_id = create_person(
             args.get("firstName", ""),
             args.get("lastName", ""),
@@ -641,22 +652,30 @@ async def _execute_tool(
 
     if name == "get_person":
         from robothor.crm.dal import get_person
+
         return get_person(args["id"], tenant_id=tenant_id) or {"error": "Person not found"}
 
     if name == "update_person":
         from robothor.crm.dal import update_person
+
         pid = args.get("id", "")
         field_map = {
-            "firstName": "first_name", "lastName": "last_name",
-            "email": "email", "phone": "phone", "jobTitle": "job_title",
-            "city": "city", "companyId": "company_id",
-            "linkedinUrl": "linkedin_url", "avatarUrl": "avatar_url",
+            "firstName": "first_name",
+            "lastName": "last_name",
+            "email": "email",
+            "phone": "phone",
+            "jobTitle": "job_title",
+            "city": "city",
+            "companyId": "company_id",
+            "linkedinUrl": "linkedin_url",
+            "avatarUrl": "avatar_url",
         }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
         return {"success": update_person(pid, tenant_id=tenant_id, **kwargs), "id": pid}
 
     if name == "list_people":
         from robothor.crm.dal import list_people
+
         results = list_people(
             search=args.get("search"), limit=args.get("limit", 20), tenant_id=tenant_id
         )
@@ -664,12 +683,14 @@ async def _execute_tool(
 
     if name == "delete_person":
         from robothor.crm.dal import delete_person
+
         return {"success": delete_person(args["id"], tenant_id=tenant_id), "id": args["id"]}
 
     # ── CRM Companies (direct DAL) ──
 
     if name == "create_company":
         from robothor.crm.dal import create_company
+
         company_id = create_company(
             name=args.get("name", ""),
             domain_name=args.get("domainName"),
@@ -687,14 +708,19 @@ async def _execute_tool(
 
     if name == "get_company":
         from robothor.crm.dal import get_company
+
         return get_company(args["id"], tenant_id=tenant_id) or {"error": "Company not found"}
 
     if name == "update_company":
         from robothor.crm.dal import update_company
+
         cid = args.get("id", "")
         field_map = {
-            "name": "name", "domainName": "domain_name", "employees": "employees",
-            "address": "address", "linkedinUrl": "linkedin_url",
+            "name": "name",
+            "domainName": "domain_name",
+            "employees": "employees",
+            "address": "address",
+            "linkedinUrl": "linkedin_url",
             "idealCustomerProfile": "ideal_customer_profile",
         }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
@@ -702,6 +728,7 @@ async def _execute_tool(
 
     if name == "list_companies":
         from robothor.crm.dal import list_companies
+
         results = list_companies(
             search=args.get("search"), limit=args.get("limit", 50), tenant_id=tenant_id
         )
@@ -709,12 +736,14 @@ async def _execute_tool(
 
     if name == "delete_company":
         from robothor.crm.dal import delete_company
+
         return {"success": delete_company(args["id"], tenant_id=tenant_id), "id": args["id"]}
 
     # ── CRM Notes (direct DAL) ──
 
     if name == "create_note":
         from robothor.crm.dal import create_note
+
         note_id = create_note(
             title=args.get("title", ""),
             body=args.get("body", ""),
@@ -730,10 +759,12 @@ async def _execute_tool(
 
     if name == "get_note":
         from robothor.crm.dal import get_note
+
         return get_note(args["id"], tenant_id=tenant_id) or {"error": "Note not found"}
 
     if name == "list_notes":
         from robothor.crm.dal import list_notes
+
         results = list_notes(
             person_id=args.get("personId"),
             company_id=args.get("companyId"),
@@ -744,19 +775,27 @@ async def _execute_tool(
 
     if name == "update_note":
         from robothor.crm.dal import update_note
+
         nid = args.get("id", "")
-        field_map = {"title": "title", "body": "body", "personId": "person_id", "companyId": "company_id"}
+        field_map = {
+            "title": "title",
+            "body": "body",
+            "personId": "person_id",
+            "companyId": "company_id",
+        }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
         return {"success": update_note(nid, tenant_id=tenant_id, **kwargs), "id": nid}
 
     if name == "delete_note":
         from robothor.crm.dal import delete_note
+
         return {"success": delete_note(args["id"], tenant_id=tenant_id), "id": args["id"]}
 
     # ── CRM Tasks (direct DAL) ──
 
     if name == "create_task":
         from robothor.crm.dal import create_task
+
         task_id = create_task(
             title=args.get("title", ""),
             body=args.get("body"),
@@ -779,10 +818,12 @@ async def _execute_tool(
 
     if name == "get_task":
         from robothor.crm.dal import get_task
+
         return get_task(args["id"], tenant_id=tenant_id) or {"error": "Task not found"}
 
     if name == "list_tasks":
         from robothor.crm.dal import list_tasks
+
         results = list_tasks(
             status=args.get("status"),
             person_id=args.get("personId"),
@@ -798,27 +839,39 @@ async def _execute_tool(
 
     if name == "update_task":
         from robothor.crm.dal import update_task
+
         tid = args.get("id", "")
         field_map = {
-            "title": "title", "body": "body", "status": "status",
-            "dueAt": "due_at", "personId": "person_id", "companyId": "company_id",
-            "assignedToAgent": "assigned_to_agent", "priority": "priority",
-            "tags": "tags", "resolution": "resolution",
+            "title": "title",
+            "body": "body",
+            "status": "status",
+            "dueAt": "due_at",
+            "personId": "person_id",
+            "companyId": "company_id",
+            "assignedToAgent": "assigned_to_agent",
+            "priority": "priority",
+            "tags": "tags",
+            "resolution": "resolution",
         }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
         return {"success": update_task(tid, tenant_id=tenant_id, **kwargs), "id": tid}
 
     if name == "delete_task":
         from robothor.crm.dal import delete_task
+
         return {"success": delete_task(args["id"], tenant_id=tenant_id), "id": args["id"]}
 
     if name == "resolve_task":
         from robothor.crm.dal import resolve_task
-        ok = resolve_task(task_id=args["id"], resolution=args.get("resolution", ""), tenant_id=tenant_id)
+
+        ok = resolve_task(
+            task_id=args["id"], resolution=args.get("resolution", ""), tenant_id=tenant_id
+        )
         return {"success": ok, "id": args["id"]}
 
     if name == "list_agent_tasks":
         from robothor.crm.dal import list_agent_tasks
+
         results = list_agent_tasks(
             agent_id=args.get("agentId", agent_id),
             include_unassigned=args.get("includeUnassigned", False),
@@ -831,6 +884,7 @@ async def _execute_tool(
     # list_my_tasks is an alias for list_agent_tasks with the current agent
     if name == "list_my_tasks":
         from robothor.crm.dal import list_agent_tasks
+
         results = list_agent_tasks(
             agent_id=agent_id,
             include_unassigned=False,
@@ -844,6 +898,7 @@ async def _execute_tool(
 
     if name == "approve_task":
         from robothor.crm.dal import approve_task
+
         result = approve_task(
             task_id=args["id"],
             resolution=args.get("resolution", "Approved"),
@@ -856,6 +911,7 @@ async def _execute_tool(
 
     if name == "reject_task":
         from robothor.crm.dal import reject_task
+
         result = reject_task(
             task_id=args["id"],
             reason=args.get("reason", ""),
@@ -871,6 +927,7 @@ async def _execute_tool(
 
     if name == "send_notification":
         from robothor.crm.dal import send_notification
+
         nid = send_notification(
             from_agent=args.get("fromAgent", agent_id),
             to_agent=args.get("toAgent", ""),
@@ -881,10 +938,15 @@ async def _execute_tool(
             task_id=args.get("taskId"),
             tenant_id=tenant_id,
         )
-        return {"id": nid, "subject": args.get("subject", "")} if nid else {"error": "Failed to send notification"}
+        return (
+            {"id": nid, "subject": args.get("subject", "")}
+            if nid
+            else {"error": "Failed to send notification"}
+        )
 
     if name == "get_inbox":
         from robothor.crm.dal import get_agent_inbox
+
         results = get_agent_inbox(
             agent_id=args.get("agentId", agent_id),
             unread_only=args.get("unreadOnly", True),
@@ -896,6 +958,7 @@ async def _execute_tool(
 
     if name == "ack_notification":
         from robothor.crm.dal import acknowledge_notification
+
         ok = acknowledge_notification(args.get("notificationId", ""), tenant_id=tenant_id)
         return {"success": ok, "id": args.get("notificationId", "")}
 
@@ -906,10 +969,16 @@ async def _execute_tool(
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 "http://127.0.0.1:9100/log-interaction",
-                json={k: args.get(k, "") for k in [
-                    "contact_name", "channel", "direction",
-                    "content_summary", "channel_identifier",
-                ]},
+                json={
+                    k: args.get(k, "")
+                    for k in [
+                        "contact_name",
+                        "channel",
+                        "direction",
+                        "content_summary",
+                        "channel_identifier",
+                    ]
+                },
             )
             resp.raise_for_status()
             return resp.json()
@@ -918,14 +987,17 @@ async def _execute_tool(
 
     if name == "get_metadata_objects":
         from robothor.crm.dal import get_metadata_objects
+
         return {"objects": get_metadata_objects()}
 
     if name == "get_object_metadata":
         from robothor.crm.dal import get_object_metadata
+
         return get_object_metadata(args.get("objectName", "")) or {"error": "Object not found"}
 
     if name == "search_records":
         from robothor.crm.dal import search_records
+
         results = search_records(
             query=args.get("query", ""),
             object_name=args.get("objectName"),
@@ -938,6 +1010,7 @@ async def _execute_tool(
 
     if name == "list_conversations":
         from robothor.crm.dal import list_conversations
+
         convos = list_conversations(
             status=args.get("status", "open"),
             page=args.get("page", 1),
@@ -947,14 +1020,19 @@ async def _execute_tool(
 
     if name == "get_conversation":
         from robothor.crm.dal import get_conversation
-        return get_conversation(args["conversationId"], tenant_id=tenant_id) or {"error": "Conversation not found"}
+
+        return get_conversation(args["conversationId"], tenant_id=tenant_id) or {
+            "error": "Conversation not found"
+        }
 
     if name == "list_messages":
         from robothor.crm.dal import list_messages
+
         return {"payload": list_messages(args["conversationId"], tenant_id=tenant_id)}
 
     if name == "create_message":
         from robothor.crm.dal import send_message
+
         result = send_message(
             conversation_id=args["conversationId"],
             content=args.get("content", ""),
@@ -966,6 +1044,7 @@ async def _execute_tool(
 
     if name == "toggle_conversation_status":
         from robothor.crm.dal import toggle_conversation_status
+
         ok = toggle_conversation_status(
             conversation_id=args["conversationId"],
             status=args.get("status", "resolved"),
@@ -977,6 +1056,7 @@ async def _execute_tool(
 
     if name == "list_agent_runs":
         from robothor.engine.tracking import list_runs
+
         runs = list_runs(
             agent_id=args.get("agent_id"),
             status=args.get("status"),
@@ -994,7 +1074,9 @@ async def _execute_tool(
                     "duration_ms": r.get("duration_ms"),
                     "input_tokens": r.get("input_tokens"),
                     "output_tokens": r.get("output_tokens"),
-                    "total_cost_usd": float(r["total_cost_usd"]) if r.get("total_cost_usd") else None,
+                    "total_cost_usd": float(r["total_cost_usd"])
+                    if r.get("total_cost_usd")
+                    else None,
                     "started_at": str(r["started_at"]) if r.get("started_at") else None,
                     "completed_at": str(r["completed_at"]) if r.get("completed_at") else None,
                     "error_message": r.get("error_message"),
@@ -1006,6 +1088,7 @@ async def _execute_tool(
 
     if name == "get_agent_run":
         from robothor.engine.tracking import get_run, list_steps
+
         run = get_run(args["run_id"])
         if not run:
             return {"error": "Run not found"}
@@ -1022,7 +1105,9 @@ async def _execute_tool(
                 "duration_ms": run.get("duration_ms"),
                 "input_tokens": run.get("input_tokens"),
                 "output_tokens": run.get("output_tokens"),
-                "total_cost_usd": float(run["total_cost_usd"]) if run.get("total_cost_usd") else None,
+                "total_cost_usd": float(run["total_cost_usd"])
+                if run.get("total_cost_usd")
+                else None,
                 "started_at": str(run["started_at"]) if run.get("started_at") else None,
                 "completed_at": str(run["completed_at"]) if run.get("completed_at") else None,
                 "error_message": run.get("error_message"),
@@ -1043,6 +1128,7 @@ async def _execute_tool(
 
     if name == "list_agent_schedules":
         from robothor.engine.tracking import list_schedules
+
         schedules = list_schedules(
             enabled_only=args.get("enabled_only", True),
             tenant_id=tenant_id,
@@ -1069,6 +1155,7 @@ async def _execute_tool(
 
     if name == "get_agent_stats":
         from robothor.engine.tracking import get_agent_stats as _get_agent_stats
+
         stats = _get_agent_stats(
             agent_id=args["agent_id"],
             hours=args.get("hours", 24),
@@ -1082,16 +1169,21 @@ async def _execute_tool(
             "completed": stats.get("completed", 0),
             "failed": stats.get("failed", 0),
             "timeouts": stats.get("timeouts", 0),
-            "avg_duration_ms": round(float(stats["avg_duration_ms"])) if stats.get("avg_duration_ms") else None,
+            "avg_duration_ms": round(float(stats["avg_duration_ms"]))
+            if stats.get("avg_duration_ms")
+            else None,
             "total_input_tokens": stats.get("total_input_tokens"),
             "total_output_tokens": stats.get("total_output_tokens"),
-            "total_cost_usd": float(stats["total_cost_usd"]) if stats.get("total_cost_usd") else None,
+            "total_cost_usd": float(stats["total_cost_usd"])
+            if stats.get("total_cost_usd")
+            else None,
         }
 
     # ── Vault tools ──
 
     if name == "vault_get":
         import robothor.vault as vault
+
         value = vault.get(args["key"], tenant_id=tenant_id)
         if value is None:
             return {"error": f"Secret not found: {args['key']}"}
@@ -1099,16 +1191,24 @@ async def _execute_tool(
 
     if name == "vault_set":
         import robothor.vault as vault
-        vault.set(args["key"], args["value"], category=args.get("category", "credential"), tenant_id=tenant_id)
+
+        vault.set(
+            args["key"],
+            args["value"],
+            category=args.get("category", "credential"),
+            tenant_id=tenant_id,
+        )
         return {"success": True, "key": args["key"]}
 
     if name == "vault_list":
         import robothor.vault as vault
+
         keys = vault.list(category=args.get("category"), tenant_id=tenant_id)
         return {"keys": keys, "count": len(keys)}
 
     if name == "vault_delete":
         import robothor.vault as vault
+
         deleted = vault.delete(args["key"], tenant_id=tenant_id)
         return {"success": deleted, "key": args["key"]}
 
@@ -1144,6 +1244,7 @@ async def _execute_tool(
 
     if name == "read_file":
         from pathlib import Path
+
         path = Path(args.get("path", ""))
         if not path.is_absolute() and workspace:
             path = Path(workspace) / path
@@ -1155,6 +1256,7 @@ async def _execute_tool(
 
     if name == "write_file":
         from pathlib import Path
+
         path = Path(args.get("path", ""))
         if not path.is_absolute() and workspace:
             path = Path(workspace) / path
@@ -1173,6 +1275,7 @@ async def _execute_tool(
             return {"error": "No URL provided"}
         try:
             import html2text
+
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
@@ -1200,7 +1303,11 @@ async def _execute_tool(
                 resp.raise_for_status()
                 data = resp.json()
                 results = [
-                    {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("content", ""),
+                    }
                     for r in data.get("results", [])[:limit]
                 ]
                 return {"results": results, "count": len(results)}
@@ -1211,6 +1318,7 @@ async def _execute_tool(
 
     if name in ("merge_people", "merge_contacts"):
         from robothor.crm.dal import merge_people as _merge_people
+
         result = _merge_people(
             keeper_id=args.get("keeperId", ""),
             loser_id=args.get("loserId", ""),
@@ -1222,6 +1330,7 @@ async def _execute_tool(
 
     if name == "merge_companies":
         from robothor.crm.dal import merge_companies as _merge_companies
+
         result = _merge_companies(
             keeper_id=args.get("keeperId", ""),
             loser_id=args.get("loserId", ""),

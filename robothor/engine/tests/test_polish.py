@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from robothor.engine.dedup import clear as dedup_clear
-from robothor.engine.models import AgentConfig, AgentRun, RunStatus
+from robothor.engine.models import AgentRun, RunStatus
 
 
 @pytest.fixture(autouse=True)
@@ -21,12 +21,14 @@ def clean_dedup():
 class TestExpandedTriggers:
     def test_all_expected_streams_registered(self):
         from robothor.engine.hooks import EVENT_TRIGGERS
+
         assert "email" in EVENT_TRIGGERS
         assert "calendar" in EVENT_TRIGGERS
         assert "vision" in EVENT_TRIGGERS
 
     def test_vision_person_unknown_trigger(self):
         from robothor.engine.hooks import EVENT_TRIGGERS
+
         triggers = EVENT_TRIGGERS["vision"]
         unknown = [t for t in triggers if t["event_type"] == "vision.person_unknown"]
         assert len(unknown) == 1
@@ -65,13 +67,15 @@ class TestDownstreamAgentChains:
             fut.set_result(None)
             return fut
 
-        with patch("robothor.engine.config.load_agent_config", return_value=sample_agent_config), \
-             patch("robothor.engine.tracking.get_schedule", return_value={"consecutive_errors": 0}), \
-             patch("robothor.engine.tracking.update_schedule_state"), \
-             patch("robothor.engine.warmup.build_warmth_preamble", return_value=""), \
-             patch("robothor.engine.delivery.deliver", new_callable=AsyncMock), \
-             patch.object(runner, "execute", new_callable=AsyncMock, return_value=run), \
-             patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task):
+        with (
+            patch("robothor.engine.config.load_agent_config", return_value=sample_agent_config),
+            patch("robothor.engine.tracking.get_schedule", return_value={"consecutive_errors": 0}),
+            patch("robothor.engine.tracking.update_schedule_state"),
+            patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
+            patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
+            patch.object(runner, "execute", new_callable=AsyncMock, return_value=run),
+            patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task),
+        ):
             await scheduler._run_agent("test-agent")
 
         assert len(created_coros) == 1
@@ -105,13 +109,15 @@ class TestDownstreamAgentChains:
             fut.set_result(None)
             return fut
 
-        with patch("robothor.engine.config.load_agent_config", return_value=sample_agent_config), \
-             patch("robothor.engine.tracking.get_schedule", return_value={"consecutive_errors": 0}), \
-             patch("robothor.engine.tracking.update_schedule_state"), \
-             patch("robothor.engine.warmup.build_warmth_preamble", return_value=""), \
-             patch("robothor.engine.delivery.deliver", new_callable=AsyncMock), \
-             patch.object(runner, "execute", new_callable=AsyncMock, return_value=run), \
-             patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task):
+        with (
+            patch("robothor.engine.config.load_agent_config", return_value=sample_agent_config),
+            patch("robothor.engine.tracking.get_schedule", return_value={"consecutive_errors": 0}),
+            patch("robothor.engine.tracking.update_schedule_state"),
+            patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
+            patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
+            patch.object(runner, "execute", new_callable=AsyncMock, return_value=run),
+            patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task),
+        ):
             await scheduler._run_agent("test-agent")
 
         assert len(created_coros) == 0
@@ -120,6 +126,7 @@ class TestDownstreamAgentChains:
 class TestCostEndpoint:
     def test_cost_endpoint_exists(self, engine_config):
         from robothor.engine.health import create_health_app
+
         app = create_health_app(engine_config)
         routes = [r.path for r in app.routes]
         assert "/costs" in routes
@@ -128,7 +135,10 @@ class TestCostEndpoint:
 class TestEngineReportManifest:
     def test_manifest_loads(self):
         from robothor.engine.config import load_manifest, manifest_to_agent_config
-        manifest_path = Path(__file__).parent.parent.parent.parent / "docs" / "agents" / "engine-report.yaml"
+
+        manifest_path = (
+            Path(__file__).parent.parent.parent.parent / "docs" / "agents" / "engine-report.yaml"
+        )
         if not manifest_path.exists():
             pytest.skip("engine-report.yaml not found")
         data = load_manifest(manifest_path)
@@ -142,6 +152,7 @@ class TestEngineReportManifest:
 class TestConfigParseWarmup:
     def test_warmup_fields_parsed(self):
         from robothor.engine.config import manifest_to_agent_config
+
         manifest = {
             "id": "test",
             "name": "Test",
@@ -160,6 +171,7 @@ class TestConfigParseWarmup:
 
     def test_warmup_defaults_empty(self):
         from robothor.engine.config import manifest_to_agent_config
+
         manifest = {"id": "test", "name": "Test"}
         config = manifest_to_agent_config(manifest)
         assert config.warmup_memory_blocks == []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from robothor.engine.router import RouteConfig, classify_difficulty, get_route_config
+from robothor.engine.router import classify_difficulty, get_route_config
 
 
 class TestClassifyDifficulty:
@@ -13,9 +13,10 @@ class TestClassifyDifficulty:
         assert classify_difficulty("short msg", 5, plan_difficulty="complex") == "complex"
 
     def test_manual_override_takes_priority(self):
-        assert classify_difficulty(
-            "short", 5, manual_override="simple", plan_difficulty="complex"
-        ) == "simple"
+        assert (
+            classify_difficulty("short", 5, manual_override="simple", plan_difficulty="complex")
+            == "simple"
+        )
 
     def test_heuristic_simple(self):
         assert classify_difficulty("do it", 3) == "simple"

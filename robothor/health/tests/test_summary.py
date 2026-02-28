@@ -15,7 +15,6 @@ from robothor.health.summary import (
     write_summary,
 )
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -25,23 +24,40 @@ def _insert_full_data(ref_time: datetime):
     midnight = ref_time.replace(hour=0, minute=0, second=0, microsecond=0)
     midnight_ts = int(midnight.timestamp())
 
-    dal.upsert_sleep([(
-        today, midnight_ts - 29460, midnight_ts, 29460, 3960, 19080,
-        6420, 960, 83, "GOOD", json.dumps({}),
-    )])
+    dal.upsert_sleep(
+        [
+            (
+                today,
+                midnight_ts - 29460,
+                midnight_ts,
+                29460,
+                3960,
+                19080,
+                6420,
+                960,
+                83,
+                "GOOD",
+                json.dumps({}),
+            )
+        ]
+    )
 
-    dal.upsert_body_battery([
-        (midnight_ts + 3600, 85, 50, 1),
-        (midnight_ts + 21600, 61, 50, 1),
-    ])
+    dal.upsert_body_battery(
+        [
+            (midnight_ts + 3600, 85, 50, 1),
+            (midnight_ts + 21600, 61, 50, 1),
+        ]
+    )
 
-    dal.upsert_stress([
-        (midnight_ts, 15),
-        (midnight_ts + 1800, 30),
-        (midnight_ts + 3600, 45),
-        (midnight_ts + 5400, 20),
-        (midnight_ts + 7200, 10),
-    ])
+    dal.upsert_stress(
+        [
+            (midnight_ts, 15),
+            (midnight_ts + 1800, 30),
+            (midnight_ts + 3600, 45),
+            (midnight_ts + 5400, 20),
+            (midnight_ts + 7200, 10),
+        ]
+    )
 
     dal.upsert_steps([(today, 5806, 7300, 4989.0, 2804, midnight_ts)])
 
@@ -91,8 +107,7 @@ class TestMissingSleep:
 
     def test_sleep_fallback_to_yesterday(self):
         ref = datetime(2026, 2, 27, 7, 0, 0)
-        dal.upsert_sleep([("2026-02-26", 0, 0, 28800, 3600, 18000,
-                           7200, 900, 76, "FAIR", None)])
+        dal.upsert_sleep([("2026-02-26", 0, 0, 28800, 3600, 18000, 7200, 900, 76, "FAIR", None)])
         output = generate_summary(now=ref)
         assert "Sleep: 8h 00m (score 76, FAIR)" in output
 

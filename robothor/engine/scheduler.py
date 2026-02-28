@@ -16,9 +16,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from robothor.engine.config import load_all_manifests, manifest_to_agent_config
-from robothor.engine.dedup import try_acquire, release
+from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
-from robothor.engine.models import DeliveryMode, TriggerType
+from robothor.engine.models import TriggerType
 from robothor.engine.tracking import update_schedule_state, upsert_schedule
 
 # Circuit breaker: skip agent after this many consecutive errors
@@ -64,7 +64,9 @@ class CronScheduler:
             except Exception as e:
                 logger.error(
                     "Invalid cron expression for %s: %s — %s",
-                    agent_config.id, agent_config.cron_expr, e,
+                    agent_config.id,
+                    agent_config.cron_expr,
+                    e,
                 )
                 continue
 
@@ -126,7 +128,9 @@ class CronScheduler:
                 except Exception as e:
                     logger.error(
                         "Invalid workflow cron for %s: %s — %s",
-                        wf.id, wf_trigger.cron, e,
+                        wf.id,
+                        wf_trigger.cron,
+                        e,
                     )
             logger.info("Loaded %d workflow cron jobs", wf_loaded)
 
@@ -157,17 +161,20 @@ class CronScheduler:
             # Circuit breaker: skip after too many consecutive errors
             try:
                 from robothor.engine.tracking import get_schedule
+
                 schedule = get_schedule(agent_id)
                 if schedule:
                     errors = schedule.get("consecutive_errors", 0) or 0
                     if errors >= CIRCUIT_BREAKER_THRESHOLD:
                         logger.warning(
                             "Circuit breaker: %s has %d consecutive errors, skipping",
-                            agent_id, errors,
+                            agent_id,
+                            errors,
                         )
                         # Send Telegram alert (best-effort)
                         try:
                             from robothor.engine.delivery import get_telegram_sender
+
                             sender = get_telegram_sender()
                             if sender and agent_config.delivery_to:
                                 await sender(
@@ -206,8 +213,7 @@ class CronScheduler:
                     except Exception:
                         pass
                     consecutive_errors = (
-                        (prev_schedule.get("consecutive_errors", 0) + 1)
-                        if prev_schedule else 1
+                        (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
                     )
 
                 update_schedule_state(
@@ -252,7 +258,9 @@ class CronScheduler:
             )
             logger.info(
                 "Workflow cron complete: %s status=%s duration=%dms",
-                workflow_id, run.status.value, run.duration_ms,
+                workflow_id,
+                run.status.value,
+                run.duration_ms,
             )
         except Exception as e:
             logger.error("Workflow cron failed for %s: %s", workflow_id, e)
@@ -274,9 +282,7 @@ class CronScheduler:
 
         # Build warmth preamble (never crashes)
         try:
-            preamble = build_warmth_preamble(
-                config, self.config.workspace, self.config.tenant_id
-            )
+            preamble = build_warmth_preamble(config, self.config.workspace, self.config.tenant_id)
         except Exception as e:
             logger.debug("Warmup preamble failed for %s: %s", config.id, e)
             preamble = ""

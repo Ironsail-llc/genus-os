@@ -94,6 +94,7 @@ async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> b
     """Publish output to the Redis event bus."""
     try:
         from robothor.events.bus import publish
+
         publish(
             stream="agent",
             event_type="agent.run.output",

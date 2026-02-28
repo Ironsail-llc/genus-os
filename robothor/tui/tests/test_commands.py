@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from robothor.tui.commands import handle_command, COMMANDS
+from robothor.tui.commands import COMMANDS, handle_command
 
 
 @pytest.fixture
@@ -44,8 +44,18 @@ class TestHandleCommand:
     @pytest.mark.asyncio
     async def test_all_commands_registered(self):
         """All expected commands are in the registry."""
-        expected = {"/status", "/agents", "/costs", "/history", "/model",
-                    "/clear", "/abort", "/help", "/quit", "/exit"}
+        expected = {
+            "/status",
+            "/agents",
+            "/costs",
+            "/history",
+            "/model",
+            "/clear",
+            "/abort",
+            "/help",
+            "/quit",
+            "/exit",
+        }
         assert set(COMMANDS.keys()) == expected
 
 

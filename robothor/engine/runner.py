@@ -38,7 +38,7 @@ from robothor.engine.config import (
     build_system_prompt,
     load_agent_config,
 )
-from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
+from robothor.engine.models import AgentConfig, AgentRun, TriggerType
 from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
@@ -141,6 +141,7 @@ class AgentRunner:
             plan_result = await self._run_planner(agent_config, message, tool_names, models)
             if plan_result and plan_result.success:
                 from robothor.engine.planner import format_plan_context
+
                 plan_context = format_plan_context(plan_result)
                 if plan_context:
                     session.messages.append({"role": "user", "content": plan_context})
@@ -156,24 +157,26 @@ class AgentRunner:
         # ── [CHECKPOINT] Resume from checkpoint if requested ──
         resumed_scratchpad = None
         if resume_from_run_id:
-            resumed_scratchpad = self._resume_from_checkpoint(
-                resume_from_run_id, session
-            )
+            resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
         # Execute with timeout
         timeout = agent_config.timeout_seconds
         try:
             async with asyncio.timeout(timeout):
                 await self._run_loop(
-                    session, models, tool_schemas, agent_config,
-                    on_content, on_tool,
+                    session,
+                    models,
+                    tool_schemas,
+                    agent_config,
+                    on_content,
+                    on_tool,
                     max_iterations=max_iterations,
                     route=route,
                     plan_result=plan_result,
                     trace=trace,
                     resumed_scratchpad=resumed_scratchpad,
                 )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Agent %s timed out after %ds", agent_id, timeout)
             session.record_error(f"Timed out after {timeout}s")
             return self._finish_run(session.timeout(), trace=trace)
@@ -187,21 +190,30 @@ class AgentRunner:
         output_text = session.get_final_text()
         if self._should_verify(agent_config, route):
             output_text = await self._run_verification(
-                agent_config, session, models, tool_schemas,
-                output_text, on_content, on_tool,
+                agent_config,
+                session,
+                models,
+                tool_schemas,
+                output_text,
+                on_content,
+                on_tool,
                 max_iterations=max_iterations,
-                route=route, plan_result=plan_result, trace=trace,
+                route=route,
+                plan_result=plan_result,
+                trace=trace,
             )
 
         # ── [TELEMETRY] Publish run metrics ──
         if trace:
             try:
-                trace.publish_metrics({
-                    "status": "completed",
-                    "duration_ms": session.run.duration_ms or 0,
-                    "input_tokens": session.run.input_tokens,
-                    "output_tokens": session.run.output_tokens,
-                })
+                trace.publish_metrics(
+                    {
+                        "status": "completed",
+                        "duration_ms": session.run.duration_ms or 0,
+                        "input_tokens": session.run.input_tokens,
+                        "output_tokens": session.run.output_tokens,
+                    }
+                )
             except Exception:
                 pass
 
@@ -230,6 +242,7 @@ class AgentRunner:
         if agent_config.session_target == "persistent":
             try:
                 from robothor.engine.context import maybe_compress
+
                 session.messages = await maybe_compress(session.messages, models)
             except Exception as e:
                 logger.debug("Context compression failed: %s", e)
@@ -252,28 +265,37 @@ class AgentRunner:
             )
             if budget_status == "exhausted":
                 session.run.budget_exhausted = True
-                session.messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SYSTEM] Budget exhausted. You must wrap up immediately. "
-                        "Summarize your progress and any remaining work."
-                    ),
-                })
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] Budget exhausted. You must wrap up immediately. "
+                            "Summarize your progress and any remaining work."
+                        ),
+                    }
+                )
                 # Allow one more LLM call to wrap up, then break
                 await self._llm_call_and_record(
-                    session, models, tool_schemas, on_content,
-                    broken_models, agent_config.temperature, trace,
+                    session,
+                    models,
+                    tool_schemas,
+                    on_content,
+                    broken_models,
+                    agent_config.temperature,
+                    trace,
                 )
                 return
             if budget_status == "warning" and not budget_warning_sent:
                 budget_warning_sent = True
-                session.messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SYSTEM] You are approaching your budget limit (>80%). "
-                        "Prioritize the most important remaining work."
-                    ),
-                })
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] You are approaching your budget limit (>80%). "
+                            "Prioritize the most important remaining work."
+                        ),
+                    }
+                )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -282,8 +304,13 @@ class AgentRunner:
 
             # ── LLM call ──
             response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
-                session, models, tool_schemas, on_content,
-                broken_models, agent_config.temperature, trace,
+                session,
+                models,
+                tool_schemas,
+                on_content,
+                broken_models,
+                agent_config.temperature,
+                trace,
             )
 
             if response is None:
@@ -334,12 +361,14 @@ class AgentRunner:
                 # Emit tool_start event
                 if on_tool:
                     try:
-                        await on_tool({
-                            "event": "tool_start",
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "call_id": tc.id,
-                        })
+                        await on_tool(
+                            {
+                                "event": "tool_start",
+                                "tool": tool_name,
+                                "args": tool_args,
+                                "call_id": tc.id,
+                            }
+                        )
                     except Exception:
                         pass  # Never block tool execution
 
@@ -370,9 +399,7 @@ class AgentRunner:
                 if guardrail_engine and not error_msg:
                     post_gr = guardrail_engine.check_post_execution(tool_name, result)
                     if post_gr.action == "warned":
-                        logger.warning(
-                            "Guardrail warning for %s: %s", tool_name, post_gr.reason
-                        )
+                        logger.warning("Guardrail warning for %s: %s", tool_name, post_gr.reason)
 
                 # Emit tool_end event
                 if on_tool:
@@ -383,14 +410,16 @@ class AgentRunner:
                     except Exception:
                         result_preview = str(result)[:2000]
                     try:
-                        await on_tool({
-                            "event": "tool_end",
-                            "tool": tool_name,
-                            "call_id": tc.id,
-                            "duration_ms": tool_elapsed,
-                            "result_preview": result_preview,
-                            "error": error_msg,
-                        })
+                        await on_tool(
+                            {
+                                "event": "tool_end",
+                                "tool": tool_name,
+                                "call_id": tc.id,
+                                "duration_ms": tool_elapsed,
+                                "result_preview": result_preview,
+                                "error": error_msg,
+                            }
+                        )
                     except Exception:
                         pass  # Never block tool execution
 
@@ -424,27 +453,25 @@ class AgentRunner:
 
             # ── [ERROR FEEDBACK] Inject analysis prompt on errors ──
             if iteration_errors and agent_config.error_feedback:
-                error_lines = "\n".join(
-                    f"- {name}: {msg}" for name, msg in iteration_errors
+                error_lines = "\n".join(f"- {name}: {msg}" for name, msg in iteration_errors)
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM] The following tool calls failed:\n{error_lines}\n\n"
+                            "Analyze why these failed. Consider:\n"
+                            "1. Were the arguments correct?\n"
+                            "2. Is there an alternative approach or different tool?\n"
+                            "3. Should you skip this step and continue?\n"
+                            "Do NOT retry the exact same call with the same arguments."
+                        ),
+                    }
                 )
-                session.messages.append({
-                    "role": "user",
-                    "content": (
-                        f"[SYSTEM] The following tool calls failed:\n{error_lines}\n\n"
-                        "Analyze why these failed. Consider:\n"
-                        "1. Were the arguments correct?\n"
-                        "2. Is there an alternative approach or different tool?\n"
-                        "3. Should you skip this step and continue?\n"
-                        "Do NOT retry the exact same call with the same arguments."
-                    ),
-                })
 
             # ── [ESCALATION] Check thresholds ──
             if escalation:
                 if escalation.should_abort():
-                    session.record_error(
-                        f"Hard abort: {escalation.total_errors} total errors"
-                    )
+                    session.record_error(f"Hard abort: {escalation.total_errors} total errors")
                     return
                 esc_msg = escalation.get_escalation_message()
                 if esc_msg:
@@ -480,13 +507,21 @@ class AgentRunner:
         if trace:
             with trace.span("llm_call") as _span:
                 response = await self._do_llm_call(
-                    session, models, tool_schemas, on_content,
-                    broken_models, temperature,
+                    session,
+                    models,
+                    tool_schemas,
+                    on_content,
+                    broken_models,
+                    temperature,
                 )
         else:
             response = await self._do_llm_call(
-                session, models, tool_schemas, on_content,
-                broken_models, temperature,
+                session,
+                models,
+                tool_schemas,
+                on_content,
+                broken_models,
+                temperature,
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -549,24 +584,31 @@ class AgentRunner:
         """Dispatch to streaming or non-streaming LLM call."""
         if on_content:
             return await self._call_llm_streaming(
-                session.messages, models, tool_schemas, on_content,
-                broken_models=broken_models, temperature=temperature,
+                session.messages,
+                models,
+                tool_schemas,
+                on_content,
+                broken_models=broken_models,
+                temperature=temperature,
             )
         return await self._call_llm(
-            session.messages, models, tool_schemas,
-            broken_models=broken_models, temperature=temperature,
+            session.messages,
+            models,
+            tool_schemas,
+            broken_models=broken_models,
+            temperature=temperature,
         )
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
 
-    def _apply_routing(
-        self, agent_config: AgentConfig, message: str, tool_count: int
-    ) -> Any:
+    def _apply_routing(self, agent_config: AgentConfig, message: str, tool_count: int) -> Any:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
         try:
             from robothor.engine.router import get_route_config
+
             return get_route_config(
-                message, tool_count,
+                message,
+                tool_count,
                 manual_override=agent_config.difficulty_class,
             )
         except Exception as e:
@@ -582,15 +624,21 @@ class AgentRunner:
         return False
 
     async def _run_planner(
-        self, agent_config: AgentConfig, message: str,
-        tool_names: list[str], models: list[str],
+        self,
+        agent_config: AgentConfig,
+        message: str,
+        tool_names: list[str],
+        models: list[str],
     ) -> Any:
         """Run the planning phase. Returns PlanResult or None."""
         try:
             from robothor.engine.planner import generate_plan
+
             plan_model = agent_config.planning_model or models[0]
             return await generate_plan(
-                message, tool_names, plan_model,
+                message,
+                tool_names,
+                plan_model,
                 fallback_models=models[1:2],
             )
         except Exception as e:
@@ -601,12 +649,15 @@ class AgentRunner:
         """Create telemetry TraceContext."""
         try:
             from robothor.engine.telemetry import TraceContext
+
             return TraceContext(run_id=session.run_id, agent_id=agent_config.id)
         except Exception:
             return None
 
     def _create_scratchpad(
-        self, agent_config: AgentConfig, route: Any,
+        self,
+        agent_config: AgentConfig,
+        route: Any,
         resumed_scratchpad: Any = None,
     ) -> Any:
         """Create Scratchpad if enabled."""
@@ -619,6 +670,7 @@ class AgentRunner:
             return resumed_scratchpad
         try:
             from robothor.engine.scratchpad import Scratchpad
+
             return Scratchpad()
         except Exception:
             return None
@@ -629,12 +681,16 @@ class AgentRunner:
             return None
         try:
             from robothor.engine.escalation import EscalationManager
+
             return EscalationManager()
         except Exception:
             return None
 
     def _create_checkpoint(
-        self, agent_config: AgentConfig, route: Any, run_id: str,
+        self,
+        agent_config: AgentConfig,
+        route: Any,
+        run_id: str,
     ) -> Any:
         """Create CheckpointManager if enabled."""
         enabled = agent_config.checkpoint_enabled
@@ -644,6 +700,7 @@ class AgentRunner:
             return None
         try:
             from robothor.engine.checkpoint import CheckpointManager
+
             return CheckpointManager(run_id=run_id)
         except Exception:
             return None
@@ -654,6 +711,7 @@ class AgentRunner:
             return None
         try:
             from robothor.engine.guardrails import GuardrailEngine
+
             return GuardrailEngine(enabled_policies=agent_config.guardrails)
         except Exception:
             return None
@@ -667,9 +725,14 @@ class AgentRunner:
         return False
 
     async def _run_verification(
-        self, agent_config: AgentConfig, session: AgentSession,
-        models: list[str], tool_schemas: list[dict],
-        output_text: str | None, on_content, on_tool,
+        self,
+        agent_config: AgentConfig,
+        session: AgentSession,
+        models: list[str],
+        tool_schemas: list[dict],
+        output_text: str | None,
+        on_content,
+        on_tool,
         **loop_kwargs,
     ) -> str | None:
         """Run verification step. If it fails, retry once."""
@@ -678,9 +741,8 @@ class AgentRunner:
                 format_verification_feedback,
                 verify_output,
             )
-            error_count = sum(
-                1 for s in session.run.steps if s.error_message
-            )
+
+            error_count = sum(1 for s in session.run.steps if s.error_message)
             result = await verify_output(
                 output_text or "",
                 agent_config.verification_prompt,
@@ -697,8 +759,13 @@ class AgentRunner:
             logger.info("Verification failed for %s, retrying once", agent_config.id)
 
             await self._run_loop(
-                session, models, tool_schemas, agent_config,
-                on_content, on_tool, **loop_kwargs,
+                session,
+                models,
+                tool_schemas,
+                agent_config,
+                on_content,
+                on_tool,
+                **loop_kwargs,
             )
             return session.get_final_text()
         except Exception as e:
@@ -706,7 +773,9 @@ class AgentRunner:
             return output_text
 
     def _resume_from_checkpoint(
-        self, run_id: str, session: AgentSession,
+        self,
+        run_id: str,
+        session: AgentSession,
     ) -> Any:
         """Resume from a previous run's checkpoint. Returns restored scratchpad or None."""
         try:
@@ -770,7 +839,8 @@ class AgentRunner:
                     broken_models.add(model)
                     logger.warning(
                         "Model %s permanently failed (%s), removing from rotation",
-                        model, status,
+                        model,
+                        status,
                     )
                 else:
                     logger.warning("Model %s failed: %s", model, e)
@@ -846,7 +916,8 @@ class AgentRunner:
                     broken_models.add(model)
                     logger.warning(
                         "Model %s permanently failed (%s), removing from rotation",
-                        model, status,
+                        model,
+                        status,
                     )
                 else:
                     logger.warning("Model %s (streaming) failed: %s", model, e)

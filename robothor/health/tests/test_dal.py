@@ -8,7 +8,6 @@ import pytest
 
 from robothor.health import dal
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -51,6 +50,7 @@ class TestUpsertHeartRate:
         dal.upsert_heart_rate([(1000001, 80, "monitoring")])
         # Should not raise, and second value should win
         from robothor.db.connection import get_connection
+
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT heart_rate FROM health_heart_rate WHERE timestamp = 1000001")
@@ -71,8 +71,19 @@ class TestUpsertBodyBattery:
 
 class TestUpsertSleep:
     def test_basic_insert(self):
-        row = ("2026-02-27", 1000, 2000, 29460, 3960, 19080, 6420, 960,
-               83, "GOOD", json.dumps({"test": True}))
+        row = (
+            "2026-02-27",
+            1000,
+            2000,
+            29460,
+            3960,
+            19080,
+            6420,
+            960,
+            83,
+            "GOOD",
+            json.dumps({"test": True}),
+        )
         assert dal.upsert_sleep([row]) == 1
 
 
@@ -90,9 +101,26 @@ class TestUpsertSteps:
 
 class TestUpsertActivities:
     def test_basic_insert(self):
-        rows = [(99999, "Morning Run", "running", 5000001, 1800,
-                 5000.0, 300, 145, 170, 5.5, 50.0, 42.0, 3.5, 1.2, 100,
-                 json.dumps({"test": True}))]
+        rows = [
+            (
+                99999,
+                "Morning Run",
+                "running",
+                5000001,
+                1800,
+                5000.0,
+                300,
+                145,
+                170,
+                5.5,
+                50.0,
+                42.0,
+                3.5,
+                1.2,
+                100,
+                json.dumps({"test": True}),
+            )
+        ]
         assert dal.upsert_activities(rows) == 1
 
     def test_empty(self):
@@ -103,6 +131,7 @@ class TestLogSync:
     def test_log_success(self):
         dal.log_sync("heart_rate", 100, "success")
         from robothor.db.connection import get_connection
+
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT metric_type, records_synced FROM health_sync_log")
@@ -113,6 +142,7 @@ class TestLogSync:
     def test_log_error(self):
         dal.log_sync("stress", 0, "error", "API timeout")
         from robothor.db.connection import get_connection
+
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT error_message FROM health_sync_log")
@@ -121,15 +151,17 @@ class TestLogSync:
 
 class TestGetSleep:
     def test_returns_today(self):
-        dal.upsert_sleep([("2026-02-27", 1000, 2000, 29460, 3960, 19080,
-                           6420, 960, 83, "GOOD", None)])
+        dal.upsert_sleep(
+            [("2026-02-27", 1000, 2000, 29460, 3960, 19080, 6420, 960, 83, "GOOD", None)]
+        )
         result = dal.get_sleep("2026-02-27", "2026-02-26")
         assert result["total"] == 29460
         assert result["score"] == 83
 
     def test_falls_back_to_yesterday(self):
-        dal.upsert_sleep([("2026-02-26", 1000, 2000, 28800, 3600, 18000,
-                           7200, 900, 76, "FAIR", None)])
+        dal.upsert_sleep(
+            [("2026-02-26", 1000, 2000, 28800, 3600, 18000, 7200, 900, 76, "FAIR", None)]
+        )
         result = dal.get_sleep("2026-02-27", "2026-02-26")
         assert result["total"] == 28800
         assert result["quality"] == "FAIR"
@@ -141,10 +173,12 @@ class TestGetSleep:
 
 class TestGetBodyBattery:
     def test_current_and_peak(self):
-        dal.upsert_body_battery([
-            (1000, 85, 50, 1),
-            (2000, 61, 50, 1),
-        ])
+        dal.upsert_body_battery(
+            [
+                (1000, 85, 50, 1),
+                (2000, 61, 50, 1),
+            ]
+        )
         result = dal.get_body_battery(0, 3000)
         assert result["current"] == 61  # latest
         assert result["peak"] == 85
@@ -195,11 +229,13 @@ class TestGetRestingHr:
 
 class TestGetHrvLatest:
     def test_latest_reading(self):
-        dal.upsert_hrv([
-            (1000, 42.0, "reading", None),
-            (2000, 45.0, "reading", None),
-            (3000, 50.0, "weekly_avg", None),  # Should be excluded
-        ])
+        dal.upsert_hrv(
+            [
+                (1000, 42.0, "reading", None),
+                (2000, 45.0, "reading", None),
+                (3000, 50.0, "weekly_avg", None),  # Should be excluded
+            ]
+        )
         result = dal.get_hrv_latest(0, 4000)
         assert result == 45  # latest 'reading' type
 

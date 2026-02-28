@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from garminconnect import Garmin
@@ -80,6 +80,7 @@ def get_client(
 # ---------------------------------------------------------------------------
 # Per-metric sync functions
 # ---------------------------------------------------------------------------
+
 
 def sync_heart_rate(client: Garmin, target_date: str) -> int:
     """Sync heart rate data for a specific date."""
@@ -166,10 +167,16 @@ def sync_sleep(client: Garmin, target_date: str) -> int:
             sleep.get("lightSleepSeconds"),
             sleep.get("remSleepSeconds"),
             sleep.get("awakeSleepSeconds"),
-            (sleep.get("sleepScores", {}).get("overall", {}).get("value")
-             if sleep.get("sleepScores") else None),
-            (sleep.get("sleepScores", {}).get("overall", {}).get("qualifierKey")
-             if sleep.get("sleepScores") else None),
+            (
+                sleep.get("sleepScores", {}).get("overall", {}).get("value")
+                if sleep.get("sleepScores")
+                else None
+            ),
+            (
+                sleep.get("sleepScores", {}).get("overall", {}).get("qualifierKey")
+                if sleep.get("sleepScores")
+                else None
+            ),
             json.dumps(data),
         )
         return dal.upsert_sleep([row])
@@ -214,10 +221,7 @@ def sync_respiration(client: Garmin, target_date: str) -> int:
         if not data:
             return 0
 
-        readings = (
-            data if isinstance(data, list)
-            else (data.get("respirationValuesArray") or [])
-        )
+        readings = data if isinstance(data, list) else (data.get("respirationValuesArray") or [])
         rows = []
         for entry in readings:
             if isinstance(entry, dict):
@@ -249,14 +253,12 @@ def sync_hrv(client: Garmin, target_date: str) -> int:
             summary = data["hrvSummary"]
             ts = dal.parse_timestamp(summary.get("startTimestampGMT"))
             if ts:
-                rows.append((ts, summary.get("weeklyAvg"), "weekly_avg",
-                             summary.get("status")))
+                rows.append((ts, summary.get("weeklyAvg"), "weekly_avg", summary.get("status")))
 
         for entry in data.get("hrvReadings", []):
             ts = dal.parse_timestamp(entry.get("readingTimeGMT"))
             if ts and entry.get("hrvValue"):
-                rows.append((ts, entry.get("hrvValue"), "reading",
-                             entry.get("status")))
+                rows.append((ts, entry.get("hrvValue"), "reading", entry.get("status")))
 
         return dal.upsert_hrv(rows)
     except GarthHTTPError as e:
@@ -277,24 +279,32 @@ def sync_steps(client: Garmin, target_date: str) -> int:
 
         stats = client.get_stats(target_date)
         if stats:
-            dal.upsert_steps([(
-                target_date,
-                stats.get("totalSteps", total),
-                stats.get("dailyStepGoal"),
-                stats.get("totalDistanceMeters"),
-                stats.get("totalKilocalories"),
-                dal.parse_timestamp(stats.get("calendarDate")),
-            )])
+            dal.upsert_steps(
+                [
+                    (
+                        target_date,
+                        stats.get("totalSteps", total),
+                        stats.get("dailyStepGoal"),
+                        stats.get("totalDistanceMeters"),
+                        stats.get("totalKilocalories"),
+                        dal.parse_timestamp(stats.get("calendarDate")),
+                    )
+                ]
+            )
 
-            dal.upsert_daily_summary([(
-                target_date,
-                stats.get("totalKilocalories"),
-                stats.get("activeKilocalories"),
-                stats.get("bmrKilocalories"),
-                stats.get("floorsAscended"),
-                stats.get("intensityMinutesGoal"),
-                json.dumps(stats),
-            )])
+            dal.upsert_daily_summary(
+                [
+                    (
+                        target_date,
+                        stats.get("totalKilocalories"),
+                        stats.get("activeKilocalories"),
+                        stats.get("bmrKilocalories"),
+                        stats.get("floorsAscended"),
+                        stats.get("intensityMinutesGoal"),
+                        json.dumps(stats),
+                    )
+                ]
+            )
 
             return 1
     except GarthHTTPError as e:
@@ -311,31 +321,33 @@ def sync_activities(client: Garmin, limit: int = 20) -> int:
 
         rows = []
         for act in activities:
-            start_ts = dal.parse_timestamp(
-                act.get("startTimeGMT") or act.get("startTimeLocal")
-            )
+            start_ts = dal.parse_timestamp(act.get("startTimeGMT") or act.get("startTimeLocal"))
             if not start_ts:
                 continue
-            rows.append((
-                act.get("activityId"),
-                act.get("activityName"),
-                (act.get("activityType", {}).get("typeKey")
-                 if isinstance(act.get("activityType"), dict)
-                 else act.get("activityType")),
-                start_ts,
-                act.get("duration"),
-                act.get("distance"),
-                act.get("calories"),
-                act.get("averageHR"),
-                act.get("maxHR"),
-                act.get("averageSpeed"),
-                act.get("elevationGain"),
-                act.get("vO2MaxValue"),
-                act.get("aerobicTrainingEffect"),
-                act.get("anaerobicTrainingEffect"),
-                act.get("activityTrainingLoad"),
-                json.dumps(act),
-            ))
+            rows.append(
+                (
+                    act.get("activityId"),
+                    act.get("activityName"),
+                    (
+                        act.get("activityType", {}).get("typeKey")
+                        if isinstance(act.get("activityType"), dict)
+                        else act.get("activityType")
+                    ),
+                    start_ts,
+                    act.get("duration"),
+                    act.get("distance"),
+                    act.get("calories"),
+                    act.get("averageHR"),
+                    act.get("maxHR"),
+                    act.get("averageSpeed"),
+                    act.get("elevationGain"),
+                    act.get("vO2MaxValue"),
+                    act.get("aerobicTrainingEffect"),
+                    act.get("anaerobicTrainingEffect"),
+                    act.get("activityTrainingLoad"),
+                    json.dumps(act),
+                )
+            )
 
         return dal.upsert_activities(rows)
     except GarthHTTPError as e:
@@ -350,17 +362,21 @@ def sync_training_status(client: Garmin, target_date: str) -> int:
         if not data:
             return 0
 
-        dal.upsert_training_status([(
-            target_date,
-            data.get("trainingStatusLabel"),
-            data.get("trainingStatusPhrase"),
-            data.get("vo2MaxPreciseValue"),
-            data.get("cyclingVo2MaxPreciseValue"),
-            data.get("loadLast7Days"),
-            data.get("loadLast28Days"),
-            data.get("recoveryTime"),
-            json.dumps(data),
-        )])
+        dal.upsert_training_status(
+            [
+                (
+                    target_date,
+                    data.get("trainingStatusLabel"),
+                    data.get("trainingStatusPhrase"),
+                    data.get("vo2MaxPreciseValue"),
+                    data.get("cyclingVo2MaxPreciseValue"),
+                    data.get("loadLast7Days"),
+                    data.get("loadLast28Days"),
+                    data.get("recoveryTime"),
+                    json.dumps(data),
+                )
+            ]
+        )
         return 1
     except GarthHTTPError as e:
         print(f"  Error fetching training status: {e}")
@@ -370,6 +386,7 @@ def sync_training_status(client: Garmin, target_date: str) -> int:
 # ---------------------------------------------------------------------------
 # Main sync orchestration
 # ---------------------------------------------------------------------------
+
 
 def sync_date(client: Garmin, target_date: str) -> dict:
     """Sync all metrics for a specific date."""
@@ -408,20 +425,24 @@ def sync_date(client: Garmin, target_date: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Sync Garmin Connect data to PostgreSQL"
-    )
+    parser = argparse.ArgumentParser(description="Sync Garmin Connect data to PostgreSQL")
     parser.add_argument(
-        "--login", nargs=2, metavar=("EMAIL", "PASSWORD"),
+        "--login",
+        nargs=2,
+        metavar=("EMAIL", "PASSWORD"),
         help="Initial login with credentials",
     )
     parser.add_argument("--date", type=str, help="Sync specific date (YYYY-MM-DD)")
     parser.add_argument(
-        "--days", type=int, default=1,
+        "--days",
+        type=int,
+        default=1,
         help="Number of days to sync (default: 1, today)",
     )
     parser.add_argument(
-        "--activities", type=int, default=10,
+        "--activities",
+        type=int,
+        default=10,
         help="Number of recent activities to sync",
     )
     args = parser.parse_args()
@@ -437,10 +458,7 @@ def main():
     if args.date:
         dates = [args.date]
     else:
-        dates = [
-            (date.today() - timedelta(days=i)).isoformat()
-            for i in range(args.days)
-        ]
+        dates = [(date.today() - timedelta(days=i)).isoformat() for i in range(args.days)]
 
     total = {"total": 0}
     for d in dates:

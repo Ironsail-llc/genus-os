@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from robothor.engine.models import AgentConfig, DeliveryMode
+from robothor.engine.models import AgentConfig
 from robothor.engine.warmup import (
     MAX_WARMTH_CHARS,
     build_warmth_preamble,
@@ -46,7 +46,8 @@ class TestBuildWarmthPreamble:
 
     def test_history_with_consecutive_errors(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_context_files=["nonexistent.md"],
         )
         schedule = {
@@ -62,7 +63,8 @@ class TestBuildWarmthPreamble:
 
     def test_history_no_data_graceful(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_context_files=["nonexistent.md"],
         )
         with patch(TRACKING_PATCH, return_value=None):
@@ -71,11 +73,14 @@ class TestBuildWarmthPreamble:
 
     def test_memory_block_injection(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_memory_blocks=["operational_findings"],
         )
-        with patch(TRACKING_PATCH, return_value=None), \
-             patch(BLOCK_PATCH, return_value={"content": "Key finding: system is healthy."}):
+        with (
+            patch(TRACKING_PATCH, return_value=None),
+            patch(BLOCK_PATCH, return_value={"content": "Key finding: system is healthy."}),
+        ):
             result = build_warmth_preamble(config, tmp_path)
         assert "MEMORY BLOCKS" in result
         assert "operational_findings" in result
@@ -83,17 +88,21 @@ class TestBuildWarmthPreamble:
 
     def test_memory_block_missing_graceful(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_memory_blocks=["nonexistent_block"],
         )
-        with patch(TRACKING_PATCH, return_value=None), \
-             patch(BLOCK_PATCH, return_value={"content": ""}):
+        with (
+            patch(TRACKING_PATCH, return_value=None),
+            patch(BLOCK_PATCH, return_value={"content": ""}),
+        ):
             result = build_warmth_preamble(config, tmp_path)
         assert result == ""
 
     def test_context_file_injection(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_context_files=["status.md"],
         )
         status_file = tmp_path / "status.md"
@@ -107,7 +116,8 @@ class TestBuildWarmthPreamble:
 
     def test_context_file_missing_graceful(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_context_files=["does-not-exist.md"],
         )
         with patch(TRACKING_PATCH, return_value=None):
@@ -116,7 +126,8 @@ class TestBuildWarmthPreamble:
 
     def test_peer_section(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_peer_agents=["email-classifier", "email-analyst"],
         )
 
@@ -146,21 +157,25 @@ class TestBuildWarmthPreamble:
 
     def test_total_truncation(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_memory_blocks=["big_block"],
             warmup_context_files=["big_file.md"],
         )
         big_file = tmp_path / "big_file.md"
         big_file.write_text("y" * 5000)
 
-        with patch(TRACKING_PATCH, return_value=None), \
-             patch(BLOCK_PATCH, return_value={"content": "x" * 5000}):
+        with (
+            patch(TRACKING_PATCH, return_value=None),
+            patch(BLOCK_PATCH, return_value={"content": "x" * 5000}),
+        ):
             result = build_warmth_preamble(config, tmp_path)
         assert len(result) <= MAX_WARMTH_CHARS + 50  # allow for truncation marker
 
     def test_history_section_completed_run(self, tmp_path: Path) -> None:
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_context_files=["nonexistent.md"],
         )
         schedule = {
@@ -178,7 +193,8 @@ class TestBuildWarmthPreamble:
     def test_all_sections_combined(self, tmp_path: Path) -> None:
         """Full warmup with all sections populated."""
         config = AgentConfig(
-            id="test-agent", name="Test",
+            id="test-agent",
+            name="Test",
             warmup_memory_blocks=["findings"],
             warmup_context_files=["status.md"],
             warmup_peer_agents=["peer-1"],
@@ -203,8 +219,10 @@ class TestBuildWarmthPreamble:
                 return schedule_self
             return schedule_peer
 
-        with patch(TRACKING_PATCH, side_effect=schedule_side_effect), \
-             patch(BLOCK_PATCH, return_value={"content": "block content here"}):
+        with (
+            patch(TRACKING_PATCH, side_effect=schedule_side_effect),
+            patch(BLOCK_PATCH, return_value={"content": "block content here"}),
+        ):
             result = build_warmth_preamble(config, tmp_path)
 
         assert "SESSION HISTORY" in result
@@ -217,21 +235,23 @@ class TestSchedulerWarmup:
     """Test that the scheduler properly injects warmup preamble."""
 
     def test_build_payload_includes_warmup(self, engine_config, sample_agent_config) -> None:
-        from robothor.engine.scheduler import CronScheduler
         from robothor.engine.runner import AgentRunner
+        from robothor.engine.scheduler import CronScheduler
 
         runner = AgentRunner(engine_config)
         scheduler = CronScheduler(engine_config, runner)
 
-        with patch("robothor.engine.warmup.build_warmth_preamble",
-                    return_value="--- SESSION HISTORY ---\nLast run: completed"):
+        with patch(
+            "robothor.engine.warmup.build_warmth_preamble",
+            return_value="--- SESSION HISTORY ---\nLast run: completed",
+        ):
             payload = scheduler._build_payload(sample_agent_config)
         assert "SESSION HISTORY" in payload
         assert "Execute your scheduled tasks" in payload
 
     def test_build_payload_empty_warmup(self, engine_config, sample_agent_config) -> None:
-        from robothor.engine.scheduler import CronScheduler
         from robothor.engine.runner import AgentRunner
+        from robothor.engine.scheduler import CronScheduler
 
         runner = AgentRunner(engine_config)
         scheduler = CronScheduler(engine_config, runner)

@@ -24,7 +24,6 @@ import asyncio
 import logging
 import re
 import time
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,6 +54,7 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
 
     Safe because workflow YAMLs are checked into git (same trust as agent manifests).
     """
+
     def _replace(match: re.Match) -> str:
         expr = match.group(1)
         try:
@@ -80,13 +80,15 @@ def parse_workflow(data: dict) -> WorkflowDef:
     """Parse a workflow definition from a YAML dict."""
     triggers = []
     for t in data.get("triggers", []):
-        triggers.append(WorkflowTriggerDef(
-            type=t.get("type", ""),
-            stream=t.get("stream", ""),
-            event_type=t.get("event_type", ""),
-            cron=t.get("cron", ""),
-            timezone=t.get("timezone", "America/Grenada"),
-        ))
+        triggers.append(
+            WorkflowTriggerDef(
+                type=t.get("type", ""),
+                stream=t.get("stream", ""),
+                event_type=t.get("event_type", ""),
+                cron=t.get("cron", ""),
+                timezone=t.get("timezone", "America/Grenada"),
+            )
+        )
 
     steps = []
     for s in data.get("steps", []):
@@ -94,26 +96,30 @@ def parse_workflow(data: dict) -> WorkflowDef:
 
         branches = []
         for b in s.get("branches", []):
-            branches.append(ConditionBranch(
-                when=b.get("when"),
-                otherwise=b.get("otherwise", False),
-                goto=b.get("goto", ""),
-            ))
+            branches.append(
+                ConditionBranch(
+                    when=b.get("when"),
+                    otherwise=b.get("otherwise", False),
+                    goto=b.get("goto", ""),
+                )
+            )
 
-        steps.append(WorkflowStepDef(
-            id=s["id"],
-            type=step_type,
-            agent_id=s.get("agent_id", ""),
-            message=s.get("message", ""),
-            tool_name=s.get("tool_name", ""),
-            tool_args=s.get("tool_args", {}),
-            input_expr=s.get("input", ""),
-            branches=branches,
-            transform_expr=s.get("expression", ""),
-            on_failure=s.get("on_failure", "abort"),
-            retry_count=s.get("retry_count", 0),
-            next=s.get("next", ""),
-        ))
+        steps.append(
+            WorkflowStepDef(
+                id=s["id"],
+                type=step_type,
+                agent_id=s.get("agent_id", ""),
+                message=s.get("message", ""),
+                tool_name=s.get("tool_name", ""),
+                tool_args=s.get("tool_args", {}),
+                input_expr=s.get("input", ""),
+                branches=branches,
+                transform_expr=s.get("expression", ""),
+                on_failure=s.get("on_failure", "abort"),
+                retry_count=s.get("retry_count", 0),
+                next=s.get("next", ""),
+            )
+        )
 
     delivery = data.get("delivery", {})
 
@@ -172,9 +178,7 @@ class WorkflowEngine:
         """List all loaded workflow definitions."""
         return list(self._workflows.values())
 
-    def get_workflows_for_event(
-        self, stream: str, event_type: str
-    ) -> list[WorkflowDef]:
+    def get_workflows_for_event(self, stream: str, event_type: str) -> list[WorkflowDef]:
         """Find workflows triggered by a specific event."""
         matches = []
         for wf in self._workflows.values():
@@ -229,13 +233,15 @@ class WorkflowEngine:
 
         logger.info(
             "Workflow started: %s (trigger=%s, run=%s)",
-            workflow_id, trigger_type, run.id,
+            workflow_id,
+            trigger_type,
+            run.id,
         )
 
         try:
             async with asyncio.timeout(wf.timeout_seconds):
                 await self._execute_steps(run, wf)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             run.status = RunStatus.TIMEOUT
             run.error_message = f"Timed out after {wf.timeout_seconds}s"
             logger.warning("Workflow %s timed out", workflow_id)
@@ -247,23 +253,20 @@ class WorkflowEngine:
         # Finalize
         run.completed_at = datetime.now(UTC)
         if run.started_at:
-            run.duration_ms = int(
-                (run.completed_at - run.started_at).total_seconds() * 1000
-            )
+            run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
 
         # Set final status if not already failed/timed out
         if run.status == RunStatus.RUNNING:
-            failed = sum(
-                1 for r in run.step_results
-                if r.status == WorkflowStepStatus.FAILED
-            )
+            failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
             run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
 
         self._persist_run_end(run)
 
         logger.info(
             "Workflow complete: %s status=%s duration=%dms steps=%d",
-            workflow_id, run.status.value, run.duration_ms,
+            workflow_id,
+            run.status.value,
+            run.duration_ms,
             len(run.step_results),
         )
 
@@ -296,9 +299,7 @@ class WorkflowEngine:
             # Handle failure
             if result.status == WorkflowStepStatus.FAILED:
                 if step.on_failure == "abort":
-                    run.error_message = (
-                        f"Step '{step.id}' failed: {result.error_message}"
-                    )
+                    run.error_message = f"Step '{step.id}' failed: {result.error_message}"
                     run.status = RunStatus.FAILED
                     return
                 elif step.on_failure == "skip":
@@ -350,7 +351,10 @@ class WorkflowEngine:
 
         logger.info(
             "Step %s: %s status=%s duration=%dms",
-            step.id, step.type.value, result.status.value, result.duration_ms,
+            step.id,
+            step.type.value,
+            result.status.value,
+            result.duration_ms,
         )
 
         return result
@@ -475,10 +479,15 @@ class WorkflowEngine:
                         correlation_id, status, steps_total, started_at)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
-                        run.id, run.tenant_id, run.workflow_id,
-                        run.trigger_type, run.trigger_detail,
-                        run.correlation_id, run.status.value,
-                        len(wf.steps), run.started_at,
+                        run.id,
+                        run.tenant_id,
+                        run.workflow_id,
+                        run.trigger_type,
+                        run.trigger_detail,
+                        run.correlation_id,
+                        run.status.value,
+                        len(wf.steps),
+                        run.started_at,
                     ),
                 )
                 conn.commit()
@@ -488,21 +497,13 @@ class WorkflowEngine:
     def _persist_run_end(self, run: WorkflowRun) -> None:
         """Update workflow run with final status."""
         try:
-            from robothor.db.connection import get_connection
             import json
 
-            completed = sum(
-                1 for r in run.step_results
-                if r.status == WorkflowStepStatus.COMPLETED
-            )
-            failed = sum(
-                1 for r in run.step_results
-                if r.status == WorkflowStepStatus.FAILED
-            )
-            skipped = sum(
-                1 for r in run.step_results
-                if r.status == WorkflowStepStatus.SKIPPED
-            )
+            from robothor.db.connection import get_connection
+
+            completed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.COMPLETED)
+            failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
+            skipped = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.SKIPPED)
 
             with get_connection() as conn:
                 cur = conn.cursor()
@@ -514,8 +515,12 @@ class WorkflowEngine:
                            context = %s
                        WHERE id = %s""",
                     (
-                        run.status.value, run.completed_at, run.duration_ms,
-                        completed, failed, skipped,
+                        run.status.value,
+                        run.completed_at,
+                        run.duration_ms,
+                        completed,
+                        failed,
+                        skipped,
                         run.error_message,
                         json.dumps(run.context, default=str),
                         run.id,
@@ -528,8 +533,9 @@ class WorkflowEngine:
     def _persist_step(self, run: WorkflowRun, result: WorkflowStepResult) -> None:
         """Record a workflow step result in DB."""
         try:
-            from robothor.db.connection import get_connection
             import json
+
+            from robothor.db.connection import get_connection
 
             with get_connection() as conn:
                 cur = conn.cursor()
@@ -543,16 +549,21 @@ class WorkflowEngine:
                         started_at, completed_at)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
-                        run.id, result.step_id, result.step_type.value,
+                        run.id,
+                        result.step_id,
+                        result.step_type.value,
                         result.status.value,
-                        None, result.agent_run_id, None,
+                        None,
+                        result.agent_run_id,
+                        None,
                         None,
                         json.dumps(result.tool_output, default=str) if result.tool_output else None,
                         result.condition_branch,
                         result.output_text[:2000] if result.output_text else None,
                         result.error_message,
                         result.duration_ms,
-                        result.started_at, result.completed_at,
+                        result.started_at,
+                        result.completed_at,
                     ),
                 )
                 conn.commit()

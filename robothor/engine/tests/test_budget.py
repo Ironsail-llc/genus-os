@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
-from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
-from robothor.engine.runner import AgentRunner
+from robothor.engine.models import AgentConfig, AgentRun
 from robothor.engine.session import AgentSession
 
 
@@ -67,7 +61,8 @@ class TestBudgetAgentConfig:
 
     def test_custom_values(self):
         config = AgentConfig(
-            id="x", name="x",
+            id="x",
+            name="x",
             token_budget=50000,
             cost_budget_usd=0.50,
         )

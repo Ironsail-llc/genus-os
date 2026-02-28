@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_timestamp(ts) -> int | None:
     """Convert various timestamp formats to Unix seconds."""
     if ts is None:
@@ -42,6 +43,7 @@ def parse_timestamp(ts) -> int | None:
 # ---------------------------------------------------------------------------
 # Batch upserts (for sync)
 # ---------------------------------------------------------------------------
+
 
 def upsert_heart_rate(rows: list[tuple]) -> int:
     """Upsert (timestamp, heart_rate, source) rows."""
@@ -314,8 +316,9 @@ def upsert_activities(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def log_sync(metric_type: str, records: int, status: str = "success",
-             error: str | None = None) -> None:
+def log_sync(
+    metric_type: str, records: int, status: str = "success", error: str | None = None
+) -> None:
     """Log a sync operation."""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -330,6 +333,7 @@ def log_sync(metric_type: str, records: int, status: str = "success",
 # ---------------------------------------------------------------------------
 # Queries (for summary)
 # ---------------------------------------------------------------------------
+
 
 def get_sleep(today: str, yesterday: str) -> dict:
     """Get last night's sleep. Try today first, then yesterday."""

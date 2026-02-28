@@ -25,43 +25,101 @@ DEFAULT_SQLITE_PATH = Path.home() / "garmin-sync" / "garmin.db"
 # Table mappings: (sqlite_table, pg_table, columns, key_type)
 # key_type: "ts" = BIGINT PK, "date" = DATE PK, "id" = BIGINT PK, "serial" = auto
 TABLES = [
-    ("heart_rate", "health_heart_rate",
-     ["timestamp", "heart_rate", "source"], "ts"),
-    ("stress", "health_stress",
-     ["timestamp", "stress_level"], "ts"),
-    ("body_battery", "health_body_battery",
-     ["timestamp", "level", "charged", "drained"], "ts"),
-    ("spo2", "health_spo2",
-     ["timestamp", "spo2_value", "reading_type"], "ts"),
-    ("respiration", "health_respiration",
-     ["timestamp", "respiration_rate"], "ts"),
-    ("hrv", "health_hrv",
-     ["timestamp", "hrv_value", "reading_type", "status"], "ts"),
-    ("sleep", "health_sleep",
-     ["date", "start_timestamp", "end_timestamp", "total_sleep_seconds",
-      "deep_sleep_seconds", "light_sleep_seconds", "rem_sleep_seconds",
-      "awake_seconds", "score", "quality", "raw_data"], "date"),
-    ("steps", "health_steps",
-     ["date", "total_steps", "goal", "distance_meters", "calories", "timestamp"],
-     "date"),
-    ("resting_heart_rate", "health_resting_heart_rate",
-     ["date", "resting_hr", "timestamp"], "date"),
-    ("daily_summary", "health_daily_summary",
-     ["date", "calories_total", "calories_active", "calories_bmr",
-      "floors_climbed", "intensity_minutes", "raw_data"], "date"),
-    ("training_status", "health_training_status",
-     ["date", "training_status", "training_status_phrase", "vo2max_running",
-      "vo2max_cycling", "training_load_7_day", "training_load_28_day",
-      "recovery_time_hours", "raw_data"], "date"),
-    ("activities", "health_activities",
-     ["activity_id", "name", "activity_type", "start_timestamp",
-      "duration_seconds", "distance_meters", "calories", "avg_heart_rate",
-      "max_heart_rate", "avg_pace", "elevation_gain", "vo2max",
-      "training_effect_aerobic", "training_effect_anaerobic",
-      "training_load", "raw_data"], "id"),
-    ("sync_log", "health_sync_log",
-     ["sync_timestamp", "metric_type", "records_synced", "status",
-      "error_message"], "serial"),
+    ("heart_rate", "health_heart_rate", ["timestamp", "heart_rate", "source"], "ts"),
+    ("stress", "health_stress", ["timestamp", "stress_level"], "ts"),
+    ("body_battery", "health_body_battery", ["timestamp", "level", "charged", "drained"], "ts"),
+    ("spo2", "health_spo2", ["timestamp", "spo2_value", "reading_type"], "ts"),
+    ("respiration", "health_respiration", ["timestamp", "respiration_rate"], "ts"),
+    ("hrv", "health_hrv", ["timestamp", "hrv_value", "reading_type", "status"], "ts"),
+    (
+        "sleep",
+        "health_sleep",
+        [
+            "date",
+            "start_timestamp",
+            "end_timestamp",
+            "total_sleep_seconds",
+            "deep_sleep_seconds",
+            "light_sleep_seconds",
+            "rem_sleep_seconds",
+            "awake_seconds",
+            "score",
+            "quality",
+            "raw_data",
+        ],
+        "date",
+    ),
+    (
+        "steps",
+        "health_steps",
+        ["date", "total_steps", "goal", "distance_meters", "calories", "timestamp"],
+        "date",
+    ),
+    (
+        "resting_heart_rate",
+        "health_resting_heart_rate",
+        ["date", "resting_hr", "timestamp"],
+        "date",
+    ),
+    (
+        "daily_summary",
+        "health_daily_summary",
+        [
+            "date",
+            "calories_total",
+            "calories_active",
+            "calories_bmr",
+            "floors_climbed",
+            "intensity_minutes",
+            "raw_data",
+        ],
+        "date",
+    ),
+    (
+        "training_status",
+        "health_training_status",
+        [
+            "date",
+            "training_status",
+            "training_status_phrase",
+            "vo2max_running",
+            "vo2max_cycling",
+            "training_load_7_day",
+            "training_load_28_day",
+            "recovery_time_hours",
+            "raw_data",
+        ],
+        "date",
+    ),
+    (
+        "activities",
+        "health_activities",
+        [
+            "activity_id",
+            "name",
+            "activity_type",
+            "start_timestamp",
+            "duration_seconds",
+            "distance_meters",
+            "calories",
+            "avg_heart_rate",
+            "max_heart_rate",
+            "avg_pace",
+            "elevation_gain",
+            "vo2max",
+            "training_effect_aerobic",
+            "training_effect_anaerobic",
+            "training_load",
+            "raw_data",
+        ],
+        "id",
+    ),
+    (
+        "sync_log",
+        "health_sync_log",
+        ["sync_timestamp", "metric_type", "records_synced", "status", "error_message"],
+        "serial",
+    ),
 ]
 
 # Columns that should be JSONB in PG (were TEXT in SQLite)
@@ -134,11 +192,11 @@ def migrate_table(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Migrate Garmin data from SQLite to PostgreSQL"
-    )
+    parser = argparse.ArgumentParser(description="Migrate Garmin data from SQLite to PostgreSQL")
     parser.add_argument(
-        "--db", type=str, default=str(DEFAULT_SQLITE_PATH),
+        "--db",
+        type=str,
+        default=str(DEFAULT_SQLITE_PATH),
         help=f"SQLite database path (default: {DEFAULT_SQLITE_PATH})",
     )
     args = parser.parse_args()
@@ -162,8 +220,12 @@ def main():
 
         for sqlite_table, pg_table, columns, key_type in TABLES:
             sqlite_count, pg_count = migrate_table(
-                sqlite_conn, pg_conn, sqlite_table, pg_table,
-                columns, key_type,
+                sqlite_conn,
+                pg_conn,
+                sqlite_table,
+                pg_table,
+                columns,
+                key_type,
             )
             total_sqlite += sqlite_count
             total_pg += pg_count

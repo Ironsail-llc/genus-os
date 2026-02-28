@@ -17,19 +17,29 @@ os.environ["ROBOTHOR_DB_NAME"] = "robothor_test"
 os.environ.setdefault("ROBOTHOR_DB_USER", os.environ.get("USER", "philip"))
 
 from robothor.config import reset_config
+
 reset_config()  # Force config reload with test DB name
 
-from robothor.db.connection import get_connection, close_pool
+from robothor.db.connection import close_pool, get_connection
 
-
-MIGRATION_SQL = Path(__file__).parent.parent.parent.parent / "crm" / "migrations" / "010_health_tables.sql"
+MIGRATION_SQL = (
+    Path(__file__).parent.parent.parent.parent / "crm" / "migrations" / "010_health_tables.sql"
+)
 
 HEALTH_TABLES = [
-    "health_heart_rate", "health_stress", "health_body_battery",
-    "health_spo2", "health_respiration", "health_hrv",
-    "health_sleep", "health_steps", "health_resting_heart_rate",
-    "health_daily_summary", "health_training_status",
-    "health_activities", "health_sync_log",
+    "health_heart_rate",
+    "health_stress",
+    "health_body_battery",
+    "health_spo2",
+    "health_respiration",
+    "health_hrv",
+    "health_sleep",
+    "health_steps",
+    "health_resting_heart_rate",
+    "health_daily_summary",
+    "health_training_status",
+    "health_activities",
+    "health_sync_log",
 ]
 
 

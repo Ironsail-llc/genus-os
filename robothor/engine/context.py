@@ -65,7 +65,8 @@ async def maybe_compress(
 
     logger.info(
         "Compressing context: %d messages, ~%d tokens",
-        len(messages), est,
+        len(messages),
+        est,
     )
 
     system_msg = messages[0]
@@ -78,14 +79,20 @@ async def maybe_compress(
     compressed = [
         system_msg,
         {"role": "user", "content": summary},
-        {"role": "assistant", "content": "Understood. I have context from our previous conversation."},
+        {
+            "role": "assistant",
+            "content": "Understood. I have context from our previous conversation.",
+        },
         *recent_messages,
     ]
 
     new_est = estimate_tokens(compressed)
     logger.info(
         "Compression complete: %d → %d messages, ~%d → ~%d tokens",
-        len(messages), len(compressed), est, new_est,
+        len(messages),
+        len(compressed),
+        est,
+        new_est,
     )
 
     return compressed
@@ -102,8 +109,7 @@ async def _summarize_messages(
     token_est = estimate_tokens(messages)
 
     fallback = (
-        f"[Previous conversation: {msg_count} messages, "
-        f"~{token_est} tokens, details compressed]"
+        f"[Previous conversation: {msg_count} messages, ~{token_est} tokens, details compressed]"
     )
 
     # Extract text content for summarization

@@ -20,6 +20,7 @@ DEFAULT_TENANT = "robothor-primary"
 def _get_conn():
     """Get a database connection using the standard Robothor config."""
     import psycopg2
+
     from robothor.config import get_config
 
     cfg = get_config().db

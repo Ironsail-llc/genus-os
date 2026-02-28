@@ -42,10 +42,20 @@ class TestSSEParsing:
         """Tool start/end events are parsed correctly."""
         sse_lines = [
             "event: tool_start",
-            json.dumps({"tool": "search_memory", "args": {"query": "test"}, "call_id": "c1"}).join(["data: ", ""]),
+            json.dumps({"tool": "search_memory", "args": {"query": "test"}, "call_id": "c1"}).join(
+                ["data: ", ""]
+            ),
             "",
             "event: tool_end",
-            json.dumps({"tool": "search_memory", "call_id": "c1", "duration_ms": 42, "result_preview": "...", "error": None}).join(["data: ", ""]),
+            json.dumps(
+                {
+                    "tool": "search_memory",
+                    "call_id": "c1",
+                    "duration_ms": 42,
+                    "result_preview": "...",
+                    "error": None,
+                }
+            ).join(["data: ", ""]),
             "",
             "event: done",
             'data: {"text": "Done"}',
@@ -98,9 +108,7 @@ class TestSSEParsing:
 
         events = list(_parse_sse_lines(sse_lines))
         assert len(events) == 5
-        assert [e.event for e in events] == [
-            "delta", "tool_start", "tool_end", "delta", "done"
-        ]
+        assert [e.event for e in events] == ["delta", "tool_start", "tool_end", "delta", "done"]
         assert events[4].data["model"] == "kimi"
 
     @pytest.mark.asyncio

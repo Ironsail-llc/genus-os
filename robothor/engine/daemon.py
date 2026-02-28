@@ -72,12 +72,11 @@ async def main() -> None:
     # Startup announcement (best-effort)
     try:
         from robothor.engine.config import load_all_manifests, manifest_to_agent_config
+
         manifests = load_all_manifests(config.manifest_dir)
-        scheduled = sum(
-            1 for m in manifests
-            if manifest_to_agent_config(m).cron_expr
-        )
+        scheduled = sum(1 for m in manifests if manifest_to_agent_config(m).cron_expr)
         from robothor.engine.delivery import get_telegram_sender
+
         sender = get_telegram_sender()
         if sender and config.default_chat_id:
             await sender(
@@ -106,6 +105,7 @@ async def main() -> None:
     try:
         from robothor.engine.dedup import running_agents
         from robothor.engine.delivery import get_telegram_sender
+
         active = running_agents()
         sender = get_telegram_sender()
         if sender and config.default_chat_id:
@@ -140,6 +140,7 @@ async def _watchdog(config: EngineConfig) -> None:
         # Ping PostgreSQL
         try:
             from robothor.db.connection import get_connection
+
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
@@ -151,11 +152,15 @@ async def _watchdog(config: EngineConfig) -> None:
         # Ping Redis
         try:
             import redis
+
             from robothor.config import get_config
+
             cfg = get_config()
             r = redis.Redis(
-                host=cfg.redis.host, port=cfg.redis.port,
-                db=cfg.redis.db, password=cfg.redis.password or None,
+                host=cfg.redis.host,
+                port=cfg.redis.port,
+                db=cfg.redis.db,
+                password=cfg.redis.password or None,
             )
             r.ping()
             r.close()
@@ -168,6 +173,7 @@ async def _watchdog(config: EngineConfig) -> None:
         if pg_failures == 3:
             try:
                 from robothor.engine.delivery import get_telegram_sender
+
                 sender = get_telegram_sender()
                 if sender and config.default_chat_id:
                     await sender(

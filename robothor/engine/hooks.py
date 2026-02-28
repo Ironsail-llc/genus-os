@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from robothor.engine.dedup import try_acquire, release
+from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
 from robothor.engine.models import TriggerType
 
@@ -166,16 +166,12 @@ class EventHooks:
 
         # Build prefixed stream keys and a reverse lookup
         prefixed_streams = [f"{STREAM_PREFIX}{s}" for s in bare_streams]
-        self._prefixed_to_bare = {
-            f"{STREAM_PREFIX}{s}": s for s in bare_streams
-        }
+        self._prefixed_to_bare = {f"{STREAM_PREFIX}{s}": s for s in bare_streams}
 
         # Create consumer groups on the prefixed keys
         for prefixed in prefixed_streams:
             try:
-                await r.xgroup_create(
-                    prefixed, consumer_group, id="$", mkstream=True
-                )
+                await r.xgroup_create(prefixed, consumer_group, id="$", mkstream=True)
             except Exception:
                 pass  # Group already exists
 
@@ -197,14 +193,10 @@ class EventHooks:
 
                 for stream_name, messages in results:
                     stream_str = (
-                        stream_name.decode()
-                        if isinstance(stream_name, bytes)
-                        else stream_name
+                        stream_name.decode() if isinstance(stream_name, bytes) else stream_name
                     )
                     for msg_id, data in messages:
-                        await self._handle_event(
-                            stream_str, msg_id, data, r, consumer_group
-                        )
+                        await self._handle_event(stream_str, msg_id, data, r, consumer_group)
 
             except asyncio.CancelledError:
                 break
@@ -252,9 +244,7 @@ class EventHooks:
             try:
                 from robothor.engine.config import load_agent_config
 
-                agent_config = load_agent_config(
-                    agent_id, self.config.manifest_dir
-                )
+                agent_config = load_agent_config(agent_id, self.config.manifest_dir)
 
                 # Build warm message with preamble
                 message = trigger["message"]
@@ -301,9 +291,7 @@ class EventHooks:
                             downstream_id,
                         )
                         asyncio.create_task(
-                            self._trigger_downstream(
-                                downstream_id, bare_stream, event_type
-                            )
+                            self._trigger_downstream(downstream_id, bare_stream, event_type)
                         )
 
                 logger.info(
@@ -314,9 +302,7 @@ class EventHooks:
                     run.status.value,
                 )
             except Exception as e:
-                logger.error(
-                    "Hook execution failed for %s: %s", agent_id, e
-                )
+                logger.error("Hook execution failed for %s: %s", agent_id, e)
                 failed = True
             finally:
                 release(agent_id)
@@ -329,11 +315,11 @@ class EventHooks:
             for wf in matching_workflows:
                 logger.info(
                     "Hook triggering workflow: %s via %s:%s",
-                    wf.id, bare_stream, event_type,
+                    wf.id,
+                    bare_stream,
+                    event_type,
                 )
-                asyncio.create_task(
-                    self._run_workflow(wf.id, bare_stream, event_type)
-                )
+                asyncio.create_task(self._run_workflow(wf.id, bare_stream, event_type))
 
         # Dead letter queue on failure
         if failed:
@@ -355,9 +341,7 @@ class EventHooks:
             else:
                 try:
                     dlq_stream = f"{stream}:dlq"
-                    await redis_client.xadd(
-                        dlq_stream, decoded, maxlen=1000
-                    )
+                    await redis_client.xadd(dlq_stream, decoded, maxlen=1000)
                     logger.warning(
                         "Moved to DLQ %s after %d retries: %s",
                         dlq_stream,
@@ -391,13 +375,9 @@ class EventHooks:
         try:
             from robothor.engine.config import load_agent_config
 
-            agent_config = load_agent_config(
-                agent_id, self.config.manifest_dir
-            )
+            agent_config = load_agent_config(agent_id, self.config.manifest_dir)
             if not agent_config:
-                logger.warning(
-                    "Downstream agent config not found: %s", agent_id
-                )
+                logger.warning("Downstream agent config not found: %s", agent_id)
                 return
 
             message = (
@@ -415,9 +395,7 @@ class EventHooks:
                 if preamble:
                     message = f"{preamble}\n\n{message}"
             except Exception as e:
-                logger.debug(
-                    "Warmup failed for downstream %s: %s", agent_id, e
-                )
+                logger.debug("Warmup failed for downstream %s: %s", agent_id, e)
 
             run = await self.runner.execute(
                 agent_id=agent_id,
@@ -435,15 +413,11 @@ class EventHooks:
                 run.status.value,
             )
         except Exception as e:
-            logger.error(
-                "Downstream execution failed for %s: %s", agent_id, e
-            )
+            logger.error("Downstream execution failed for %s: %s", agent_id, e)
         finally:
             release(agent_id)
 
-    async def _run_workflow(
-        self, workflow_id: str, stream: str, event_type: str
-    ) -> None:
+    async def _run_workflow(self, workflow_id: str, stream: str, event_type: str) -> None:
         """Execute a workflow triggered by an event (fire-and-forget)."""
         try:
             await self.workflow_engine.execute(
@@ -454,7 +428,10 @@ class EventHooks:
         except Exception as e:
             logger.error(
                 "Workflow %s failed (hook %s:%s): %s",
-                workflow_id, stream, event_type, e,
+                workflow_id,
+                stream,
+                event_type,
+                e,
             )
 
     async def _idle(self) -> None:

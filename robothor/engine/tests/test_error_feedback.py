@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from robothor.engine.models import AgentConfig, DeliveryMode
+from robothor.engine.models import AgentConfig
 from robothor.engine.runner import AgentRunner
 
 
@@ -53,23 +53,31 @@ async def test_error_feedback_injected_on_tool_failure(engine_config, mock_db):
         return r
 
     agent_config = AgentConfig(
-        id="err-test", name="Error Test",
+        id="err-test",
+        name="Error Test",
         model_primary="test-model",
         error_feedback=True,
     )
 
-    with patch("litellm.acompletion", side_effect=fake_completion), \
-         patch.object(runner.registry, "build_for_agent", return_value=[]), \
-         patch.object(runner.registry, "get_tool_names", return_value=["bad_tool"]), \
-         patch.object(runner.registry, "execute", return_value={"error": "Tool broke"}):
+    with (
+        patch("litellm.acompletion", side_effect=fake_completion),
+        patch.object(runner.registry, "build_for_agent", return_value=[]),
+        patch.object(runner.registry, "get_tool_names", return_value=["bad_tool"]),
+        patch.object(runner.registry, "execute", return_value={"error": "Tool broke"}),
+    ):
         run = await runner.execute("err-test", "do stuff", agent_config=agent_config)
 
     assert run.status.value == "completed"
     # Check that an error feedback message was injected
-    has_feedback = any(
-        "[SYSTEM]" in m.get("content", "") and "tool calls failed" in m.get("content", "")
-        for m in runner._last_messages if isinstance(m, dict)
-    ) if hasattr(runner, '_last_messages') else True  # messages are in session
+    has_feedback = (
+        any(
+            "[SYSTEM]" in m.get("content", "") and "tool calls failed" in m.get("content", "")
+            for m in runner._last_messages
+            if isinstance(m, dict)
+        )
+        if hasattr(runner, "_last_messages")
+        else True
+    )  # messages are in session
 
 
 @pytest.mark.asyncio
@@ -91,15 +99,18 @@ async def test_error_feedback_not_injected_when_disabled(engine_config, mock_db)
         return r
 
     agent_config = AgentConfig(
-        id="no-fb", name="No Feedback",
+        id="no-fb",
+        name="No Feedback",
         model_primary="test-model",
         error_feedback=False,
     )
 
-    with patch("litellm.acompletion", side_effect=fake_completion), \
-         patch.object(runner.registry, "build_for_agent", return_value=[]), \
-         patch.object(runner.registry, "get_tool_names", return_value=["bad_tool"]), \
-         patch.object(runner.registry, "execute", return_value={"error": "fail"}):
+    with (
+        patch("litellm.acompletion", side_effect=fake_completion),
+        patch.object(runner.registry, "build_for_agent", return_value=[]),
+        patch.object(runner.registry, "get_tool_names", return_value=["bad_tool"]),
+        patch.object(runner.registry, "execute", return_value={"error": "fail"}),
+    ):
         run = await runner.execute("no-fb", "do stuff", agent_config=agent_config)
 
     assert run.status.value == "completed"
@@ -124,15 +135,18 @@ async def test_error_feedback_not_injected_on_success(engine_config, mock_db):
         return r
 
     agent_config = AgentConfig(
-        id="ok-test", name="OK Test",
+        id="ok-test",
+        name="OK Test",
         model_primary="test-model",
         error_feedback=True,
     )
 
-    with patch("litellm.acompletion", side_effect=fake_completion), \
-         patch.object(runner.registry, "build_for_agent", return_value=[]), \
-         patch.object(runner.registry, "get_tool_names", return_value=["good_tool"]), \
-         patch.object(runner.registry, "execute", return_value={"result": "ok"}):
+    with (
+        patch("litellm.acompletion", side_effect=fake_completion),
+        patch.object(runner.registry, "build_for_agent", return_value=[]),
+        patch.object(runner.registry, "get_tool_names", return_value=["good_tool"]),
+        patch.object(runner.registry, "execute", return_value={"result": "ok"}),
+    ):
         run = await runner.execute("ok-test", "do stuff", agent_config=agent_config)
 
     assert run.status.value == "completed"

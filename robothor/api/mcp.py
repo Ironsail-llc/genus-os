@@ -820,8 +820,15 @@ def get_tool_definitions() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query — patient name, DOB (YYYY-MM-DD), or condition"},
-                    "limit": {"type": "integer", "description": "Max results (default 10, max 50)", "default": 10},
+                    "query": {
+                        "type": "string",
+                        "description": "Search query — patient name, DOB (YYYY-MM-DD), or condition",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 10, max 50)",
+                        "default": 10,
+                    },
                 },
                 "required": ["query"],
             },
@@ -844,7 +851,11 @@ def get_tool_definitions() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "patientId": {"type": "string", "description": "Patient ID (UUID)"},
-                    "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                        "default": 20,
+                    },
                 },
                 "required": ["patientId"],
             },
@@ -856,8 +867,15 @@ def get_tool_definitions() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "patientId": {"type": "string", "description": "Patient ID (UUID)"},
-                    "status": {"type": "string", "description": "Filter by status (e.g., signed, transmitted, filled)"},
-                    "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by status (e.g., signed, transmitted, filled)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 50)",
+                        "default": 50,
+                    },
                 },
                 "required": ["patientId"],
             },
@@ -868,11 +886,18 @@ def get_tool_definitions() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query (medication name, patient name, etc.)"},
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (medication name, patient name, etc.)",
+                    },
                     "status": {"type": "string", "description": "Filter by status"},
                     "fromDate": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
                     "toDate": {"type": "string", "description": "Filter to date (YYYY-MM-DD)"},
-                    "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                        "default": 20,
+                    },
                 },
                 "required": ["query"],
             },
@@ -894,9 +919,19 @@ def get_tool_definitions() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query (medication name or indication)"},
-                    "indication": {"type": "string", "description": "Clinical indication to filter by"},
-                    "limit": {"type": "integer", "description": "Max results (default 10)", "default": 10},
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (medication name or indication)",
+                    },
+                    "indication": {
+                        "type": "string",
+                        "description": "Clinical indication to filter by",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                        "default": 10,
+                    },
                 },
                 "required": ["query"],
             },
@@ -907,8 +942,15 @@ def get_tool_definitions() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query (pharmacy name or location)"},
-                    "limit": {"type": "integer", "description": "Max results (default 10)", "default": 10},
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (pharmacy name or location)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                        "default": 10,
+                    },
                 },
                 "required": ["query"],
             },
@@ -919,13 +961,20 @@ def get_tool_definitions() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "patientId": {"type": "string", "description": "Filter by patient ID (optional)"},
+                    "patientId": {
+                        "type": "string",
+                        "description": "Filter by patient ID (optional)",
+                    },
                     "dateRange": {
                         "type": "string",
                         "description": "Date range: today, tomorrow, this_week, next_week, all (default: this_week)",
                         "default": "this_week",
                     },
-                    "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                        "default": 20,
+                    },
                 },
             },
         },
@@ -945,12 +994,22 @@ def get_tool_definitions() -> list[dict]:
                 "properties": {
                     "patientId": {"type": "string", "description": "Patient ID (UUID)"},
                     "medicationId": {"type": "string", "description": "Medication ID (UUID)"},
-                    "directions": {"type": "string", "description": "Dosing directions for patient"},
+                    "directions": {
+                        "type": "string",
+                        "description": "Dosing directions for patient",
+                    },
                     "quantity": {"type": "integer", "description": "Quantity to dispense"},
                     "daysSupply": {"type": "integer", "description": "Days supply"},
-                    "refills": {"type": "integer", "description": "Number of refills (default: 0)", "default": 0},
+                    "refills": {
+                        "type": "integer",
+                        "description": "Number of refills (default: 0)",
+                        "default": 0,
+                    },
                     "notes": {"type": "string", "description": "Clinical notes (optional)"},
-                    "actingAsProviderId": {"type": "string", "description": "Provider UUID to act as (for delegation)"},
+                    "actingAsProviderId": {
+                        "type": "string",
+                        "description": "Provider UUID to act as (for delegation)",
+                    },
                 },
                 "required": ["patientId", "medicationId", "directions", "quantity", "daysSupply"],
             },
@@ -962,13 +1021,23 @@ def get_tool_definitions() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "patientId": {"type": "string", "description": "Patient ID (UUID)"},
-                    "datetime": {"type": "string", "description": "Appointment date and time (YYYY-MM-DD HH:MM)"},
-                    "type": {"type": "string", "description": "Appointment type: video, in_person, phone"},
+                    "datetime": {
+                        "type": "string",
+                        "description": "Appointment date and time (YYYY-MM-DD HH:MM)",
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "Appointment type: video, in_person, phone",
+                    },
                     "reason": {
                         "type": "string",
                         "description": "Reason: consultation, follow_up, new_prescription, refill, lab_review, medication_review, other",
                     },
-                    "duration": {"type": "integer", "description": "Duration in minutes (default: 30)", "default": 30},
+                    "duration": {
+                        "type": "integer",
+                        "description": "Duration in minutes (default: 30)",
+                        "default": 30,
+                    },
                 },
                 "required": ["patientId", "datetime", "type", "reason"],
             },
@@ -980,8 +1049,14 @@ def get_tool_definitions() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "prescriptionId": {"type": "string", "description": "Prescription ID (UUID)"},
-                    "confirmationId": {"type": "string", "description": "Confirmation ID from previous call (for 2-step confirmation)"},
-                    "actingAsProviderId": {"type": "string", "description": "Provider UUID to act as (for delegation)"},
+                    "confirmationId": {
+                        "type": "string",
+                        "description": "Confirmation ID from previous call (for 2-step confirmation)",
+                    },
+                    "actingAsProviderId": {
+                        "type": "string",
+                        "description": "Provider UUID to act as (for delegation)",
+                    },
                 },
                 "required": ["prescriptionId"],
             },

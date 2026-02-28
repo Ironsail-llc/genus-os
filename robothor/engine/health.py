@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None):
+def create_health_app(
+    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None
+):
     """Create a lightweight FastAPI health app."""
     from fastapi import FastAPI
 
@@ -28,7 +30,9 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
 
     # Mount chat endpoints when runner is available
     if runner is not None:
-        from robothor.engine.chat import init_chat, router as chat_router
+        from robothor.engine.chat import init_chat
+        from robothor.engine.chat import router as chat_router
+
         init_chat(runner, config)
         app.include_router(chat_router)
 
@@ -39,6 +43,7 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
         schedules = []
         try:
             from robothor.engine.tracking import list_schedules
+
             schedules = list_schedules(tenant_id=config.tenant_id)
         except Exception as e:
             logger.warning("Failed to load schedules: %s", e)
@@ -67,6 +72,7 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
         """List recent agent runs."""
         try:
             from robothor.engine.tracking import list_runs
+
             runs = list_runs(limit=20, tenant_id=config.tenant_id)
             return {
                 "runs": [
@@ -143,7 +149,12 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
                     "version": wf.version,
                     "steps": len(wf.steps),
                     "triggers": [
-                        {"type": t.type, "stream": t.stream, "event_type": t.event_type, "cron": t.cron}
+                        {
+                            "type": t.type,
+                            "stream": t.stream,
+                            "event_type": t.event_type,
+                            "cron": t.cron,
+                        }
                         for t in wf.triggers
                     ],
                 }
@@ -232,11 +243,13 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
             return {"error": "Runner not available"}
         try:
             from robothor.engine.tracking import get_run
+
             original = get_run(run_id)
             if not original:
                 return {"error": f"Run not found: {run_id}"}
 
             import asyncio
+
             asyncio.create_task(
                 runner.execute(
                     agent_id=original["agent_id"],
@@ -268,8 +281,7 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
                     (hours,),
                 )
                 guardrails = [
-                    {"guardrail": r[0], "action": r[1], "count": r[2]}
-                    for r in cur.fetchall()
+                    {"guardrail": r[0], "action": r[1], "count": r[2]} for r in cur.fetchall()
                 ]
 
                 # Budget exhaustions
@@ -312,6 +324,7 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
 
         # Execute in background
         import asyncio
+
         asyncio.create_task(
             workflow_engine.execute(
                 workflow_id=workflow_id,
@@ -324,7 +337,9 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
     return app
 
 
-async def serve_health(config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None) -> None:
+async def serve_health(
+    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None
+) -> None:
     """Start the health endpoint server."""
     import uvicorn
 

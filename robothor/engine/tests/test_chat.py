@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from robothor.engine.chat import _sessions, init_chat, router
-from robothor.engine.config import EngineConfig
 from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
 
@@ -254,20 +253,24 @@ class TestToolEvents:
 
             # Simulate tool call
             if on_tool:
-                await on_tool({
-                    "event": "tool_start",
-                    "tool": "list_tasks",
-                    "args": {"status": "TODO"},
-                    "call_id": "call_1",
-                })
-                await on_tool({
-                    "event": "tool_end",
-                    "tool": "list_tasks",
-                    "call_id": "call_1",
-                    "duration_ms": 42,
-                    "result_preview": "[]",
-                    "error": None,
-                })
+                await on_tool(
+                    {
+                        "event": "tool_start",
+                        "tool": "list_tasks",
+                        "args": {"status": "TODO"},
+                        "call_id": "call_1",
+                    }
+                )
+                await on_tool(
+                    {
+                        "event": "tool_end",
+                        "tool": "list_tasks",
+                        "call_id": "call_1",
+                        "duration_ms": 42,
+                        "result_preview": "[]",
+                        "error": None,
+                    }
+                )
 
             # Simulate content
             if on_content:

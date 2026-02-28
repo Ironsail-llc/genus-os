@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from robothor.db.connection import get_connection
-from robothor.health.migrate_sqlite import migrate_table, TABLES
-
+from robothor.health.migrate_sqlite import migrate_table
 
 pytestmark = pytest.mark.integration
 
@@ -131,7 +128,9 @@ def sqlite_db(tmp_path):
     cur.execute("INSERT INTO heart_rate VALUES (1000001, 72, 'monitoring')")
     cur.execute("INSERT INTO heart_rate VALUES (1000002, 75, 'monitoring')")
     cur.execute("INSERT INTO stress VALUES (2000001, 35)")
-    cur.execute("INSERT INTO sleep VALUES ('2026-02-27', 1000, 2000, 29460, 3960, 19080, 6420, 960, 83, 'GOOD', '{}')")
+    cur.execute(
+        "INSERT INTO sleep VALUES ('2026-02-27', 1000, 2000, 29460, 3960, 19080, 6420, 960, 83, 'GOOD', '{}')"
+    )
     cur.execute("INSERT INTO steps VALUES ('2026-02-27', 5806, 7300, 4989.0, 2804, 1000)")
     cur.execute("INSERT INTO sync_log VALUES (NULL, 1709000000, 'full_sync', 10, 'success', NULL)")
 
@@ -145,9 +144,12 @@ class TestMigrateTable:
         sqlite_conn = sqlite3.connect(str(sqlite_db))
         with get_connection() as pg_conn:
             sqlite_count, pg_count = migrate_table(
-                sqlite_conn, pg_conn,
-                "heart_rate", "health_heart_rate",
-                ["timestamp", "heart_rate", "source"], "ts",
+                sqlite_conn,
+                pg_conn,
+                "heart_rate",
+                "health_heart_rate",
+                ["timestamp", "heart_rate", "source"],
+                "ts",
             )
         sqlite_conn.close()
         assert sqlite_count == 2
@@ -157,12 +159,23 @@ class TestMigrateTable:
         sqlite_conn = sqlite3.connect(str(sqlite_db))
         with get_connection() as pg_conn:
             sqlite_count, pg_count = migrate_table(
-                sqlite_conn, pg_conn,
-                "sleep", "health_sleep",
-                ["date", "start_timestamp", "end_timestamp",
-                 "total_sleep_seconds", "deep_sleep_seconds",
-                 "light_sleep_seconds", "rem_sleep_seconds",
-                 "awake_seconds", "score", "quality", "raw_data"],
+                sqlite_conn,
+                pg_conn,
+                "sleep",
+                "health_sleep",
+                [
+                    "date",
+                    "start_timestamp",
+                    "end_timestamp",
+                    "total_sleep_seconds",
+                    "deep_sleep_seconds",
+                    "light_sleep_seconds",
+                    "rem_sleep_seconds",
+                    "awake_seconds",
+                    "score",
+                    "quality",
+                    "raw_data",
+                ],
                 "date",
             )
         sqlite_conn.close()
@@ -174,14 +187,20 @@ class TestMigrateTable:
         sqlite_conn = sqlite3.connect(str(sqlite_db))
         with get_connection() as pg_conn:
             migrate_table(
-                sqlite_conn, pg_conn,
-                "stress", "health_stress",
-                ["timestamp", "stress_level"], "ts",
+                sqlite_conn,
+                pg_conn,
+                "stress",
+                "health_stress",
+                ["timestamp", "stress_level"],
+                "ts",
             )
             _, pg_count_1 = migrate_table(
-                sqlite_conn, pg_conn,
-                "stress", "health_stress",
-                ["timestamp", "stress_level"], "ts",
+                sqlite_conn,
+                pg_conn,
+                "stress",
+                "health_stress",
+                ["timestamp", "stress_level"],
+                "ts",
             )
         sqlite_conn.close()
         assert pg_count_1 == 1  # Still just 1 row
@@ -191,9 +210,12 @@ class TestMigrateTable:
         sqlite_conn = sqlite3.connect(str(sqlite_db))
         with get_connection() as pg_conn:
             sqlite_count, pg_count = migrate_table(
-                sqlite_conn, pg_conn,
-                "nonexistent_table", "health_heart_rate",
-                ["timestamp", "heart_rate", "source"], "ts",
+                sqlite_conn,
+                pg_conn,
+                "nonexistent_table",
+                "health_heart_rate",
+                ["timestamp", "heart_rate", "source"],
+                "ts",
             )
         sqlite_conn.close()
         assert sqlite_count == 0
@@ -203,10 +225,11 @@ class TestMigrateTable:
         sqlite_conn = sqlite3.connect(str(sqlite_db))
         with get_connection() as pg_conn:
             sqlite_count, pg_count = migrate_table(
-                sqlite_conn, pg_conn,
-                "sync_log", "health_sync_log",
-                ["sync_timestamp", "metric_type", "records_synced",
-                 "status", "error_message"],
+                sqlite_conn,
+                pg_conn,
+                "sync_log",
+                "health_sync_log",
+                ["sync_timestamp", "metric_type", "records_synced", "status", "error_message"],
                 "serial",
             )
         sqlite_conn.close()

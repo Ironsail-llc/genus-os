@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,7 +30,9 @@ async def test_generate_plan_success():
     response.choices[0].message.content = json.dumps(plan_data)
 
     with patch("litellm.acompletion", return_value=response):
-        result = await generate_plan("Classify inbox", ["read_file", "exec", "create_task"], "test-model")
+        result = await generate_plan(
+            "Classify inbox", ["read_file", "exec", "create_task"], "test-model"
+        )
 
     assert result.success is True
     assert result.difficulty == "moderate"

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from robothor.engine.models import RunStatus, StepType, TriggerType
 from robothor.engine.session import AgentSession
 
@@ -32,8 +30,9 @@ class TestSessionLifecycle:
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there!"},
         ]
-        session.start("System prompt", "Follow-up", ["list_tasks"], "announce",
-                       conversation_history=history)
+        session.start(
+            "System prompt", "Follow-up", ["list_tasks"], "announce", conversation_history=history
+        )
         assert len(session.messages) == 4  # system + 2 history + user
         assert session.messages[0]["role"] == "system"
         assert session.messages[1]["role"] == "user"
@@ -125,7 +124,9 @@ class TestStepRecording:
         session.start("sys", "user", [])
         s1 = session.record_llm_call("m", assistant_message={"role": "assistant", "content": "hi"})
         s2 = session.record_tool_call("t", {}, {}, "c1")
-        s3 = session.record_llm_call("m", assistant_message={"role": "assistant", "content": "done"})
+        s3 = session.record_llm_call(
+            "m", assistant_message={"role": "assistant", "content": "done"}
+        )
         assert s1.step_number == 1
         assert s2.step_number == 2
         assert s3.step_number == 3
@@ -133,10 +134,18 @@ class TestStepRecording:
     def test_token_accumulation(self):
         session = AgentSession("test-agent")
         session.start("sys", "user", [])
-        session.record_llm_call("m", input_tokens=100, output_tokens=50,
-                                assistant_message={"role": "assistant", "content": "1"})
-        session.record_llm_call("m", input_tokens=200, output_tokens=80,
-                                assistant_message={"role": "assistant", "content": "2"})
+        session.record_llm_call(
+            "m",
+            input_tokens=100,
+            output_tokens=50,
+            assistant_message={"role": "assistant", "content": "1"},
+        )
+        session.record_llm_call(
+            "m",
+            input_tokens=200,
+            output_tokens=80,
+            assistant_message={"role": "assistant", "content": "2"},
+        )
         assert session.run.input_tokens == 300
         assert session.run.output_tokens == 130
 

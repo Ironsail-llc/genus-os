@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
-from robothor.engine.models import AgentRun, RunStatus, RunStep
+from robothor.engine.models import AgentRun, RunStep
 
 logger = logging.getLogger(__name__)
 

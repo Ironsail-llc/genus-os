@@ -140,7 +140,9 @@ class TestMaybeCompress:
             messages.append({"role": "user", "content": "x" * 4000})
             messages.append({"role": "assistant", "content": "y" * 4000})
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API down")):
+        with patch(
+            "litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API down")
+        ):
             result = await maybe_compress(messages)
 
         # Should still compress with fallback message

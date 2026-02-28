@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -78,8 +77,7 @@ def generate_summary(now: datetime | None = None) -> str:
 
     if sleep:
         lines.append(
-            f"Sleep: {format_duration(sleep['total'])} "
-            f"(score {sleep['score']}, {sleep['quality']})"
+            f"Sleep: {format_duration(sleep['total'])} (score {sleep['score']}, {sleep['quality']})"
         )
         lines.append(
             f"Deep {format_duration(sleep['deep'])} | "
@@ -103,18 +101,13 @@ def generate_summary(now: datetime | None = None) -> str:
 
     stress_label_val = stress_label(stress["avg"])
     if stress["avg"] is not None:
-        lines.append(
-            f"Stress: avg {stress['avg']} (peak {stress['peak']}) "
-            f"— {stress_label_val}"
-        )
+        lines.append(f"Stress: avg {stress['avg']} (peak {stress['peak']}) — {stress_label_val}")
     else:
         lines.append("Stress: N/A")
 
     if steps:
         pct_str = f" ({steps['pct']}%)" if steps.get("pct") is not None else ""
-        lines.append(
-            f"Steps: {steps['total']:,} / {steps['goal']:,}{pct_str}"
-        )
+        lines.append(f"Steps: {steps['total']:,} / {steps['goal']:,}{pct_str}")
     else:
         lines.append("Steps: N/A")
 

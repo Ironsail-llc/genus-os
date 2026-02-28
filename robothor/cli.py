@@ -70,20 +70,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Pipeline tier (1=ingest, 2=analysis, 3=deep)",
     )
 
-
     # version
     subparsers.add_parser("version", help="Show version")
 
     # tui
     tui_parser = subparsers.add_parser("tui", help="Launch the terminal chat interface")
     tui_parser.add_argument("--url", default="http://127.0.0.1:18800", help="Engine URL")
-    tui_parser.add_argument("--session", default=None, help="Session key (auto-generated if omitted)")
+    tui_parser.add_argument(
+        "--session", default=None, help="Session key (auto-generated if omitted)"
+    )
 
     # tunnel
     tunnel_parser = subparsers.add_parser("tunnel", help="Manage tunnel/ingress config")
     tunnel_sub = tunnel_parser.add_subparsers(dest="tunnel_command")
-    tunnel_gen = tunnel_sub.add_parser("generate", help="Generate tunnel config from enabled services")
-    tunnel_gen.add_argument("--provider", default=None, help="Provider: cloudflare, caddy (default: from env)")
+    tunnel_gen = tunnel_sub.add_parser(
+        "generate", help="Generate tunnel config from enabled services"
+    )
+    tunnel_gen.add_argument(
+        "--provider", default=None, help="Provider: cloudflare, caddy (default: from env)"
+    )
     tunnel_gen.add_argument("--domain", default=None, help="Domain (default: from env)")
     tunnel_sub.add_parser("status", help="Check tunnel connectivity")
 
@@ -94,7 +99,9 @@ def main(argv: list[str] | None = None) -> int:
     vault_set_p = vault_sub.add_parser("set", help="Store a secret")
     vault_set_p.add_argument("key", help="Secret key (e.g. telegram/bot_token)")
     vault_set_p.add_argument("value", nargs="?", default=None, help="Value (prompted if omitted)")
-    vault_set_p.add_argument("--category", default="credential", help="Category (default: credential)")
+    vault_set_p.add_argument(
+        "--category", default="credential", help="Category (default: credential)"
+    )
     vault_get_p = vault_sub.add_parser("get", help="Retrieve a secret")
     vault_get_p.add_argument("key", help="Secret key")
     vault_list_p = vault_sub.add_parser("list", help="List secret keys")
@@ -117,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
     eng_run.add_argument("agent_id", help="Agent ID (from YAML manifest)")
-    eng_run.add_argument("--message", "-m", default=None, help="User message (default: cron payload)")
+    eng_run.add_argument(
+        "--message", "-m", default=None, help="User message (default: cron payload)"
+    )
     eng_run.add_argument("--trigger", default="manual", help="Trigger type")
     eng_sub.add_parser("start", help="Start the engine daemon")
     eng_sub.add_parser("stop", help="Stop the engine daemon")
@@ -381,7 +390,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"               UNREACHABLE — {e}")
 
     # Engine
-    print(f"  Engine:      port 18800")
+    print("  Engine:      port 18800")
     try:
         import httpx as _httpx
 
@@ -390,7 +399,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
         data = resp.json()
         agent_count = len(data.get("agents", {}))
         wf_count = data.get("workflow_count", 0)
-        print(f"               {data.get('status', '?')} — {agent_count} agents, {wf_count} workflows")
+        print(
+            f"               {data.get('status', '?')} — {agent_count} agents, {wf_count} workflows"
+        )
     except Exception:
         print("               Not running — start with: robothor engine start")
 
@@ -398,6 +409,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print("  Vault:      ", end="")
     try:
         from robothor.vault.dal import count_secrets
+
         count = count_secrets()
         print(f" {count} secret(s) stored")
     except Exception:
@@ -423,6 +435,7 @@ def _check_optional_service(name: str, port: int, health_path: str | None) -> No
     if port == 0:
         return
     import socket
+
     try:
         sock = socket.create_connection(("127.0.0.1", port), timeout=2)
         sock.close()
@@ -432,7 +445,6 @@ def _check_optional_service(name: str, port: int, health_path: str | None) -> No
         profiles = os.environ.get("COMPOSE_PROFILES", "")
         if profiles:
             print(f"  {name + ':':<13} port {port:<10} — Not running")
-
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> int:
@@ -475,7 +487,9 @@ def _cmd_tunnel(args: argparse.Namespace) -> int:
         if not domain:
             print("Error: No domain set. Use --domain or ROBOTHOR_DOMAIN env var.")
             return 1
-        profiles = [p.strip() for p in os.environ.get("COMPOSE_PROFILES", "").split(",") if p.strip()]
+        profiles = [
+            p.strip() for p in os.environ.get("COMPOSE_PROFILES", "").split(",") if p.strip()
+        ]
         try:
             out_path = generate_tunnel_config(provider, domain, profiles)
             print(f"Generated {provider} config: {out_path}")
@@ -508,14 +522,17 @@ def _cmd_vault(args: argparse.Namespace) -> int:
 
     if sub == "init":
         from robothor.vault.crypto import init_master_key
+
         key_path = init_master_key(workspace)
         print(f"Vault master key: {key_path}")
         return 0
 
     if sub == "set":
         import getpass
+
         from robothor.vault import set as vault_set
         from robothor.vault.crypto import get_master_key
+
         try:
             get_master_key(workspace)
         except FileNotFoundError:
@@ -531,6 +548,7 @@ def _cmd_vault(args: argparse.Namespace) -> int:
     if sub == "get":
         from robothor.vault import get as vault_get
         from robothor.vault.crypto import get_master_key
+
         try:
             get_master_key(workspace)
         except FileNotFoundError:
@@ -546,6 +564,7 @@ def _cmd_vault(args: argparse.Namespace) -> int:
     if sub == "list":
         from robothor.vault import list as vault_list
         from robothor.vault.crypto import get_master_key
+
         try:
             get_master_key(workspace)
         except FileNotFoundError:
@@ -562,6 +581,7 @@ def _cmd_vault(args: argparse.Namespace) -> int:
 
     if sub == "delete":
         from robothor.vault import delete as vault_delete
+
         deleted = vault_delete(args.key)
         print(f"{'Deleted' if deleted else 'Not found'}: {args.key}")
         return 0 if deleted else 1
@@ -569,6 +589,7 @@ def _cmd_vault(args: argparse.Namespace) -> int:
     if sub == "import-env":
         from robothor.vault import set as vault_set
         from robothor.vault.crypto import get_master_key
+
         try:
             get_master_key(workspace)
         except FileNotFoundError:
@@ -584,7 +605,9 @@ def _cmd_vault(args: argparse.Namespace) -> int:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            key = key.strip().lower().replace("_", "/", 1)  # TELEGRAM_BOT_TOKEN → telegram/bot_token
+            key = (
+                key.strip().lower().replace("_", "/", 1)
+            )  # TELEGRAM_BOT_TOKEN → telegram/bot_token
             value = value.strip().strip("'\"")
             if value:
                 vault_set(key, value, category="credential")
@@ -595,6 +618,7 @@ def _cmd_vault(args: argparse.Namespace) -> int:
     if sub == "export-env":
         from robothor.vault import export_env
         from robothor.vault.crypto import get_master_key
+
         try:
             get_master_key(workspace)
         except FileNotFoundError:
@@ -698,7 +722,7 @@ def _cmd_agent_scaffold(args: argparse.Namespace) -> int:
     print(f"  1. Edit the manifest:     {manifest_path}")
     print(f"  2. Edit the instructions: {instruction_path}")
     print(f"  3. Validate:              python scripts/validate_agents.py --agent {agent_id}")
-    print(f"  4. Restart engine:        sudo systemctl restart robothor-engine")
+    print("  4. Restart engine:        sudo systemctl restart robothor-engine")
     return 0
 
 
@@ -729,7 +753,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     import asyncio
     from datetime import UTC, datetime
 
-    from robothor.engine.config import EngineConfig, build_system_prompt, load_agent_config
+    from robothor.engine.config import EngineConfig, load_agent_config
     from robothor.engine.models import TriggerType
 
     config = EngineConfig.from_env()
@@ -758,6 +782,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
 
     async def _run():
         from robothor.engine.runner import AgentRunner
+
         runner = AgentRunner(config)
         return await runner.execute(
             agent_id=agent_id,
@@ -788,6 +813,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
 def _cmd_engine_start() -> int:
     """Start the engine daemon."""
     from robothor.engine.daemon import run
+
     run()
     return 0
 
@@ -795,9 +821,11 @@ def _cmd_engine_start() -> int:
 def _cmd_engine_stop() -> int:
     """Stop the engine daemon via systemctl."""
     import subprocess
+
     result = subprocess.run(
         ["sudo", "systemctl", "stop", "robothor-engine"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode == 0:
         print("Engine stopped.")
@@ -880,7 +908,9 @@ def _cmd_engine_history(args: argparse.Namespace) -> int:
         print("No runs found.")
         return 0
 
-    print(f"{'Agent':<25} {'Status':<12} {'Duration':<10} {'Trigger':<10} {'Model':<20} {'Created'}")
+    print(
+        f"{'Agent':<25} {'Status':<12} {'Duration':<10} {'Trigger':<10} {'Model':<20} {'Created'}"
+    )
     print("─" * 100)
     for r in runs:
         duration = f"{r.get('duration_ms', 0) or 0}ms"

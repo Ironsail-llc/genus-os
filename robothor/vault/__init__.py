@@ -29,7 +29,9 @@ def get(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     return get_secret(key, master_key, tenant_id=tenant_id)
 
 
-def set(key: str, value: str, *, category: str = "credential", tenant_id: str = DEFAULT_TENANT) -> None:
+def set(
+    key: str, value: str, *, category: str = "credential", tenant_id: str = DEFAULT_TENANT
+) -> None:
     """Encrypt and store a secret."""
     master_key = get_master_key()
     set_secret(key, value, master_key, category=category, tenant_id=tenant_id)

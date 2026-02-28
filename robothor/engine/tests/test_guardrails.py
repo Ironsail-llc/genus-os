@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from unittest.mock import patch
-
 from robothor.engine.guardrails import DEFAULT_RATE_LIMIT, GuardrailEngine
 
 
@@ -64,7 +61,9 @@ class TestNoSensitiveData:
 
     def test_warns_on_github_token(self):
         engine = GuardrailEngine(enabled_policies=["no_sensitive_data"])
-        result = engine.check_post_execution("exec", {"output": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"})
+        result = engine.check_post_execution(
+            "exec", {"output": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"}
+        )
         assert result.action == "warned"
 
     def test_ok_on_clean_output(self):
@@ -92,9 +91,7 @@ class TestRateLimit:
 
 class TestMultiplePolicies:
     def test_first_blocking_wins(self):
-        engine = GuardrailEngine(
-            enabled_policies=["no_destructive_writes", "no_external_http"]
-        )
+        engine = GuardrailEngine(enabled_policies=["no_destructive_writes", "no_external_http"])
         result = engine.check_pre_execution("exec", {"command": "rm -rf /"})
         assert not result.allowed
         assert result.guardrail_name == "no_destructive_writes"

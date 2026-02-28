@@ -70,9 +70,7 @@ def _md_to_html(text: str) -> str:
     # Escape any existing HTML entities in the source text
     text = html.escape(text)
     # Code blocks (``` ... ```)
-    text = re.sub(
-        r"```(\w*)\n(.*?)```", r"<pre>\2</pre>", text, flags=re.DOTALL
-    )
+    text = re.sub(r"```(\w*)\n(.*?)```", r"<pre>\2</pre>", text, flags=re.DOTALL)
     # Inline code
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     # Bold (**text** or __text__)
@@ -139,7 +137,9 @@ class TelegramBot:
             else:
                 current = self._get_manifest_primary()
                 current_name = MODEL_DISPLAY_NAMES.get(current, current)
-                status_line = f"<b>Current model:</b> {html.escape(current_name)} (manifest default)"
+                status_line = (
+                    f"<b>Current model:</b> {html.escape(current_name)} (manifest default)"
+                )
             kb = self._build_model_keyboard(current)
             await message.answer(
                 f"{status_line}\n\nTap to switch:",
@@ -180,6 +180,7 @@ class TelegramBot:
             history = self._chat_history.get(chat_id, [])
 
             from robothor.engine.context import get_context_stats
+
             stats = get_context_stats(history)
 
             lines = [
@@ -209,8 +210,10 @@ class TelegramBot:
                 for aid, info in sorted(agents.items()):
                     status = info.get("last_status") or "—"
                     errors = info.get("consecutive_errors", 0)
-                    marker = "\u2705" if status == "completed" else (
-                        "\u274c" if status == "failed" else "\u23f3"
+                    marker = (
+                        "\u2705"
+                        if status == "completed"
+                        else ("\u274c" if status == "failed" else "\u23f3")
                     )
                     line = f"{marker} <b>{html.escape(aid)}</b>: {html.escape(str(status))}"
                     if errors:
@@ -360,7 +363,7 @@ class TelegramBot:
                         chat_hist.append({"role": "assistant", "content": run.output_text})
                         # Cap at max_history entries (trim from front)
                         if len(chat_hist) > self._max_history:
-                            self._chat_history[chat_id] = chat_hist[-self._max_history:]
+                            self._chat_history[chat_id] = chat_hist[-self._max_history :]
 
                     if run.output_text:
                         if stream_msg_id is not None:
@@ -438,9 +441,7 @@ class TelegramBot:
         """Edit a streamed message with the final text. Tries HTML, falls back to plain."""
         if len(text) > MAX_MESSAGE_LENGTH:
             try:
-                await self.bot.delete_message(
-                    chat_id=int(chat_id), message_id=message_id
-                )
+                await self.bot.delete_message(chat_id=int(chat_id), message_id=message_id)
             except Exception:
                 pass
             await self.send_message(chat_id, text)
@@ -522,15 +523,17 @@ class TelegramBot:
 
         # Register command menu with Telegram
         try:
-            await self.bot.set_my_commands([
-                BotCommand(command="model", description="Switch AI model"),
-                BotCommand(command="clear", description="Clear conversation history"),
-                BotCommand(command="context", description="Context window stats"),
-                BotCommand(command="status", description="Engine health"),
-                BotCommand(command="reset", description="Reset model + history"),
-                BotCommand(command="stop", description="Cancel current response"),
-                BotCommand(command="help", description="Show commands"),
-            ])
+            await self.bot.set_my_commands(
+                [
+                    BotCommand(command="model", description="Switch AI model"),
+                    BotCommand(command="clear", description="Clear conversation history"),
+                    BotCommand(command="context", description="Context window stats"),
+                    BotCommand(command="status", description="Engine health"),
+                    BotCommand(command="reset", description="Reset model + history"),
+                    BotCommand(command="stop", description="Cancel current response"),
+                    BotCommand(command="help", description="Show commands"),
+                ]
+            )
         except Exception as e:
             logger.warning("Failed to set bot commands: %s", e)
 

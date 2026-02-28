@@ -55,9 +55,7 @@ class GuardrailEngine:
     """Runs pre/post execution checks based on enabled policies."""
 
     enabled_policies: list[str] = field(default_factory=list)
-    _rate_counts: dict[str, list[float]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
 
     def check_pre_execution(
         self,
@@ -111,9 +109,7 @@ class GuardrailEngine:
             return self._check_sensitive_output(tool_name, tool_output)
         return GuardrailResult()
 
-    def _check_destructive(
-        self, tool_name: str, tool_args: dict[str, Any]
-    ) -> GuardrailResult:
+    def _check_destructive(self, tool_name: str, tool_args: dict[str, Any]) -> GuardrailResult:
         """Block destructive commands in exec/shell tools."""
         if tool_name not in ("exec", "shell"):
             return GuardrailResult()
@@ -161,9 +157,7 @@ class GuardrailEngine:
         calls.append(now)
         return GuardrailResult()
 
-    def _check_sensitive_output(
-        self, tool_name: str, tool_output: Any
-    ) -> GuardrailResult:
+    def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
         """Warn if tool output contains sensitive data patterns."""
         output_str = str(tool_output)[:10000]  # cap scan length
         for pattern in SENSITIVE_PATTERNS:

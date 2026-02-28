@@ -101,7 +101,11 @@ def _build_history_section(agent_id: str) -> str:
     if last_run_at:
         if isinstance(last_run_at, datetime):
             now = datetime.now(UTC)
-            delta = now - last_run_at.replace(tzinfo=UTC) if last_run_at.tzinfo is None else now - last_run_at
+            delta = (
+                now - last_run_at.replace(tzinfo=UTC)
+                if last_run_at.tzinfo is None
+                else now - last_run_at
+            )
             hours = delta.total_seconds() / 3600
             lines.append(f"Hours since last run: {hours:.1f}")
         else:
@@ -125,7 +129,13 @@ def _build_memory_blocks_section(block_names: list[str]) -> str:
     for name in block_names:
         try:
             result = read_block(name)
-            content = result.get("content", "") if isinstance(result, dict) else str(result) if result else ""
+            content = (
+                result.get("content", "")
+                if isinstance(result, dict)
+                else str(result)
+                if result
+                else ""
+            )
             if content:
                 truncated = content[:MAX_BLOCK_CHARS]
                 if len(content) > MAX_BLOCK_CHARS:
@@ -182,7 +192,11 @@ def _build_peer_section(peer_agent_ids: list[str]) -> str:
             if last_run:
                 if isinstance(last_run, datetime):
                     now = datetime.now(UTC)
-                    delta = now - last_run.replace(tzinfo=UTC) if last_run.tzinfo is None else now - last_run
+                    delta = (
+                        now - last_run.replace(tzinfo=UTC)
+                        if last_run.tzinfo is None
+                        else now - last_run
+                    )
                     hours = delta.total_seconds() / 3600
                     run_str = f" ({hours:.1f}h ago)"
                 else:

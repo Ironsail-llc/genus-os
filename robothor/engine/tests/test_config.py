@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from robothor.engine.config import (
     BOOTSTRAP_MAX_CHARS_PER_FILE,
     BOOTSTRAP_TOTAL_MAX_CHARS,
@@ -143,9 +141,7 @@ class TestManifestToAgentConfig:
         assert config.tools_allowed == []
 
     def test_invalid_delivery_mode(self):
-        config = manifest_to_agent_config(
-            {"id": "x", "delivery": {"mode": "invalid_mode"}}
-        )
+        config = manifest_to_agent_config({"id": "x", "delivery": {"mode": "invalid_mode"}})
         assert config.delivery_mode == DeliveryMode.NONE
 
     def test_max_iterations_from_manifest(self):
@@ -229,7 +225,8 @@ class TestBuildSystemPrompt:
         (tmp_path / "instr.md").write_text("Main instructions.")
         (tmp_path / "shared.md").write_text("Shared context.")
         config = AgentConfig(
-            id="t", name="t",
+            id="t",
+            name="t",
             instruction_file="instr.md",
             bootstrap_files=["shared.md"],
         )
@@ -257,7 +254,8 @@ class TestBuildSystemPrompt:
         (tmp_path / "bs1.md").write_text("b" * half)
         (tmp_path / "bs2.md").write_text("c" * half)
         config = AgentConfig(
-            id="t", name="t",
+            id="t",
+            name="t",
             instruction_file="instr.md",
             bootstrap_files=["bs1.md", "bs2.md"],
         )

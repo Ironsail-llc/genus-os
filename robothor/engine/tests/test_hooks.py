@@ -11,15 +11,23 @@ Verifies:
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 import yaml
 
-from robothor.engine.hooks import EVENT_TRIGGERS, STREAM_PREFIX, EventHooks, _LEGACY_EVENT_TRIGGERS, build_event_triggers
-from robothor.engine.models import AgentConfig, AgentHook, AgentRun, DeliveryMode, RunStatus, TriggerType
+from robothor.engine.hooks import (
+    _LEGACY_EVENT_TRIGGERS,
+    EVENT_TRIGGERS,
+    STREAM_PREFIX,
+    EventHooks,
+    build_event_triggers,
+)
+from robothor.engine.models import (
+    AgentConfig,
+    DeliveryMode,
+    TriggerType,
+)
 
 
 def _make_run(status: str = "completed") -> MagicMock:
@@ -94,9 +102,7 @@ class TestHandleEvent:
         hooks = EventHooks(engine_config, runner)
         # Initialize the prefix mapping and triggers (normally done in start())
         hooks._event_triggers = dict(EVENT_TRIGGERS)
-        hooks._prefixed_to_bare = {
-            f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
-        }
+        hooks._prefixed_to_bare = {f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS}
         return hooks
 
     @pytest.fixture
@@ -118,18 +124,19 @@ class TestHandleEvent:
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"), \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock), \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = AgentConfig(
-                id="email-classifier", name="Email Classifier",
+                id="email-classifier",
+                name="Email Classifier",
                 delivery_mode=DeliveryMode.ANNOUNCE,
             )
 
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
 
             # Runner should have been called — meaning the event type matched
             hooks.runner.execute.assert_called_once()
@@ -144,26 +151,25 @@ class TestHandleEvent:
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"), \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock), \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = AgentConfig(
-                id="email-classifier", name="Email Classifier",
+                id="email-classifier",
+                name="Email Classifier",
                 delivery_mode=DeliveryMode.ANNOUNCE,
             )
 
             # Pass prefixed stream name — should still match
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
             hooks.runner.execute.assert_called_once()
 
             # Pass bare name (no match in _prefixed_to_bare, falls through)
             hooks.runner.execute.reset_mock()
-            await hooks._handle_event(
-                "email", b"2-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event("email", b"2-0", data, mock_redis, "engine")
             hooks.runner.execute.assert_called_once()
 
     @pytest.mark.asyncio
@@ -173,11 +179,11 @@ class TestHandleEvent:
 
         hooks.runner.execute = AsyncMock()
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"):
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+        ):
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
             hooks.runner.execute.assert_not_called()
 
 
@@ -189,9 +195,7 @@ class TestDownstreamTriggers:
         runner = MagicMock()
         hooks = EventHooks(engine_config, runner)
         hooks._event_triggers = dict(EVENT_TRIGGERS)
-        hooks._prefixed_to_bare = {
-            f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
-        }
+        hooks._prefixed_to_bare = {f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS}
         return hooks
 
     @pytest.fixture
@@ -216,18 +220,18 @@ class TestDownstreamTriggers:
             downstream_agents=["email-analyst", "email-responder"],
         )
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"), \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock), \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = classifier_config
 
             # Patch _trigger_downstream to track calls without actually running
             hooks._trigger_downstream = AsyncMock()
 
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
 
             # Runner should have been called for the classifier
             hooks.runner.execute.assert_called_once()
@@ -246,16 +250,16 @@ class TestDownstreamTriggers:
             downstream_agents=["email-analyst", "email-responder"],
         )
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"), \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock), \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = classifier_config
             hooks._trigger_downstream = AsyncMock()
 
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
 
             # _trigger_downstream should not have been called
             hooks._trigger_downstream.assert_not_called()
@@ -274,16 +278,16 @@ class TestDownstreamTriggers:
             downstream_agents=[],
         )
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release"), \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock), \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = vision_config
             hooks._trigger_downstream = AsyncMock()
 
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}vision", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}vision", b"1-0", data, mock_redis, "engine")
 
             hooks._trigger_downstream.assert_not_called()
 
@@ -296,9 +300,7 @@ class TestDedup:
         runner = MagicMock()
         hooks = EventHooks(engine_config, runner)
         hooks._event_triggers = dict(EVENT_TRIGGERS)
-        hooks._prefixed_to_bare = {
-            f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS
-        }
+        hooks._prefixed_to_bare = {f"{STREAM_PREFIX}{s}": s for s in EVENT_TRIGGERS}
         return hooks
 
     @pytest.fixture
@@ -317,9 +319,7 @@ class TestDedup:
         hooks.runner.execute = AsyncMock()
 
         with patch("robothor.engine.hooks.try_acquire", return_value=False):
-            await hooks._handle_event(
-                f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine"
-            )
+            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
 
             # Runner should NOT have been called
             hooks.runner.execute.assert_not_called()
@@ -345,11 +345,12 @@ class TestTriggerDownstream:
             delivery_mode=DeliveryMode.ANNOUNCE,
         )
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release") as mock_release, \
-             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock) as mock_deliver, \
-             patch("robothor.engine.config.load_agent_config", return_value=downstream_config):
-
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release") as mock_release,
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock) as mock_deliver,
+            patch("robothor.engine.config.load_agent_config", return_value=downstream_config),
+        ):
             await hooks._trigger_downstream("email-analyst", "email", "email.new")
 
             hooks.runner.execute.assert_called_once()
@@ -375,11 +376,14 @@ class TestTriggerDownstream:
         """_trigger_downstream should always release the lock, even on error."""
         hooks.runner.execute = AsyncMock(side_effect=RuntimeError("boom"))
 
-        with patch("robothor.engine.hooks.try_acquire", return_value=True), \
-             patch("robothor.engine.hooks.release") as mock_release, \
-             patch("robothor.engine.config.load_agent_config") as mock_load:
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release") as mock_release,
+            patch("robothor.engine.config.load_agent_config") as mock_load,
+        ):
             mock_load.return_value = AgentConfig(
-                id="email-analyst", name="Email Analyst",
+                id="email-analyst",
+                name="Email Analyst",
                 delivery_mode=DeliveryMode.ANNOUNCE,
             )
 
@@ -396,16 +400,20 @@ class TestBuildEventTriggers:
         agents_dir.mkdir()
 
         # Agent with one hook
-        (agents_dir / "my-agent.yaml").write_text(yaml.dump({
-            "id": "my-agent",
-            "name": "My Agent",
-            "description": "Test",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [
-                {"stream": "email", "event_type": "email.new", "message": "Process emails"},
-            ],
-        }))
+        (agents_dir / "my-agent.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "my-agent",
+                    "name": "My Agent",
+                    "description": "Test",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [
+                        {"stream": "email", "event_type": "email.new", "message": "Process emails"},
+                    ],
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         assert "email" in triggers
@@ -420,13 +428,17 @@ class TestBuildEventTriggers:
         agents_dir.mkdir()
 
         # Agent with NO hooks
-        (agents_dir / "bare-agent.yaml").write_text(yaml.dump({
-            "id": "bare-agent",
-            "name": "Bare Agent",
-            "description": "No hooks",
-            "version": "2026-02-28",
-            "department": "custom",
-        }))
+        (agents_dir / "bare-agent.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "bare-agent",
+                    "name": "Bare Agent",
+                    "description": "No hooks",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         # Should fall back to legacy triggers
@@ -442,18 +454,30 @@ class TestBuildEventTriggers:
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
 
-        (agents_dir / "multi.yaml").write_text(yaml.dump({
-            "id": "multi-hook",
-            "name": "Multi Hook",
-            "description": "Multiple hooks",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [
-                {"stream": "calendar", "event_type": "calendar.new", "message": "New event"},
-                {"stream": "calendar", "event_type": "calendar.modified", "message": "Modified event"},
-                {"stream": "email", "event_type": "email.new", "message": "New email"},
-            ],
-        }))
+        (agents_dir / "multi.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "multi-hook",
+                    "name": "Multi Hook",
+                    "description": "Multiple hooks",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [
+                        {
+                            "stream": "calendar",
+                            "event_type": "calendar.new",
+                            "message": "New event",
+                        },
+                        {
+                            "stream": "calendar",
+                            "event_type": "calendar.modified",
+                            "message": "Modified event",
+                        },
+                        {"stream": "email", "event_type": "email.new", "message": "New email"},
+                    ],
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         assert len(triggers["calendar"]) == 2
@@ -464,22 +488,34 @@ class TestBuildEventTriggers:
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
 
-        (agents_dir / "agent-a.yaml").write_text(yaml.dump({
-            "id": "agent-a",
-            "name": "Agent A",
-            "description": "First",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [{"stream": "email", "event_type": "email.new", "message": "A handles email"}],
-        }))
-        (agents_dir / "agent-b.yaml").write_text(yaml.dump({
-            "id": "agent-b",
-            "name": "Agent B",
-            "description": "Second",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [{"stream": "email", "event_type": "email.new", "message": "B handles email"}],
-        }))
+        (agents_dir / "agent-a.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "agent-a",
+                    "name": "Agent A",
+                    "description": "First",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [
+                        {"stream": "email", "event_type": "email.new", "message": "A handles email"}
+                    ],
+                }
+            )
+        )
+        (agents_dir / "agent-b.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "agent-b",
+                    "name": "Agent B",
+                    "description": "Second",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [
+                        {"stream": "email", "event_type": "email.new", "message": "B handles email"}
+                    ],
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         assert len(triggers["email"]) == 2
@@ -491,19 +527,23 @@ class TestBuildEventTriggers:
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
 
-        (agents_dir / "bad-hooks.yaml").write_text(yaml.dump({
-            "id": "bad-hooks",
-            "name": "Bad Hooks",
-            "description": "Invalid hooks",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [
-                {"stream": "email"},  # Missing event_type
-                {"event_type": "email.new"},  # Missing stream
-                "not-a-dict",  # Not a dict at all
-                {"stream": "email", "event_type": "email.new", "message": "Valid"},  # Valid
-            ],
-        }))
+        (agents_dir / "bad-hooks.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "bad-hooks",
+                    "name": "Bad Hooks",
+                    "description": "Invalid hooks",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [
+                        {"stream": "email"},  # Missing event_type
+                        {"event_type": "email.new"},  # Missing stream
+                        "not-a-dict",  # Not a dict at all
+                        {"stream": "email", "event_type": "email.new", "message": "Valid"},  # Valid
+                    ],
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         # Only the valid hook should produce a trigger
@@ -516,14 +556,18 @@ class TestBuildEventTriggers:
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
 
-        (agents_dir / "empty-hooks.yaml").write_text(yaml.dump({
-            "id": "empty-hooks",
-            "name": "Empty Hooks",
-            "description": "Empty hooks list",
-            "version": "2026-02-28",
-            "department": "custom",
-            "hooks": [],
-        }))
+        (agents_dir / "empty-hooks.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "empty-hooks",
+                    "name": "Empty Hooks",
+                    "description": "Empty hooks list",
+                    "version": "2026-02-28",
+                    "department": "custom",
+                    "hooks": [],
+                }
+            )
+        )
 
         triggers = build_event_triggers(agents_dir)
         assert triggers == _LEGACY_EVENT_TRIGGERS

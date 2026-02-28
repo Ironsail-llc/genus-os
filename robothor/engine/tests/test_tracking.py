@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 from robothor.engine.tracking import (
@@ -108,7 +105,9 @@ class TestUpdateRun:
 class TestGetRun:
     def test_returns_dict(self, mock_db):
         mock_db["cursor"].fetchone.return_value = {
-            "id": "run-1", "agent_id": "test", "status": "completed"
+            "id": "run-1",
+            "agent_id": "test",
+            "status": "completed",
         }
         result = get_run("run-1")
         assert result is not None

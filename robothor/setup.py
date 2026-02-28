@@ -345,6 +345,7 @@ def prompt_subsystems() -> list[str]:
 def setup_vault_key(workspace: Path) -> Path:
     """Generate vault master key if it doesn't exist."""
     from robothor.vault.crypto import init_master_key
+
     return init_master_key(workspace)
 
 
@@ -368,8 +369,13 @@ def create_workspace(path: Path) -> None:
     template_dir = _find_template_dir()
     if template_dir:
         brain_templates = [
-            "SOUL.md", "IDENTITY.md", "AGENTS.md", "TOOLS.md",
-            "HEARTBEAT.md", "USER.md", "BOOTSTRAP.md",
+            "SOUL.md",
+            "IDENTITY.md",
+            "AGENTS.md",
+            "TOOLS.md",
+            "HEARTBEAT.md",
+            "USER.md",
+            "BOOTSTRAP.md",
         ]
         for filename in brain_templates:
             src = template_dir / filename

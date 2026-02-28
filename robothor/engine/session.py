@@ -140,11 +140,14 @@ class AgentSession:
 
         # Append tool result to conversation
         import json
-        self.messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": json.dumps(tool_output, default=str),
-        })
+
+        self.messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": json.dumps(tool_output, default=str),
+            }
+        )
 
         return step
 

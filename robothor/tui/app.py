@@ -142,9 +142,7 @@ class RobothorApp(App):
             if handled:
                 if output:
                     chat_scroll = self.query_one("#chat-scroll")
-                    await chat_scroll.mount(
-                        MessageDisplay(content=output, role="system")
-                    )
+                    await chat_scroll.mount(MessageDisplay(content=output, role="system"))
                     chat_scroll.scroll_end(animate=False)
                 return
 

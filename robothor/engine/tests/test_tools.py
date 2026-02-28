@@ -40,14 +40,27 @@ class TestToolRegistry:
         """Filters tools by tools_allowed list."""
         with patch("robothor.api.mcp.get_tool_definitions") as mock_defs:
             mock_defs.return_value = [
-                {"name": "list_tasks", "description": "t1", "inputSchema": {"type": "object", "properties": {}}},
-                {"name": "create_task", "description": "t2", "inputSchema": {"type": "object", "properties": {}}},
-                {"name": "delete_task", "description": "t3", "inputSchema": {"type": "object", "properties": {}}},
+                {
+                    "name": "list_tasks",
+                    "description": "t1",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
+                    "name": "create_task",
+                    "description": "t2",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
+                    "name": "delete_task",
+                    "description": "t3",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
             ]
             registry = ToolRegistry()
 
         config = AgentConfig(
-            id="test", name="test",
+            id="test",
+            name="test",
             tools_allowed=["list_tasks", "create_task"],
             tools_denied=[],
         )
@@ -61,13 +74,22 @@ class TestToolRegistry:
         """Filters out tools in tools_denied list."""
         with patch("robothor.api.mcp.get_tool_definitions") as mock_defs:
             mock_defs.return_value = [
-                {"name": "list_tasks", "description": "t1", "inputSchema": {"type": "object", "properties": {}}},
-                {"name": "message", "description": "t2", "inputSchema": {"type": "object", "properties": {}}},
+                {
+                    "name": "list_tasks",
+                    "description": "t1",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
+                    "name": "message",
+                    "description": "t2",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
             ]
             registry = ToolRegistry()
 
         config = AgentConfig(
-            id="test", name="test",
+            id="test",
+            name="test",
             tools_allowed=[],  # all allowed
             tools_denied=["message"],
         )
@@ -80,7 +102,11 @@ class TestToolRegistry:
         """Returns just the filtered names."""
         with patch("robothor.api.mcp.get_tool_definitions") as mock_defs:
             mock_defs.return_value = [
-                {"name": "list_tasks", "description": "t1", "inputSchema": {"type": "object", "properties": {}}},
+                {
+                    "name": "list_tasks",
+                    "description": "t1",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
             ]
             registry = ToolRegistry()
 
@@ -208,15 +234,24 @@ class TestObservabilityTools:
         """list_agent_runs returns summarized run data."""
         mock_runs = [
             {
-                "id": "run-1", "agent_id": "vision-monitor", "status": "completed",
-                "trigger_type": "cron", "model_used": "kimi-k2.5",
-                "duration_ms": 25000, "input_tokens": 1000, "output_tokens": 500,
-                "total_cost_usd": None, "started_at": "2026-02-27 10:00:00",
-                "completed_at": "2026-02-27 10:00:25", "error_message": None,
+                "id": "run-1",
+                "agent_id": "vision-monitor",
+                "status": "completed",
+                "trigger_type": "cron",
+                "model_used": "kimi-k2.5",
+                "duration_ms": 25000,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "total_cost_usd": None,
+                "started_at": "2026-02-27 10:00:00",
+                "completed_at": "2026-02-27 10:00:25",
+                "error_message": None,
             },
         ]
         with patch("robothor.engine.tracking.list_runs", return_value=mock_runs):
-            result = await _execute_tool("list_agent_runs", {"agent_id": "vision-monitor", "limit": 5})
+            result = await _execute_tool(
+                "list_agent_runs", {"agent_id": "vision-monitor", "limit": 5}
+            )
         assert result["count"] == 1
         assert result["runs"][0]["agent_id"] == "vision-monitor"
         assert result["runs"][0]["status"] == "completed"
@@ -234,20 +269,42 @@ class TestObservabilityTools:
     async def test_get_agent_run_with_steps(self):
         """get_agent_run returns run details and step audit trail."""
         mock_run = {
-            "id": "run-1", "agent_id": "email-classifier", "status": "completed",
-            "trigger_type": "cron", "trigger_detail": None,
-            "model_used": "kimi-k2.5", "models_attempted": ["kimi-k2.5"],
-            "duration_ms": 13000, "input_tokens": 800, "output_tokens": 300,
-            "total_cost_usd": None, "started_at": "2026-02-27 10:00:00",
-            "completed_at": "2026-02-27 10:00:13", "error_message": None,
+            "id": "run-1",
+            "agent_id": "email-classifier",
+            "status": "completed",
+            "trigger_type": "cron",
+            "trigger_detail": None,
+            "model_used": "kimi-k2.5",
+            "models_attempted": ["kimi-k2.5"],
+            "duration_ms": 13000,
+            "input_tokens": 800,
+            "output_tokens": 300,
+            "total_cost_usd": None,
+            "started_at": "2026-02-27 10:00:00",
+            "completed_at": "2026-02-27 10:00:13",
+            "error_message": None,
             "delivery_status": "delivered",
         }
         mock_steps = [
-            {"step_number": 1, "step_type": "tool_call", "tool_name": "read_file", "duration_ms": 50, "error_message": None},
-            {"step_number": 2, "step_type": "tool_call", "tool_name": "create_task", "duration_ms": 120, "error_message": None},
+            {
+                "step_number": 1,
+                "step_type": "tool_call",
+                "tool_name": "read_file",
+                "duration_ms": 50,
+                "error_message": None,
+            },
+            {
+                "step_number": 2,
+                "step_type": "tool_call",
+                "tool_name": "create_task",
+                "duration_ms": 120,
+                "error_message": None,
+            },
         ]
-        with patch("robothor.engine.tracking.get_run", return_value=mock_run), \
-             patch("robothor.engine.tracking.list_steps", return_value=mock_steps):
+        with (
+            patch("robothor.engine.tracking.get_run", return_value=mock_run),
+            patch("robothor.engine.tracking.list_steps", return_value=mock_steps),
+        ):
             result = await _execute_tool("get_agent_run", {"run_id": "run-1"})
         assert result["run"]["agent_id"] == "email-classifier"
         assert result["step_count"] == 2
@@ -266,11 +323,16 @@ class TestObservabilityTools:
         """list_agent_schedules returns schedule data."""
         mock_schedules = [
             {
-                "agent_id": "email-classifier", "enabled": True,
-                "cron_expr": "0 6-22/2 * * *", "timezone": "America/Grenada",
-                "timeout_seconds": 480, "model_primary": "kimi-k2.5",
-                "last_run_at": "2026-02-27 10:00:00", "last_status": "completed",
-                "last_duration_ms": 13000, "next_run_at": "2026-02-27 12:00:00",
+                "agent_id": "email-classifier",
+                "enabled": True,
+                "cron_expr": "0 6-22/2 * * *",
+                "timezone": "America/Grenada",
+                "timeout_seconds": 480,
+                "model_primary": "kimi-k2.5",
+                "last_run_at": "2026-02-27 10:00:00",
+                "last_status": "completed",
+                "last_duration_ms": 13000,
+                "next_run_at": "2026-02-27 12:00:00",
                 "consecutive_errors": 0,
             },
         ]
@@ -284,10 +346,16 @@ class TestObservabilityTools:
     async def test_get_agent_stats(self):
         """get_agent_stats returns aggregated stats."""
         from decimal import Decimal
+
         mock_stats = {
-            "total_runs": 12, "completed": 10, "failed": 1, "timeouts": 1,
-            "avg_duration_ms": Decimal("25000.5"), "total_input_tokens": 12000,
-            "total_output_tokens": 6000, "total_cost_usd": Decimal("0.045"),
+            "total_runs": 12,
+            "completed": 10,
+            "failed": 1,
+            "timeouts": 1,
+            "avg_duration_ms": Decimal("25000.5"),
+            "total_input_tokens": 12000,
+            "total_output_tokens": 6000,
+            "total_cost_usd": Decimal("0.045"),
         }
         with patch("robothor.engine.tracking.get_agent_stats", return_value=mock_stats):
             result = await _execute_tool("get_agent_stats", {"agent_id": "vision-monitor"})
@@ -301,9 +369,14 @@ class TestObservabilityTools:
     async def test_get_agent_stats_empty(self):
         """get_agent_stats handles empty stats."""
         mock_stats = {
-            "total_runs": 0, "completed": 0, "failed": 0, "timeouts": 0,
-            "avg_duration_ms": None, "total_input_tokens": None,
-            "total_output_tokens": None, "total_cost_usd": None,
+            "total_runs": 0,
+            "completed": 0,
+            "failed": 0,
+            "timeouts": 0,
+            "avg_duration_ms": None,
+            "total_input_tokens": None,
+            "total_output_tokens": None,
+            "total_cost_usd": None,
         }
         with patch("robothor.engine.tracking.get_agent_stats", return_value=mock_stats):
             result = await _execute_tool("get_agent_stats", {"agent_id": "nonexistent"})
@@ -325,7 +398,8 @@ class TestObservabilityTools:
         with patch("robothor.api.mcp.get_tool_definitions", return_value=[]):
             registry = ToolRegistry()
         config = AgentConfig(
-            id="main", name="main",
+            id="main",
+            name="main",
             tools_allowed=["list_agent_runs", "get_agent_stats", "exec"],
         )
         names = registry.get_tool_names(config)
@@ -355,6 +429,7 @@ class TestImpetusTool:
     def test_all_impetus_schemas_registered(self):
         """All 13 Impetus tool schemas are registered in ToolRegistry."""
         from robothor.api.mcp import get_tool_definitions
+
         real_defs = get_tool_definitions()
         with patch("robothor.api.mcp.get_tool_definitions", return_value=real_defs):
             registry = ToolRegistry()
@@ -410,7 +485,9 @@ class TestImpetusTool:
         """Bridge HTTP errors are caught and returned as error dicts."""
         mock_client = AsyncMock()
         mock_client.post.side_effect = httpx.HTTPStatusError(
-            "502 Bad Gateway", request=MagicMock(), response=MagicMock(status_code=502),
+            "502 Bad Gateway",
+            request=MagicMock(),
+            response=MagicMock(status_code=502),
         )
 
         with patch("robothor.engine.tools.httpx.AsyncClient") as mock_client_cls:
@@ -424,12 +501,14 @@ class TestImpetusTool:
     def test_impetus_tools_in_main_agent_allowlist(self):
         """Impetus tools are available to the main agent when in tools_allowed."""
         from robothor.api.mcp import get_tool_definitions
+
         real_defs = get_tool_definitions()
         with patch("robothor.api.mcp.get_tool_definitions", return_value=real_defs):
             registry = ToolRegistry()
 
         config = AgentConfig(
-            id="main", name="main",
+            id="main",
+            name="main",
             tools_allowed=list(IMPETUS_TOOLS) + ["exec"],
         )
         names = registry.get_tool_names(config)
@@ -477,7 +556,8 @@ class TestMergeAndAliasTools:
         """Agent with list_my_tasks in tools_allowed gets the schema."""
         r = self._make_registry()
         config = AgentConfig(
-            id="test", name="test",
+            id="test",
+            name="test",
             tools_allowed=["list_my_tasks", "exec"],
         )
         tools = r.build_for_agent(config)
@@ -490,7 +570,8 @@ class TestMergeAndAliasTools:
         """Agent with merge_contacts in tools_allowed gets the schema."""
         r = self._make_registry()
         config = AgentConfig(
-            id="test", name="test",
+            id="test",
+            name="test",
             tools_allowed=["merge_contacts", "merge_companies"],
         )
         tools = r.build_for_agent(config)
@@ -530,7 +611,9 @@ class TestMergeAndAliasTools:
             )
         assert result["success"] is True
         mock_merge.assert_called_once_with(
-            keeper_id="keeper-1", loser_id="loser-1", tenant_id="test",
+            keeper_id="keeper-1",
+            loser_id="loser-1",
+            tenant_id="test",
         )
 
     @pytest.mark.asyncio
@@ -558,7 +641,9 @@ class TestMergeAndAliasTools:
             )
         assert result["success"] is True
         mock_merge.assert_called_once_with(
-            keeper_id="keeper-co", loser_id="loser-co", tenant_id="test",
+            keeper_id="keeper-co",
+            loser_id="loser-co",
+            tenant_id="test",
         )
 
     @pytest.mark.asyncio
@@ -578,6 +663,7 @@ class TestRegistrySingleton:
     def test_singleton(self):
         """get_registry returns the same instance."""
         import robothor.engine.tools as tools_mod
+
         tools_mod._registry = None  # Reset
 
         with patch("robothor.api.mcp.get_tool_definitions", return_value=[]):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -48,10 +48,12 @@ class TestAppPilot:
     async def test_connected_shows_welcome(self):
         """When engine is reachable, shows welcome banner."""
         app = RobothorApp()
-        app.client.check_health = AsyncMock(return_value={
-            "status": "healthy",
-            "agents": {"a": {}, "b": {}},
-        })
+        app.client.check_health = AsyncMock(
+            return_value={
+                "status": "healthy",
+                "agents": {"a": {}, "b": {}},
+            }
+        )
         app.client.get_history = AsyncMock(return_value=[])
         app.client.close = AsyncMock()
 
@@ -63,10 +65,12 @@ class TestAppPilot:
     async def test_slash_command_handled_locally(self):
         """Slash commands are handled without sending to engine."""
         app = RobothorApp()
-        app.client.check_health = AsyncMock(return_value={
-            "status": "healthy",
-            "agents": {},
-        })
+        app.client.check_health = AsyncMock(
+            return_value={
+                "status": "healthy",
+                "agents": {},
+            }
+        )
         app.client.get_history = AsyncMock(return_value=[])
         app.client.close = AsyncMock()
         app.client.send_message = AsyncMock()

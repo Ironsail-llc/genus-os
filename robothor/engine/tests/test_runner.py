@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.config import EngineConfig
-from robothor.engine.models import AgentConfig, DeliveryMode, RunStatus, TriggerType
+from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.runner import AgentRunner
 
 
@@ -44,7 +43,8 @@ class TestAgentRunnerExecute:
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
                     run = await runner.execute(
-                        "test-agent", "hello",
+                        "test-agent",
+                        "hello",
                         agent_config=sample_agent_config,
                     )
         assert run.status == RunStatus.FAILED
@@ -58,9 +58,12 @@ class TestAgentRunnerExecute:
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -85,13 +88,16 @@ class TestAgentRunnerExecute:
         response2 = mock_litellm_response(content="Found 3 tasks.")
 
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
             return response1 if call_count == 1 else response2
 
         runner.registry.execute = AsyncMock(return_value={"tasks": [], "count": 0})
-        runner.registry.build_for_agent.return_value = [{"type": "function", "function": {"name": "list_tasks"}}]
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
         runner.registry.get_tool_names.return_value = ["list_tasks"]
 
         with patch("robothor.engine.runner.create_run"):
@@ -99,7 +105,8 @@ class TestAgentRunnerExecute:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "List my tasks",
+                            "test-agent",
+                            "List my tasks",
                             agent_config=sample_agent_config,
                         )
 
@@ -118,9 +125,12 @@ class TestAgentRunnerExecute:
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -128,7 +138,9 @@ class TestAgentRunnerExecute:
         assert "empty choices" in (run.error_message or "")
 
     @pytest.mark.asyncio
-    async def test_conversation_history_passed(self, runner, sample_agent_config, mock_litellm_response):
+    async def test_conversation_history_passed(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
         """Conversation history is passed through to the session."""
         response = mock_litellm_response(content="I remember!")
         history = [
@@ -139,9 +151,12 @@ class TestAgentRunnerExecute:
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_llm:
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
                         run = await runner.execute(
-                            "test-agent", "Follow-up",
+                            "test-agent",
+                            "Follow-up",
                             agent_config=sample_agent_config,
                             conversation_history=history,
                         )
@@ -161,6 +176,7 @@ class TestAgentRunnerExecute:
     @pytest.mark.asyncio
     async def test_all_models_fail(self, runner, sample_agent_config):
         """Run fails when all models error."""
+
         async def mock_fail(**kwargs):
             raise Exception("Model unavailable")
 
@@ -169,7 +185,8 @@ class TestAgentRunnerExecute:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_fail):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -180,6 +197,7 @@ class TestAgentRunnerExecute:
     async def test_timeout(self, runner, sample_agent_config, mock_litellm_response):
         """Agent times out when execution exceeds timeout_seconds."""
         import asyncio
+
         sample_agent_config.timeout_seconds = 1  # 1 second timeout
 
         async def slow_completion(**kwargs):
@@ -191,7 +209,8 @@ class TestAgentRunnerExecute:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=slow_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -201,19 +220,23 @@ class TestAgentRunnerExecute:
     async def test_model_fallback(self, runner, sample_agent_config, mock_litellm_response):
         """Falls back to next model when primary fails."""
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
             if kwargs.get("model") == "openrouter/test/model":
                 raise Exception("Primary model down")
-            return mock_litellm_response(content="Fallback worked", model="openrouter/test/fallback")
+            return mock_litellm_response(
+                content="Fallback worked", model="openrouter/test/fallback"
+            )
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -229,9 +252,12 @@ class TestAgentRunnerExecute:
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             trigger_type=TriggerType.CRON,
                             trigger_detail="0 * * * *",
                             agent_config=sample_agent_config,
@@ -292,7 +318,8 @@ class TestBrokenModelTracking:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -325,7 +352,8 @@ class TestBrokenModelTracking:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
@@ -371,14 +399,17 @@ class TestBrokenModelTracking:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=counting_mock):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                         )
 
         # Should hit max iterations (3), not the engine default (5 from conftest)
         assert llm_call_count == 3
         # Max iterations error is recorded as a step
-        error_steps = [s for s in run.steps if s.error_message and "Max iterations" in s.error_message]
+        error_steps = [
+            s for s in run.steps if s.error_message and "Max iterations" in s.error_message
+        ]
         assert len(error_steps) == 1
         assert "(3)" in error_steps[0].error_message
 
@@ -387,7 +418,9 @@ class TestOnToolCallback:
     """Tests for the on_tool callback in tool execution."""
 
     @pytest.mark.asyncio
-    async def test_on_tool_receives_start_and_end(self, runner, sample_agent_config, mock_litellm_response):
+    async def test_on_tool_receives_start_and_end(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
         """on_tool callback fires for tool_start and tool_end events."""
         tc = MagicMock()
         tc.id = "call_1"
@@ -399,6 +432,7 @@ class TestOnToolCallback:
         response2 = mock_litellm_response(content="Done.")
 
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
@@ -411,6 +445,7 @@ class TestOnToolCallback:
         runner.registry.get_tool_names.return_value = ["list_tasks"]
 
         tool_events: list[dict] = []
+
         async def on_tool(event: dict) -> None:
             tool_events.append(event)
 
@@ -419,7 +454,8 @@ class TestOnToolCallback:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                             on_tool=on_tool,
                         )
@@ -444,7 +480,9 @@ class TestOnToolCallback:
         assert "result_preview" in end_evt
 
     @pytest.mark.asyncio
-    async def test_on_tool_errors_are_swallowed(self, runner, sample_agent_config, mock_litellm_response):
+    async def test_on_tool_errors_are_swallowed(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
         """Errors in on_tool callback must never block tool execution."""
         tc = MagicMock()
         tc.id = "call_1"
@@ -456,6 +494,7 @@ class TestOnToolCallback:
         response2 = mock_litellm_response(content="Done.")
 
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
@@ -475,7 +514,8 @@ class TestOnToolCallback:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                             on_tool=failing_on_tool,
                         )
@@ -485,7 +525,9 @@ class TestOnToolCallback:
         assert run.output_text == "Done."
 
     @pytest.mark.asyncio
-    async def test_on_tool_works_alongside_on_content(self, runner, sample_agent_config, mock_litellm_response):
+    async def test_on_tool_works_alongside_on_content(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
         """on_tool and on_content can both be provided (non-streaming path)."""
         tc = MagicMock()
         tc.id = "call_1"
@@ -497,6 +539,7 @@ class TestOnToolCallback:
         response2 = mock_litellm_response(content="Done.")
 
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
@@ -522,7 +565,8 @@ class TestOnToolCallback:
                         # No on_content to avoid streaming path; just verify
                         # on_tool param is accepted alongside on_content signature
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                             on_tool=on_tool,
                         )
@@ -532,7 +576,9 @@ class TestOnToolCallback:
         assert len(tool_events) == 2
 
     @pytest.mark.asyncio
-    async def test_on_tool_result_preview_truncated(self, runner, sample_agent_config, mock_litellm_response):
+    async def test_on_tool_result_preview_truncated(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
         """Result preview in tool_end is truncated to 2000 chars."""
         tc = MagicMock()
         tc.id = "call_1"
@@ -544,6 +590,7 @@ class TestOnToolCallback:
         response2 = mock_litellm_response(content="Done.")
 
         call_count = 0
+
         async def mock_completion(**kwargs):
             nonlocal call_count
             call_count += 1
@@ -558,6 +605,7 @@ class TestOnToolCallback:
         runner.registry.get_tool_names.return_value = ["search_memory"]
 
         tool_events: list[dict] = []
+
         async def on_tool(event: dict) -> None:
             tool_events.append(event)
 
@@ -566,7 +614,8 @@ class TestOnToolCallback:
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
-                            "test-agent", "hello",
+                            "test-agent",
+                            "hello",
                             agent_config=sample_agent_config,
                             on_tool=on_tool,
                         )

@@ -33,7 +33,9 @@ class MessageDisplay(Static):
         self._content = content
         super().__init__(
             Content.from_markup(self._format()),
-            name=name, id=id, classes=classes,
+            name=name,
+            id=id,
+            classes=classes,
         )
 
     def _format(self) -> str:
@@ -84,7 +86,9 @@ class ToolCard(Static):
         self._error: str | None = None
         super().__init__(
             Content.from_markup(self._format()),
-            name=name, id=id, classes=classes,
+            name=name,
+            id=id,
+            classes=classes,
         )
 
     def _format(self) -> str:
@@ -143,7 +147,9 @@ class StatusBar(Static):
         self._agent_count = 0
         super().__init__(
             Content.from_markup(self._format()),
-            name=name, id=id, classes=classes,
+            name=name,
+            id=id,
+            classes=classes,
         )
 
     def _format(self) -> str:
@@ -212,5 +218,7 @@ class WelcomeBanner(Static):
         )
         super().__init__(
             Content.from_markup(text),
-            name=name, id=id, classes=classes,
+            name=name,
+            id=id,
+            classes=classes,
         )

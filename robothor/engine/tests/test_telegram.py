@@ -48,7 +48,7 @@ class TestChatHistory:
             bot._chat_history[chat_id].append({"role": "assistant", "content": f"reply {i}"})
         hist = bot._chat_history[chat_id]
         if len(hist) > bot._max_history:
-            bot._chat_history[chat_id] = hist[-bot._max_history:]
+            bot._chat_history[chat_id] = hist[-bot._max_history :]
         assert len(bot._chat_history[chat_id]) == 20
 
     def test_reset_clears_history(self, bot):
@@ -126,7 +126,6 @@ class TestSendMessage:
     @pytest.mark.asyncio
     async def test_markdown_fallback(self, bot):
         """Falls back to plain text when markdown fails."""
-        from aiogram.enums import ParseMode
 
         # First call with markdown fails, second without succeeds
         bot.bot.send_message.side_effect = [Exception("Bad markdown"), None]

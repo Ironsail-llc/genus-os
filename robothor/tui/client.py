@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -77,9 +78,7 @@ class EngineClient:
     async def get_history(self) -> list[dict]:
         """GET /chat/history — return session message history."""
         try:
-            resp = await self._client.get(
-                "/chat/history", params={"session_key": self.session_key}
-            )
+            resp = await self._client.get("/chat/history", params={"session_key": self.session_key})
             resp.raise_for_status()
             return resp.json().get("messages", [])
         except Exception:
@@ -88,9 +87,7 @@ class EngineClient:
     async def abort(self) -> bool:
         """POST /chat/abort — cancel running response."""
         try:
-            resp = await self._client.post(
-                "/chat/abort", json={"session_key": self.session_key}
-            )
+            resp = await self._client.post("/chat/abort", json={"session_key": self.session_key})
             resp.raise_for_status()
             return resp.json().get("aborted", False)
         except Exception:
@@ -99,9 +96,7 @@ class EngineClient:
     async def clear(self) -> bool:
         """POST /chat/clear — reset session history."""
         try:
-            resp = await self._client.post(
-                "/chat/clear", json={"session_key": self.session_key}
-            )
+            resp = await self._client.post("/chat/clear", json={"session_key": self.session_key})
             resp.raise_for_status()
             return resp.json().get("ok", False)
         except Exception:

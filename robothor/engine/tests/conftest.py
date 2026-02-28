@@ -9,20 +9,16 @@ Follows brain/memory_system/conftest.py patterns:
 
 from __future__ import annotations
 
-import os
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from robothor.engine.config import EngineConfig
 from robothor.engine.models import (
     AgentConfig,
-    AgentRun,
     DeliveryMode,
-    RunStatus,
-    TriggerType,
 )
 
 
@@ -123,6 +119,7 @@ sla:
 @pytest.fixture
 def mock_litellm_response():
     """Create a mock litellm response."""
+
     def _make_response(content="Test response", tool_calls=None, model="test-model"):
         response = MagicMock()
         response.model = model
@@ -138,6 +135,7 @@ def mock_litellm_response():
         response.usage = usage
 
         return response
+
     return _make_response
 
 

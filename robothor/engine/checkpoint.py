@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,9 @@ class CheckpointManager:
             self._checkpoint_count += 1
             logger.debug(
                 "Checkpoint %d saved for run %s at step %d",
-                self._checkpoint_count, self.run_id, step_number,
+                self._checkpoint_count,
+                self.run_id,
+                step_number,
             )
             return True
         except Exception as e:
