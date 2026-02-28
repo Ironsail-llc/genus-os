@@ -248,6 +248,85 @@ class ToolRegistry:
             },
         }
 
+        # ── Vault tools ──
+
+        self._schemas["vault_get"] = {
+            "type": "function",
+            "function": {
+                "name": "vault_get",
+                "description": "Retrieve a decrypted secret from the vault by key.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Secret key (e.g. 'telegram/bot_token', 'openai/api_key')",
+                        },
+                    },
+                    "required": ["key"],
+                },
+            },
+        }
+        self._schemas["vault_set"] = {
+            "type": "function",
+            "function": {
+                "name": "vault_set",
+                "description": "Store an encrypted secret in the vault.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Secret key (e.g. 'telegram/bot_token')",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Secret value to encrypt and store",
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Category: credential, oauth_token, api_key, certificate (default: credential)",
+                            "default": "credential",
+                        },
+                    },
+                    "required": ["key", "value"],
+                },
+            },
+        }
+        self._schemas["vault_list"] = {
+            "type": "function",
+            "function": {
+                "name": "vault_list",
+                "description": "List secret keys in the vault (not values). Optionally filter by category.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "Filter by category: credential, oauth_token, api_key, certificate",
+                        },
+                    },
+                },
+            },
+        }
+        self._schemas["vault_delete"] = {
+            "type": "function",
+            "function": {
+                "name": "vault_delete",
+                "description": "Delete a secret from the vault.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Secret key to delete",
+                        },
+                    },
+                    "required": ["key"],
+                },
+            },
+        }
+
         # ── Convenience aliases ──
 
         self._schemas["list_my_tasks"] = {
@@ -980,6 +1059,30 @@ async def _execute_tool(
             "total_output_tokens": stats.get("total_output_tokens"),
             "total_cost_usd": float(stats["total_cost_usd"]) if stats.get("total_cost_usd") else None,
         }
+
+    # ── Vault tools ──
+
+    if name == "vault_get":
+        import robothor.vault as vault
+        value = vault.get(args["key"], tenant_id=tenant_id)
+        if value is None:
+            return {"error": f"Secret not found: {args['key']}"}
+        return {"key": args["key"], "value": value}
+
+    if name == "vault_set":
+        import robothor.vault as vault
+        vault.set(args["key"], args["value"], category=args.get("category", "credential"), tenant_id=tenant_id)
+        return {"success": True, "key": args["key"]}
+
+    if name == "vault_list":
+        import robothor.vault as vault
+        keys = vault.list(category=args.get("category"), tenant_id=tenant_id)
+        return {"keys": keys, "count": len(keys)}
+
+    if name == "vault_delete":
+        import robothor.vault as vault
+        deleted = vault.delete(args["key"], tenant_id=tenant_id)
+        return {"success": deleted, "key": args["key"]}
 
     # ── Shell execution ──
 

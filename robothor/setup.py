@@ -181,7 +181,18 @@ def run_init(args) -> int:
     if not skip_models:
         pull_ollama_models(ollama_config.base_url, REQUIRED_MODELS)
 
-    # 10. Write env file
+    # 9. Subsystem selection
+    profiles: list[str] = []
+    if not yes:
+        profiles = prompt_subsystems()
+    print()
+
+    # 10. Generate vault master key
+    print("  Generating vault master key ...", end=" ", flush=True)
+    setup_vault_key(workspace)
+    print("done")
+
+    # 11. Write env file
     env_path = workspace / ".env"
     wrote = write_env_file(
         env_path,
@@ -190,6 +201,7 @@ def run_init(args) -> int:
         ollama_config,
         owner_name=owner_name,
         ai_name=ai_name,
+        profiles=profiles,
         yes=yes,
     )
     if wrote:
@@ -201,6 +213,9 @@ def run_init(args) -> int:
     print(f"    source {env_path}")
     print("    robothor status")
     print("    robothor serve")
+    if profiles:
+        profile_flag = ",".join(profiles)
+        print(f"    docker compose -f infra/docker-compose.yml --profile {profile_flag} up -d")
     print()
     return 0
 
@@ -301,11 +316,87 @@ def prompt_db_config() -> DatabaseConfig:
     return DatabaseConfig(host=host, port=port, name=name, user=user, password=password)
 
 
+def prompt_subsystems() -> list[str]:
+    """Interactive multi-select for optional Docker Compose profiles."""
+    options = [
+        ("monitoring", "Monitoring (Uptime Kuma)", "web dashboard for service health"),
+        ("tts", "Voice synthesis (Kokoro TTS)", "local text-to-speech"),
+        ("media", "Webcam/vision (MediaMTX)", "RTSP/HLS camera streaming"),
+        ("tunnel", "Reverse proxy (Cloudflare tunnel)", "secure external access"),
+    ]
+    print("  Subsystems (optional Docker services):")
+    for i, (_, label, desc) in enumerate(options, 1):
+        print(f"    {i}. {label} — {desc}")
+    selection = input("  Enable (comma-separated numbers, or Enter to skip): ").strip()
+    if not selection:
+        return []
+    profiles = []
+    for part in selection.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part) - 1
+            if 0 <= idx < len(options):
+                profiles.append(options[idx][0])
+    if profiles:
+        print(f"  Enabled: {', '.join(profiles)}")
+    return profiles
+
+
+def setup_vault_key(workspace: Path) -> Path:
+    """Generate vault master key if it doesn't exist."""
+    from robothor.vault.crypto import init_master_key
+    return init_master_key(workspace)
+
+
 def create_workspace(path: Path) -> None:
-    """Create workspace directory structure."""
+    """Create workspace directory structure with brain/ scaffold from templates."""
     path.mkdir(parents=True, exist_ok=True)
     (path / "memory").mkdir(exist_ok=True)
     (path / "faces").mkdir(exist_ok=True)
+
+    # Brain directory — identity, runtime state, agent instructions
+    brain = path / "brain"
+    brain.mkdir(exist_ok=True)
+    (brain / "memory").mkdir(exist_ok=True)
+
+    # Docs directories — agent manifests and workflows
+    docs = path / "docs"
+    (docs / "agents").mkdir(parents=True, exist_ok=True)
+    (docs / "workflows").mkdir(parents=True, exist_ok=True)
+
+    # Copy template files into brain/ (never overwrite existing)
+    template_dir = _find_template_dir()
+    if template_dir:
+        brain_templates = [
+            "SOUL.md", "IDENTITY.md", "AGENTS.md", "TOOLS.md",
+            "HEARTBEAT.md", "USER.md", "BOOTSTRAP.md",
+        ]
+        for filename in brain_templates:
+            src = template_dir / filename
+            dst = brain / filename
+            if src.exists() and not dst.exists():
+                dst.write_text(src.read_text())
+
+        # Copy agent manifest template to docs/agents/
+        for name in ("agent-manifest.yaml", "agent-instructions.md"):
+            src = template_dir / name
+            dst = docs / "agents" / name
+            if src.exists() and not dst.exists():
+                dst.write_text(src.read_text())
+
+
+def _find_template_dir() -> Path | None:
+    """Locate the templates/ directory (bundled or in-repo)."""
+    # Bundled in wheel
+    bundled = Path(__file__).parent / "templates"
+    if bundled.is_dir():
+        return bundled
+    # Development: repo root
+    repo_root = Path(__file__).parent.parent
+    dev_path = repo_root / "templates"
+    if dev_path.is_dir():
+        return dev_path
+    return None
 
 
 def run_migration(db_config: DatabaseConfig) -> int:
@@ -371,6 +462,7 @@ def write_env_file(
     *,
     owner_name: str = "",
     ai_name: str = "Robothor",
+    profiles: list[str] | None = None,
     yes: bool = False,
 ) -> bool:
     """Write .env file with configuration. Returns True if written."""
@@ -394,6 +486,8 @@ def write_env_file(
         f"ROBOTHOR_OLLAMA_PORT={ollama.port}",
         f"ROBOTHOR_WORKSPACE={path.parent}",
     ]
+    if profiles:
+        lines.append(f"COMPOSE_PROFILES={','.join(profiles)}")
     path.write_text("\n".join(lines) + "\n")
     return True
 

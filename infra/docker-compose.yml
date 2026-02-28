@@ -1,10 +1,20 @@
 # Robothor Infrastructure Stack
-# Usage: docker compose up -d
+# ============================================================================
+# Usage:
+#   docker compose up -d                              # Core only (postgres, redis, ollama)
+#   docker compose --profile monitoring up -d         # Core + Uptime Kuma
+#   docker compose --profile tts up -d                # Core + Kokoro TTS
+#   docker compose --profile media up -d              # Core + MediaMTX
+#   docker compose --profile tunnel up -d             # Core + Cloudflare tunnel
+#   docker compose --profile full up -d               # Everything
+#   COMPOSE_PROFILES=monitoring,tts docker compose up -d  # Via env var
 #
-# Provides PostgreSQL (pgvector), Redis, and Ollama for the Robothor AI brain.
 # Copy robothor.env.example to .env and customize before starting.
+# ============================================================================
 
 services:
+  # ── Core Services (always started) ────────────────────────────────────────
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: robothor-postgres
@@ -65,10 +75,107 @@ services:
     # and uncomment the following line:
     # deploy: {}
 
+  # ── Monitoring (Uptime Kuma) ──────────────────────────────────────────────
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: robothor-uptime-kuma
+    profiles: ["monitoring", "full"]
+    restart: always
+    ports:
+      - "127.0.0.1:${ROBOTHOR_MONITORING_PORT:-3010}:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/api/status-page/heartbeat || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── Voice Synthesis (Kokoro TTS) ──────────────────────────────────────────
+
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: robothor-kokoro-tts
+    profiles: ["tts", "full"]
+    restart: always
+    ports:
+      - "127.0.0.1:${ROBOTHOR_TTS_PORT:-8880}:8880"
+    environment:
+      USE_GPU: "false"
+      DEVICE_TYPE: cpu
+      DEFAULT_VOICE: ${ROBOTHOR_TTS_VOICE:-am_michael}
+      SAMPLE_RATE: "24000"
+      ENABLE_WEB_PLAYER: "false"
+      API_LOG_LEVEL: INFO
+      DOWNLOAD_MODEL: "true"
+    volumes:
+      - kokoro_models:/app/api/src/models/v1_0
+      - kokoro_voices:/app/api/src/voices/v1_0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8880/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  # ── Media Streaming (MediaMTX) ────────────────────────────────────────────
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: robothor-mediamtx
+    profiles: ["media", "full"]
+    restart: always
+    ports:
+      - "127.0.0.1:${ROBOTHOR_CAMERA_RTSP_PORT:-8554}:8554"   # RTSP
+      - "127.0.0.1:${ROBOTHOR_CAMERA_HLS_PORT:-8890}:8888"    # HLS
+    environment:
+      MTX_PROTOCOLS: tcp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9997/v3/paths/list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ── Tunnel / Ingress (Cloudflare) ─────────────────────────────────────────
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: robothor-cloudflared
+    profiles: ["tunnel", "full"]
+    restart: always
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    network_mode: host
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
 volumes:
   postgres_data:
     driver: local
   redis_data:
     driver: local
   ollama_data:
+    driver: local
+  uptime_kuma_data:
+    driver: local
+  kokoro_models:
+    driver: local
+  kokoro_voices:
     driver: local

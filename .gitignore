@@ -1,7 +1,7 @@
 # Symlinked directories (tracked in their own repos)
 brain/
 templates/
-tunnel/
+/tunnel/
 
 # Sensitive docs (symlinked from ~/clawd/, tracked there)
 CLAUDE.md

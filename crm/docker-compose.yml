@@ -1,3 +1,7 @@
+# DEPRECATED: Use infra/docker-compose.yml with profiles instead.
+# This file is kept for backward compatibility with Philip's running system.
+# New installs should use: docker compose -f infra/docker-compose.yml --profile full up -d
+#
 # Robothor Docker Services — Vaultwarden, Uptime Kuma, Kokoro TTS
 # All containers use host PostgreSQL (172.17.0.1:5432) and Redis (host.docker.internal:6379)
 # Ports bound to 127.0.0.1 — external access only via Cloudflare tunnel

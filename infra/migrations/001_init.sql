@@ -15,6 +15,13 @@
 --   - Audit logging
 --   - CRM (people, companies, notes, tasks, conversations, messages)
 --   - Telemetry (service health metrics)
+--   - Task coordination + state machine + routines
+--   - Multi-tenancy (crm_tenants + tenant_id columns)
+--   - Agent notifications
+--   - Health (Garmin biometric data)
+--   - Agent engine (runs, steps, schedules, checkpoints, guardrails)
+--   - Workflow engine (runs, steps)
+--   - Vault (encrypted secret store)
 -- ============================================================================
 
 BEGIN;
@@ -449,5 +456,497 @@ BEGIN
     LIMIT limit_count;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- TASK COORDINATION (from migration 005)
+-- ════════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS created_by_agent TEXT;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS assigned_to_agent TEXT;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal';
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS parent_task_id UUID REFERENCES crm_tasks(id);
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS resolution TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_assigned_to_agent
+    ON crm_tasks (assigned_to_agent) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_created_by_agent
+    ON crm_tasks (created_by_agent) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_priority
+    ON crm_tasks (priority) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_parent_task_id
+    ON crm_tasks (parent_task_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_tags
+    ON crm_tasks USING GIN (tags) WHERE deleted_at IS NULL;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- TASK STATE MACHINE (from migration 006)
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Status constraint (final set includes REVIEW)
+DO $$ BEGIN
+    ALTER TABLE crm_tasks ADD CONSTRAINT valid_status
+        CHECK (status IN ('TODO', 'IN_PROGRESS', 'REVIEW', 'DONE'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS crm_task_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES crm_tasks(id),
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    changed_by TEXT,
+    reason TEXT,
+    metadata JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_history_task ON crm_task_history (task_id);
+CREATE INDEX IF NOT EXISTS idx_task_history_created ON crm_task_history (created_at);
+
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS sla_deadline_at TIMESTAMPTZ;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS escalation_count INT DEFAULT 0;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ROUTINES (from migration 007)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS crm_routines (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    body TEXT,
+    cron_expr TEXT NOT NULL,
+    timezone TEXT DEFAULT 'America/New_York',
+    assigned_to_agent TEXT,
+    priority TEXT DEFAULT 'normal',
+    tags TEXT[] DEFAULT '{}',
+    person_id UUID REFERENCES crm_people(id),
+    company_id UUID REFERENCES crm_companies(id),
+    active BOOLEAN DEFAULT TRUE,
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_routines_due ON crm_routines (next_run_at)
+    WHERE active = TRUE AND deleted_at IS NULL;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- MULTI-TENANCY (from migration 008)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS crm_tenants (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    parent_tenant_id TEXT REFERENCES crm_tenants(id),
+    settings JSONB DEFAULT '{}',
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tenants_parent ON crm_tenants(parent_tenant_id) WHERE parent_tenant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tenants_active ON crm_tenants(active) WHERE active = TRUE;
+
+INSERT INTO crm_tenants (id, display_name)
+VALUES ('robothor-primary', 'Robothor Primary')
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE crm_people ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_people_tenant ON crm_people(tenant_id) WHERE deleted_at IS NULL;
+
+ALTER TABLE crm_companies ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_companies_tenant ON crm_companies(tenant_id) WHERE deleted_at IS NULL;
+
+ALTER TABLE crm_notes ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_notes_tenant ON crm_notes(tenant_id) WHERE deleted_at IS NULL;
+
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON crm_tasks(tenant_id) WHERE deleted_at IS NULL;
+
+ALTER TABLE crm_task_history ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_task_history_tenant ON crm_task_history(tenant_id);
+
+ALTER TABLE crm_routines ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_routines_tenant ON crm_routines(tenant_id) WHERE deleted_at IS NULL;
+
+ALTER TABLE crm_conversations ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_conversations_tenant ON crm_conversations(tenant_id);
+
+ALTER TABLE crm_messages ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
+CREATE INDEX IF NOT EXISTS idx_messages_tenant ON crm_messages(tenant_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- AGENT NOTIFICATIONS (from migration 009)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS crm_agent_notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    notification_type TEXT NOT NULL CHECK (notification_type IN (
+        'task_assigned', 'review_requested', 'review_approved',
+        'review_rejected', 'blocked', 'unblocked',
+        'agent_error', 'info', 'custom'
+    )),
+    subject TEXT NOT NULL,
+    body TEXT,
+    metadata JSONB DEFAULT '{}',
+    task_id UUID REFERENCES crm_tasks(id),
+    read_at TIMESTAMPTZ,
+    acknowledged_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_inbox
+    ON crm_agent_notifications(to_agent, read_at NULLS FIRST)
+    WHERE acknowledged_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notifications_task
+    ON crm_agent_notifications(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant
+    ON crm_agent_notifications(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_type
+    ON crm_agent_notifications(notification_type, created_at DESC);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- HEALTH TABLES (from migration 010)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS health_heart_rate (
+    timestamp BIGINT PRIMARY KEY,
+    heart_rate INTEGER NOT NULL,
+    source TEXT DEFAULT 'monitoring'
+);
+CREATE INDEX IF NOT EXISTS idx_health_hr_ts ON health_heart_rate(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_stress (
+    timestamp BIGINT PRIMARY KEY,
+    stress_level INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_stress_ts ON health_stress(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_body_battery (
+    timestamp BIGINT PRIMARY KEY,
+    level INTEGER NOT NULL,
+    charged INTEGER,
+    drained INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_health_bb_ts ON health_body_battery(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_spo2 (
+    timestamp BIGINT PRIMARY KEY,
+    spo2_value INTEGER NOT NULL,
+    reading_type TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_health_spo2_ts ON health_spo2(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_respiration (
+    timestamp BIGINT PRIMARY KEY,
+    respiration_rate REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_resp_ts ON health_respiration(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_hrv (
+    timestamp BIGINT PRIMARY KEY,
+    hrv_value REAL,
+    reading_type TEXT,
+    status TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_health_hrv_ts ON health_hrv(timestamp);
+
+CREATE TABLE IF NOT EXISTS health_sleep (
+    date DATE PRIMARY KEY,
+    start_timestamp BIGINT,
+    end_timestamp BIGINT,
+    total_sleep_seconds INTEGER,
+    deep_sleep_seconds INTEGER,
+    light_sleep_seconds INTEGER,
+    rem_sleep_seconds INTEGER,
+    awake_seconds INTEGER,
+    score INTEGER,
+    quality TEXT,
+    raw_data JSONB
+);
+
+CREATE TABLE IF NOT EXISTS health_steps (
+    date DATE PRIMARY KEY,
+    total_steps INTEGER NOT NULL,
+    goal INTEGER,
+    distance_meters REAL,
+    calories INTEGER,
+    timestamp BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS health_resting_heart_rate (
+    date DATE PRIMARY KEY,
+    resting_hr INTEGER NOT NULL,
+    timestamp BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS health_daily_summary (
+    date DATE PRIMARY KEY,
+    calories_total INTEGER,
+    calories_active INTEGER,
+    calories_bmr INTEGER,
+    floors_climbed INTEGER,
+    intensity_minutes INTEGER,
+    raw_data JSONB
+);
+
+CREATE TABLE IF NOT EXISTS health_training_status (
+    date DATE PRIMARY KEY,
+    training_status TEXT,
+    training_status_phrase TEXT,
+    vo2max_running REAL,
+    vo2max_cycling REAL,
+    training_load_7_day INTEGER,
+    training_load_28_day INTEGER,
+    recovery_time_hours INTEGER,
+    raw_data JSONB
+);
+
+CREATE TABLE IF NOT EXISTS health_activities (
+    activity_id BIGINT PRIMARY KEY,
+    name TEXT,
+    activity_type TEXT,
+    start_timestamp BIGINT NOT NULL,
+    duration_seconds INTEGER,
+    distance_meters REAL,
+    calories INTEGER,
+    avg_heart_rate INTEGER,
+    max_heart_rate INTEGER,
+    avg_pace REAL,
+    elevation_gain REAL,
+    vo2max REAL,
+    training_effect_aerobic REAL,
+    training_effect_anaerobic REAL,
+    training_load INTEGER,
+    raw_data JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_health_act_start ON health_activities(start_timestamp);
+
+CREATE TABLE IF NOT EXISTS health_sync_log (
+    id SERIAL PRIMARY KEY,
+    sync_timestamp BIGINT NOT NULL,
+    metric_type TEXT NOT NULL,
+    records_synced INTEGER,
+    status TEXT,
+    error_message TEXT
+);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- AGENT ENGINE (from migration 011, 012, 014)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
+    agent_id TEXT NOT NULL,
+
+    trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+        'cron', 'hook', 'event', 'manual', 'telegram', 'webchat', 'workflow'
+    )),
+    trigger_detail TEXT,
+    correlation_id UUID,
+
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending', 'running', 'completed', 'failed', 'timeout', 'cancelled'
+    )),
+
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    duration_ms INTEGER,
+
+    model_used TEXT,
+    models_attempted TEXT[],
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    total_cost_usd NUMERIC(10, 6) DEFAULT 0,
+
+    system_prompt_chars INTEGER DEFAULT 0,
+    user_prompt_chars INTEGER DEFAULT 0,
+    tools_provided TEXT[],
+
+    output_text TEXT,
+    error_message TEXT,
+    error_traceback TEXT,
+
+    delivery_mode TEXT,
+    delivery_status TEXT,
+    delivered_at TIMESTAMPTZ,
+    delivery_channel TEXT,
+
+    token_budget INTEGER DEFAULT 0,
+    cost_budget_usd NUMERIC(10, 6) DEFAULT 0,
+    budget_exhausted BOOLEAN DEFAULT FALSE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status ON agent_runs(agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_tenant ON agent_runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_correlation ON agent_runs(correlation_id) WHERE correlation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS agent_run_steps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+
+    step_type TEXT NOT NULL CHECK (step_type IN (
+        'llm_call', 'tool_call', 'tool_result', 'error',
+        'planning', 'verification', 'checkpoint', 'scratchpad',
+        'escalation', 'guardrail'
+    )),
+
+    tool_name TEXT,
+    tool_input JSONB,
+    tool_output JSONB,
+
+    model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    duration_ms INTEGER,
+
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps(run_id, step_number);
+
+CREATE TABLE IF NOT EXISTS agent_schedules (
+    agent_id TEXT PRIMARY KEY,
+    tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    cron_expr TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'America/Grenada',
+
+    timeout_seconds INTEGER NOT NULL DEFAULT 600,
+
+    last_run_at TIMESTAMPTZ,
+    last_run_id UUID REFERENCES agent_runs(id),
+    last_status TEXT,
+    last_duration_ms INTEGER,
+    next_run_at TIMESTAMPTZ,
+    consecutive_errors INTEGER NOT NULL DEFAULT 0,
+
+    model_primary TEXT,
+    model_fallbacks TEXT[],
+    delivery_mode TEXT,
+    delivery_channel TEXT,
+    delivery_to TEXT,
+    session_target TEXT,
+
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_tenant ON agent_schedules(tenant_id);
+
+-- ── Checkpoints: mid-run state snapshots for resume (from migration 014) ─
+
+CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    messages JSONB NOT NULL DEFAULT '[]',
+    scratchpad JSONB,
+    plan JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run
+    ON agent_run_checkpoints(run_id, step_number DESC);
+
+-- ── Guardrail audit trail (from migration 014) ──────────────────────────
+
+CREATE TABLE IF NOT EXISTS agent_guardrail_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    guardrail_name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('blocked', 'warned', 'allowed')),
+    tool_name TEXT,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_guardrail_events_run
+    ON agent_guardrail_events(run_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- WORKFLOW ENGINE (from migration 013)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary',
+    workflow_id TEXT NOT NULL,
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    trigger_detail TEXT,
+    correlation_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'completed', 'failed', 'timeout', 'cancelled')),
+    steps_total INTEGER NOT NULL DEFAULT 0,
+    steps_completed INTEGER NOT NULL DEFAULT 0,
+    steps_failed INTEGER NOT NULL DEFAULT 0,
+    steps_skipped INTEGER NOT NULL DEFAULT 0,
+    context JSONB DEFAULT '{}',
+    error_message TEXT,
+    duration_ms INTEGER,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_run_steps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    step_id TEXT NOT NULL,
+    step_type TEXT NOT NULL CHECK (step_type IN ('agent', 'tool', 'condition', 'transform', 'noop')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+    agent_id TEXT,
+    agent_run_id UUID,
+    tool_name TEXT,
+    tool_input JSONB,
+    tool_output JSONB,
+    condition_branch TEXT,
+    output_text TEXT,
+    error_message TEXT,
+    duration_ms INTEGER,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_status ON workflow_runs(workflow_id, status);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant ON workflow_runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_created ON workflow_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_correlation ON workflow_runs(correlation_id) WHERE correlation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(run_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- VAULT (secret store)
+-- ════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS vault_secrets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary',
+    key TEXT NOT NULL,
+    encrypted_value BYTEA NOT NULL,
+    category TEXT DEFAULT 'credential',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(tenant_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_tenant_category ON vault_secrets(tenant_id, category);
 
 COMMIT;
