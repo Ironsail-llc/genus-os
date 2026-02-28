@@ -11,6 +11,8 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from robothor.engine.models import TriggerType
+
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
@@ -218,6 +220,83 @@ def create_health_app(config: EngineConfig, runner: AgentRunner | None = None, w
                 ]
 
                 return run_data
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── v2 Enhancement endpoints ─────────────────────────────────────
+
+    @app.post("/api/runs/{run_id}/resume")
+    async def resume_run(run_id: str):
+        """Resume a run from its latest checkpoint."""
+        if not runner:
+            return {"error": "Runner not available"}
+        try:
+            from robothor.engine.tracking import get_run
+            original = get_run(run_id)
+            if not original:
+                return {"error": f"Run not found: {run_id}"}
+
+            import asyncio
+            asyncio.create_task(
+                runner.execute(
+                    agent_id=original["agent_id"],
+                    message="Resume from checkpoint — continue where you left off.",
+                    trigger_type=TriggerType.MANUAL,
+                    trigger_detail=f"resume:{run_id}",
+                    resume_from_run_id=run_id,
+                )
+            )
+            return {"status": "resuming", "original_run_id": run_id}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/v2/stats")
+    async def v2_stats(hours: int = 24):
+        """v2 enhancement stats — guardrail events, budget exhaustions, checkpoints."""
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                # Guardrail events
+                cur.execute(
+                    """SELECT guardrail_name, action, COUNT(*)
+                       FROM agent_guardrail_events
+                       WHERE created_at > NOW() - INTERVAL '%s hours'
+                       GROUP BY guardrail_name, action
+                       ORDER BY count DESC""",
+                    (hours,),
+                )
+                guardrails = [
+                    {"guardrail": r[0], "action": r[1], "count": r[2]}
+                    for r in cur.fetchall()
+                ]
+
+                # Budget exhaustions
+                cur.execute(
+                    """SELECT agent_id, COUNT(*)
+                       FROM agent_runs
+                       WHERE budget_exhausted = TRUE
+                         AND created_at > NOW() - INTERVAL '%s hours'
+                       GROUP BY agent_id""",
+                    (hours,),
+                )
+                budgets = {r[0]: r[1] for r in cur.fetchall()}
+
+                # Checkpoints
+                cur.execute(
+                    """SELECT COUNT(*) FROM agent_run_checkpoints
+                       WHERE created_at > NOW() - INTERVAL '%s hours'""",
+                    (hours,),
+                )
+                checkpoint_count = cur.fetchone()[0]
+
+                return {
+                    "hours": hours,
+                    "guardrail_events": guardrails,
+                    "budget_exhaustions": budgets,
+                    "checkpoints_saved": checkpoint_count,
+                }
         except Exception as e:
             return {"error": str(e)}
 

@@ -38,12 +38,27 @@ class StepType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     ERROR = "error"
+    PLANNING = "planning"
+    VERIFICATION = "verification"
+    CHECKPOINT = "checkpoint"
+    SCRATCHPAD = "scratchpad"
+    ESCALATION = "escalation"
+    GUARDRAIL = "guardrail"
 
 
 class DeliveryMode(str, Enum):
     ANNOUNCE = "announce"
     NONE = "none"
     LOG = "log"
+
+
+@dataclass
+class AgentHook:
+    """Event hook — triggers an agent run when a matching Redis Stream event arrives."""
+
+    stream: str  # Redis Stream name (e.g., "email", "calendar")
+    event_type: str  # Event type filter (e.g., "email.new")
+    message: str = ""  # Initial prompt sent to agent when triggered
 
 
 @dataclass
@@ -104,6 +119,22 @@ class AgentConfig:
 
     # Downstream agents to trigger after successful cron run
     downstream_agents: list[str] = field(default_factory=list)
+
+    # Event hooks — triggers from Redis Streams (parsed from manifest hooks field)
+    hooks: list[AgentHook] = field(default_factory=list)
+
+    # ── v2 enhancements (all default off for backward compat) ──
+    error_feedback: bool = True
+    token_budget: int = 0  # max tokens per run (0 = unlimited)
+    cost_budget_usd: float = 0.0  # max cost per run (0 = unlimited)
+    planning_enabled: bool = False
+    planning_model: str = ""  # separate cheap model for planning
+    scratchpad_enabled: bool = False
+    guardrails: list[str] = field(default_factory=list)
+    checkpoint_enabled: bool = False
+    verification_enabled: bool = False
+    verification_prompt: str = ""
+    difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
 
 
 @dataclass
@@ -177,6 +208,11 @@ class AgentRun:
     delivery_status: str | None = None
     delivered_at: datetime | None = None
     delivery_channel: str | None = None
+
+    # v2 budget tracking
+    token_budget: int = 0
+    cost_budget_usd: float = 0.0
+    budget_exhausted: bool = False
 
     steps: list[RunStep] = field(default_factory=list)
 
