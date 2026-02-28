@@ -36,6 +36,7 @@ dependencies = [
     "aiogram>=3.10",
     "apscheduler>=3.10",
     "html2text>=2024.2",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

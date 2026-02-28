@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 
@@ -78,6 +79,39 @@ def main(argv: list[str] | None = None) -> int:
     tui_parser.add_argument("--url", default="http://127.0.0.1:18800", help="Engine URL")
     tui_parser.add_argument("--session", default=None, help="Session key (auto-generated if omitted)")
 
+    # tunnel
+    tunnel_parser = subparsers.add_parser("tunnel", help="Manage tunnel/ingress config")
+    tunnel_sub = tunnel_parser.add_subparsers(dest="tunnel_command")
+    tunnel_gen = tunnel_sub.add_parser("generate", help="Generate tunnel config from enabled services")
+    tunnel_gen.add_argument("--provider", default=None, help="Provider: cloudflare, caddy (default: from env)")
+    tunnel_gen.add_argument("--domain", default=None, help="Domain (default: from env)")
+    tunnel_sub.add_parser("status", help="Check tunnel connectivity")
+
+    # vault
+    vault_parser = subparsers.add_parser("vault", help="Manage the secret vault")
+    vault_sub = vault_parser.add_subparsers(dest="vault_command")
+    vault_sub.add_parser("init", help="Generate vault master key")
+    vault_set_p = vault_sub.add_parser("set", help="Store a secret")
+    vault_set_p.add_argument("key", help="Secret key (e.g. telegram/bot_token)")
+    vault_set_p.add_argument("value", nargs="?", default=None, help="Value (prompted if omitted)")
+    vault_set_p.add_argument("--category", default="credential", help="Category (default: credential)")
+    vault_get_p = vault_sub.add_parser("get", help="Retrieve a secret")
+    vault_get_p.add_argument("key", help="Secret key")
+    vault_list_p = vault_sub.add_parser("list", help="List secret keys")
+    vault_list_p.add_argument("--category", default=None, help="Filter by category")
+    vault_del_p = vault_sub.add_parser("delete", help="Delete a secret")
+    vault_del_p.add_argument("key", help="Secret key to delete")
+    vault_import_p = vault_sub.add_parser("import-env", help="Import secrets from .env file")
+    vault_import_p.add_argument("file", help="Path to .env file")
+    vault_sub.add_parser("export-env", help="Export all secrets as KEY=VALUE")
+
+    # agent
+    agent_parser = subparsers.add_parser("agent", help="Agent management")
+    agent_sub = agent_parser.add_subparsers(dest="agent_command")
+    scaffold_parser = agent_sub.add_parser("scaffold", help="Scaffold a new agent")
+    scaffold_parser.add_argument("agent_id", help="Agent ID (kebab-case, e.g., ticket-router)")
+    scaffold_parser.add_argument("--description", "-d", default="", help="One-line description")
+
     # engine
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
@@ -120,6 +154,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_status(args)
     elif args.command == "pipeline":
         return _cmd_pipeline(args)
+    elif args.command == "tunnel":
+        return _cmd_tunnel(args)
+    elif args.command == "vault":
+        return _cmd_vault(args)
+    elif args.command == "agent":
+        return _cmd_agent(args)
     elif args.command == "engine":
         return _cmd_engine(args)
     elif args.command == "tui":
@@ -175,6 +215,7 @@ REQUIRED_TABLES = [
     "crm_conversations",
     "crm_messages",
     "telemetry",
+    "vault_secrets",
 ]
 
 
@@ -348,13 +389,49 @@ def _cmd_status(args: argparse.Namespace) -> int:
         resp.raise_for_status()
         data = resp.json()
         agent_count = len(data.get("agents", {}))
-        print(f"               {data.get('status', '?')} — {agent_count} agents, bot={'yes' if data.get('bot_configured') else 'no'}")
+        wf_count = data.get("workflow_count", 0)
+        print(f"               {data.get('status', '?')} — {agent_count} agents, {wf_count} workflows")
     except Exception:
-        print(f"               Not running — start with: robothor engine start")
+        print("               Not running — start with: robothor engine start")
+
+    # Vault
+    print("  Vault:      ", end="")
+    try:
+        from robothor.vault.dal import count_secrets
+        count = count_secrets()
+        print(f" {count} secret(s) stored")
+    except Exception:
+        print(" not configured — run: robothor vault init")
+
+    # Optional services (check if ports are listening)
+    _check_optional_service("TTS", cfg.tts_port, "/v1/models")
+
+    monitoring_port = int(os.environ.get("ROBOTHOR_MONITORING_PORT", "3010"))
+    _check_optional_service("Monitoring", monitoring_port, "/")
+
+    camera_rtsp_port = int(os.environ.get("ROBOTHOR_CAMERA_RTSP_PORT", "0"))
+    if camera_rtsp_port:
+        _check_optional_service("Camera", camera_rtsp_port, None)
 
     print()
     print(f"  Workspace:   {cfg.workspace}")
     return 0
+
+
+def _check_optional_service(name: str, port: int, health_path: str | None) -> None:
+    """Check if an optional service is running on a given port."""
+    if port == 0:
+        return
+    import socket
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+        sock.close()
+        print(f"  {name + ':':<13} port {port:<10} — Connected")
+    except (ConnectionRefusedError, OSError, TimeoutError):
+        # Only show if profiles indicate it should be running
+        profiles = os.environ.get("COMPOSE_PROFILES", "")
+        if profiles:
+            print(f"  {name + ':':<13} port {port:<10} — Not running")
 
 
 
@@ -385,6 +462,244 @@ def _cmd_tui(args: argparse.Namespace) -> int:
         print("Error: Textual is required for the TUI.")
         print("Install with: pip install robothor[tui]")
         return 1
+
+
+def _cmd_tunnel(args: argparse.Namespace) -> int:
+    sub = getattr(args, "tunnel_command", None)
+
+    if sub == "generate":
+        from robothor.tunnel import generate_tunnel_config
+
+        provider = args.provider or os.environ.get("ROBOTHOR_TUNNEL_PROVIDER", "cloudflare")
+        domain = args.domain or os.environ.get("ROBOTHOR_DOMAIN", "")
+        if not domain:
+            print("Error: No domain set. Use --domain or ROBOTHOR_DOMAIN env var.")
+            return 1
+        profiles = [p.strip() for p in os.environ.get("COMPOSE_PROFILES", "").split(",") if p.strip()]
+        try:
+            out_path = generate_tunnel_config(provider, domain, profiles)
+            print(f"Generated {provider} config: {out_path}")
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+    if sub == "status":
+        from robothor.tunnel import check_tunnel_status
+
+        provider = os.environ.get("ROBOTHOR_TUNNEL_PROVIDER", "none")
+        if provider == "none":
+            print("No tunnel configured. Set ROBOTHOR_TUNNEL_PROVIDER in .env")
+            return 0
+        result = check_tunnel_status(provider)
+        status = "Connected" if result["connected"] else "Not connected"
+        print(f"Tunnel ({provider}): {status}")
+        return 0 if result["connected"] else 1
+
+    print("Usage: robothor tunnel {generate|status}")
+    return 0
+
+
+def _cmd_vault(args: argparse.Namespace) -> int:
+    sub = getattr(args, "vault_command", None)
+    from pathlib import Path
+
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
+
+    if sub == "init":
+        from robothor.vault.crypto import init_master_key
+        key_path = init_master_key(workspace)
+        print(f"Vault master key: {key_path}")
+        return 0
+
+    if sub == "set":
+        import getpass
+        from robothor.vault import set as vault_set
+        from robothor.vault.crypto import get_master_key
+        try:
+            get_master_key(workspace)
+        except FileNotFoundError:
+            print("Error: No vault master key. Run 'robothor vault init' first.")
+            return 1
+        value = args.value
+        if value is None:
+            value = getpass.getpass(f"Value for {args.key}: ")
+        vault_set(args.key, value, category=args.category)
+        print(f"Stored: {args.key} [{args.category}]")
+        return 0
+
+    if sub == "get":
+        from robothor.vault import get as vault_get
+        from robothor.vault.crypto import get_master_key
+        try:
+            get_master_key(workspace)
+        except FileNotFoundError:
+            print("Error: No vault master key. Run 'robothor vault init' first.")
+            return 1
+        value = vault_get(args.key)
+        if value is None:
+            print(f"Not found: {args.key}")
+            return 1
+        print(value)
+        return 0
+
+    if sub == "list":
+        from robothor.vault import list as vault_list
+        from robothor.vault.crypto import get_master_key
+        try:
+            get_master_key(workspace)
+        except FileNotFoundError:
+            print("Error: No vault master key. Run 'robothor vault init' first.")
+            return 1
+        keys = vault_list(category=args.category)
+        if not keys:
+            print("Vault is empty.")
+        else:
+            for k in keys:
+                print(f"  {k}")
+            print(f"\n{len(keys)} secret(s)")
+        return 0
+
+    if sub == "delete":
+        from robothor.vault import delete as vault_delete
+        deleted = vault_delete(args.key)
+        print(f"{'Deleted' if deleted else 'Not found'}: {args.key}")
+        return 0 if deleted else 1
+
+    if sub == "import-env":
+        from robothor.vault import set as vault_set
+        from robothor.vault.crypto import get_master_key
+        try:
+            get_master_key(workspace)
+        except FileNotFoundError:
+            print("Error: No vault master key. Run 'robothor vault init' first.")
+            return 1
+        env_path = Path(args.file)
+        if not env_path.exists():
+            print(f"Error: File not found: {env_path}")
+            return 1
+        count = 0
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip().lower().replace("_", "/", 1)  # TELEGRAM_BOT_TOKEN → telegram/bot_token
+            value = value.strip().strip("'\"")
+            if value:
+                vault_set(key, value, category="credential")
+                count += 1
+        print(f"Imported {count} secret(s)")
+        return 0
+
+    if sub == "export-env":
+        from robothor.vault import export_env
+        from robothor.vault.crypto import get_master_key
+        try:
+            get_master_key(workspace)
+        except FileNotFoundError:
+            print("Error: No vault master key. Run 'robothor vault init' first.")
+            return 1
+        secrets = export_env()
+        for k, v in sorted(secrets.items()):
+            print(f"{k}={v}")
+        return 0
+
+    print("Usage: robothor vault {init|set|get|list|delete|import-env|export-env}")
+    return 0
+
+
+def _cmd_agent(args: argparse.Namespace) -> int:
+    sub = getattr(args, "agent_command", None)
+    if sub == "scaffold":
+        return _cmd_agent_scaffold(args)
+    else:
+        print("Usage: robothor agent {scaffold}")
+        return 0
+
+
+def _cmd_agent_scaffold(args: argparse.Namespace) -> int:
+    """Scaffold a new agent — create manifest + instruction file from templates."""
+    import re
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    agent_id = args.agent_id
+    description = args.description or f"A new agent: {agent_id}"
+
+    # Validate kebab-case
+    if not re.match(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$", agent_id):
+        print(f"Error: agent_id must be kebab-case (e.g., 'ticket-router'), got: {agent_id}")
+        return 1
+
+    # Derive names
+    agent_name = agent_id.replace("-", " ").title()
+    instruction_filename = agent_id.upper().replace("-", "_") + ".md"
+    version = datetime.now(UTC).strftime("%Y-%m-%d")
+    status_file = f"brain/memory/{agent_id}-status.md"
+
+    # Paths
+    workspace = Path.home() / "robothor"
+    manifest_dir = workspace / "docs" / "agents"
+    brain_dir = workspace / "brain"
+    template_dir = workspace / "templates"
+
+    manifest_path = manifest_dir / f"{agent_id}.yaml"
+    instruction_path = brain_dir / instruction_filename
+
+    # Check for conflicts
+    if manifest_path.exists():
+        print(f"Error: Manifest already exists: {manifest_path}")
+        return 1
+    if instruction_path.exists():
+        print(f"Error: Instruction file already exists: {instruction_path}")
+        return 1
+
+    # Load templates
+    manifest_template = template_dir / "agent-manifest.yaml"
+    instruction_template = template_dir / "agent-instructions.md"
+
+    if not manifest_template.exists():
+        print(f"Error: Template not found: {manifest_template}")
+        return 1
+    if not instruction_template.exists():
+        print(f"Error: Template not found: {instruction_template}")
+        return 1
+
+    replacements = {
+        "{AGENT_ID}": agent_id,
+        "{AGENT_NAME}": agent_name,
+        "{DESCRIPTION}": description,
+        "{VERSION}": version,
+        "{INSTRUCTION_FILENAME}": instruction_filename,
+        "{STATUS_FILE}": status_file,
+    }
+
+    # Write manifest
+    manifest_content = manifest_template.read_text()
+    for placeholder, value in replacements.items():
+        manifest_content = manifest_content.replace(placeholder, value)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(manifest_content)
+
+    # Write instruction file
+    instruction_content = instruction_template.read_text()
+    for placeholder, value in replacements.items():
+        instruction_content = instruction_content.replace(placeholder, value)
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    instruction_path.write_text(instruction_content)
+
+    print(f"Scaffolded agent: {agent_name} ({agent_id})")
+    print()
+    print(f"  Manifest:     {manifest_path}")
+    print(f"  Instructions: {instruction_path}")
+    print()
+    print("Next steps:")
+    print(f"  1. Edit the manifest:     {manifest_path}")
+    print(f"  2. Edit the instructions: {instruction_path}")
+    print(f"  3. Validate:              python scripts/validate_agents.py --agent {agent_id}")
+    print(f"  4. Restart engine:        sudo systemctl restart robothor-engine")
+    return 0
 
 
 def _cmd_engine(args: argparse.Namespace) -> int:
