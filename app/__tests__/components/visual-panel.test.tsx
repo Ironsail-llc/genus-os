@@ -1,6 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import React from "react";
+
+// Stub fetch to prevent real network calls (LiveCanvas fetches on mount)
+const mockFetch = vi.fn().mockResolvedValue({
+  ok: false,
+  status: 404,
+  json: () => Promise.resolve({}),
+});
+vi.stubGlobal("fetch", mockFetch);
 
 // Mock Recharts
 vi.mock("recharts", () => ({
