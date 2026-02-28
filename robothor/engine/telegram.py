@@ -51,10 +51,10 @@ THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
-    "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
-    "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
+    "Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
     "Kimi K2.5": "openrouter/moonshotai/kimi-k2.5",
-    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
+    "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
+    "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
 }
 
 # Reverse lookup: model id → display name
@@ -131,12 +131,18 @@ class TelegramBot:
         @self.dp.message(Command("model"))
         async def cmd_model(message: Message) -> None:
             chat_id = str(message.chat.id)
-            current = self._model_override.get(chat_id, "gemini/gemini-2.5-flash")
+            override = self._model_override.get(chat_id)
+            if override:
+                current = override
+                current_name = MODEL_DISPLAY_NAMES.get(current, current)
+                status_line = f"<b>Current model:</b> {html.escape(current_name)} (override)"
+            else:
+                current = self._get_manifest_primary()
+                current_name = MODEL_DISPLAY_NAMES.get(current, current)
+                status_line = f"<b>Current model:</b> {html.escape(current_name)} (manifest default)"
             kb = self._build_model_keyboard(current)
-            current_name = MODEL_DISPLAY_NAMES.get(current, current)
             await message.answer(
-                f"<b>Current model:</b> {html.escape(current_name)}\n\n"
-                "Tap to switch:",
+                f"{status_line}\n\nTap to switch:",
                 reply_markup=kb,
             )
 
@@ -151,7 +157,11 @@ class TelegramBot:
             chat_id = str(message.chat.id)
             self._model_override.pop(chat_id, None)
             self._chat_history.pop(chat_id, None)
-            await message.answer("Session reset. Model and history cleared.")
+            primary = self._get_manifest_primary()
+            name = MODEL_DISPLAY_NAMES.get(primary, primary)
+            await message.answer(
+                f"Session reset. Model reverted to {html.escape(name)} (manifest default)."
+            )
 
         @self.dp.message(Command("stop"))
         async def cmd_stop(message: Message) -> None:
@@ -394,6 +404,13 @@ class TelegramBot:
 
             task = asyncio.create_task(run_agent())
             self._active_tasks[chat_id] = task
+
+    def _get_manifest_primary(self) -> str:
+        """Get the main agent's manifest primary model."""
+        from robothor.engine.config import load_agent_config
+
+        cfg = load_agent_config("main", self.config.manifest_dir)
+        return cfg.model_primary if cfg else ""
 
     def _build_model_keyboard(self, current_model: str) -> InlineKeyboardMarkup:
         """Build inline keyboard for model selection."""
