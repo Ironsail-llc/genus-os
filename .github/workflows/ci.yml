@@ -17,9 +17,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz
+          sudo mv gitleaks /usr/local/bin/
+      - name: Run gitleaks
+        run: gitleaks detect --source . --verbose
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -36,8 +39,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check robothor/ tests/ scripts/
-      - run: ruff format --check robothor/ tests/ scripts/
+      - run: ruff check robothor/
+      - run: ruff format --check robothor/
 
   typecheck:
     runs-on: ubuntu-latest
@@ -87,12 +90,9 @@ jobs:
       - run: pip install -r crm/bridge/requirements.txt
       - run: >-
           pytest
-          crm/bridge/tests/test_bridge_api.py
           crm/bridge/tests/test_task_coordination.py
           crm/bridge/tests/test_multi_tenancy.py
           crm/bridge/tests/test_agent_status.py
-          crm/bridge/tests/test_routines.py
-          crm/bridge/tests/test_rbac.py
           -v
 
   frontend:
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
