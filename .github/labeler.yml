@@ -1,0 +1,41 @@
+engine:
+  - changed-files:
+      - any-glob-to-any-file: "robothor/engine/**"
+
+memory:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "robothor/memory/**"
+          - "robothor/rag/**"
+
+crm:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "robothor/crm/**"
+          - "crm/**"
+
+vision:
+  - changed-files:
+      - any-glob-to-any-file: "robothor/vision/**"
+
+health:
+  - changed-files:
+      - any-glob-to-any-file: "robothor/health/**"
+
+helm:
+  - changed-files:
+      - any-glob-to-any-file: "app/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "*.md"
+
+agents:
+  - changed-files:
+      - any-glob-to-any-file: "docs/agents/**"
