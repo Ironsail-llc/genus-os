@@ -49,6 +49,9 @@ class EngineConfig:
     # Default agent for interactive chat (Telegram + webchat)
     default_chat_agent: str = "main"
 
+    # Canonical session key shared by Telegram + Helm webchat
+    main_session_key: str = "agent:main:primary"
+
     @classmethod
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
@@ -70,6 +73,7 @@ class EngineConfig:
             default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/New_York"),
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
             default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
+            main_session_key=os.environ.get("ROBOTHOR_MAIN_SESSION_KEY", "agent:main:primary"),
         )
 
 

@@ -117,12 +117,20 @@ describe("POST /api/chat/send", () => {
     expect(res.status).toBe(502);
   });
 
-  it("returns 409 when session is busy", async () => {
-    const busyRes = new Response(JSON.stringify({ error: "Session is busy" }), {
-      status: 409,
-      headers: { "Content-Type": "application/json" },
+  it("forwards SSE keepalive comments from engine", async () => {
+    // Engine sends keepalive comments between events
+    const encoder = new TextEncoder();
+    const body = [
+      ": keepalive\n\n",
+      "event: delta\ndata: {\"text\":\"hi\"}\n\n",
+      ": keepalive\n\n",
+      "event: done\ndata: {\"text\":\"hi\"}\n\n",
+    ].join("");
+    const engineRes = new Response(encoder.encode(body), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
     });
-    mockChatSend.mockResolvedValue(busyRes);
+    mockChatSend.mockResolvedValue(engineRes);
 
     const req = new Request("http://localhost:3004/api/chat/send", {
       method: "POST",
@@ -131,6 +139,9 @@ describe("POST /api/chat/send", () => {
     });
 
     const res = await POST(req);
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain(": keepalive");
+    expect(text).toContain("event: done");
   });
 });

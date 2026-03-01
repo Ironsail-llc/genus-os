@@ -17,7 +17,7 @@ class EngineClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, message }),
     });
-    if (!res.ok && res.status !== 409) {
+    if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
     }
     return res;
