@@ -49,7 +49,7 @@ def check_1_service_registry():
         return False
 
     # Key services must be present
-    for name in ["bridge", "orchestrator", "vision", "helm", "gateway", "redis", "postgres"]:
+    for name in ["bridge", "orchestrator", "vision", "helm", "redis", "postgres"]:
         if name not in services:
             return False
 

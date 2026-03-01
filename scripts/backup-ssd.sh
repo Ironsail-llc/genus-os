@@ -65,7 +65,7 @@ rsync -a --delete "${EXCLUDES[@]}" \
 
 # ── Hidden config directories ───────────────────────────────────
 
-rsync -a --delete "$HOME/.openclaw/" "$BACKUP_ROOT/latest/openclaw/" 2>> "$LOG"  # includes garmin_tokens/
+rsync -a --delete "$HOME/.config/robothor/" "$BACKUP_ROOT/latest/config-robothor/" 2>> "$LOG"  # includes garmin_tokens/
 rsync -a --delete "$HOME/.cloudflared/" "$BACKUP_ROOT/latest/cloudflared/" 2>> "$LOG"
 
 # ── System service files ────────────────────────────────────────

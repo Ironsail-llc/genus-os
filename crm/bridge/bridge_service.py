@@ -1,5 +1,5 @@
 """
-Robothor Bridge Service — Connects OpenClaw, CRM, and Memory System.
+Robothor Bridge Service — Connects agents, CRM, and Memory System.
 
 FastAPI app on port 9100. All CRM operations go through robothor.crm.dal.
 Agent RBAC enforced via X-Agent-Id header middleware.
@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Robothor Bridge",
     version="3.0.0",
-    description="Bridge between OpenClaw agents and the Robothor intelligence layer. Multi-tenant.",
+    description="Bridge between agents and the Robothor intelligence layer. Multi-tenant.",
     lifespan=lifespan,
 )
 

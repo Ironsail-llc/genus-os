@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { MarkerInterceptor } from "@/lib/gateway/marker-interceptor";
+import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
 
 describe("MarkerInterceptor", () => {
   it("passes through plain text unchanged", () => {

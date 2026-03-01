@@ -6,14 +6,14 @@ Robothor's command center. Live dashboard and chat interface in a two-panel Dock
 
 - **Next.js 16** + Dockview + shadcn/ui + Recharts + TanStack Table
 - **Port**: 3004, service: `robothor-app.service`
-- **Chat**: Custom SSE bridge to OpenClaw gateway (same agent as Telegram)
+- **Chat**: Custom SSE bridge to Agent Engine (same agent as Telegram)
 - **Canvas**: HTML-first rendering via iframe srcdoc (Tailwind CSS), native components as fallback
 - **Dashboard generation**: Gemini 2.5 Flash via OpenRouter (~2-6s)
 
 ## Architecture
 
 ```
-Chat Input → Gateway (Kimi K2.5) → SSE stream
+Chat Input → Engine (Kimi K2.5) → SSE stream
                                     ├─ delta events → chat text
                                     ├─ dashboard events → agent data passthrough
                                     └─ render events → native components
@@ -28,7 +28,7 @@ Dashboard Pipeline:
 
 ### Agent Data Passthrough
 
-When the gateway agent (Kimi K2.5) has data from tool calls (web search, memory lookup, etc.), it includes it in dashboard markers:
+When the engine agent (Kimi K2.5) has data from tool calls (web search, memory lookup, etc.), it includes it in dashboard markers:
 
 ```
 [DASHBOARD:{"intent":"weather","data":{"web":{"results":[...]}}}]
@@ -41,8 +41,8 @@ The dashboard pipeline skips re-fetching data the agent already provided. This a
 ```
 src/
 ├── app/api/
-│   ├── chat/send/         # POST → SSE (gateway bridge + marker interception)
-│   ├── chat/history/      # GET → message history from gateway
+│   ├── chat/send/         # POST → SSE (engine bridge + marker interception)
+│   ├── chat/history/      # GET → message history from engine
 │   ├── dashboard/generate/ # Triage → fetch → generate HTML
 │   └── dashboard/welcome/ # Welcome dashboard on page load
 ├── components/
@@ -52,7 +52,7 @@ src/
 │   ├── use-visual-state.ts  # Canvas state management
 │   └── use-dashboard-agent.ts # Background dashboard update agent
 └── lib/
-    ├── gateway/           # WebSocket client, types, marker interceptor
+    ├── engine/            # Engine client, types, marker interceptor
     └── dashboard/         # System prompt, triage, code validator, data fetching
 ```
 

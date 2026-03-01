@@ -56,7 +56,6 @@ The config is a singleton. Call `reset_config()` in tests to reload from environ
 | `ROBOTHOR_BRIDGE_PORT` | `9100` | Bridge service (CRM, contacts) |
 | `ROBOTHOR_VISION_PORT` | `8600` | Vision service |
 | `ROBOTHOR_HELM_PORT` | `3004` | Helm dashboard |
-| `ROBOTHOR_GATEWAY_PORT` | `18789` | Agent gateway |
 | `ROBOTHOR_TTS_PORT` | `8880` | TTS service |
 
 ## Vision

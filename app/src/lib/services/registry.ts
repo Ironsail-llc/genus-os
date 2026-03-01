@@ -32,7 +32,6 @@ const ENV_OVERRIDES: Record<string, string> = {
   vision: "VISION_URL",
   ollama: "OLLAMA_URL",
   redis: "REDIS_URL",
-  gateway: "GATEWAY_URL",
   searxng: "SEARXNG_URL",
   vaultwarden: "VAULTWARDEN_URL",
   impetus_one: "IMPETUS_ONE_BASE_URL",

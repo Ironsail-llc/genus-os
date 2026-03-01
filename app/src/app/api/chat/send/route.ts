@@ -1,6 +1,6 @@
-import { getEngineClient } from "@/lib/gateway/server-client";
-import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/gateway/session-state";
-import { MarkerInterceptor } from "@/lib/gateway/marker-interceptor";
+import { getEngineClient } from "@/lib/engine/server-client";
+import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/engine/session-state";
+import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
 
 export async function POST(req: Request) {
   const body = await req.json();

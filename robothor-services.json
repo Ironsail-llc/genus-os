@@ -38,16 +38,6 @@
       "tunnel_route": "app.robothor.ai",
       "dependencies": ["bridge", "orchestrator"]
     },
-    "gateway": {
-      "name": "OpenClaw Gateway",
-      "port": 18789,
-      "host": "0.0.0.0",
-      "health": null,
-      "protocol": "ws",
-      "systemd_unit": "robothor-gateway.service",
-      "tunnel_route": "gateway.robothor.ai",
-      "dependencies": []
-    },
     "ollama": {
       "name": "Ollama LLM Server",
       "port": 11434,

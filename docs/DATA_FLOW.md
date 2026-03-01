@@ -54,7 +54,7 @@ Canonical reference: `brain/ARCHITECTURE.md`
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
 │         LAYER 2: TRIAGE WORKER (Kimi K2.5, */15 min)          │
-│         Isolated session via OpenClaw cron                     │
+│         Agent run via Engine scheduler                         │
 │                                                              │
 │  1. Read triage-inbox.json (NOT full log files)               │
 │  2. Find entries needing processing                           │

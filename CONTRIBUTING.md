@@ -129,7 +129,7 @@ Use conventional commit prefixes:
 Robothor is a three-layer system in a single repo:
 
 1. **Intelligence Layer** (`robothor/`) — Python package: memory, RAG, knowledge graph, CRM, vision, events
-2. **Agent Orchestration** (`gateway/`) — OpenClaw messaging gateway with 11 autonomous agents defined as YAML manifests
+2. **Agent Engine** (`robothor/engine/`) — Python agent execution with 11 autonomous agents defined as YAML manifests
 3. **Control Plane** (`app/`) — The Helm, a Next.js 16 live dashboard with chat, task board, and event streams
 
 Supporting services: Bridge (`crm/bridge/`) for CRM API, PostgreSQL+pgvector, Redis, Ollama, 19 systemd units.
