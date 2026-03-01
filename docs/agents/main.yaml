@@ -13,7 +13,7 @@ tags_produced: [escalation, needs-philip]
 tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, vision, unknown-person, conversation]
 
 model:
-  primary: anthropic/claude-sonnet-4-6
+  primary: openrouter/anthropic/claude-sonnet-4-6
   fallbacks:
     - openrouter/moonshotai/kimi-k2.5
     - gemini/gemini-2.5-pro

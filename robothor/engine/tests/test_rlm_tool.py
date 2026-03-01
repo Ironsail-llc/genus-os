@@ -25,8 +25,8 @@ from robothor.engine.rlm_tool import (
 class TestDeepReasonConfig:
     def test_defaults(self):
         config = DeepReasonConfig()
-        assert config.root_model == "anthropic/claude-sonnet-4-6"
-        assert config.sub_model == "anthropic/claude-haiku-4-5-20251001"
+        assert config.root_model == "openrouter/anthropic/claude-sonnet-4-6"
+        assert config.sub_model == "openrouter/anthropic/claude-haiku-4-5-20251001"
         assert config.max_budget == 2.0
         assert config.max_timeout == 240
         assert config.max_iterations == 30
@@ -219,29 +219,51 @@ class TestBuildCustomTools:
         assert "read_file" in tools
         assert "memory_block_read" in tools
 
-    def test_each_tool_has_function_and_description(self):
+    def test_each_tool_has_tool_and_description(self):
         tools = _build_custom_tools("/workspace")
         for name, tool in tools.items():
-            assert "function" in tool, f"{name} missing function"
+            assert "tool" in tool, f"{name} missing tool"
             assert "description" in tool, f"{name} missing description"
-            assert callable(tool["function"]), f"{name} function not callable"
+            assert callable(tool["tool"]), f"{name} tool not callable"
 
 
 # ─── Execution tests ─────────────────────────────────────────────────
 
 
-class TestExecuteDeepReason:
-    @patch("robothor.engine.rlm_tool.RLM", create=True)
-    def test_successful_call(self, _):
-        """Mock at module level since we import inside the function."""
-        mock_rlm_cls = MagicMock()
-        mock_instance = MagicMock()
-        mock_instance.completion.return_value = "The answer is 42"
-        mock_instance.total_cost = 0.15
-        mock_instance.last_trajectory_path = "/tmp/trace.json"
-        mock_rlm_cls.return_value = mock_instance
+def _mock_rlm_modules(mock_rlm_cls):
+    """Patch sys.modules so `from rlm import RLM` and `from rlm.logger import RLMLogger` work."""
+    mock_logger_cls = MagicMock()
+    mock_logger_cls.return_value.log_file_path = "/tmp/trace.jsonl"
 
-        with patch.dict("sys.modules", {"rlms": MagicMock(RLM=mock_rlm_cls)}):
+    mock_rlm_mod = MagicMock()
+    mock_rlm_mod.RLM = mock_rlm_cls
+
+    mock_logger_mod = MagicMock()
+    mock_logger_mod.RLMLogger = mock_logger_cls
+
+    return patch.dict(
+        "sys.modules",
+        {"rlm": mock_rlm_mod, "rlm.logger": mock_logger_mod},
+    )
+
+
+def _make_mock_result(response="result", cost=0.0):
+    """Create a mock RLMChatCompletion."""
+    mock = MagicMock()
+    mock.response = response
+    mock.usage_summary.total_cost = cost
+    mock.execution_time = 1.0
+    return mock
+
+
+class TestExecuteDeepReason:
+    def test_successful_call(self):
+        mock_rlm_cls = MagicMock()
+        mock_rlm_cls.return_value.completion.return_value = _make_mock_result(
+            "The answer is 42", cost=0.15
+        )
+
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="What is the meaning?",
                 context="Some background info",
@@ -254,18 +276,17 @@ class TestExecuteDeepReason:
         assert result["context_chars"] > 0
 
     def test_import_error(self):
-        """When rlms is not installed, return helpful error."""
-        with patch.dict("sys.modules", {"rlms": None}):
-            # Force ImportError by making the import fail
-            import builtins
+        """When rlm is not installed, return helpful error."""
+        import builtins
 
-            original_import = builtins.__import__
+        original_import = builtins.__import__
 
-            def mock_import(name, *a, **kw):
-                if name == "rlms":
-                    raise ImportError("No module named 'rlms'")
-                return original_import(name, *a, **kw)
+        def mock_import(name, *a, **kw):
+            if name == "rlm":
+                raise ImportError("No module named 'rlm'")
+            return original_import(name, *a, **kw)
 
+        with patch.dict("sys.modules", {"rlm": None}):
             with patch("builtins.__import__", side_effect=mock_import):
                 result = execute_deep_reason(
                     query="test",
@@ -273,7 +294,6 @@ class TestExecuteDeepReason:
                 )
 
         assert "error" in result
-        assert "rlms" in result["error"]
         assert "pip install" in result["error"]
 
     def test_budget_exceeded_error(self):
@@ -284,10 +304,7 @@ class TestExecuteDeepReason:
             "Budget limit reached"
         )
 
-        mock_module = MagicMock()
-        mock_module.RLM = mock_rlm_cls
-
-        with patch.dict("sys.modules", {"rlms": mock_module}):
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="expensive query",
                 config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
@@ -303,10 +320,7 @@ class TestExecuteDeepReason:
         mock_rlm_cls = MagicMock()
         mock_rlm_cls.return_value.completion.side_effect = TimeoutExceededError("Timeout reached")
 
-        mock_module = MagicMock()
-        mock_module.RLM = mock_rlm_cls
-
-        with patch.dict("sys.modules", {"rlms": mock_module}):
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="slow query",
                 config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
@@ -322,15 +336,9 @@ class TestExecuteDeepReason:
         f.write_text("Important notes here")
 
         mock_rlm_cls = MagicMock()
-        mock_instance = MagicMock()
-        mock_instance.completion.return_value = "Analyzed"
-        mock_instance.total_cost = 0.05
-        mock_rlm_cls.return_value = mock_instance
+        mock_rlm_cls.return_value.completion.return_value = _make_mock_result("Analyzed")
 
-        mock_module = MagicMock()
-        mock_module.RLM = mock_rlm_cls
-
-        with patch.dict("sys.modules", {"rlms": mock_module}):
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="analyze notes",
                 context_sources=[{"type": "file", "path": str(f)}],
@@ -346,15 +354,9 @@ class TestExecuteDeepReason:
     def test_no_context(self):
         """Runs fine with no context at all."""
         mock_rlm_cls = MagicMock()
-        mock_instance = MagicMock()
-        mock_instance.completion.return_value = "Pure reasoning"
-        mock_instance.total_cost = 0.01
-        mock_rlm_cls.return_value = mock_instance
+        mock_rlm_cls.return_value.completion.return_value = _make_mock_result("Pure reasoning")
 
-        mock_module = MagicMock()
-        mock_module.RLM = mock_rlm_cls
-
-        with patch.dict("sys.modules", {"rlms": mock_module}):
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="think about this",
                 config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
@@ -368,10 +370,7 @@ class TestExecuteDeepReason:
         mock_rlm_cls = MagicMock()
         mock_rlm_cls.return_value.completion.side_effect = RuntimeError("kaboom")
 
-        mock_module = MagicMock()
-        mock_module.RLM = mock_rlm_cls
-
-        with patch.dict("sys.modules", {"rlms": mock_module}):
+        with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="broken",
                 config=DeepReasonConfig(log_dir="/tmp/rlm-test"),

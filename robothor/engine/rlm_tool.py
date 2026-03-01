@@ -32,12 +32,12 @@ class DeepReasonConfig:
 
     root_model: str = field(
         default_factory=lambda: os.environ.get(
-            "ROBOTHOR_RLM_ROOT_MODEL", "anthropic/claude-sonnet-4-6"
+            "ROBOTHOR_RLM_ROOT_MODEL", "openrouter/anthropic/claude-sonnet-4-6"
         )
     )
     sub_model: str = field(
         default_factory=lambda: os.environ.get(
-            "ROBOTHOR_RLM_SUB_MODEL", "anthropic/claude-haiku-4-5-20251001"
+            "ROBOTHOR_RLM_SUB_MODEL", "openrouter/anthropic/claude-haiku-4-5-20251001"
         )
     )
     max_budget: float = field(
@@ -209,28 +209,28 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
     """Build the custom_tools dict for the RLM instance."""
     return {
         "search_memory": {
-            "function": _make_search_memory_fn(),
+            "tool": _make_search_memory_fn(),
             "description": (
                 "Search Robothor's semantic memory for facts matching a query. "
                 "Returns JSON list of facts with category, confidence, similarity."
             ),
         },
         "get_entity": {
-            "function": _make_get_entity_fn(),
+            "tool": _make_get_entity_fn(),
             "description": (
                 "Look up an entity (person, org, concept) and its relationships "
                 "in the knowledge graph. Returns JSON."
             ),
         },
         "read_file": {
-            "function": _make_read_file_fn(workspace),
+            "tool": _make_read_file_fn(workspace),
             "description": (
                 "Read a file from the workspace. Paths relative to workspace root. "
                 "Truncated to 50KB."
             ),
         },
         "memory_block_read": {
-            "function": _make_memory_block_read_fn(),
+            "tool": _make_memory_block_read_fn(),
             "description": (
                 "Read a named memory block (persistent structured working memory). "
                 "Returns JSON with block_name, content, last_written_at."
@@ -287,32 +287,42 @@ def execute_deep_reason(
     # 4. Initialize RLM and run
     start_time = time.monotonic()
     try:
-        from rlms import RLM
+        from rlm import RLM
+        from rlm.logger import RLMLogger
+
+        rlm_logger = RLMLogger(log_dir=str(log_dir))
 
         rlm = RLM(
-            root_model=config.root_model,
-            sub_model=config.sub_model,
+            backend="litellm",
+            backend_kwargs={"model_name": config.root_model},
+            other_backends=["litellm"],
+            other_backend_kwargs=[{"model_name": config.sub_model}],
+            environment="local",
             max_budget=config.max_budget,
             max_timeout=config.max_timeout,
             max_iterations=config.max_iterations,
             max_depth=config.max_depth,
             custom_tools=custom_tools,
-            log_dir=str(log_dir),
+            compaction=True,
+            logger=rlm_logger,
         )
 
         result = rlm.completion({"context": full_context, "query": query})
 
         elapsed = time.monotonic() - start_time
 
-        # Extract trajectory file if available
-        trajectory_file = None
-        if hasattr(rlm, "last_trajectory_path"):
-            trajectory_file = rlm.last_trajectory_path
+        # Extract cost from usage summary
+        cost = 0.0
+        if result.usage_summary and result.usage_summary.total_cost:
+            cost = result.usage_summary.total_cost
+
+        # Extract trajectory file path from logger
+        trajectory_file = getattr(rlm_logger, "log_file_path", None)
 
         return {
-            "response": str(result),
+            "response": result.response,
             "execution_time_s": round(elapsed, 1),
-            "cost_usd": round(getattr(rlm, "total_cost", 0.0), 4),
+            "cost_usd": round(cost, 4),
             "context_chars": len(full_context),
             "trajectory_file": trajectory_file,
         }
