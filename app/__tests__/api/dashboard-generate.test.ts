@@ -31,7 +31,7 @@ describe("POST /api/dashboard/generate", () => {
     expect(body.error).toContain("intent required");
   });
 
-  it("returns buffered JSON on successful legacy generation", async () => {
+  it("returns chunked JSON on successful legacy generation", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
@@ -60,7 +60,8 @@ describe("POST /api/dashboard/generate", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json");
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.html).toContain("Test Dashboard");
     expect(body.type).toBeTruthy();
   });
@@ -164,7 +165,8 @@ describe("POST /api/dashboard/generate", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json");
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.html).toContain("Health Dashboard");
   });
 
@@ -232,7 +234,8 @@ describe("POST /api/dashboard/generate", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.html).toContain("Weather Dashboard");
 
     // Verify no SearXNG call was made (only OpenRouter calls)
@@ -304,7 +307,7 @@ describe("POST /api/dashboard/generate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("returns 502 when OpenRouter fails", async () => {
+  it("returns error JSON when OpenRouter fails", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
@@ -318,6 +321,10 @@ describe("POST /api/dashboard/generate", () => {
     });
 
     const res = await POST(req);
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
+    expect(body.error).toBe("Dashboard service temporarily unavailable");
   });
 });

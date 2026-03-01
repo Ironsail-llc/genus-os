@@ -65,11 +65,17 @@ export function useDashboardAgent() {
           return;
         }
 
-        const data = await res.json();
+        // Response may contain leading whitespace (keepalive padding) —
+        // parse from text to handle chunked responses safely.
+        const rawText = await res.text();
+        const data = JSON.parse(rawText.trim());
 
         if (abort.signal.aborted) return;
 
-        if (data.html) {
+        if (data.error) {
+          console.warn("[dashboard-agent] Generate returned error:", data.error);
+          reportDashboardError("generate-api", data.error);
+        } else if (data.html) {
           const validation = validateDashboardCode(data.html);
           if (validation.valid) {
             console.log("[dashboard-agent] Dashboard updated:", data.html.length, "chars");

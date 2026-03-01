@@ -20,14 +20,6 @@ export async function POST(req: Request) {
 
     const engineRes = await client.chatSend(SESSION_KEY, message);
 
-    // 409 = session busy
-    if (engineRes.status === 409) {
-      return new Response(
-        JSON.stringify({ error: "Session is busy" }),
-        { status: 409, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
     if (!engineRes.body) {
       return new Response(
         JSON.stringify({ error: "No response body from engine" }),
@@ -59,7 +51,10 @@ export async function POST(req: Request) {
 
             let eventType = "";
             for (const line of lines) {
-              if (line.startsWith("event: ")) {
+              if (line.startsWith(":")) {
+                // SSE comment (keepalive) — forward to browser
+                controller.enqueue(encoder.encode(line + "\n\n"));
+              } else if (line.startsWith("event: ")) {
                 eventType = line.slice(7).trim();
               } else if (line.startsWith("data: ")) {
                 const dataStr = line.slice(6);

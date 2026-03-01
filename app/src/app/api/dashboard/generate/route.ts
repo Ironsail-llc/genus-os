@@ -131,99 +131,115 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
 }
 
 /**
- * Generate dashboard HTML via OpenRouter and return as buffered JSON.
- * Returns: { html: string, type: "html" } on 200, or error on 502/500.
+ * Generate dashboard HTML via OpenRouter and return as chunked JSON.
+ *
+ * Sends whitespace padding every ~10s while the LLM streams, keeping the
+ * Cloudflare proxy alive (its idle timeout is 100s). The final chunk is
+ * the real JSON payload. Clients ignore leading whitespace when parsing JSON.
  */
 async function generateBuffered(systemPrompt: string, userPrompt: string) {
-  try {
-    const response = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://app.robothor.ai",
-        "X-Title": "Robothor Dashboard",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        stream: true,
-        max_tokens: 4096,
-        temperature: 0.3,
-      }),
-    });
+  const encoder = new TextEncoder();
 
-    if (!response.ok || !response.body) {
-      console.error("[dashboard] OpenRouter error:", await response.text().catch(() => "Unknown"));
-      return new Response(
-        JSON.stringify({ error: "Dashboard service temporarily unavailable" }),
-        { status: 502, headers: { "Content-Type": "application/json" } }
-      );
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://app.robothor.ai",
+            "X-Title": "Robothor Dashboard",
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+            stream: true,
+            max_tokens: 4096,
+            temperature: 0.3,
+          }),
+        });
 
-    // Accumulate the full response (buffered, not streamed to client)
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullCode = "";
+        if (!response.ok || !response.body) {
+          console.error("[dashboard] OpenRouter error:", await response.text().catch(() => "Unknown"));
+          controller.enqueue(encoder.encode(
+            JSON.stringify({ error: "Dashboard service temporarily unavailable" })
+          ));
+          controller.close();
+          return;
+        }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") continue;
+        // Keepalive: send a space every 10s while reading from OpenRouter
+        const keepalive = setInterval(() => {
+          controller.enqueue(encoder.encode(" "));
+        }, 10_000);
 
         try {
-          const parsed = JSON.parse(data);
-          const chunk = parsed.choices?.[0]?.delta?.content || "";
-          if (chunk) {
-            fullCode += chunk;
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let fullCode = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const data = line.slice(6).trim();
+              if (data === "[DONE]") continue;
+
+              try {
+                const parsed = JSON.parse(data);
+                const chunk = parsed.choices?.[0]?.delta?.content || "";
+                if (chunk) {
+                  fullCode += chunk;
+                }
+              } catch {
+                // Skip malformed chunks
+              }
+            }
           }
-        } catch {
-          // Skip malformed chunks
+
+          // Validate the generated code
+          const validation = validateDashboardCode(fullCode);
+          const codeType = detectCodeType(validation.code);
+
+          if (!validation.valid) {
+            console.error("[dashboard-error] source=server-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
+            controller.enqueue(encoder.encode(
+              JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
+            ));
+          } else {
+            const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
+            controller.enqueue(encoder.encode(
+              JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
+            ));
+          }
+        } finally {
+          clearInterval(keepalive);
         }
+      } catch (err) {
+        console.error("[dashboard] Generation error:", err);
+        controller.enqueue(encoder.encode(
+          JSON.stringify({ error: "Dashboard generation failed" })
+        ));
       }
-    }
+      controller.close();
+    },
+  });
 
-    // Validate the generated code
-    const validation = validateDashboardCode(fullCode);
-    const codeType = detectCodeType(validation.code);
-
-    if (!validation.valid) {
-      console.error("[dashboard-error] source=server-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
-      return new Response(
-        JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors }),
-        { status: 422, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    // Sanitize server-side so the client can skip DOMPurify (saves 50-200ms + 40KB bundle)
-    const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
-
-    return new Response(
-      JSON.stringify({ html: sanitized, type: codeType, sanitized: true }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (err) {
-    console.error("[dashboard] Generation error:", err);
-    return new Response(
-      JSON.stringify({ error: "Dashboard generation failed" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
-  }
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function buildUserPrompt(
