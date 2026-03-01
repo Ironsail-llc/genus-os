@@ -10,13 +10,19 @@ Schemas extracted from robothor/api/mcp.py. Executors call robothor/crm/dal.py d
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
-from typing import Any
+import time
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from robothor.engine.models import AgentConfig
+from robothor.engine.models import AgentConfig, SpawnContext
+
+if TYPE_CHECKING:
+    from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,48 @@ IMPETUS_TOOLS = frozenset(
         "transmit_prescription",
     }
 )
+
+
+# ─── Runner reference (for spawn_agent tool) ─────────────────────────
+# Follows the same pattern as delivery.py's set_telegram_sender()
+
+_runner_ref: AgentRunner | None = None
+
+
+def set_runner(runner: AgentRunner) -> None:
+    """Register the runner instance (called by daemon on startup)."""
+    global _runner_ref
+    _runner_ref = runner
+
+
+def get_runner() -> AgentRunner | None:
+    """Get the registered runner instance."""
+    return _runner_ref
+
+
+# ─── Spawn context (async-safe via contextvars) ──────────────────────
+
+_current_spawn_context: ContextVar[SpawnContext | None] = ContextVar(
+    "_current_spawn_context", default=None
+)
+
+# ─── Concurrency semaphore for sub-agent spawns ──────────────────────
+
+_spawn_semaphore: asyncio.Semaphore | None = None
+MAX_CONCURRENT_SPAWNS = 3
+
+
+def _get_spawn_semaphore() -> asyncio.Semaphore:
+    """Get or create the spawn concurrency semaphore."""
+    global _spawn_semaphore
+    if _spawn_semaphore is None:
+        _spawn_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SPAWNS)
+    return _spawn_semaphore
+
+
+# ─── Spawn tool names ────────────────────────────────────────────────
+
+SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
 
 
 class ToolRegistry:
@@ -447,6 +495,151 @@ class ToolRegistry:
             },
         }
 
+        # ── Deep reasoning (RLM) ──
+
+        self._schemas["deep_reason"] = {
+            "type": "function",
+            "function": {
+                "name": "deep_reason",
+                "description": (
+                    "Run a deep reasoning session over large context using an RLM (Recursive Language Model). "
+                    "The RLM writes Python code in a REPL to navigate, chunk, and recursively query context — "
+                    "far more effective than vanilla prompts for complex multi-source analysis. "
+                    "EXPENSIVE ($0.50-$2.00/call) — use only for questions that genuinely need heavy-context reasoning."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The reasoning question to answer",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional raw text context to include",
+                        },
+                        "context_sources": {
+                            "type": "array",
+                            "description": "Optional list of context sources to pre-load",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["memory", "file", "block", "entity"],
+                                        "description": "Source type",
+                                    },
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query (for memory type)",
+                                    },
+                                    "path": {
+                                        "type": "string",
+                                        "description": "File path (for file type)",
+                                    },
+                                    "block_name": {
+                                        "type": "string",
+                                        "description": "Block name (for block type)",
+                                    },
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Entity name (for entity type)",
+                                    },
+                                    "limit": {
+                                        "type": "integer",
+                                        "description": "Max results for memory search (default 10)",
+                                    },
+                                },
+                                "required": ["type"],
+                            },
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+
+        # ── Sub-agent spawning tools ──
+
+        self._schemas["spawn_agent"] = {
+            "type": "function",
+            "function": {
+                "name": "spawn_agent",
+                "description": (
+                    "Spawn another agent as a sub-task and wait for its result. "
+                    "The child agent runs synchronously within your tool loop and returns "
+                    "structured output. Use for delegating focused work to specialist agents."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {
+                            "type": "string",
+                            "description": "ID of the agent to spawn (must have a manifest)",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Task message / prompt for the child agent",
+                        },
+                        "tools_override": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional: replace child's tools_allowed with this list",
+                        },
+                        "max_iterations": {
+                            "type": "integer",
+                            "description": "Optional: cap max LLM iterations for the child",
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "Optional: cap timeout for the child run",
+                        },
+                    },
+                    "required": ["agent_id", "message"],
+                },
+            },
+        }
+        self._schemas["spawn_agents"] = {
+            "type": "function",
+            "function": {
+                "name": "spawn_agents",
+                "description": (
+                    "Spawn multiple agents in parallel and wait for all results. "
+                    "Max 5 parallel sub-agents. Each runs independently — one failure "
+                    "doesn't cancel others."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agents": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "agent_id": {
+                                        "type": "string",
+                                        "description": "Agent ID to spawn",
+                                    },
+                                    "message": {
+                                        "type": "string",
+                                        "description": "Task message for this agent",
+                                    },
+                                    "tools_override": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Optional tools override",
+                                    },
+                                },
+                                "required": ["agent_id", "message"],
+                            },
+                            "description": "List of agents to spawn (max 5)",
+                        },
+                    },
+                    "required": ["agents"],
+                },
+            },
+        }
+
     def build_for_agent(self, config: AgentConfig) -> list[dict]:
         """Return filtered tool schemas for an agent based on allow/deny lists."""
         if config.tools_allowed:
@@ -456,6 +649,10 @@ class ToolRegistry:
 
         if config.tools_denied:
             names = [n for n in names if n not in config.tools_denied]
+
+        # Exclude spawn tools unless agent has can_spawn_agents enabled
+        if not config.can_spawn_agents:
+            names = [n for n in names if n not in SPAWN_TOOLS]
 
         return [self._schemas[n] for n in names]
 
@@ -467,6 +664,11 @@ class ToolRegistry:
             names = list(self._schemas.keys())
         if config.tools_denied:
             names = [n for n in names if n not in config.tools_denied]
+
+        # Exclude spawn tools unless agent has can_spawn_agents enabled
+        if not config.can_spawn_agents:
+            names = [n for n in names if n not in SPAWN_TOOLS]
+
         return names
 
     async def execute(
@@ -510,6 +712,28 @@ def get_registry() -> ToolRegistry:
 
 # ─── Tool Execution Router ───────────────────────────────────────────
 
+# Tools that use async I/O (httpx, await) and MUST run on the event loop
+_ASYNC_TOOLS = (
+    frozenset(
+        {
+            "search_memory",
+            "store_memory",
+            "get_entity",
+            "look",
+            "who_is_here",
+            "enroll_face",
+            "set_vision_mode",
+            "log_interaction",
+            "web_fetch",
+            "web_search",
+            "make_call",
+            "spawn_agent",
+            "spawn_agents",
+        }
+    )
+    | IMPETUS_TOOLS
+)
+
 
 async def _execute_tool(
     name: str,
@@ -519,7 +743,38 @@ async def _execute_tool(
     tenant_id: str = "robothor-primary",
     workspace: str = "",
 ) -> dict[str, Any]:
-    """Route tool call to the correct handler."""
+    """Route tool call to the correct handler.
+
+    Async-native tools (httpx, awaitable DAL) run on the event loop.
+    Sync tools (psycopg2 DAL, subprocess, file I/O) run in a thread
+    via asyncio.to_thread() to avoid blocking the event loop.
+    """
+    if name in _ASYNC_TOOLS:
+        return await _handle_async_tool(
+            name, args, agent_id=agent_id, tenant_id=tenant_id, workspace=workspace
+        )
+    return await asyncio.to_thread(
+        _handle_sync_tool, name, args, agent_id=agent_id, tenant_id=tenant_id, workspace=workspace
+    )
+
+
+async def _handle_async_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    agent_id: str = "",
+    tenant_id: str = "robothor-primary",
+    workspace: str = "",
+) -> dict[str, Any]:
+    """Handle tools that use async I/O (httpx, awaitable DAL)."""
+
+    # ── Sub-agent spawning ──
+
+    if name == "spawn_agent":
+        return await _handle_spawn_agent(args, agent_id=agent_id)
+
+    if name == "spawn_agents":
+        return await _handle_spawn_agents(args, agent_id=agent_id)
 
     # ── Memory tools ──
 
@@ -551,11 +806,6 @@ async def _execute_tool(
         fact = {"fact_text": content, "category": "personal", "entities": [], "confidence": 0.5}
         fact_id = await store_fact(fact, content, content_type)
         return {"id": fact_id, "facts_stored": 1}
-
-    if name == "get_stats":
-        from robothor.memory.tiers import get_memory_stats
-
-        return get_memory_stats()
 
     if name == "get_entity":
         from robothor.memory.entities import get_entity
@@ -604,6 +854,128 @@ async def _execute_tool(
             resp = await client.post(f"{VISION_URL}/mode", json={"mode": mode})
             resp.raise_for_status()
             return dict(resp.json())
+
+    # ── CRM Interaction (httpx) ──
+
+    if name == "log_interaction":
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "http://127.0.0.1:9100/log-interaction",
+                json={
+                    k: args.get(k, "")
+                    for k in [
+                        "contact_name",
+                        "channel",
+                        "direction",
+                        "content_summary",
+                        "channel_identifier",
+                    ]
+                },
+            )
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    # ── Web tools (httpx) ──
+
+    if name == "web_fetch":
+        url = args.get("url", "")
+        if not url:
+            return {"error": "No URL provided"}
+        try:
+            import html2text
+
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.body_width = 0
+                text = h.handle(resp.text)
+                return {"content": text[:20000], "url": str(resp.url), "status": resp.status_code}
+        except ImportError:
+            return {"error": "html2text not installed"}
+        except Exception as e:
+            return {"error": f"Fetch failed: {e}"}
+
+    if name == "web_search":
+        query = args.get("query", "")
+        limit = args.get("limit", 5)
+        if not query:
+            return {"error": "No query provided"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "http://127.0.0.1:8888/search",
+                    params={"q": query, "format": "json", "pageno": 1},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results = [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("content", ""),
+                    }
+                    for r in data.get("results", [])[:limit]
+                ]
+                return {"results": results, "count": len(results)}
+        except Exception as e:
+            return {"error": f"Search failed: {e}"}
+
+    # ── Voice / outbound calling (httpx) ──
+
+    if name == "make_call":
+        to_number = args.get("to", "")
+        recipient = args.get("recipient", "someone")
+        purpose = args.get("purpose", "")
+        if not to_number:
+            return {"error": "Missing 'to' phone number"}
+        if not purpose:
+            return {"error": "Missing 'purpose' for the call"}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "http://127.0.0.1:8765/call",
+                    json={"to": to_number, "recipient": recipient, "purpose": purpose},
+                )
+                resp.raise_for_status()
+                return dict(resp.json())
+        except Exception as e:
+            return {"error": f"Call failed: {e}"}
+
+    # ── Impetus One (Bridge MCP passthrough) ──
+
+    if name in IMPETUS_TOOLS:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{BRIDGE_URL}/api/impetus/tools/call",
+                json={"name": name, "arguments": args},
+            )
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    return {"error": f"Unknown async tool: {name}"}
+
+
+def _handle_sync_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    agent_id: str = "",
+    tenant_id: str = "robothor-primary",
+    workspace: str = "",
+) -> dict[str, Any]:
+    """Handle tools that use sync I/O (psycopg2, subprocess, file I/O).
+
+    Called via asyncio.to_thread() to avoid blocking the event loop.
+    """
+
+    # ── Memory stats (sync) ──
+
+    if name == "get_stats":
+        from robothor.memory.tiers import get_memory_stats
+
+        return get_memory_stats()
 
     # ── Memory block tools (direct DAL) ──
 
@@ -962,27 +1334,6 @@ async def _execute_tool(
         ok = acknowledge_notification(args.get("notificationId", ""), tenant_id=tenant_id)
         return {"success": ok, "id": args.get("notificationId", "")}
 
-    # ── CRM Interaction ──
-
-    if name == "log_interaction":
-        # Use Bridge for interaction logging (it does contact resolution)
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                "http://127.0.0.1:9100/log-interaction",
-                json={
-                    k: args.get(k, "")
-                    for k in [
-                        "contact_name",
-                        "channel",
-                        "direction",
-                        "content_summary",
-                        "channel_identifier",
-                    ]
-                },
-            )
-            resp.raise_for_status()
-            return dict(resp.json())
-
     # ── CRM Metadata ──
 
     if name == "get_metadata_objects":
@@ -1264,52 +1615,18 @@ async def _execute_tool(
         except Exception as e:
             return {"error": f"Failed to write file: {e}"}
 
-    # ── Web tools ──
+    # ── Deep reasoning (RLM) ──
 
-    if name == "web_fetch":
-        url = args.get("url", "")
-        if not url:
-            return {"error": "No URL provided"}
-        try:
-            import html2text
+    if name == "deep_reason":
+        from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
 
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                h = html2text.HTML2Text()
-                h.ignore_links = False
-                h.body_width = 0
-                text = h.handle(resp.text)
-                return {"content": text[:20000], "url": str(resp.url), "status": resp.status_code}
-        except ImportError:
-            return {"error": "html2text not installed"}
-        except Exception as e:
-            return {"error": f"Fetch failed: {e}"}
-
-    if name == "web_search":
-        query = args.get("query", "")
-        limit = args.get("limit", 5)
-        if not query:
-            return {"error": "No query provided"}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    "http://127.0.0.1:8888/search",
-                    params={"q": query, "format": "json", "pageno": 1},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                results = [
-                    {
-                        "title": r.get("title", ""),
-                        "url": r.get("url", ""),
-                        "content": r.get("content", ""),
-                    }
-                    for r in data.get("results", [])[:limit]
-                ]
-                return {"results": results, "count": len(results)}
-        except Exception as e:
-            return {"error": f"Search failed: {e}"}
+        config = DeepReasonConfig(workspace=workspace)
+        return execute_deep_reason(
+            query=args.get("query", ""),
+            context=args.get("context", ""),
+            context_sources=args.get("context_sources"),
+            config=config,
+        )
 
     # ── CRM Merge tools ──
 
@@ -1337,36 +1654,196 @@ async def _execute_tool(
             return {"success": True, "keeper": result}
         return {"error": "Merge failed — one or both IDs not found"}
 
-    # ── Voice / outbound calling ──
-
-    if name == "make_call":
-        to_number = args.get("to", "")
-        recipient = args.get("recipient", "someone")
-        purpose = args.get("purpose", "")
-        if not to_number:
-            return {"error": "Missing 'to' phone number"}
-        if not purpose:
-            return {"error": "Missing 'purpose' for the call"}
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    "http://127.0.0.1:8765/call",
-                    json={"to": to_number, "recipient": recipient, "purpose": purpose},
-                )
-                resp.raise_for_status()
-                return dict(resp.json())
-        except Exception as e:
-            return {"error": f"Call failed: {e}"}
-
-    # ── Impetus One (Bridge MCP passthrough) ──
-
-    if name in IMPETUS_TOOLS:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{BRIDGE_URL}/api/impetus/tools/call",
-                json={"name": name, "arguments": args},
-            )
-            resp.raise_for_status()
-            return dict(resp.json())
-
     return {"error": f"Unknown tool: {name}"}
+
+
+# ─── Sub-agent spawn handlers ────────────────────────────────────────
+
+
+async def _handle_spawn_agent(
+    args: dict[str, Any],
+    *,
+    agent_id: str = "",
+) -> dict[str, Any]:
+    """Spawn a single child agent and wait for its result."""
+    from robothor.engine.config import load_agent_config
+    from robothor.engine.models import DeliveryMode, TriggerType
+
+    runner = get_runner()
+    if runner is None:
+        return {"error": "Runner not available — spawn_agent requires a running engine"}
+
+    spawn_ctx = _current_spawn_context.get()
+    if spawn_ctx is None:
+        return {"error": "No spawn context — spawn_agent can only be called during an agent run"}
+
+    child_agent_id = args.get("agent_id", "")
+    message = args.get("message", "")
+    if not child_agent_id or not message:
+        return {"error": "agent_id and message are required"}
+
+    # Depth check
+    child_depth = spawn_ctx.nesting_depth + 1
+    if child_depth > spawn_ctx.max_nesting_depth:
+        return {
+            "error": (
+                f"Max nesting depth exceeded: depth {child_depth} > limit {spawn_ctx.max_nesting_depth}. "
+                "Handle this task directly instead of spawning."
+            )
+        }
+
+    # Load child agent config
+    child_config = load_agent_config(child_agent_id, runner.config.manifest_dir)
+    if child_config is None:
+        return {"error": f"Agent config not found: {child_agent_id}"}
+
+    # Apply tools_override if provided
+    tools_override = args.get("tools_override")
+    if tools_override and isinstance(tools_override, list):
+        child_config.tools_allowed = tools_override
+
+    # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)
+    child_max_iters = child_config.max_iterations
+    # Get the parent agent's sub_agent_max_iterations from the spawn context indirectly
+    # by reading from the args (caller's requested cap)
+    requested_iters = args.get("max_iterations")
+    if requested_iters is not None:
+        child_max_iters = min(child_max_iters, int(requested_iters))
+    # Also respect the general sub_agent cap — we load it via the parent's config
+    # The spawn context doesn't carry this, but the parent set it when creating context
+    # For safety, cap at a reasonable maximum
+    child_max_iters = min(child_max_iters, 30)
+    child_config.max_iterations = child_max_iters
+
+    # Apply timeout override
+    requested_timeout = args.get("timeout_seconds")
+    if requested_timeout is not None:
+        child_config.timeout_seconds = min(child_config.timeout_seconds, int(requested_timeout))
+
+    # Force delivery to NONE — sub-agents never message Philip
+    child_config.delivery_mode = DeliveryMode.NONE
+
+    # Disable spawning on child unless explicitly configured
+    # (prevents runaway recursion even if manifest has can_spawn_agents)
+    if child_depth >= spawn_ctx.max_nesting_depth:
+        child_config.can_spawn_agents = False
+
+    # Build child SpawnContext
+    child_spawn_ctx = SpawnContext(
+        parent_run_id=spawn_ctx.parent_run_id,
+        parent_agent_id=agent_id,
+        correlation_id=spawn_ctx.correlation_id,
+        nesting_depth=child_depth,
+        max_nesting_depth=spawn_ctx.max_nesting_depth,
+        remaining_token_budget=spawn_ctx.remaining_token_budget,
+        remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
+        parent_trace_id=spawn_ctx.parent_trace_id,
+        parent_span_id=spawn_ctx.parent_span_id,
+    )
+
+    # Namespaced dedup key to prevent duplicate spawns from the same parent
+    dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}"
+    from robothor.engine.dedup import release, try_acquire
+
+    if not try_acquire(dedup_key):
+        return {"error": f"Agent {child_agent_id} is already running as a sub-agent of this run"}
+
+    start_time = time.monotonic()
+    try:
+        sem = _get_spawn_semaphore()
+        async with sem:
+            run = await runner.execute(
+                agent_id=child_agent_id,
+                message=message,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=f"spawned_by:{agent_id}",
+                correlation_id=spawn_ctx.correlation_id,
+                agent_config=child_config,
+                spawn_context=child_spawn_ctx,
+            )
+    finally:
+        release(dedup_key)
+
+    elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+    # Deduct child's usage from parent's remaining budget
+    if spawn_ctx.remaining_token_budget > 0:
+        spawn_ctx.remaining_token_budget = max(
+            0, spawn_ctx.remaining_token_budget - run.input_tokens - run.output_tokens
+        )
+    if spawn_ctx.remaining_cost_budget_usd > 0:
+        spawn_ctx.remaining_cost_budget_usd = max(
+            0.0, spawn_ctx.remaining_cost_budget_usd - run.total_cost_usd
+        )
+
+    result: dict[str, Any] = {
+        "agent_id": child_agent_id,
+        "run_id": run.id,
+        "status": run.status.value,
+        "output_text": run.output_text or "",
+        "duration_ms": elapsed_ms,
+        "input_tokens": run.input_tokens,
+        "output_tokens": run.output_tokens,
+        "total_cost_usd": run.total_cost_usd,
+        "steps": len(run.steps),
+    }
+    if run.error_message:
+        result["error"] = run.error_message
+
+    return result
+
+
+async def _handle_spawn_agents(
+    args: dict[str, Any],
+    *,
+    agent_id: str = "",
+) -> dict[str, Any]:
+    """Spawn multiple agents in parallel and wait for all results."""
+    agents_list = args.get("agents", [])
+    if not agents_list:
+        return {"error": "agents list is required and must not be empty"}
+
+    if len(agents_list) > 5:
+        return {"error": f"Max 5 parallel sub-agents allowed, got {len(agents_list)}"}
+
+    # Create coroutines for each sub-agent
+    coros = []
+    for spec in agents_list:
+        spawn_args = {
+            "agent_id": spec.get("agent_id", ""),
+            "message": spec.get("message", ""),
+        }
+        if "tools_override" in spec:
+            spawn_args["tools_override"] = spec["tools_override"]
+        coros.append(_handle_spawn_agent(spawn_args, agent_id=agent_id))
+
+    # Run all in parallel — one failure doesn't cancel others
+    raw_results = await asyncio.gather(*coros, return_exceptions=True)
+
+    results = []
+    completed = 0
+    failed = 0
+
+    for i, r in enumerate(raw_results):
+        if isinstance(r, Exception):
+            failed += 1
+            results.append(
+                {
+                    "agent_id": agents_list[i].get("agent_id", "unknown"),
+                    "status": "failed",
+                    "error": str(r),
+                }
+            )
+        elif isinstance(r, dict) and r.get("error"):
+            failed += 1
+            results.append(r)
+        else:
+            completed += 1
+            results.append(r)
+
+    return {
+        "results": results,
+        "total": len(agents_list),
+        "completed": completed,
+        "failed": failed,
+    }

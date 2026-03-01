@@ -68,6 +68,9 @@ class TraceContext:
     trace_id: str = field(default_factory=_trace_id)
     run_id: str = ""
     agent_id: str = ""
+    # Sub-agent trace linkage — reuse parent trace_id for unified traces
+    parent_trace_id: str = ""
+    parent_span_id: str = ""
     spans: list[Span] = field(default_factory=list)
     _span_stack: list[Span] = field(default_factory=list)
 

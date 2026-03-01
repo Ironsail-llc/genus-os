@@ -85,11 +85,53 @@ def create_health_app(
                         "model_used": r.get("model_used"),
                         "input_tokens": r.get("input_tokens"),
                         "output_tokens": r.get("output_tokens"),
+                        "parent_run_id": str(r["parent_run_id"])
+                        if r.get("parent_run_id")
+                        else None,
+                        "nesting_depth": r.get("nesting_depth", 0),
                         "created_at": str(r.get("created_at", "")),
                     }
                     for r in runs
                 ]
             }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/runs/{run_id}/children")
+    async def get_run_children(run_id: str):
+        """Get direct child runs of a parent run."""
+        try:
+            from robothor.engine.tracking import get_run_children as _get_children
+
+            children = _get_children(run_id)
+            return {
+                "parent_run_id": run_id,
+                "children": [
+                    {
+                        "id": c["id"],
+                        "agent_id": c["agent_id"],
+                        "status": c["status"],
+                        "nesting_depth": c.get("nesting_depth", 0),
+                        "duration_ms": c.get("duration_ms"),
+                        "input_tokens": c.get("input_tokens"),
+                        "output_tokens": c.get("output_tokens"),
+                        "total_cost_usd": c.get("total_cost_usd"),
+                        "started_at": str(c.get("started_at", "")),
+                    }
+                    for c in children
+                ],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/runs/{run_id}/tree")
+    async def get_run_tree(run_id: str):
+        """Get full execution tree (recursive) for a run."""
+        try:
+            from robothor.engine.tracking import get_run_tree as _get_tree
+
+            tree = _get_tree(run_id)
+            return tree
         except Exception as e:
             return {"error": str(e)}
 

@@ -139,12 +139,83 @@ optional:
     type: list[string]
   tags_consumed:
     type: list[string]
+  # ── Heartbeat (periodic health-check runs with overrides) ────────
+  # Attach to an interactive agent to add periodic cron runs with
+  # different instruction file, delivery mode, warmup, and budget.
+  # Inherits model + tools from the parent agent.
+  heartbeat:
+    cron:
+      type: string
+      description: APScheduler cron expression for heartbeat schedule
+      example: "0 6-22/4 * * *"
+    timezone:
+      type: string
+      default: (inherits from schedule.timezone)
+    instruction_file:
+      type: string
+      description: Path to .md file used as system prompt for heartbeat runs
+    session_target:
+      type: string
+      enum: [isolated, persistent]
+      default: isolated
+    max_iterations:
+      type: integer
+      default: 15
+    timeout_seconds:
+      type: integer
+      default: 600
+    delivery:
+      mode:
+        type: string
+        enum: [none, announce, log]
+        default: announce
+      channel:
+        type: string
+      to:
+        type: string
+    context_files:
+      type: list[string]
+      description: Warmup context files for heartbeat runs
+    peer_agents:
+      type: list[string]
+      description: Peer agents whose status is checked during warmup
+    memory_blocks:
+      type: list[string]
+      description: Memory blocks loaded during warmup
+    bootstrap_files:
+      type: list[string]
+      description: Shared context files for heartbeat system prompt
+    token_budget:
+      type: integer
+      default: 0
+    cost_budget_usd:
+      type: number
+      default: 0.0
+
   changelog:
     type: "list[{date: string, change: string}]"
 
   # ── v2 Engine Enhancements (all default off) ──────────────────────
   # Nest under a `v2:` key in the manifest. All fields are optional.
   v2:
+    # Sub-agent spawning
+    can_spawn_agents:
+      type: boolean
+      default: false
+      description: Allow this agent to spawn other agents as sub-tasks mid-run
+    max_nesting_depth:
+      type: integer
+      default: 2
+      description: Max spawn depth (capped at 3). 0 = top-level only, 2 = A→B→C
+    sub_agent_max_iterations:
+      type: integer
+      default: 10
+      description: Max LLM iterations for spawned child agents
+    sub_agent_timeout_seconds:
+      type: integer
+      default: 120
+      description: Timeout in seconds for spawned child agents
+
     error_feedback:
       type: boolean
       default: true

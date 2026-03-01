@@ -4,10 +4,10 @@ description: Monitors vision events, escalates anomalies and unknown persons
 version: "2026-02-24"
 department: security
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: []
 receives_tasks_from: []
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/moonshotai/kimi-k2.5
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 6-22/6 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 5
   session_target: isolated
@@ -54,7 +54,6 @@ tools_denied:
   - message
   - web_search
   - web_fetch
-  - sessions_spawn
 bridge_endpoints:
   - "GET /health"
   - "POST /api/tasks"
@@ -93,6 +92,10 @@ hooks:
 
 tags_produced: [vision, unknown-person]
 tags_consumed: []
+
+v2:
+  token_budget: 50000
+  cost_budget_usd: 0.05
 
 changelog:
   - date: "2026-02-28"

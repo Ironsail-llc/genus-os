@@ -118,10 +118,10 @@ version: "YYYY-MM-DD"        # Date of last manifest change
 department: string            # email | calendar | operations | security | communications | crm | briefings | core | custom
 
 # Hierarchy
-reports_to: string            # Agent ID this reports to (usually "supervisor")
+reports_to: string            # Agent ID this reports to (usually "main")
 creates_tasks_for: [string]   # Agent IDs this creates tasks for
 receives_tasks_from: [string] # Agent IDs that create tasks for this
-escalates_to: string          # Agent ID for escalations (usually "supervisor")
+escalates_to: string          # Agent ID for escalations (usually "main")
 
 # Runtime
 model:
@@ -131,7 +131,7 @@ model:
 
 schedule:
   cron: string                # Cron expression (e.g., "0 6-22/2 * * *"), empty for non-scheduled
-  timezone: string            # IANA timezone (e.g., America/Grenada)
+  timezone: string            # IANA timezone (e.g., America/New_York)
   timeout_seconds: int        # Max execution time (default: 600)
   max_iterations: int         # Max LLM loop iterations (default: 20, see section 6)
   session_target: string      # "isolated" (fresh each run) or "persistent"
@@ -152,7 +152,7 @@ streams:
 
 # Coordination
 task_protocol: bool           # Must follow task protocol (list_my_tasks → process → resolve)
-review_workflow: bool         # Sends tasks to REVIEW status for supervisor approval
+review_workflow: bool         # Sends tasks to REVIEW status for main agent approval
 notification_inbox: bool      # Checks get_inbox at start of run
 status_file: string           # Path to status file (e.g., brain/memory/<id>-status.md)
 shared_working_state: bool    # Appends to shared_working_state block at end of run
@@ -204,12 +204,11 @@ changelog:
 
 | ID | Dept | Model | Schedule | Delivery | max_iter | Instruction File |
 |----|------|-------|----------|----------|----------|-----------------|
-| main | core | Gemini Flash | *(interactive)* | none | 30 | SOUL.md |
+| main | core | Sonnet 4.6 | *(interactive)* + heartbeat `0 6-22/4 * * *` | none (heartbeat: announce) | 30 (hb: 15) | SOUL.md (hb: HEARTBEAT.md) |
 | email-classifier | email | Kimi K2.5 | `0 6-22/6 * * *` | none | 10 | EMAIL_CLASSIFIER.md |
 | email-analyst | email | Kimi K2.5 | `30 8-20/6 * * *` | none | 10 | EMAIL_ANALYST.md |
 | email-responder | email | Sonnet 4.6 | `0 8-20/4 * * *` | none | 15 | RESPONDER.md |
 | calendar-monitor | calendar | Kimi K2.5 | `0 6-22/6 * * *` | none | 8 | CALENDAR_MONITOR.md |
-| supervisor | operations | Kimi K2.5 | `0 6-22/4 * * *` | announce | 15 | HEARTBEAT.md |
 | vision-monitor | security | Kimi K2.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
 | conversation-inbox | communications | Kimi K2.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
 | conversation-resolver | communications | Kimi K2.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
@@ -220,10 +219,10 @@ changelog:
 ### 3.2 Org Chart
 
 ```
-                    ┌──────────────┐
-                    │  supervisor  │ (Kimi K2.5, every 2h)
-                    │ HEARTBEAT.md │ Reads status files, approves REVIEW tasks
-                    └──────┬───────┘
+                    ┌───────────────┐
+                    │     main      │ (Sonnet 4.6, interactive + heartbeat every 4h)
+                    │ SOUL.md / HB  │ Interactive chat + reads status, approves REVIEW
+                    └──────┬────────┘
            ┌───────────────┼───────────────┬────────────────┐
            ▼               ▼               ▼                ▼
     ┌─────────────┐ ┌─────────────┐ ┌──────────────┐ ┌───────────┐
@@ -246,19 +245,19 @@ changelog:
 |---------|------------|------|----------|
 | email-classifier | email-responder | email, reply-needed | normal |
 | email-classifier | email-analyst | email, analytical | normal |
-| email-classifier | supervisor | email, escalation, needs-philip | high |
-| calendar-monitor | supervisor | calendar, conflict/cancellation | high |
-| conversation-inbox | supervisor | conversation, escalation | high |
-| vision-monitor | supervisor | vision, unknown-person | urgent |
-| crm-steward | supervisor (via REVIEW) | crm-hygiene, dedup | normal |
-| email-responder | supervisor (via REVIEW) | *(inherits from task)* | *(inherits)* |
+| email-classifier | main | email, escalation, needs-philip | high |
+| calendar-monitor | main | calendar, conflict/cancellation | high |
+| conversation-inbox | main | conversation, escalation | high |
+| vision-monitor | main | vision, unknown-person | urgent |
+| crm-steward | main (via REVIEW) | crm-hygiene, dedup | normal |
+| email-responder | main (via REVIEW) | *(inherits from task)* | *(inherits)* |
 
 ### 3.4 Pipeline Flow
 
 ```
 Gmail ──email_sync.py (*/5m)──► email_hook.py (real-time, ~130s total)
   Stage 1: triage_prep.py → triage-inbox.json
-  Stage 2: Email Classifier → create_task(email-responder/supervisor)
+  Stage 2: Email Classifier → create_task(email-responder/main)
   Stage 3: Email Responder → gog gmail send → resolve/REVIEW
 
 Safety net crons:
@@ -356,15 +355,15 @@ Policy changes do NOT auto-propagate. The AI decides which agents need updating.
 | SLA deadlines | urgent=30m, high=2h, normal=8h, low=24h |
 | Task protocol | `list_my_tasks` → `IN_PROGRESS` → process → `resolve`/`REVIEW` → `append shared_working_state` |
 | Status flow | `TODO` → `IN_PROGRESS` → `REVIEW` → `DONE` (app-enforced state machine) |
-| REVIEW approvers | supervisor and helm-user only |
-| Model selection | Sonnet for quality-critical (responder). Gemini Flash for interactive (main). Kimi K2.5 for all others. |
+| REVIEW approvers | main and helm-user only |
+| Model selection | Sonnet 4.6 for interactive + heartbeat (main) and quality-critical (responder). Kimi K2.5 for all others. |
 | Fallback chain | primary → fallback[0] → fallback[1] (typically kimi → sonnet/minimax → gemini-pro) |
 | Broken model tracking | Models returning 401/403/429 are removed from rotation for the rest of that run |
 | Max iterations (default) | 20 — override per-agent via `schedule.max_iterations` |
 | Max iterations (guideline) | 5 for simple checkers, 8-10 for processors, 15 for complex agents, 30 for interactive |
-| Output limit | <500 chars, emoji prefix. Workers write status file and stop silently. HEARTBEAT_OK is supervisor-only. |
+| Output limit | <500 chars, emoji prefix. Workers write status file and stop silently. HEARTBEAT_OK is heartbeat-only. |
 | Credentials | NEVER hardcode. Env vars via SOPS → `/run/robothor/secrets.env`. |
-| Status files | MANDATORY every run. Supervisor considers >35min = stale. |
+| Status files | MANDATORY every run. Heartbeat considers >35min = stale. |
 | Bootstrap budget | 12,000 chars per file, 30,000 chars total |
 
 ---
@@ -466,13 +465,59 @@ robothor engine workflow run <id>  # Manual trigger
 
 ---
 
+## 8.5 Sub-Agent Spawning
+
+Agents with `v2.can_spawn_agents: true` can delegate focused sub-tasks to other agents mid-run using the `spawn_agent` and `spawn_agents` tools. The child runs synchronously within the parent's tool loop and returns structured output.
+
+### Enabling
+
+```yaml
+# In the parent agent's manifest:
+v2:
+  can_spawn_agents: true
+  max_nesting_depth: 2      # A→B→C (cap: 3)
+  sub_agent_max_iterations: 10
+  sub_agent_timeout_seconds: 120
+
+tools_allowed:
+  - spawn_agent
+  - spawn_agents
+```
+
+### How it works
+
+1. Parent calls `spawn_agent(agent_id="email-classifier", message="Triage this email: ...")`.
+2. Engine loads the child's manifest, forces `delivery: none`, applies budget cascading.
+3. Child runs in the same event loop, inheriting the parent's correlation_id and trace_id.
+4. On completion, parent receives `{agent_id, run_id, status, output_text, duration_ms, tokens, cost}`.
+5. Child's token/cost usage is deducted from parent's remaining budget.
+
+### Constraints
+
+| Constraint | Value | Rationale |
+|-----------|-------|-----------|
+| Max nesting depth | 3 (configurable, capped) | Prevents infinite recursion |
+| Max parallel sub-agents | 5 (via `spawn_agents`) | Resource protection |
+| Concurrency semaphore | 3 simultaneous spawns | Matches `max_concurrent_agents` |
+| Delivery | Forced `NONE` on children | Sub-agents never message Philip |
+| Budget | `min(child_config, parent_remaining)` | Child can't exceed parent's budget |
+| Dedup | Namespaced `sub:{parent_run_id}:{agent_id}` | Won't collide with cron triggers |
+
+### Observability
+
+- `GET /runs` includes `parent_run_id` and `nesting_depth` fields
+- `GET /api/runs/{id}/children` — direct children of a run
+- `GET /api/runs/{id}/tree` — recursive execution tree with aggregate totals
+
+---
+
 ## 9. Lessons Learned
 
 | Lesson | Context |
 |--------|---------|
 | **Every agent needs `exec`, `read_file`, `write_file`** | `build_for_agent()` strictly filters — if tools_allowed is set, ONLY those tools appear. Without `read_file`, agents can't read data files. Without `exec`, they can't run `gog` CLI. |
 | **`read_file` uses workspace-relative paths** | Workspace is `~/robothor/`. Brain files are at `~/clawd/` but accessible via symlink at `brain/`. Instruction files should reference `brain/memory/triage-inbox.json`. |
-| **HEARTBEAT_OK is supervisor-only** | Workers write status files and stop silently. Cargo-culting HEARTBEAT_OK into worker instructions causes them to skip real work. |
+| **HEARTBEAT_OK is heartbeat-only** | Workers write status files and stop silently. Cargo-culting HEARTBEAT_OK into worker instructions causes them to skip real work. |
 | **Event hooks are the primary trigger** | Crons are 6h safety nets. The fast path is: Python sync → Redis Stream → hook → agent (email: ~60s end-to-end). |
 | **Validate after every manifest change** | `python scripts/validate_agents.py --agent <id>` catches missing tools, broken file paths, invalid crons. |
 

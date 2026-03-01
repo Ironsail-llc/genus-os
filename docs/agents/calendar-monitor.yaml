@@ -4,10 +4,10 @@ description: Detects calendar conflicts, cancellations, and changes
 version: "2026-02-24"
 department: calendar
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: []
 receives_tasks_from: []
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/moonshotai/kimi-k2.5
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 6-22/6 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 8
   session_target: isolated
@@ -48,7 +48,6 @@ tools_denied:
   - message
   - web_search
   - web_fetch
-  - sessions_spawn
 bridge_endpoints:
   - "GET /health"
   - "POST /log-interaction"
@@ -94,6 +93,10 @@ hooks:
 
 tags_produced: [calendar, conflict, cancellation]
 tags_consumed: []
+
+v2:
+  token_budget: 200000
+  cost_budget_usd: 0.15
 
 changelog:
   - date: "2026-02-28"

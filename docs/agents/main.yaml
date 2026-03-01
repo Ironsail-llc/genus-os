@@ -1,13 +1,16 @@
 id: main
-name: Robothor (Interactive)
-description: Primary interactive agent — Philip talks to Robothor via Telegram
-version: "2026-02-27"
+name: Robothor
+description: Primary agent — interactive Telegram chat + periodic heartbeat (worker oversight, escalation)
+version: "2026-03-01"
 department: core
 
 reports_to: null
 creates_tasks_for: [email-classifier, email-responder, crm-steward]
-receives_tasks_from: []
+receives_tasks_from: [email-classifier, calendar-monitor, conversation-inbox, vision-monitor, crm-steward, email-responder]
 escalates_to: null
+
+tags_produced: [escalation, needs-philip]
+tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, vision, unknown-person, conversation]
 
 model:
   primary: anthropic/claude-sonnet-4-6
@@ -19,7 +22,7 @@ model:
 
 schedule:
   cron: ""
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 600
   max_iterations: 30
   session_target: persistent
@@ -101,6 +104,11 @@ tools_allowed:
   - create_prescription_draft
   - schedule_appointment
   - transmit_prescription
+  # Deep reasoning (RLM)
+  - deep_reason
+  # Sub-agent spawning tools
+  - spawn_agent
+  - spawn_agents
 tools_denied: []
 
 streams:
@@ -124,6 +132,37 @@ bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
 
+heartbeat:
+  cron: "0 6-22 * * *"
+  timezone: America/New_York
+  instruction_file: brain/HEARTBEAT.md
+  session_target: isolated
+  max_iterations: 15
+  timeout_seconds: 600
+  delivery:
+    mode: announce
+    channel: telegram
+    to: "7636850023"
+  context_files:
+    - brain/memory/email-classifier-status.md
+    - brain/memory/response-status.md
+    - brain/memory/calendar-monitor-status.md
+    - brain/memory/vision-monitor-status.md
+  peer_agents: [email-classifier, email-responder, calendar-monitor]
+  bootstrap_files: [brain/AGENTS.md, brain/TOOLS.md]
+  token_budget: 200000
+  cost_budget_usd: 0.15
+
+v2:
+  can_spawn_agents: true
+  max_nesting_depth: 2
+  sub_agent_max_iterations: 10
+  sub_agent_timeout_seconds: 120
+
 changelog:
+  - date: "2026-03-01"
+    change: "Enable sub-agent spawning — main can delegate focused sub-tasks to worker agents mid-run"
+  - date: "2026-03-01"
+    change: "Merged supervisor into main — heartbeat is now a feature of the main agent, not a separate entity"
   - date: "2026-02-27"
     change: "Created for Python Agent Engine — interactive Telegram chat"

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode
+from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, HeartbeatConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class EngineConfig:
 
     # Scheduler
     max_concurrent_agents: int = 3
-    default_timezone: str = "America/Grenada"
+    default_timezone: str = "America/New_York"
 
     # LLM
     max_iterations: int = 20
@@ -69,7 +69,7 @@ class EngineConfig:
                 os.environ.get("ROBOTHOR_WORKFLOW_DIR", workspace / "docs" / "workflows")
             ),
             max_concurrent_agents=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_AGENTS", "3")),
-            default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/Grenada"),
+            default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/New_York"),
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
             default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
         )
@@ -134,6 +134,34 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
                 h,
             )
 
+    # Parse heartbeat config
+    raw_heartbeat = manifest.get("heartbeat", {})
+    heartbeat: HeartbeatConfig | None = None
+    if raw_heartbeat and raw_heartbeat.get("cron"):
+        hb_delivery = raw_heartbeat.get("delivery", {})
+        hb_delivery_mode_str = hb_delivery.get("mode", "announce")
+        try:
+            hb_delivery_mode = DeliveryMode(hb_delivery_mode_str)
+        except ValueError:
+            hb_delivery_mode = DeliveryMode.ANNOUNCE
+        heartbeat = HeartbeatConfig(
+            cron_expr=raw_heartbeat["cron"],
+            timezone=raw_heartbeat.get("timezone", schedule.get("timezone", "America/New_York")),
+            instruction_file=raw_heartbeat.get("instruction_file", ""),
+            session_target=raw_heartbeat.get("session_target", "isolated"),
+            max_iterations=int(raw_heartbeat.get("max_iterations", 15)),
+            timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 600)),
+            delivery_mode=hb_delivery_mode,
+            delivery_channel=hb_delivery.get("channel", ""),
+            delivery_to=hb_delivery.get("to", ""),
+            warmup_context_files=raw_heartbeat.get("context_files", []),
+            warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
+            warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
+            bootstrap_files=raw_heartbeat.get("bootstrap_files", []),
+            token_budget=int(raw_heartbeat.get("token_budget", 0)),
+            cost_budget_usd=float(raw_heartbeat.get("cost_budget_usd", 0.0)),
+        )
+
     # v2 enhancement fields
     v2 = manifest.get("v2", {})
 
@@ -144,7 +172,7 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         model_primary=model.get("primary", ""),
         model_fallbacks=model.get("fallbacks", []),
         cron_expr=schedule.get("cron", ""),
-        timezone=schedule.get("timezone", "America/Grenada"),
+        timezone=schedule.get("timezone", "America/New_York"),
         timeout_seconds=schedule.get("timeout_seconds", 600),
         max_iterations=schedule.get("max_iterations", 20),
         temperature=float(model.get("temperature", 0.3)),
@@ -171,6 +199,12 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         warmup_peer_agents=warmup.get("peer_agents", []),
         downstream_agents=manifest.get("downstream_agents", []),
         hooks=parsed_hooks,
+        heartbeat=heartbeat,
+        # v2 enhancements — sub-agent spawning
+        can_spawn_agents=v2.get("can_spawn_agents", False),
+        max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
+        sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
+        sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 120)),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
         token_budget=int(v2.get("token_budget", 0)),

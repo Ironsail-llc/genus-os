@@ -36,6 +36,11 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
 
     Returns True if delivery succeeded.
     """
+    # Sub-agent output should never reach Telegram (belt-and-suspenders)
+    if run.parent_run_id is not None:
+        logger.debug("Suppressing delivery for sub-agent run %s", run.id)
+        return True
+
     if not run.output_text:
         logger.debug("No output to deliver for %s", config.id)
         return True

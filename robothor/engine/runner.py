@@ -39,7 +39,7 @@ from robothor.engine.config import (
     build_system_prompt,
     load_agent_config,
 )
-from robothor.engine.models import AgentConfig, AgentRun, TriggerType
+from robothor.engine.models import AgentConfig, AgentRun, SpawnContext, TriggerType
 from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
@@ -48,6 +48,23 @@ logger = logging.getLogger(__name__)
 
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
+
+# Register custom pricing for OpenRouter-routed models.
+# Without this, litellm.completion_cost() returns $0.00 for these models.
+litellm.register_model(
+    {
+        "openrouter/moonshotai/kimi-k2.5": {
+            "max_tokens": 131072,
+            "input_cost_per_token": 0.0000006,  # $0.60/M
+            "output_cost_per_token": 0.0000024,  # $2.40/M
+        },
+        "openrouter/anthropic/claude-sonnet-4.6": {
+            "max_tokens": 8192,
+            "input_cost_per_token": 0.000003,  # $3/M
+            "output_cost_per_token": 0.000015,  # $15/M
+        },
+    }
+)
 
 
 class AgentRunner:
@@ -70,6 +87,7 @@ class AgentRunner:
         model_override: str | None = None,
         conversation_history: list[dict] | None = None,
         resume_from_run_id: str | None = None,
+        spawn_context: SpawnContext | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -93,6 +111,11 @@ class AgentRunner:
             correlation_id=correlation_id,
         )
 
+        # Sub-agent: link to parent run
+        if spawn_context:
+            session.run.parent_run_id = spawn_context.parent_run_id
+            session.run.nesting_depth = spawn_context.nesting_depth + 1
+
         # Build system prompt
         system_prompt = build_system_prompt(agent_config, self.config.workspace)
 
@@ -112,6 +135,26 @@ class AgentRunner:
         # Copy budget config to run for persistence
         session.run.token_budget = agent_config.token_budget
         session.run.cost_budget_usd = agent_config.cost_budget_usd
+
+        # Sub-agent: cascade parent's remaining budget (child can never exceed parent)
+        if spawn_context:
+            if spawn_context.remaining_token_budget > 0:
+                if agent_config.token_budget > 0:
+                    session.run.token_budget = min(
+                        agent_config.token_budget, spawn_context.remaining_token_budget
+                    )
+                else:
+                    session.run.token_budget = spawn_context.remaining_token_budget
+                agent_config.token_budget = session.run.token_budget
+
+            if spawn_context.remaining_cost_budget_usd > 0:
+                if agent_config.cost_budget_usd > 0:
+                    session.run.cost_budget_usd = min(
+                        agent_config.cost_budget_usd, spawn_context.remaining_cost_budget_usd
+                    )
+                else:
+                    session.run.cost_budget_usd = spawn_context.remaining_cost_budget_usd
+                agent_config.cost_budget_usd = session.run.cost_budget_usd
 
         # Record run in database
         try:
@@ -148,7 +191,7 @@ class AgentRunner:
                     session.messages.append({"role": "user", "content": plan_context})
 
         # ── [TELEMETRY] Create trace context ──
-        trace = self._create_trace(agent_config, session)
+        trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
 
         # Resolve effective max_iterations (route may cap it lower, never raise it)
         max_iterations = agent_config.max_iterations
@@ -176,6 +219,7 @@ class AgentRunner:
                     plan_result=plan_result,
                     trace=trace,
                     resumed_scratchpad=resumed_scratchpad,
+                    spawn_context=spawn_context,
                 )
         except TimeoutError:
             logger.warning("Agent %s timed out after %ds", agent_id, timeout)
@@ -232,10 +276,36 @@ class AgentRunner:
         plan_result: Any = None,
         trace: Any = None,
         resumed_scratchpad: Any = None,
+        spawn_context: SpawnContext | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
         # Track models that hit permanent errors (401/403/429) across iterations
         broken_models: set[str] = set()
+
+        # Set spawn context for sub-agent tools (via contextvars)
+        if spawn_context:
+            # This is a sub-agent run — use the provided context
+            from robothor.engine.tools import _current_spawn_context
+
+            _current_spawn_context.set(spawn_context)
+        elif agent_config.can_spawn_agents:
+            # This is a top-level run that can spawn — create fresh context
+            import uuid
+
+            from robothor.engine.tools import _current_spawn_context
+
+            fresh_ctx = SpawnContext(
+                parent_run_id=session.run.id,
+                parent_agent_id=agent_config.id,
+                correlation_id=session.run.correlation_id or str(uuid.uuid4()),
+                nesting_depth=0,
+                max_nesting_depth=agent_config.max_nesting_depth,
+                remaining_token_budget=agent_config.token_budget,
+                remaining_cost_budget_usd=agent_config.cost_budget_usd,
+                parent_trace_id=trace.trace_id if trace else "",
+                parent_span_id="",
+            )
+            _current_spawn_context.set(fresh_ctx)
 
         # Compress context for persistent sessions
         if agent_config.session_target == "persistent":
@@ -638,12 +708,27 @@ class AgentRunner:
             logger.debug("Planning phase failed: %s", e)
             return None
 
-    def _create_trace(self, agent_config: AgentConfig, session: AgentSession) -> Any:
+    def _create_trace(
+        self,
+        agent_config: AgentConfig,
+        session: AgentSession,
+        spawn_context: SpawnContext | None = None,
+    ) -> Any:
         """Create telemetry TraceContext."""
         try:
             from robothor.engine.telemetry import TraceContext
 
-            return TraceContext(run_id=session.run_id, agent_id=agent_config.id)
+            kwargs: dict[str, Any] = {
+                "run_id": session.run_id,
+                "agent_id": agent_config.id,
+            }
+            # Reuse parent's trace_id for unified cross-run traces
+            if spawn_context and spawn_context.parent_trace_id:
+                kwargs["trace_id"] = spawn_context.parent_trace_id
+                kwargs["parent_trace_id"] = spawn_context.parent_trace_id
+                kwargs["parent_span_id"] = spawn_context.parent_span_id
+
+            return TraceContext(**kwargs)
         except Exception:
             return None
 

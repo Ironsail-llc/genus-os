@@ -48,9 +48,9 @@ def create_run(run: AgentRun) -> str:
                 id, tenant_id, agent_id, trigger_type, trigger_detail,
                 correlation_id, status, started_at, model_used,
                 system_prompt_chars, user_prompt_chars, tools_provided,
-                delivery_mode
+                delivery_mode, parent_run_id, nesting_depth
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -67,6 +67,8 @@ def create_run(run: AgentRun) -> str:
                 run.user_prompt_chars,
                 run.tools_provided,
                 run.delivery_mode,
+                run.parent_run_id,
+                run.nesting_depth,
             ),
         )
     return run.id
@@ -172,6 +174,67 @@ def list_runs(
         return [dict(r) for r in cur.fetchall()]
 
 
+# ─── Sub-agent tree queries ───────────────────────────────────────────
+
+
+def get_run_children(run_id: str) -> list[dict]:
+    """Get direct child runs of a parent run."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """SELECT id, agent_id, status, trigger_type, nesting_depth,
+                      duration_ms, input_tokens, output_tokens, total_cost_usd,
+                      started_at, completed_at
+               FROM agent_runs
+               WHERE parent_run_id = %s
+               ORDER BY started_at""",
+            (run_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_run_tree(run_id: str) -> dict:
+    """Get full execution tree using a recursive CTE.
+
+    Returns the root run with aggregate token/cost totals across all
+    descendants, plus a flat list of all runs in the tree.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            WITH RECURSIVE tree AS (
+                SELECT id, agent_id, parent_run_id, nesting_depth, status,
+                       duration_ms, input_tokens, output_tokens, total_cost_usd,
+                       started_at, completed_at
+                FROM agent_runs WHERE id = %s
+                UNION ALL
+                SELECT r.id, r.agent_id, r.parent_run_id, r.nesting_depth, r.status,
+                       r.duration_ms, r.input_tokens, r.output_tokens, r.total_cost_usd,
+                       r.started_at, r.completed_at
+                FROM agent_runs r
+                JOIN tree t ON r.parent_run_id = t.id
+            )
+            SELECT * FROM tree ORDER BY nesting_depth, started_at
+            """,
+            (run_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    if not rows:
+        return {"root": None, "runs": [], "totals": {}}
+
+    totals = {
+        "total_runs": len(rows),
+        "total_input_tokens": sum(r.get("input_tokens") or 0 for r in rows),
+        "total_output_tokens": sum(r.get("output_tokens") or 0 for r in rows),
+        "total_cost_usd": sum(r.get("total_cost_usd") or 0.0 for r in rows),
+        "max_nesting_depth": max(r.get("nesting_depth") or 0 for r in rows),
+    }
+
+    return {"root": rows[0], "runs": rows, "totals": totals}
+
+
 # ─── Steps ────────────────────────────────────────────────────────────
 
 
@@ -242,7 +305,7 @@ def upsert_schedule(
     tenant_id: str = DEFAULT_TENANT,
     enabled: bool = True,
     cron_expr: str = "",
-    timezone: str = "America/Grenada",
+    timezone: str = "America/New_York",
     timeout_seconds: int = 600,
     model_primary: str | None = None,
     model_fallbacks: list[str] | None = None,

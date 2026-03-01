@@ -22,6 +22,7 @@ class TriggerType(StrEnum):
     TELEGRAM = "telegram"
     WEBCHAT = "webchat"
     WORKFLOW = "workflow"
+    SUB_AGENT = "sub_agent"
 
 
 class RunStatus(StrEnum):
@@ -44,6 +45,7 @@ class StepType(StrEnum):
     SCRATCHPAD = "scratchpad"
     ESCALATION = "escalation"
     GUARDRAIL = "guardrail"
+    SPAWN_AGENT = "spawn_agent"
 
 
 class DeliveryMode(StrEnum):
@@ -62,6 +64,40 @@ class AgentHook:
 
 
 @dataclass
+class HeartbeatConfig:
+    """Override configuration for periodic heartbeat runs.
+
+    When attached to an AgentConfig, the scheduler creates a separate cron job
+    that runs with these overrides (instruction file, delivery, warmup, etc.)
+    while inheriting model + tools from the parent agent.
+    """
+
+    cron_expr: str = ""
+    timezone: str = "America/New_York"
+    instruction_file: str = ""
+    session_target: str = "isolated"
+    max_iterations: int = 15
+    timeout_seconds: int = 600
+
+    # Delivery (typically announce for heartbeat)
+    delivery_mode: DeliveryMode = DeliveryMode.ANNOUNCE
+    delivery_channel: str = ""
+    delivery_to: str = ""
+
+    # Warmup context for heartbeat runs
+    warmup_context_files: list[str] = field(default_factory=list)
+    warmup_peer_agents: list[str] = field(default_factory=list)
+    warmup_memory_blocks: list[str] = field(default_factory=list)
+
+    # Bootstrap files loaded into system prompt
+    bootstrap_files: list[str] = field(default_factory=list)
+
+    # Budget overrides
+    token_budget: int = 0
+    cost_budget_usd: float = 0.0
+
+
+@dataclass
 class AgentConfig:
     """Configuration for a single agent, loaded from YAML manifest."""
 
@@ -75,7 +111,7 @@ class AgentConfig:
 
     # Schedule
     cron_expr: str = ""
-    timezone: str = "America/Grenada"
+    timezone: str = "America/New_York"
     timeout_seconds: int = 600
     session_target: str = "isolated"
 
@@ -123,7 +159,16 @@ class AgentConfig:
     # Event hooks — triggers from Redis Streams (parsed from manifest hooks field)
     hooks: list[AgentHook] = field(default_factory=list)
 
+    # Heartbeat — periodic health-check runs with overrides
+    heartbeat: HeartbeatConfig | None = None
+
     # ── v2 enhancements (all default off for backward compat) ──
+    # Sub-agent spawning
+    can_spawn_agents: bool = False
+    max_nesting_depth: int = 2  # absolute cap: 3
+    sub_agent_max_iterations: int = 10
+    sub_agent_timeout_seconds: int = 120
+
     error_feedback: bool = True
     token_budget: int = 0  # max tokens per run (0 = unlimited)
     cost_budget_usd: float = 0.0  # max cost per run (0 = unlimited)
@@ -214,7 +259,30 @@ class AgentRun:
     cost_budget_usd: float = 0.0
     budget_exhausted: bool = False
 
+    # Sub-agent tracking
+    parent_run_id: str | None = None
+    nesting_depth: int = 0
+
     steps: list[RunStep] = field(default_factory=list)
+
+
+@dataclass
+class SpawnContext:
+    """Context passed from parent agent to spawned child agents.
+
+    Carries budget constraints, trace linkage, and nesting depth
+    through the agent execution tree.
+    """
+
+    parent_run_id: str
+    parent_agent_id: str
+    correlation_id: str
+    nesting_depth: int  # parent's depth (child = +1)
+    max_nesting_depth: int = 2  # absolute cap: 3
+    remaining_token_budget: int = 0
+    remaining_cost_budget_usd: float = 0.0
+    parent_trace_id: str = ""
+    parent_span_id: str = ""
 
 
 # ─── Workflow Engine Models ────────────────────────────────────────────
@@ -283,7 +351,7 @@ class WorkflowTriggerDef:
     stream: str = ""
     event_type: str = ""
     cron: str = ""
-    timezone: str = "America/Grenada"
+    timezone: str = "America/New_York"
 
 
 @dataclass

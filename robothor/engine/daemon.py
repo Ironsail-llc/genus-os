@@ -27,6 +27,39 @@ from robothor.engine.workflow import WorkflowEngine
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_stale_runs() -> int:
+    """Mark stale 'running' agent_runs as 'timeout'.
+
+    Called on startup and periodically by the watchdog.
+    Returns the number of runs cleaned up.
+    """
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE agent_runs SET status='timeout', "
+                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000 "
+                "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes' "
+                "RETURNING id, agent_id"
+            )
+            rows = cur.fetchall()
+            conn.commit()
+            if rows:
+                for row in rows:
+                    logger.warning("Cleaned up stale run %s (agent: %s)", row[0], row[1])
+                # Release dedup locks for cleaned-up agents
+                from robothor.engine.dedup import release
+
+                for row in rows:
+                    release(row[1])
+            return len(rows)
+    except Exception as e:
+        logger.warning("Stale run cleanup failed: %s", e)
+        return 0
+
+
 async def main() -> None:
     """Start all engine subsystems."""
     # Configure logging
@@ -38,6 +71,11 @@ async def main() -> None:
 
     logger.info("Starting Robothor Agent Engine...")
 
+    # Clean up stale runs from previous crash/restart
+    cleaned = await asyncio.get_event_loop().run_in_executor(None, _cleanup_stale_runs)
+    if cleaned:
+        logger.info("Startup: cleaned %d stale agent runs", cleaned)
+
     # Load config
     config = EngineConfig.from_env()
     logger.info("Tenant: %s", config.tenant_id)
@@ -47,6 +85,12 @@ async def main() -> None:
 
     # Create subsystems
     runner = AgentRunner(config)
+
+    # Register runner for sub-agent spawning
+    from robothor.engine.tools import set_runner
+
+    set_runner(runner)
+
     workflow_engine = WorkflowEngine(config, runner)
     wf_count = workflow_engine.load_workflows(config.workflow_dir)
     logger.info("Loaded %d workflows", wf_count)
@@ -170,6 +214,16 @@ async def _watchdog(config: EngineConfig) -> None:
         except Exception as e:
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
+
+        # Zombie run reaper (every 20 ticks = 20 minutes)
+        if tick_count % 20 == 0:
+            try:
+                loop = asyncio.get_running_loop()
+                reaped = await loop.run_in_executor(None, _cleanup_stale_runs)
+                if reaped:
+                    logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
+            except Exception as e:
+                logger.warning("Watchdog: zombie reaper failed: %s", e)
 
         # Daily chat session TTL cleanup (every 1440 ticks = 24h)
         if tick_count % 1440 == 0:
