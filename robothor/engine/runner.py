@@ -51,15 +51,16 @@ litellm.suppress_debug_info = True
 
 # Register custom pricing for OpenRouter-routed models.
 # Without this, litellm.completion_cost() returns $0.00 for these models.
+# NOTE: max_tokens here is the MODEL's context window, not the output cap we request.
 litellm.register_model(
     {
         "openrouter/moonshotai/kimi-k2.5": {
-            "max_tokens": 131072,
+            "max_tokens": 262144,
             "input_cost_per_token": 0.0000006,  # $0.60/M
             "output_cost_per_token": 0.0000024,  # $2.40/M
         },
-        "openrouter/anthropic/claude-sonnet-4.6": {
-            "max_tokens": 8192,
+        "openrouter/anthropic/claude-sonnet-4-6": {
+            "max_tokens": 200000,
             "input_cost_per_token": 0.000003,  # $3/M
             "output_cost_per_token": 0.000015,  # $15/M
         },
@@ -122,6 +123,27 @@ class AgentRunner:
         # Get filtered tools for this agent
         tool_schemas = self.registry.build_for_agent(agent_config)
         tool_names = self.registry.get_tool_names(agent_config)
+
+        # Warmup: prepend context for scheduled/event/workflow triggers
+        # Interactive (TELEGRAM) and SUB_AGENT runs skip warmup — they have
+        # conversation context already.
+        if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
+            has_warmup = (
+                agent_config.warmup_memory_blocks
+                or agent_config.warmup_context_files
+                or agent_config.warmup_peer_agents
+            )
+            if has_warmup:
+                try:
+                    from robothor.engine.warmup import build_warmth_preamble
+
+                    preamble = build_warmth_preamble(
+                        agent_config, self.config.workspace, self.config.tenant_id
+                    )
+                    if preamble:
+                        message = f"{preamble}\n\n{message}"
+                except Exception as e:
+                    logger.debug("Warmup preamble failed for %s: %s", agent_id, e)
 
         # Start session
         session.start(
@@ -307,14 +329,18 @@ class AgentRunner:
             )
             _current_spawn_context.set(fresh_ctx)
 
-        # Compress context for persistent sessions
-        if agent_config.session_target == "persistent":
-            try:
-                from robothor.engine.context import maybe_compress
+        # Compress context if it exceeds model's threshold
+        try:
+            from robothor.engine.context import maybe_compress
+            from robothor.engine.model_registry import get_model_limits
 
-                session.messages = await maybe_compress(session.messages, models)
-            except Exception as e:
-                logger.debug("Context compression failed: %s", e)
+            model_limits = get_model_limits(models[0])
+            compress_threshold = int(model_limits.max_input_tokens * 0.75)
+            session.messages = await maybe_compress(
+                session.messages, models, threshold=compress_threshold
+            )
+        except Exception as e:
+            logger.debug("Context compression failed: %s", e)
 
         # ── v2: Initialize enhancement objects ──
         scratchpad = self._create_scratchpad(agent_config, route, resumed_scratchpad)
@@ -889,7 +915,19 @@ class AgentRunner:
         temperature: float = 0.3,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
+        from robothor.engine.context import estimate_tokens, maybe_compress
+        from robothor.engine.model_registry import get_model_limits, get_output_tokens
+
+        # Pre-flight compression: if context grew during the run, compress now
+        try:
+            model_limits = get_model_limits(models[0])
+            compress_threshold = int(model_limits.max_input_tokens * 0.75)
+            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
+        except Exception as e:
+            logger.debug("Pre-flight compression failed: %s", e)
+
         last_error = None
+        input_est = estimate_tokens(messages)
 
         for model in models:
             if broken_models and model in broken_models:
@@ -900,7 +938,7 @@ class AgentRunner:
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": 8192,
+                    "max_tokens": get_output_tokens(model, input_est),
                 }
                 if tools:
                     kwargs["tools"] = tools
@@ -940,7 +978,19 @@ class AgentRunner:
         Returns a reconstructed ModelResponse identical to non-streaming _call_llm,
         so the rest of the loop processes it the same way.
         """
+        from robothor.engine.context import estimate_tokens, maybe_compress
+        from robothor.engine.model_registry import get_model_limits, get_output_tokens
+
+        # Pre-flight compression: if context grew during the run, compress now
+        try:
+            model_limits = get_model_limits(models[0])
+            compress_threshold = int(model_limits.max_input_tokens * 0.75)
+            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
+        except Exception as e:
+            logger.debug("Pre-flight compression (streaming) failed: %s", e)
+
         last_error = None
+        input_est = estimate_tokens(messages)
 
         for model in models:
             if broken_models and model in broken_models:
@@ -951,7 +1001,7 @@ class AgentRunner:
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": 8192,
+                    "max_tokens": get_output_tokens(model, input_est),
                     "stream": True,
                 }
                 if tools:

@@ -72,3 +72,42 @@ class TestScratchpad:
         for i in range(15):
             sp.record_tool_call(f"tool_{i}")
         assert len(sp._recent_actions) == 10
+
+    def test_max_injections_stops_injecting(self):
+        """After max_injections, should_inject returns False."""
+        sp = Scratchpad(inject_interval=1, max_injections=2)
+
+        sp.record_tool_call("t1")
+        assert sp.should_inject()
+        sp.format_summary()  # injection 1
+
+        sp.record_tool_call("t2")
+        assert sp.should_inject()
+        sp.format_summary()  # injection 2
+
+        sp.record_tool_call("t3")
+        assert not sp.should_inject()  # limit reached
+
+    def test_tracking_continues_after_max_injections(self):
+        """Internal tracking continues even after injection stops."""
+        sp = Scratchpad(inject_interval=1, max_injections=1)
+
+        sp.record_tool_call("t1")
+        sp.format_summary()  # injection 1
+
+        sp.record_tool_call("t2")
+        sp.record_tool_call("t3")
+        # Tracking continues
+        assert sp._tool_calls == 3
+        assert sp._successes == 3
+
+    def test_default_max_injections_is_five(self):
+        sp = Scratchpad()
+        assert sp.max_injections == 5
+
+    def test_format_summary_increments_count(self):
+        sp = Scratchpad()
+        for _ in range(3):
+            sp.record_tool_call("t")
+        sp.format_summary()
+        assert sp._injected_count == 1

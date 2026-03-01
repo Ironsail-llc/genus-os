@@ -17,6 +17,7 @@ class Scratchpad:
     """Working memory tracker for a single agent run."""
 
     inject_interval: int = 3  # inject summary every N tool calls
+    max_injections: int = 5  # stop injecting into messages after this many
     _tool_calls: int = 0
     _successes: int = 0
     _errors: int = 0
@@ -44,13 +45,20 @@ class Scratchpad:
             self._successes += 1
 
     def should_inject(self) -> bool:
-        """Whether it's time to inject a working state summary."""
+        """Whether it's time to inject a working state summary.
+
+        Returns False once max_injections is reached to prevent unbounded
+        context growth. Tracking continues internally regardless.
+        """
         if self._tool_calls == 0:
+            return False
+        if self._injected_count >= self.max_injections:
             return False
         return self._tool_calls % self.inject_interval == 0
 
     def format_summary(self, plan_steps: int = 0) -> str:
         """Format the current working state as a context message."""
+        self._injected_count += 1
         progress = ""
         if plan_steps > 0 and self._successes > 0:
             pct = min(100, int(self._successes / plan_steps * 100))

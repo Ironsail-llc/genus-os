@@ -498,28 +498,15 @@ class CronScheduler:
     def _build_payload(self, config: AgentConfig) -> str:
         """Build the cron payload message from agent config.
 
-        Prepends warmth preamble (session history, memory blocks, context
-        files, peer status) so agents start warm instead of cold.
+        Warmup preamble is now handled centrally by runner.execute(),
+        so this method just returns the base instruction.
         """
-        from robothor.engine.warmup import build_warmth_preamble
-
         now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-        base = (
+        return (
             f"Current time: {now}\n\n"
             f"You are {config.name} ({config.id}). "
             f"Execute your scheduled tasks as described in your instructions."
         )
-
-        # Build warmth preamble (never crashes)
-        try:
-            preamble = build_warmth_preamble(config, self.config.workspace, self.config.tenant_id)
-        except Exception as e:
-            logger.debug("Warmup preamble failed for %s: %s", config.id, e)
-            preamble = ""
-
-        if preamble:
-            return f"{preamble}\n\n{base}"
-        return base
 
     async def stop(self) -> None:
         """Shut down the scheduler."""

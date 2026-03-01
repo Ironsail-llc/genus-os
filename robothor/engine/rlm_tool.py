@@ -37,7 +37,7 @@ class DeepReasonConfig:
     )
     sub_model: str = field(
         default_factory=lambda: os.environ.get(
-            "ROBOTHOR_RLM_SUB_MODEL", "openrouter/anthropic/claude-haiku-4-5-20251001"
+            "ROBOTHOR_RLM_SUB_MODEL", "openrouter/anthropic/claude-haiku-4.5"
         )
     )
     max_budget: float = field(
@@ -104,19 +104,24 @@ def _make_get_entity_fn():
     return get_entity
 
 
+_READ_FILE_LIMIT = 200_000
+
+
 def _make_read_file_fn(workspace: str):
-    """Return a sync file reader with 50 KB truncation."""
+    """Return a sync file reader with 200 KB truncation."""
 
     def read_file(path: str) -> str:
-        """Read a file from the workspace. Truncated to 50 KB."""
+        """Read a file from the workspace. Truncated to 200 KB."""
         p = Path(path)
         if not p.is_absolute() and workspace:
             p = Path(workspace) / p
         try:
             text = p.read_text()
-            if len(text) > 50_000:
+            if len(text) > _READ_FILE_LIMIT:
                 text = (
-                    text[:50_000] + f"\n\n... [truncated at 50KB, full file is {len(text)} chars]"
+                    text[:_READ_FILE_LIMIT]
+                    + f"\n\n... [truncated at {_READ_FILE_LIMIT // 1000}KB,"
+                    f" full file is {len(text)} chars]"
                 )
             return text
         except Exception as e:
@@ -169,8 +174,8 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
             p = Path(workspace) / p
         try:
             text = p.read_text()
-            if len(text) > 50_000:
-                text = text[:50_000] + "\n... [truncated at 50KB]"
+            if len(text) > _READ_FILE_LIMIT:
+                text = text[:_READ_FILE_LIMIT] + f"\n... [truncated at {_READ_FILE_LIMIT // 1000}KB]"
             return f"## File: {path}\n\n{text}"
         except Exception as e:
             logger.warning("Failed to load file context %s: %s", path, e)
@@ -205,6 +210,82 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
 # ─── Custom tools for the RLM REPL ──────────────────────────────────
 
 
+def _make_web_search_fn():
+    """Return a sync wrapper around SearXNG for web search.
+
+    SearXNG runs on localhost:8888 — this is infrastructure code, not
+    agent-facing, so localhost is fine (CLAUDE.md rule 7).
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    def web_search(query: str, num_results: int = 5) -> str:
+        """Search the web via SearXNG. Returns JSON list of results."""
+        params = urllib.parse.urlencode(
+            {"q": query, "format": "json", "categories": "general", "pageno": 1}
+        )
+        url = f"http://127.0.0.1:8888/search?{params}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "robothor-rlm/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            results = data.get("results", [])[:num_results]
+            return json.dumps(
+                [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("content", "")[:500],
+                    }
+                    for r in results
+                ],
+                indent=2,
+            )
+        except urllib.error.URLError as e:
+            return json.dumps({"error": f"SearXNG unavailable: {e}"})
+        except Exception as e:
+            return json.dumps({"error": f"Web search failed: {e}"})
+
+    return web_search
+
+
+def _make_exec_fn(workspace: str):
+    """Return a sync shell executor with 30s timeout and 4K truncation."""
+    import subprocess
+
+    def exec_shell(command: str) -> str:
+        """Execute a shell command. 30s timeout, 4KB stdout limit. CWD is workspace root."""
+        cwd = workspace or None
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=cwd,
+            )
+            stdout = result.stdout[:4000] if result.stdout else ""
+            stderr = result.stderr[:1000] if result.stderr else ""
+            if len(result.stdout or "") > 4000:
+                stdout += "\n... [truncated at 4KB]"
+            parts = []
+            if stdout:
+                parts.append(f"STDOUT:\n{stdout}")
+            if stderr:
+                parts.append(f"STDERR:\n{stderr}")
+            if result.returncode != 0:
+                parts.append(f"EXIT CODE: {result.returncode}")
+            return "\n".join(parts) if parts else "(no output)"
+        except subprocess.TimeoutExpired:
+            return "ERROR: Command timed out after 30 seconds"
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    return exec_shell
+
+
 def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
     """Build the custom_tools dict for the RLM instance."""
     return {
@@ -226,7 +307,7 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
             "tool": _make_read_file_fn(workspace),
             "description": (
                 "Read a file from the workspace. Paths relative to workspace root. "
-                "Truncated to 50KB."
+                "Truncated to 200KB. Good for reading source code, configs, docs."
             ),
         },
         "memory_block_read": {
@@ -234,6 +315,21 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
             "description": (
                 "Read a named memory block (persistent structured working memory). "
                 "Returns JSON with block_name, content, last_written_at."
+            ),
+        },
+        "web_search": {
+            "tool": _make_web_search_fn(),
+            "description": (
+                "Search the web via SearXNG. Returns JSON list of results with "
+                "title, url, content snippet. Good for fact-checking and research."
+            ),
+        },
+        "exec_shell": {
+            "tool": _make_exec_fn(workspace),
+            "description": (
+                "Execute a shell command (grep, find, wc, python, etc.). "
+                "30s timeout, 4KB stdout limit. CWD is workspace root. "
+                "Good for codebase analysis, running scripts, searching files."
             ),
         },
     }

@@ -245,25 +245,8 @@ class EventHooks:
 
                 agent_config = load_agent_config(agent_id, self.config.manifest_dir)
 
-                # Build warm message with preamble
+                # Warmup is handled centrally by runner.execute()
                 message = trigger["message"]
-                if agent_config:
-                    try:
-                        from robothor.engine.warmup import build_warmth_preamble
-
-                        preamble = build_warmth_preamble(
-                            agent_config,
-                            self.config.workspace,
-                            self.config.tenant_id,
-                        )
-                        if preamble:
-                            message = f"{preamble}\n\n{message}"
-                    except Exception as e:
-                        logger.debug(
-                            "Warmup preamble failed for hook %s: %s",
-                            agent_id,
-                            e,
-                        )
 
                 run = await self.runner.execute(
                     agent_id=agent_id,
@@ -379,22 +362,11 @@ class EventHooks:
                 logger.warning("Downstream agent config not found: %s", agent_id)
                 return
 
+            # Warmup is handled centrally by runner.execute()
             message = (
                 f"Triggered as downstream agent after "
                 f"{source_stream}:{source_event}. Execute your tasks."
             )
-            try:
-                from robothor.engine.warmup import build_warmth_preamble
-
-                preamble = build_warmth_preamble(
-                    agent_config,
-                    self.config.workspace,
-                    self.config.tenant_id,
-                )
-                if preamble:
-                    message = f"{preamble}\n\n{message}"
-            except Exception as e:
-                logger.debug("Warmup failed for downstream %s: %s", agent_id, e)
 
             run = await self.runner.execute(
                 agent_id=agent_id,

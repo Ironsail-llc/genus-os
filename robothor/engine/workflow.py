@@ -368,7 +368,6 @@ class WorkflowEngine:
         """Execute an agent step via runner.execute()."""
         from robothor.engine.config import load_agent_config
         from robothor.engine.delivery import deliver
-        from robothor.engine.warmup import build_warmth_preamble
 
         agent_config = load_agent_config(step.agent_id, self.config.manifest_dir)
         if not agent_config:
@@ -376,18 +375,8 @@ class WorkflowEngine:
             result.error_message = f"Agent config not found: {step.agent_id}"
             return
 
-        # Render message template
+        # Render message template — warmup handled centrally by runner.execute()
         message = _render_template(step.message, run.context)
-
-        # Add warmth preamble
-        try:
-            preamble = build_warmth_preamble(
-                agent_config, self.config.workspace, self.config.tenant_id
-            )
-            if preamble:
-                message = f"{preamble}\n\n{message}"
-        except Exception as e:
-            logger.debug("Warmup failed for workflow step %s: %s", step.id, e)
 
         agent_run = await self.runner.execute(
             agent_id=step.agent_id,

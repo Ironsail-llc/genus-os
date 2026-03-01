@@ -45,10 +45,16 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
 async def maybe_compress(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
+    threshold: int | None = None,
 ) -> list[dict[str, Any]]:
     """Compress conversation if above threshold.
 
     Returns potentially compressed message list. Original list is not modified.
+
+    Args:
+        messages: The conversation messages to potentially compress.
+        models: Optional list of models (first is used for summarization).
+        threshold: Token threshold for compression. Defaults to COMPRESS_THRESHOLD (80K).
 
     Strategy:
     - Keep messages[0] (system prompt) always
@@ -56,8 +62,9 @@ async def maybe_compress(
     - Keep last KEEP_RECENT messages verbatim
     - If LLM summary fails, use a static placeholder
     """
+    compress_at = threshold if threshold is not None else COMPRESS_THRESHOLD
     est = estimate_tokens(messages)
-    if est < COMPRESS_THRESHOLD:
+    if est < compress_at:
         return messages
 
     if len(messages) <= KEEP_RECENT + 1:

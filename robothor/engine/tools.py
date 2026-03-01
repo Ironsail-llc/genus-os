@@ -502,10 +502,11 @@ class ToolRegistry:
             "function": {
                 "name": "deep_reason",
                 "description": (
-                    "Run a deep reasoning session over large context using an RLM (Recursive Language Model). "
-                    "The RLM writes Python code in a REPL to navigate, chunk, and recursively query context — "
-                    "far more effective than vanilla prompts for complex multi-source analysis. "
-                    "EXPENSIVE ($0.50-$2.00/call) — use only for questions that genuinely need heavy-context reasoning."
+                    "Run a deep research session using an RLM (Recursive Language Model). "
+                    "The RLM writes Python code in a REPL to search the web, execute shell commands, "
+                    "read files, query memory, and recursively investigate multi-source questions. "
+                    "Best for: codebase analysis, fact-checking across sources, complex investigations. "
+                    "EXPENSIVE ($0.50-$2.00/call) — use only for questions needing deep multi-step research."
                 ),
                 "parameters": {
                     "type": "object",

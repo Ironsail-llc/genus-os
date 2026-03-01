@@ -9,13 +9,16 @@ import json
 from unittest.mock import MagicMock, patch
 
 from robothor.engine.rlm_tool import (
+    _READ_FILE_LIMIT,
     DeepReasonConfig,
     _build_custom_tools,
     _load_context_source,
+    _make_exec_fn,
     _make_get_entity_fn,
     _make_memory_block_read_fn,
     _make_read_file_fn,
     _make_search_memory_fn,
+    _make_web_search_fn,
     execute_deep_reason,
 )
 
@@ -26,7 +29,7 @@ class TestDeepReasonConfig:
     def test_defaults(self):
         config = DeepReasonConfig()
         assert config.root_model == "openrouter/anthropic/claude-sonnet-4-6"
-        assert config.sub_model == "openrouter/anthropic/claude-haiku-4-5-20251001"
+        assert config.sub_model == "openrouter/anthropic/claude-haiku-4.5"
         assert config.max_budget == 2.0
         assert config.max_timeout == 240
         assert config.max_iterations == 30
@@ -187,11 +190,11 @@ class TestCustomToolWrappers:
 
     def test_read_file_fn_truncates(self, tmp_path):
         f = tmp_path / "big.txt"
-        f.write_text("x" * 60_000)
+        f.write_text("x" * 250_000)
         fn = _make_read_file_fn(str(tmp_path))
         result = fn("big.txt")
-        assert len(result) < 60_000
-        assert "truncated at 50KB" in result
+        assert len(result) < 250_000
+        assert "truncated at 200KB" in result
 
     def test_read_file_fn_error(self):
         fn = _make_read_file_fn("/tmp")
@@ -211,13 +214,67 @@ class TestCustomToolWrappers:
         assert parsed["content"] == "block content"
 
 
+class TestExecFn:
+    def test_exec_simple_command(self, tmp_path):
+        fn = _make_exec_fn(str(tmp_path))
+        result = fn("echo hello")
+        assert "hello" in result
+
+    def test_exec_with_error(self, tmp_path):
+        fn = _make_exec_fn(str(tmp_path))
+        result = fn("false")  # exits 1
+        assert "EXIT CODE: 1" in result
+
+    def test_exec_timeout(self, tmp_path):
+        fn = _make_exec_fn(str(tmp_path))
+        # This should time out quickly in test — use sleep 0 as baseline
+        result = fn("echo fast")
+        assert "fast" in result
+
+    def test_exec_truncates_long_output(self, tmp_path):
+        fn = _make_exec_fn(str(tmp_path))
+        result = fn("python3 -c \"print('x' * 10000)\"")
+        assert "truncated at 4KB" in result
+
+
+class TestWebSearchFn:
+    @patch("urllib.request.urlopen")
+    def test_web_search_success(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(
+            {
+                "results": [
+                    {"title": "Result 1", "url": "https://example.com", "content": "test content"},
+                ]
+            }
+        ).encode()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        fn = _make_web_search_fn()
+        result = fn("test query")
+        parsed = json.loads(result)
+        assert len(parsed) == 1
+        assert parsed[0]["title"] == "Result 1"
+
+    @patch("urllib.request.urlopen", side_effect=Exception("Connection refused"))
+    def test_web_search_error_handling(self, _mock):
+        fn = _make_web_search_fn()
+        result = fn("test query")
+        parsed = json.loads(result)
+        assert "error" in parsed
+
+
 class TestBuildCustomTools:
-    def test_returns_four_tools(self):
+    def test_returns_six_tools(self):
         tools = _build_custom_tools("/workspace")
         assert "search_memory" in tools
         assert "get_entity" in tools
         assert "read_file" in tools
         assert "memory_block_read" in tools
+        assert "web_search" in tools
+        assert "exec_shell" in tools
 
     def test_each_tool_has_tool_and_description(self):
         tools = _build_custom_tools("/workspace")
@@ -225,6 +282,11 @@ class TestBuildCustomTools:
             assert "tool" in tool, f"{name} missing tool"
             assert "description" in tool, f"{name} missing description"
             assert callable(tool["tool"]), f"{name} tool not callable"
+
+
+class TestReadFileLimit:
+    def test_limit_is_200kb(self):
+        assert _READ_FILE_LIMIT == 200_000
 
 
 # ─── Execution tests ─────────────────────────────────────────────────

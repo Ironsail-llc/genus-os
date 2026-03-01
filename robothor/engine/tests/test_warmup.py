@@ -232,31 +232,16 @@ class TestBuildWarmthPreamble:
 
 
 class TestSchedulerWarmup:
-    """Test that the scheduler properly injects warmup preamble."""
+    """Test that warmup is now handled by runner, not scheduler."""
 
-    def test_build_payload_includes_warmup(self, engine_config, sample_agent_config) -> None:
+    def test_build_payload_no_warmup(self, engine_config, sample_agent_config) -> None:
+        """_build_payload no longer calls warmup — that's centralized in runner.execute()."""
         from robothor.engine.runner import AgentRunner
         from robothor.engine.scheduler import CronScheduler
 
         runner = AgentRunner(engine_config)
         scheduler = CronScheduler(engine_config, runner)
 
-        with patch(
-            "robothor.engine.warmup.build_warmth_preamble",
-            return_value="--- SESSION HISTORY ---\nLast run: completed",
-        ):
-            payload = scheduler._build_payload(sample_agent_config)
-        assert "SESSION HISTORY" in payload
-        assert "Execute your scheduled tasks" in payload
-
-    def test_build_payload_empty_warmup(self, engine_config, sample_agent_config) -> None:
-        from robothor.engine.runner import AgentRunner
-        from robothor.engine.scheduler import CronScheduler
-
-        runner = AgentRunner(engine_config)
-        scheduler = CronScheduler(engine_config, runner)
-
-        with patch("robothor.engine.warmup.build_warmth_preamble", return_value=""):
-            payload = scheduler._build_payload(sample_agent_config)
+        payload = scheduler._build_payload(sample_agent_config)
         assert "SESSION HISTORY" not in payload
         assert "Execute your scheduled tasks" in payload
