@@ -7,7 +7,7 @@ Robothor is an AI brain -- a Python package (`robothor.*`) that provides persist
 ```
                               Agent Orchestration
                         ┌──────────────────────────┐
-                        │  OpenClaw, LangChain,     │
+                        │  Agent Engine, LangChain, │
                         │  CrewAI, custom, or any   │
                         │  framework that can call  │
                         │  Python or HTTP            │
@@ -119,4 +119,4 @@ Each agent declares its capabilities in `agent_capabilities.json`: which tools i
 | MCP clients (Claude Code, etc.) | `robothor mcp` (stdio) | 35 tools, direct DB access |
 | Non-Python services | Bridge HTTP API on :9100 | REST endpoints for CRM, contacts, search |
 | Dashboards | API server on :9099 | FastAPI with SSE for real-time events |
-| Agent frameworks | Any of the above | OpenClaw uses Bridge; LangChain can import directly |
+| Agent frameworks | Any of the above | Agent Engine calls DAL directly; LangChain can import directly |

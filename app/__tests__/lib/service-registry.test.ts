@@ -31,14 +31,6 @@ const mockManifest = {
       health: "/health",
       dependencies: ["postgres"],
     },
-    gateway: {
-      name: "OpenClaw Gateway",
-      port: 18789,
-      host: "0.0.0.0",
-      health: null,
-      protocol: "ws",
-      dependencies: [],
-    },
     vision: {
       name: "Vision Service",
       port: 8600,
@@ -56,7 +48,6 @@ beforeEach(() => {
   delete process.env.BRIDGE_URL;
   delete process.env.ORCHESTRATOR_URL;
   delete process.env.VISION_URL;
-  delete process.env.GATEWAY_URL;
 });
 
 afterEach(() => {
@@ -70,10 +61,6 @@ describe("getServiceUrl", () => {
 
   it("returns orchestrator URL", () => {
     expect(getServiceUrl("orchestrator")).toBe("http://0.0.0.0:9099");
-  });
-
-  it("returns websocket URL for gateway", () => {
-    expect(getServiceUrl("gateway")).toBe("ws://0.0.0.0:18789");
   });
 
   it("appends path to URL", () => {
@@ -108,10 +95,6 @@ describe("getHealthUrl", () => {
     expect(getHealthUrl("bridge")).toBe("http://127.0.0.1:9100/health");
   });
 
-  it("returns null when no health endpoint", () => {
-    expect(getHealthUrl("gateway")).toBeNull();
-  });
-
   it("returns null for unknown service", () => {
     expect(getHealthUrl("nonexistent")).toBeNull();
   });
@@ -122,6 +105,6 @@ describe("listServices", () => {
     const services = listServices();
     expect(Object.keys(services)).toContain("bridge");
     expect(Object.keys(services)).toContain("orchestrator");
-    expect(Object.keys(services)).toContain("gateway");
+    expect(Object.keys(services)).toContain("vision");
   });
 });

@@ -358,21 +358,6 @@ class TestAuditErrorResilience:
             assert person_id is not None
             crm_dal.delete_person(person_id)
 
-    @pytest.mark.asyncio
-    async def test_audit_failure_doesnt_break_bridge_webhook(self, client):
-        """Mock audit to raise; webhook endpoint should still return 200."""
-        with patch("routers.integration.log_event", side_effect=Exception("Audit DB down")):
-            # The webhook endpoint calls audit.log_event — if it raises,
-            # the endpoint should still function (return 200 or handle gracefully).
-            # Send a minimal webhook payload
-            resp = await client.post("/openclaw-webhook", json={
-                "channel": "test",
-                "identifier": "test@example.com",
-                "direction": "incoming",
-                "content": "test message",
-            })
-            # Should not be 500
-            assert resp.status_code != 500
 
 
 # ─── Cleanup ──────────────────────────────────────────────────────────

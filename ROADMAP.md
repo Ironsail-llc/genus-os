@@ -78,11 +78,10 @@ Unified scheduling -- cron and event-driven in one system.
 
 ## v0.7 -- Channel Drivers
 
-Messaging abstraction. OpenClaw becomes one implementation among many.
+Messaging abstraction layer.
 
 - [ ] Channel driver interface (send, receive, status, capabilities)
 - [ ] Built-in drivers: email (IMAP/SMTP), Telegram, webhook
-- [ ] OpenClaw adapter (wraps existing OpenClaw gateway)
 - [ ] Channel routing (rules for which agent handles which channel)
 - [ ] Message normalization (all channels produce the same event format)
 

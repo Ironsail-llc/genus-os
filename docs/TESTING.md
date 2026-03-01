@@ -287,7 +287,6 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | CRM MCP tools | `brain/memory_system/test_phase3_mcp_server.py` | ~10 | Tool schema validation, argument mapping, CRM CRUD via crm_dal |
-| OpenClaw CRM plugin | `runtime/extensions/crm-tools/tests/test_crm_plugin.py` | ~8 | Plugin registration, fetch→Bridge proxy calls, error handling |
 
 **Fixtures needed:** Mock MCP server context, mock Bridge HTTP
 **Mocks:** HTTP responses from Bridge, crm_dal

@@ -1,7 +1,5 @@
 """
 Engine configuration — loads agent configs from YAML manifests and env vars.
-
-Reuses robothor.gateway.config_gen.load_manifests() for YAML parsing.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, Heartbe
 
 logger = logging.getLogger(__name__)
 
-# Bootstrap file limits (matching OpenClaw behavior)
+# Bootstrap file limits
 BOOTSTRAP_MAX_CHARS_PER_FILE = 12_000
 BOOTSTRAP_TOTAL_MAX_CHARS = 30_000
 

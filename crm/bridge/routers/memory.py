@@ -1,4 +1,4 @@
-"""Memory proxy routes — for OpenClaw plugins that can't import Python directly."""
+"""Memory proxy routes — HTTP-accessible memory operations."""
 
 from __future__ import annotations
 

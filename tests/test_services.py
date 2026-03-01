@@ -51,13 +51,6 @@ def manifest_file(tmp_path, monkeypatch):
                 "health": None,
                 "dependencies": [],
             },
-            "gateway": {
-                "port": 18789,
-                "host": "127.0.0.1",
-                "protocol": "ws",
-                "health": "/health",
-                "dependencies": [],
-            },
         }
     }
     path = tmp_path / "robothor-services.json"
@@ -82,10 +75,6 @@ class TestServiceLookup:
     def test_get_service_url_with_path(self, manifest_file):
         url = get_service_url("bridge", "/api/people")
         assert url == "http://127.0.0.1:9100/api/people"
-
-    def test_get_service_url_ws(self, manifest_file):
-        url = get_service_url("gateway")
-        assert url == "ws://127.0.0.1:18789"
 
     def test_get_service_url_unknown(self, manifest_file):
         assert get_service_url("nonexistent") is None
@@ -118,7 +107,7 @@ class TestListServices:
         services = list_services()
         assert "bridge" in services
         assert "postgresql" in services
-        assert len(services) == 4
+        assert len(services) == 3
 
 
 class TestTopologicalSort:

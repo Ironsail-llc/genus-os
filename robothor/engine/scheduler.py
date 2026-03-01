@@ -261,6 +261,20 @@ class CronScheduler:
             # Deliver output
             await deliver(agent_config, run)
 
+            # Persist delivery status back to DB
+            if run.delivery_status or run.delivered_at:
+                try:
+                    from robothor.engine.tracking import update_run
+
+                    update_run(
+                        run.id,
+                        delivery_status=run.delivery_status,
+                        delivered_at=run.delivered_at,
+                        delivery_channel=run.delivery_channel,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to persist delivery status for %s: %s", agent_id, e)
+
             # Update schedule state
             try:
                 consecutive_errors = 0
@@ -404,6 +418,24 @@ class CronScheduler:
 
             # Deliver with heartbeat's announce mode
             await deliver(override_config, run)
+
+            # Persist delivery status back to DB
+            if run.delivery_status or run.delivered_at:
+                try:
+                    from robothor.engine.tracking import update_run
+
+                    update_run(
+                        run.id,
+                        delivery_status=run.delivery_status,
+                        delivered_at=run.delivered_at,
+                        delivery_channel=run.delivery_channel,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to persist heartbeat delivery status for %s: %s",
+                        agent_id,
+                        e,
+                    )
 
             # Update schedule state under heartbeat key
             try:

@@ -11,7 +11,7 @@ vi.mock("@/lib/config", () => ({
 // Mock the engine client module
 const mockChatSend = vi.fn();
 const mockChatInject = vi.fn();
-vi.mock("@/lib/gateway/server-client", () => ({
+vi.mock("@/lib/engine/server-client", () => ({
   getEngineClient: () => ({
     chatSend: mockChatSend,
     chatInject: mockChatInject,

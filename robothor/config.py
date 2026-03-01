@@ -96,7 +96,7 @@ class GarminConfig:
         default_factory=lambda: Path(
             os.environ.get(
                 "GARMIN_TOKEN_DIR",
-                Path.home() / ".openclaw" / "garmin_tokens",
+                Path.home() / ".config" / "robothor" / "garmin_tokens",
             )
         )
     )

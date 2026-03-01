@@ -636,7 +636,7 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 | Category | Contents |
 |----------|----------|
 | Project directories | `clawd/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
-| Config directories | `.openclaw/`, `.cloudflared/` |
+| Config directories | `.config/robothor/`, `.cloudflared/` |
 | Credentials | `.bashrc`, `crm/.env` |
 | Databases | 2x `pg_dump`: robothor\_memory, vaultwarden |
 | Docker volumes | vaultwarden-data, uptime-kuma-data |

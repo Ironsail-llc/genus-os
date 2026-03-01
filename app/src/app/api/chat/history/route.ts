@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getEngineClient } from "@/lib/gateway/server-client";
-import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/gateway/session-state";
+import { getEngineClient } from "@/lib/engine/server-client";
+import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/engine/session-state";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);

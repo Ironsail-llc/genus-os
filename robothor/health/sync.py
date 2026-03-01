@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TOKEN_DIR = Path(
     os.environ.get(
         "GARMIN_TOKEN_DIR",
-        Path.home() / ".openclaw" / "garmin_tokens",
+        Path.home() / ".config" / "robothor" / "garmin_tokens",
     )
 )
 

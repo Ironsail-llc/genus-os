@@ -17,7 +17,6 @@ from models import (
     ResolveContactRequest,
     VaultCreateCardRequest,
     VaultCreateLoginRequest,
-    WebhookRequest,
 )
 
 # Lazy-loaded vault client
@@ -52,35 +51,6 @@ async def timeline(identifier: str):
 
 
 # ─── Webhooks ────────────────────────────────────────────────────────────
-
-
-@router.post("/webhooks/openclaw")
-async def webhook_openclaw(body: WebhookRequest):
-    import crm_dal
-    resolved = crm_dal.resolve_contact(body.channel, body.identifier, body.name)
-    person_id = resolved.get("person_id")
-    if person_id and body.content:
-        convos = crm_dal.get_conversations_for_contact(str(person_id))
-        convo_id = convos[0].get("id") if convos else None
-        if not convo_id:
-            convo = crm_dal.create_conversation(str(person_id))
-            convo_id = convo.get("id") if convo else None
-        if convo_id:
-            msg_type = "incoming" if body.direction == "incoming" else "outgoing"
-            crm_dal.send_message(convo_id, body.content, msg_type)
-
-    log_event(
-        "ipc.webhook", f"openclaw webhook: {body.channel}:{body.identifier}",
-        category="bridge", source_channel=body.channel,
-        target=f"person:{person_id}" if person_id else None,
-        details={"channel": body.channel, "identifier": body.identifier,
-                 "direction": body.direction, "has_content": bool(body.content)},
-    )
-    publish("crm", "ipc.webhook", {
-        "channel": body.channel, "identifier": body.identifier,
-        "direction": body.direction, "person_id": person_id,
-    }, source="bridge")
-    return {"status": "ok", "resolved": {"person_id": person_id}}
 
 
 @router.post("/log-interaction")
