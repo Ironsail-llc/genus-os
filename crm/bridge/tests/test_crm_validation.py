@@ -6,12 +6,9 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import crm_dal
-
 
 # ─── validate_person_input ─────────────────────────────────────────────
 
@@ -51,7 +48,9 @@ class TestValidatePersonInput:
         assert "@" in reason
 
     def test_accepts_normal_input(self):
-        ok, reason = crm_dal.validate_person_input("Philip", "D'Agostino", email="philip@ironsail.ai")
+        ok, reason = crm_dal.validate_person_input(
+            "Philip", "D'Agostino", email="philip@ironsail.ai"
+        )
         assert ok
         assert reason == "ok"
 

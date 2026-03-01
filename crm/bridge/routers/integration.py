@@ -7,17 +7,15 @@ import os
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-
-from robothor.audit.logger import log_event
-from robothor.events.bus import publish
-
 from models import (
-    ImpetusTransmitRequest,
     LogInteractionRequest,
     ResolveContactRequest,
     VaultCreateCardRequest,
     VaultCreateLoginRequest,
 )
+
+from robothor.audit.logger import log_event
+from robothor.events.bus import publish
 
 # Lazy-loaded vault client
 _vault_client = None
@@ -36,6 +34,7 @@ async def resolve_contact(body: ResolveContactRequest):
         return JSONResponse({"error": "channel and identifier required"}, status_code=400)
 
     from robothor.crm.dal import resolve_contact as _resolve
+
     result = _resolve(body.channel, body.identifier, body.name)
     for k, v in result.items():
         if hasattr(v, "isoformat"):
@@ -46,6 +45,7 @@ async def resolve_contact(body: ResolveContactRequest):
 @router.get("/timeline/{identifier}")
 async def timeline(identifier: str):
     from robothor.crm.dal import get_timeline
+
     return get_timeline(identifier)
 
 
@@ -57,9 +57,12 @@ async def log_interaction(body: LogInteractionRequest):
     from robothor.crm.dal import (
         create_conversation,
         get_conversations_for_contact,
-        resolve_contact as _resolve,
         send_message,
     )
+    from robothor.crm.dal import (
+        resolve_contact as _resolve,
+    )
+
     channel_id = body.channel_identifier or body.contact_name
     resolved = _resolve(body.channel, channel_id, body.contact_name)
     person_id = resolved.get("person_id")
@@ -74,16 +77,29 @@ async def log_interaction(body: LogInteractionRequest):
             send_message(convo_id, body.content_summary, msg_type)
 
     log_event(
-        "ipc.interaction", f"log_interaction: {body.contact_name} via {body.channel}",
-        category="bridge", source_channel=body.channel,
+        "ipc.interaction",
+        f"log_interaction: {body.contact_name} via {body.channel}",
+        category="bridge",
+        source_channel=body.channel,
         target=f"person:{person_id}" if person_id else None,
-        details={"contact_name": body.contact_name, "channel": body.channel,
-                 "direction": body.direction, "resolved": bool(person_id)},
+        details={
+            "contact_name": body.contact_name,
+            "channel": body.channel,
+            "direction": body.direction,
+            "resolved": bool(person_id),
+        },
     )
-    publish("crm", "ipc.interaction", {
-        "contact_name": body.contact_name, "channel": body.channel,
-        "direction": body.direction, "person_id": person_id,
-    }, source="bridge")
+    publish(
+        "crm",
+        "ipc.interaction",
+        {
+            "contact_name": body.contact_name,
+            "channel": body.channel,
+            "direction": body.direction,
+            "person_id": person_id,
+        },
+        source="bridge",
+    )
     return {"status": "ok", "contact": body.contact_name, "resolved": bool(person_id)}
 
 
@@ -94,8 +110,10 @@ def _get_vault():
     global _vault_client
     if _vault_client is None:
         import sys
+
         sys.path.insert(0, os.path.expanduser("~/clawd/scripts"))
         from vault_client import VaultClient
+
         _vault_client = VaultClient()
         _vault_client.login()
     return _vault_client
@@ -132,8 +150,11 @@ async def api_vault_search(q: str = Query(..., description="Search query")):
 async def api_vault_create(body: VaultCreateLoginRequest):
     try:
         return _get_vault().create_login(
-            name=body.name, username=body.username, password=body.password,
-            uri=body.uri, notes=body.notes,
+            name=body.name,
+            username=body.username,
+            password=body.password,
+            uri=body.uri,
+            notes=body.notes,
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -143,9 +164,14 @@ async def api_vault_create(body: VaultCreateLoginRequest):
 async def api_vault_create_card(body: VaultCreateCardRequest):
     try:
         return _get_vault().create_card(
-            name=body.name, cardholderName=body.cardholderName,
-            number=body.number, expMonth=body.expMonth, expYear=body.expYear,
-            code=body.code, brand=body.brand, notes=body.notes,
+            name=body.name,
+            cardholderName=body.cardholderName,
+            number=body.number,
+            expMonth=body.expMonth,
+            expYear=body.expYear,
+            code=body.code,
+            brand=body.brand,
+            notes=body.notes,
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -155,23 +181,29 @@ async def api_vault_create_card(body: VaultCreateCardRequest):
 
 
 async def _io_get(path: str, params: dict | None = None) -> dict:
-    from bridge_service import http_client, _bridge_config
+    from bridge_service import _bridge_config, http_client
+
     headers = {"Authorization": f"Bearer {_bridge_config['impetus_one_token']}"}
     r = await http_client.get(
-        f"{_bridge_config['impetus_one_url']}{path}", headers=headers, params=params,
+        f"{_bridge_config['impetus_one_url']}{path}",
+        headers=headers,
+        params=params,
     )
     r.raise_for_status()
     return r.json()
 
 
 async def _io_post(path: str, body: dict) -> dict:
-    from bridge_service import http_client, _bridge_config
+    from bridge_service import _bridge_config, http_client
+
     headers = {
         "Authorization": f"Bearer {_bridge_config['impetus_one_token']}",
         "Content-Type": "application/json",
     }
     r = await http_client.post(
-        f"{_bridge_config['impetus_one_url']}{path}", headers=headers, json=body,
+        f"{_bridge_config['impetus_one_url']}{path}",
+        headers=headers,
+        json=body,
     )
     r.raise_for_status()
     return r.json()
@@ -180,7 +212,8 @@ async def _io_post(path: str, body: dict) -> dict:
 @router.get("/api/impetus/health")
 async def api_impetus_health():
     try:
-        from bridge_service import http_client, _bridge_config
+        from bridge_service import _bridge_config, http_client
+
         r = await http_client.get(f"{_bridge_config['impetus_one_url']}/healthz", timeout=5.0)
         return {"status": "ok" if r.status_code == 200 else "error", "http_code": r.status_code}
     except Exception as e:
@@ -304,7 +337,8 @@ class ImpetusMCPClient:
         return self._request_id
 
     async def _send(self, message: dict) -> dict:
-        from bridge_service import http_client, _bridge_config
+        from bridge_service import _bridge_config, http_client
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {_bridge_config['impetus_one_token']}",
@@ -314,7 +348,9 @@ class ImpetusMCPClient:
 
         r = await http_client.post(
             f"{_bridge_config['impetus_one_url']}/_mcp",
-            headers=headers, json=message, timeout=30.0,
+            headers=headers,
+            json=message,
+            timeout=30.0,
         )
 
         if session_id := r.headers.get("Mcp-Session-Id"):
@@ -332,22 +368,31 @@ class ImpetusMCPClient:
     async def ensure_initialized(self):
         if self._initialized:
             return
-        await self._send({
-            "jsonrpc": "2.0", "id": self._next_id(), "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05", "capabilities": {},
-                "clientInfo": {"name": "robothor-bridge", "version": "1.0.0"},
-            },
-        })
+        await self._send(
+            {
+                "jsonrpc": "2.0",
+                "id": self._next_id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "robothor-bridge", "version": "1.0.0"},
+                },
+            }
+        )
         await self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self._initialized = True
 
     async def call_tool(self, name: str, arguments: dict | None = None) -> dict:
         await self.ensure_initialized()
-        result = await self._send({
-            "jsonrpc": "2.0", "id": self._next_id(), "method": "tools/call",
-            "params": {"name": name, "arguments": arguments or {}},
-        })
+        result = await self._send(
+            {
+                "jsonrpc": "2.0",
+                "id": self._next_id(),
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments or {}},
+            }
+        )
         if "error" in result:
             err = result["error"]
             return {"error": err.get("message", str(err)) if isinstance(err, dict) else str(err)}

@@ -80,7 +80,7 @@ tags_produced: []
 tags_consumed: [conversation]
 
 v2:
-  token_budget: 100000
+  error_feedback: true
 
 changelog:
   - date: "2026-02-24"

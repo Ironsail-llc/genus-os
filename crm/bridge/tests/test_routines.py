@@ -11,6 +11,7 @@ Tests cover:
 
 import sys
 import uuid
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,12 +29,15 @@ async def test_create_routine(test_client):
     routine_id = str(uuid.uuid4())
     with patch("routers.routines.create_routine", return_value=routine_id):
         with patch("routers.routines.publish"):
-            r = await test_client.post("/api/routines", json={
-                "title": "Weekly report",
-                "cronExpr": "0 9 * * 1",
-                "assignedToAgent": "crm-steward",
-                "priority": "normal",
-            })
+            r = await test_client.post(
+                "/api/routines",
+                json={
+                    "title": "Weekly report",
+                    "cronExpr": "0 9 * * 1",
+                    "assignedToAgent": "crm-steward",
+                    "priority": "normal",
+                },
+            )
     assert r.status_code == 200
     data = r.json()
     assert data["id"] == routine_id
@@ -43,10 +47,13 @@ async def test_create_routine(test_client):
 @pytest.mark.asyncio
 async def test_create_routine_invalid_cron(test_client):
     """POST /api/routines with invalid cron returns 400."""
-    r = await test_client.post("/api/routines", json={
-        "title": "Bad routine",
-        "cronExpr": "not a cron",
-    })
+    r = await test_client.post(
+        "/api/routines",
+        json={
+            "title": "Bad routine",
+            "cronExpr": "not a cron",
+        },
+    )
     assert r.status_code == 400
     assert "Invalid cron" in r.json()["error"]
 
@@ -99,16 +106,18 @@ async def test_trigger_creates_tasks(test_client):
     """POST /api/routines/trigger creates tasks from due routines."""
     task_id = str(uuid.uuid4())
     routine_id = str(uuid.uuid4())
-    due_routines = [{
-        "id": routine_id,
-        "title": "Weekly cleanup",
-        "body": "Clean stale data",
-        "assignedToAgent": "crm-steward",
-        "priority": "normal",
-        "tags": ["crm-hygiene"],
-        "personId": None,
-        "companyId": None,
-    }]
+    due_routines = [
+        {
+            "id": routine_id,
+            "title": "Weekly cleanup",
+            "body": "Clean stale data",
+            "assignedToAgent": "crm-steward",
+            "priority": "normal",
+            "tags": ["crm-hygiene"],
+            "personId": None,
+            "companyId": None,
+        }
+    ]
     with patch("routers.routines.get_due_routines", return_value=due_routines):
         with patch("routers.routines.create_task", return_value=task_id):
             with patch("routers.routines.advance_routine", return_value=True):
@@ -135,10 +144,11 @@ async def test_trigger_skips_duplicate(test_client):
 
 def test_routine_to_dict():
     """routine_to_dict converts a row correctly."""
-    from robothor.crm.models import routine_to_dict
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.models import routine_to_dict
+
+    now = datetime.now(UTC)
     row = {
         "id": uuid.uuid4(),
         "title": "Weekly report",
@@ -168,6 +178,7 @@ def test_routine_to_dict():
 def test_create_routine_request_validation():
     """CreateRoutineRequest validates fields."""
     from models import CreateRoutineRequest
+
     req = CreateRoutineRequest(title="Test", cronExpr="0 9 * * 1")
     assert req.title == "Test"
     assert req.priority == "normal"
@@ -176,7 +187,8 @@ def test_create_routine_request_validation():
 
 def test_create_routine_request_rejects_bad_uuid():
     """CreateRoutineRequest rejects invalid personId."""
-    from pydantic import ValidationError
     from models import CreateRoutineRequest
+    from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="personId must be a valid UUID"):
         CreateRoutineRequest(title="Test", cronExpr="0 9 * * 1", personId="bad")

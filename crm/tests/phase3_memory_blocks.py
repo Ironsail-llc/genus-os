@@ -3,8 +3,10 @@
 Phase 3 tests for agent memory blocks.
 Tests the DB table and MCP tool handlers directly.
 """
-import psycopg2
+
 import sys
+
+import psycopg2
 from psycopg2.extras import RealDictCursor
 
 DB = {"dbname": "robothor_memory", "user": "philip", "host": "/var/run/postgresql"}
@@ -35,7 +37,13 @@ test("T3.2 Core blocks seeded (>=4)", cur.fetchone()["cnt"] >= 4)
 # T3.3: Block names are correct
 cur.execute("SELECT array_agg(block_name ORDER BY block_name) as names FROM agent_memory_blocks;")
 names = cur.fetchone()["names"]
-for expected in ["persona", "user_profile", "working_context", "operational_findings", "contacts_summary"]:
+for expected in [
+    "persona",
+    "user_profile",
+    "working_context",
+    "operational_findings",
+    "contacts_summary",
+]:
     test(f"T3.3 Block '{expected}' exists", expected in names)
 
 # T3.4: Write and read round-trip
@@ -87,16 +95,23 @@ try:
 
     # Test memory_block_list
     result = asyncio.run(handle_tool_call("memory_block_list", {}))
-    test("T3.8a memory_block_list returns blocks", "blocks" in result and len(result["blocks"]) >= 5)
+    test(
+        "T3.8a memory_block_list returns blocks", "blocks" in result and len(result["blocks"]) >= 5
+    )
 
     # Test memory_block_read
     result = asyncio.run(handle_tool_call("memory_block_read", {"block_name": "persona"}))
-    test("T3.8b memory_block_read returns content", "content" in result and len(result["content"]) > 0)
+    test(
+        "T3.8b memory_block_read returns content",
+        "content" in result and len(result["content"]) > 0,
+    )
 
     # Test memory_block_write
     test_val = "Phase 3 test write"
     result = asyncio.run(
-        handle_tool_call("memory_block_write", {"block_name": "working_context", "content": test_val})
+        handle_tool_call(
+            "memory_block_write", {"block_name": "working_context", "content": test_val}
+        )
     )
     test("T3.8c memory_block_write succeeds", result.get("chars_written", 0) > 0)
 

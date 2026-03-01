@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from models import CreateMessageRequest, ToggleStatusRequest
 
 from robothor.crm.dal import (
     get_conversation,
@@ -12,9 +14,6 @@ from robothor.crm.dal import (
     send_message,
     toggle_conversation_status,
 )
-
-from deps import get_tenant_id
-from models import CreateMessageRequest, ToggleStatusRequest
 
 router = APIRouter(prefix="/api", tags=["conversations"])
 
@@ -57,7 +56,10 @@ async def api_create_message(
     if not body.content:
         return JSONResponse({"error": "content required"}, status_code=400)
     result = send_message(
-        conversation_id, body.content, body.message_type, body.private,
+        conversation_id,
+        body.content,
+        body.message_type,
+        body.private,
         tenant_id=tenant_id,
     )
     return result or {"status": "ok"}
@@ -71,7 +73,8 @@ async def api_toggle_conversation_status(
 ):
     if body.status not in ("open", "resolved", "pending", "snoozed"):
         return JSONResponse(
-            {"error": "status must be open, resolved, pending, or snoozed"}, status_code=400,
+            {"error": "status must be open, resolved, pending, or snoozed"},
+            status_code=400,
         )
     result = toggle_conversation_status(conversation_id, body.status, tenant_id=tenant_id)
     if not result:

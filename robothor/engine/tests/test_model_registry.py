@@ -5,6 +5,7 @@ from __future__ import annotations
 from robothor.engine.model_registry import (
     _FALLBACK,
     ModelLimits,
+    compute_token_budget,
     get_model_limits,
     get_output_tokens,
 )
@@ -14,7 +15,7 @@ class TestGetModelLimits:
     def test_known_model_claude(self):
         limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
         assert limits.max_input_tokens == 200_000
-        assert limits.max_output_tokens == 64_000
+        assert limits.max_output_tokens == 128_000
         assert limits.default_output_tokens == 16_384
 
     def test_known_model_kimi(self):
@@ -49,9 +50,39 @@ class TestGetModelLimits:
         assert isinstance(limits, ModelLimits)
 
 
+class TestComputeTokenBudget:
+    def test_sonnet_15_iterations(self):
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 15)
+        assert budget == 200_000 * 15  # 3,000,000
+
+    def test_kimi_10_iterations(self):
+        budget = compute_token_budget("openrouter/moonshotai/kimi-k2.5", 10)
+        assert budget == 262_144 * 10  # 2,621,440
+
+    def test_gemini_pro_10_iterations(self):
+        budget = compute_token_budget("gemini/gemini-2.5-pro", 10)
+        assert budget == 1_048_576 * 10
+
+    def test_unknown_model_uses_fallback(self):
+        budget = compute_token_budget("unknown/model", 10)
+        assert budget == 128_000 * 10  # fallback max_input
+
+    def test_zero_iterations_returns_unlimited(self):
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 0)
+        assert budget == 0
+
+    def test_negative_iterations_returns_unlimited(self):
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", -1)
+        assert budget == 0
+
+    def test_single_iteration(self):
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 1)
+        assert budget == 200_000
+
+
 class TestGetOutputTokens:
     def test_default_output_when_plenty_of_room(self):
-        # Claude has 200K input, 64K max output, 16K default
+        # Claude has 200K input, 128K max output, 16K default
         # With 10K input, should return default (16K)
         tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 10_000)
         assert tokens == 16_384

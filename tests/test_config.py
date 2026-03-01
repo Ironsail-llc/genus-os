@@ -1,6 +1,5 @@
 """Tests for robothor.config — centralized configuration."""
 
-
 import pytest
 
 from robothor.config import (

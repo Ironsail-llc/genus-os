@@ -6,6 +6,7 @@ from pathlib import Path
 # Try to load .env if dotenv is available (dev convenience)
 try:
     from dotenv import load_dotenv
+
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)

@@ -73,10 +73,16 @@ async def _routine_trigger_loop():
                 )
                 if task_id:
                     advance_routine(routine["id"])
-                    publish("agent", "routine.triggered", {
-                        "routine_id": routine["id"], "task_id": task_id,
-                        "title": routine["title"],
-                    }, source="bridge")
+                    publish(
+                        "agent",
+                        "routine.triggered",
+                        {
+                            "routine_id": routine["id"],
+                            "task_id": task_id,
+                            "title": routine["title"],
+                        },
+                        source="bridge",
+                    )
                     logger.info("Routine '%s' triggered → task %s", routine["title"], task_id)
         except asyncio.CancelledError:
             break
@@ -127,4 +133,5 @@ app.include_router(integration_router)
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=9100)

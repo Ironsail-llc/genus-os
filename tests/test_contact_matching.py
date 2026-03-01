@@ -1,6 +1,5 @@
 """Tests for robothor.memory.contact_matching — pure Python, no deps."""
 
-
 from robothor.memory.contact_matching import (
     find_best_match,
     name_similarity,

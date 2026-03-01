@@ -10,13 +10,13 @@ Validates end-to-end correctness of audit logging:
 
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
-import httpx
 from httpx import ASGITransport
 
 # Add paths
@@ -25,8 +25,8 @@ sys.path.insert(0, str(BRIDGE_DIR))
 sys.path.insert(0, "/home/philip/clawd/memory_system")
 
 import audit
-import crm_dal
 import bridge_service
+import crm_dal
 from bridge_service import app
 
 # Prefix for test data isolation
@@ -38,12 +38,11 @@ PG_DSN = "dbname=robothor_memory user=philip host=/var/run/postgresql"
 def use_real_dsn():
     """Ensure both audit modules use real database."""
     import psycopg2
+
     from robothor.audit import logger as oss_audit
 
     audit.set_dsn(PG_DSN)
-    oss_audit.set_connection_factory(
-        lambda: psycopg2.connect(PG_DSN)
-    )
+    oss_audit.set_connection_factory(lambda: psycopg2.connect(PG_DSN))
     yield
     oss_audit.reset_connection_factory()
 
@@ -71,9 +70,7 @@ class TestAuditAPISmokeTests:
         # Seed a known event
         crm_dal.create_person(f"{TEST_PREFIX}ApiSmoke", "Test")
 
-        resp = await client.get("/api/audit", params={
-            "event_type": "crm.create", "limit": 5
-        })
+        resp = await client.get("/api/audit", params={"event_type": "crm.create", "limit": 5})
         assert resp.status_code == 200
         data = resp.json()
         assert "events" in data
@@ -95,9 +92,7 @@ class TestAuditAPISmokeTests:
     @pytest.mark.asyncio
     async def test_audit_api_returns_ipc_events(self, client):
         """GET /api/audit?event_type=ipc.webhook returns rows if any exist."""
-        resp = await client.get("/api/audit", params={
-            "event_type": "ipc.webhook", "limit": 5
-        })
+        resp = await client.get("/api/audit", params={"event_type": "ipc.webhook", "limit": 5})
         assert resp.status_code == 200
         data = resp.json()
         assert "events" in data
@@ -110,9 +105,7 @@ class TestAuditAPISmokeTests:
         # Seed telemetry
         audit.log_telemetry("bridge", "response_time_ms", 42.5, unit="ms")
 
-        resp = await client.get("/api/telemetry", params={
-            "service": "bridge", "limit": 5
-        })
+        resp = await client.get("/api/telemetry", params={"service": "bridge", "limit": 5})
         assert resp.status_code == 200
         data = resp.json()
         assert "data" in data
@@ -138,10 +131,8 @@ class TestAuditAPISmokeTests:
     @pytest.mark.asyncio
     async def test_audit_api_since_filter(self, client):
         """GET /api/audit?since=<1h ago> returns only recent entries."""
-        one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        resp = await client.get("/api/audit", params={
-            "since": one_hour_ago, "limit": 100
-        })
+        one_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+        resp = await client.get("/api/audit", params={"since": one_hour_ago, "limit": 100})
         assert resp.status_code == 200
         data = resp.json()
         assert "events" in data
@@ -162,7 +153,8 @@ class TestCRMRoundTripAudit:
         """Full lifecycle: create → update → delete, verify 3 audit entries."""
         # Create
         person_id = crm_dal.create_person(
-            f"{TEST_PREFIX}Lifecycle", "Tester",
+            f"{TEST_PREFIX}Lifecycle",
+            "Tester",
             email=f"{TEST_PREFIX}@lifecycle.test",
         )
         assert person_id is not None
@@ -174,22 +166,16 @@ class TestCRMRoundTripAudit:
         crm_dal.delete_person(person_id)
 
         # Verify all 3 audit entries exist
-        create_rows = audit.query_log(
-            event_type="crm.create", target=person_id, limit=5
-        )
+        create_rows = audit.query_log(event_type="crm.create", target=person_id, limit=5)
         assert len(create_rows) >= 1
         assert create_rows[0]["category"] == "crm"
         assert "Lifecycle" in create_rows[0]["details"].get("first_name", "")
 
-        update_rows = audit.query_log(
-            event_type="crm.update", target=person_id, limit=5
-        )
+        update_rows = audit.query_log(event_type="crm.update", target=person_id, limit=5)
         assert len(update_rows) >= 1
         assert "city" in update_rows[0]["details"].get("fields", [])
 
-        delete_rows = audit.query_log(
-            event_type="crm.delete", target=person_id, limit=5
-        )
+        delete_rows = audit.query_log(event_type="crm.delete", target=person_id, limit=5)
         assert len(delete_rows) >= 1
 
     @pytest.mark.integration
@@ -201,9 +187,7 @@ class TestCRMRoundTripAudit:
         )
         assert company_id is not None
 
-        rows = audit.query_log(
-            event_type="crm.create", target=company_id, limit=5
-        )
+        rows = audit.query_log(event_type="crm.create", target=company_id, limit=5)
         assert len(rows) >= 1
         assert rows[0]["category"] == "crm"
         assert "TestCorp" in rows[0]["details"].get("name", "")
@@ -222,9 +206,7 @@ class TestCRMRoundTripAudit:
         )
         assert note_id is not None
 
-        rows = audit.query_log(
-            event_type="crm.create", target=note_id, limit=5
-        )
+        rows = audit.query_log(event_type="crm.create", target=note_id, limit=5)
         assert len(rows) >= 1
         assert rows[0]["details"]["title"] == f"{TEST_PREFIX} test note"
         assert rows[0]["details"]["person_id"] == person_id
@@ -243,9 +225,7 @@ class TestCRMRoundTripAudit:
         )
         assert task_id is not None
 
-        rows = audit.query_log(
-            event_type="crm.create", target=task_id, limit=5
-        )
+        rows = audit.query_log(event_type="crm.create", target=task_id, limit=5)
         assert len(rows) >= 1
         assert rows[0]["details"]["title"] == f"{TEST_PREFIX} test task"
         assert rows[0]["details"]["status"] == "TODO"
@@ -257,11 +237,13 @@ class TestCRMRoundTripAudit:
     def test_merge_people_audited(self):
         """Create 2 people, merge, verify crm.merge audit entry."""
         keeper_id = crm_dal.create_person(
-            f"{TEST_PREFIX}Keeper", "Merge",
+            f"{TEST_PREFIX}Keeper",
+            "Merge",
             email=f"keeper_{TEST_PREFIX}@test.com",
         )
         loser_id = crm_dal.create_person(
-            f"{TEST_PREFIX}Loser", "Merge",
+            f"{TEST_PREFIX}Loser",
+            "Merge",
             phone="+15551234567",
         )
         assert keeper_id is not None
@@ -270,9 +252,7 @@ class TestCRMRoundTripAudit:
         result = crm_dal.merge_people(keeper_id, loser_id)
         assert result is not None
 
-        rows = audit.query_log(
-            event_type="crm.merge", target=keeper_id, limit=5
-        )
+        rows = audit.query_log(event_type="crm.merge", target=keeper_id, limit=5)
         assert len(rows) >= 1
         details = rows[0]["details"]
         assert details.get("loser_id") == loser_id or "loser" in str(details).lower()
@@ -294,6 +274,7 @@ class TestTelemetryVerification:
         audit.log_telemetry("test-verify", "response_time_ms", 15.0, unit="ms")
 
         import psycopg2
+
         conn = psycopg2.connect(PG_DSN)
         cur = conn.cursor()
         cur.execute("""
@@ -323,6 +304,7 @@ class TestTelemetryVerification:
         audit.log_telemetry("test-numeric", "response_time_ms", 123.456, unit="ms")
 
         import psycopg2
+
         conn = psycopg2.connect(PG_DSN)
         cur = conn.cursor()
         cur.execute("""
@@ -352,12 +334,12 @@ class TestAuditErrorResilience:
         """
         with patch("crm_dal.audit.log_crm_mutation", side_effect=Exception("DB down")):
             person_id = crm_dal.create_person(
-                f"{TEST_PREFIX}Resilience", "Test",
+                f"{TEST_PREFIX}Resilience",
+                "Test",
             )
             # _safe_audit wraps the exception — create_person must return the ID
             assert person_id is not None
             crm_dal.delete_person(person_id)
-
 
 
 # ─── Cleanup ──────────────────────────────────────────────────────────
@@ -369,6 +351,7 @@ def cleanup_test_data():
     yield
     try:
         import psycopg2
+
         conn = psycopg2.connect(PG_DSN)
         cur = conn.cursor()
         # Clean up audit entries

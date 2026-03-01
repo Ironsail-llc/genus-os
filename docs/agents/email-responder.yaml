@@ -94,11 +94,10 @@ tags_produced: []
 tags_consumed: [email, reply-needed]
 
 v2:
-  token_budget: 500000
+  error_feedback: true
 
 changelog:
   - date: "2026-03-01"
-    change: "token_budget 300K→500K — 300K too tight for Sonnet 4.6 (200K context × 2-3 iterations). Budget exhaustion was blocking all replies."
   - date: "2026-02-28"
     change: "CRITICAL FIX: Add exec, read_file, write_file, search_memory, get_entity, store_memory — agent was blind without file access. Delivery→none."
   - date: "2026-02-24"

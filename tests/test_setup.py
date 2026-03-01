@@ -123,8 +123,13 @@ class TestWriteEnvFile:
         ollama = OllamaConfig(host="ollama-host", port=11435)
 
         wrote = write_env_file(
-            env_path, db, redis, ollama,
-            owner_name="Alice", ai_name="Jarvis", yes=True,
+            env_path,
+            db,
+            redis,
+            ollama,
+            owner_name="Alice",
+            ai_name="Jarvis",
+            yes=True,
         )
         assert wrote is True
 
@@ -316,7 +321,10 @@ class TestIdentityEnvVars:
         )
 
         args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True,
+            yes=True,
+            docker=False,
+            skip_models=True,
+            skip_db=True,
             workspace=str(workspace),
         )
         rc = run_init(args)

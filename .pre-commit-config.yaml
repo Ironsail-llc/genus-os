@@ -18,7 +18,7 @@ repos:
     hooks:
       - id: validate-agents
         name: validate agent manifests
-        entry: python scripts/validate_agents.py
+        entry: python3 scripts/validate_agents.py
         language: system
         files: 'docs/agents/.*\.yaml'
         pass_filenames: false

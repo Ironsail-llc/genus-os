@@ -125,8 +125,32 @@ class TestLogCrmMutation:
 class TestQueryLog:
     def test_basic_query(self):
         rows = [
-            (1, datetime(2026, 2, 22), "crm.create", "crm", "robot", "created", None, None, "p:1", "ok", None),
-            (2, datetime(2026, 2, 21), "crm.update", "crm", "robot", "updated", None, None, "p:2", "ok", None),
+            (
+                1,
+                datetime(2026, 2, 22),
+                "crm.create",
+                "crm",
+                "robot",
+                "created",
+                None,
+                None,
+                "p:1",
+                "ok",
+                None,
+            ),
+            (
+                2,
+                datetime(2026, 2, 21),
+                "crm.update",
+                "crm",
+                "robot",
+                "updated",
+                None,
+                None,
+                "p:2",
+                "ok",
+                None,
+            ),
         ]
         conn, cursor = _mock_conn(fetchall_return=rows)
         set_connection_factory(lambda: conn)
@@ -186,7 +210,9 @@ class TestTelemetry:
         conn, cursor = _mock_conn()
         set_connection_factory(lambda: conn)
 
-        result = log_telemetry("vision", "detect_time", 0.5, unit="seconds", details={"model": "yolo"})
+        result = log_telemetry(
+            "vision", "detect_time", 0.5, unit="seconds", details={"model": "yolo"}
+        )
         assert result is True
 
     def test_telemetry_failure(self):

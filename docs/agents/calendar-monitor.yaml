@@ -95,7 +95,7 @@ tags_produced: [calendar, conflict, cancellation]
 tags_consumed: []
 
 v2:
-  token_budget: 200000
+  error_feedback: true
 
 changelog:
   - date: "2026-02-28"

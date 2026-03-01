@@ -63,15 +63,19 @@ class TestModeManagement:
         assert service.current_mode == "disarmed"
 
     def test_set_mode_basic(self, service):
-        with patch.object(service.detector, "_ensure_loaded"), \
-             patch.object(service.recognizer, "_ensure_loaded"):
+        with (
+            patch.object(service.detector, "_ensure_loaded"),
+            patch.object(service.recognizer, "_ensure_loaded"),
+        ):
             result = service.set_mode("basic")
         assert result == "basic"
         assert service.current_mode == "basic"
 
     def test_set_mode_armed(self, service):
-        with patch.object(service.detector, "_ensure_loaded"), \
-             patch.object(service.recognizer, "_ensure_loaded"):
+        with (
+            patch.object(service.detector, "_ensure_loaded"),
+            patch.object(service.recognizer, "_ensure_loaded"),
+        ):
             result = service.set_mode("armed")
         assert result == "armed"
         assert service.current_mode == "armed"
@@ -195,8 +199,10 @@ class TestVLM:
     async def test_analyze_vlm_calls_ollama(self, service, fake_frame):
         mock_cv2 = MagicMock()
         mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        with patch("robothor.vision.service._get_cv2", return_value=mock_cv2), \
-             patch("robothor.vision.service.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=mock_cv2),
+            patch("robothor.vision.service.httpx.AsyncClient") as mock_client_cls,
+        ):
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"message": {"content": "I see a room"}}
             mock_resp.raise_for_status = MagicMock()
@@ -265,9 +271,15 @@ class TestHTTPRouting:
 
     @pytest.mark.asyncio
     async def test_detections_with_frame(self, service, fake_frame):
-        with patch("robothor.vision.service.CameraStream") as mock_cam_cls, \
-             patch.object(service.detector, "detect", return_value=[{"class": "cat", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"):
+        with (
+            patch("robothor.vision.service.CameraStream") as mock_cam_cls,
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "cat", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+        ):
             mock_cam = MagicMock()
             mock_cam.read.return_value = fake_frame
             mock_cam_cls.return_value = mock_cam
@@ -311,7 +323,10 @@ class TestHTTPRouting:
 class TestBasicMode:
     @pytest.mark.asyncio
     async def test_no_motion_skips_processing(self, service, fake_frame):
-        with patch("robothor.vision.service.detect_motion", return_value=(False, 0.01, np.zeros((100, 100)))):
+        with patch(
+            "robothor.vision.service.detect_motion",
+            return_value=(False, 0.01, np.zeros((100, 100))),
+        ):
             await service.process_frame_basic(fake_frame)
         # No detections run — quick exit
         assert service.last_detection_time is None
@@ -319,35 +334,74 @@ class TestBasicMode:
     @pytest.mark.asyncio
     async def test_motion_no_person_logs(self, service, fake_frame):
         service._last_motion_time = 0  # ensure no cooldown
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.25, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "cat", "confidence": 0.8, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"), \
-             patch.object(service, "ingest_event", new_callable=AsyncMock) as mock_ingest:
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.25, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "cat", "confidence": 0.8, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "ingest_event", new_callable=AsyncMock) as mock_ingest,
+        ):
             await service.process_frame_basic(fake_frame)
         mock_ingest.assert_called_once()
         assert "Motion" in mock_ingest.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_known_person_detected(self, service, fake_frame):
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.3, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service.recognizer, "detect", return_value=[{"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}]), \
-             patch.object(service.recognizer, "match", return_value=("Alice", 0.92)), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"), \
-             patch.object(service, "ingest_event", new_callable=AsyncMock):
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=("Alice", 0.92)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "ingest_event", new_callable=AsyncMock),
+        ):
             await service.process_frame_basic(fake_frame)
         assert "Alice" in service.people_present
 
     @pytest.mark.asyncio
     async def test_unknown_person_triggers_alert(self, service, fake_frame):
         service._last_person_alert_time = 0  # no cooldown
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.3, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service.recognizer, "detect", return_value=[{"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}]), \
-             patch.object(service.recognizer, "match", return_value=(None, 0.2)), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"), \
-             patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert, \
-             patch.object(service, "publish_event", new_callable=AsyncMock):
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=(None, 0.2)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "publish_event", new_callable=AsyncMock),
+        ):
             await service.process_frame_basic(fake_frame)
         mock_alert.assert_called_once()
         assert any(k.startswith("unknown_") for k in service.people_present)
@@ -355,23 +409,47 @@ class TestBasicMode:
     @pytest.mark.asyncio
     async def test_unknown_person_cooldown(self, service, fake_frame):
         service._last_person_alert_time = time.time()  # just alerted
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.3, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service.recognizer, "detect", return_value=[{"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}]), \
-             patch.object(service.recognizer, "match", return_value=(None, 0.2)), \
-             patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert:
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=(None, 0.2)),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+        ):
             await service.process_frame_basic(fake_frame)
         mock_alert.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_person_no_face_triggers_alert(self, service, fake_frame):
         service._last_person_alert_time = 0
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.3, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service.recognizer, "detect", return_value=[]), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"), \
-             patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert, \
-             patch.object(service, "ingest_event", new_callable=AsyncMock):
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(service.recognizer, "detect", return_value=[]),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "ingest_event", new_callable=AsyncMock),
+        ):
             await service.process_frame_basic(fake_frame)
         mock_alert.assert_called_once()
         assert "face not visible" in mock_alert.call_args[0][2]
@@ -383,18 +461,36 @@ class TestBasicMode:
 class TestArmedMode:
     @pytest.mark.asyncio
     async def test_no_motion_no_people_skips(self, service, fake_frame):
-        with patch("robothor.vision.service.detect_motion", return_value=(False, 0.01, np.zeros((100, 100)))):
+        with patch(
+            "robothor.vision.service.detect_motion",
+            return_value=(False, 0.01, np.zeros((100, 100))),
+        ):
             await service.process_frame_armed(fake_frame)
         assert service.last_detection_time is None
 
     @pytest.mark.asyncio
     async def test_person_detection_armed(self, service, fake_frame):
-        with patch("robothor.vision.service.detect_motion", return_value=(True, 0.3, np.zeros((100, 100)))), \
-             patch.object(service.detector, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}]), \
-             patch.object(service.recognizer, "detect", return_value=[{"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}]), \
-             patch.object(service.recognizer, "match", return_value=("Bob", 0.88)), \
-             patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"), \
-             patch.object(service, "ingest_event", new_callable=AsyncMock):
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=("Bob", 0.88)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "ingest_event", new_callable=AsyncMock),
+        ):
             await service.process_frame_armed(fake_frame)
         assert "Bob" in service.people_present
 
@@ -494,7 +590,9 @@ class TestAlertIntegration:
         snapshot_dir, face_dir, state_dir = tmp_dirs
         custom = AlertManager()
         svc = VisionService(
-            snapshot_dir=snapshot_dir, face_data_dir=face_dir, state_dir=state_dir,
+            snapshot_dir=snapshot_dir,
+            face_data_dir=face_dir,
+            state_dir=state_dir,
             alert_manager=custom,
         )
         assert svc.alerts is custom
@@ -559,9 +657,10 @@ class TestLazyCv2Import:
         """Importing the module should succeed even without opencv installed."""
         # The module is already imported (it uses lazy _get_cv2), so we test
         # that _get_cv2 raises a helpful ImportError when cv2 is missing.
+        import builtins
+
         from robothor.vision.service import _get_cv2
 
-        import builtins
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):

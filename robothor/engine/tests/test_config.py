@@ -220,7 +220,6 @@ class TestManifestToAgentConfig:
                 "context_files": ["brain/memory/status.md"],
                 "peer_agents": ["email-classifier"],
                 "bootstrap_files": ["brain/AGENTS.md"],
-                "token_budget": 200000,
             },
         }
         config = manifest_to_agent_config(manifest)
@@ -237,7 +236,8 @@ class TestManifestToAgentConfig:
         assert config.heartbeat.warmup_context_files == ["brain/memory/status.md"]
         assert config.heartbeat.warmup_peer_agents == ["email-classifier"]
         assert config.heartbeat.bootstrap_files == ["brain/AGENTS.md"]
-        assert config.heartbeat.token_budget == 200000
+        # token_budget is auto-derived at runtime, not parsed from YAML
+        assert config.heartbeat.token_budget == 0
 
     def test_heartbeat_missing_is_none(self):
         """No heartbeat key → None."""

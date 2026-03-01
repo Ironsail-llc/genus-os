@@ -400,7 +400,7 @@ class CronScheduler:
                 warmup_memory_blocks=hb.warmup_memory_blocks,
                 warmup_context_files=hb.warmup_context_files,
                 warmup_peer_agents=hb.warmup_peer_agents,
-                token_budget=hb.token_budget,
+                # token_budget auto-derived at runtime from model registry
                 error_feedback=agent_config.error_feedback,
             )
 

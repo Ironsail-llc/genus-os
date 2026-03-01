@@ -65,7 +65,13 @@ class TestToolDefinitions:
 
     def test_crm_company_tools_present(self):
         names = {t["name"] for t in get_tool_definitions()}
-        for op in ["create_company", "get_company", "update_company", "list_companies", "delete_company"]:
+        for op in [
+            "create_company",
+            "get_company",
+            "update_company",
+            "list_companies",
+            "delete_company",
+        ]:
             assert op in names
 
     def test_crm_note_tools_present(self):

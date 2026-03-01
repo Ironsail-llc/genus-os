@@ -108,9 +108,13 @@ def load_manifests(agent_id: str | None = None) -> dict:
     for f in sorted(MANIFEST_DIR.glob("*.yaml")):
         with open(f) as fh:
             data = yaml.safe_load(fh)
-        if data and isinstance(data, dict) and "id" in data:
-            if agent_id is None or data["id"] == agent_id:
-                manifests[data["id"]] = data
+        if (
+            data
+            and isinstance(data, dict)
+            and "id" in data
+            and (agent_id is None or data["id"] == agent_id)
+        ):
+            manifests[data["id"]] = data
     return manifests
 
 
@@ -119,6 +123,7 @@ def get_registered_tools() -> set[str]:
     try:
         sys.path.insert(0, str(REPO_ROOT))
         from robothor.engine.tools import ToolRegistry
+
         registry = ToolRegistry()
         return set(registry._schemas.keys())
     except Exception as e:
@@ -145,9 +150,7 @@ def check_schema_required(manifest: dict) -> CheckResult:
     # Validate department enum
     dept = manifest.get("department", "")
     if SCHEMA_DEPARTMENTS and dept and dept not in SCHEMA_DEPARTMENTS:
-        issues.append(
-            f"department '{dept}' not in schema enum: {sorted(SCHEMA_DEPARTMENTS)}"
-        )
+        issues.append(f"department '{dept}' not in schema enum: {sorted(SCHEMA_DEPARTMENTS)}")
 
     if issues:
         return result.fail("Schema violations (required)", issues)
@@ -240,7 +243,7 @@ def check_status_file_tools(manifest: dict) -> CheckResult:
     has_write = tools_allowed & FILE_WRITE_TOOLS
     if not has_write:
         return result.fail(
-            f"Agent has status_file but no write tools",
+            "Agent has status_file but no write tools",
             [f"status_file: {status_file}", f"Need one of: {sorted(FILE_WRITE_TOOLS)}"],
         )
     return result
@@ -255,6 +258,7 @@ def check_cron(manifest: dict) -> CheckResult:
 
     try:
         from apscheduler.triggers.cron import CronTrigger
+
         CronTrigger.from_crontab(cron_expr)
     except ImportError:
         return result.skip("APScheduler not available for validation")
@@ -392,36 +396,39 @@ def validate_agent(
         checks.append(skip_c)
     else:
         checks.append(check_files(manifest))
-    checks.extend([
-        check_tools_registered(manifest, registered_tools),
-        check_status_file_tools(manifest),
-        check_cron(manifest),
-        check_relationships(manifest, all_manifests),
-        check_permission_coherence(manifest),
-        check_downstream(manifest, all_manifests),
-    ])
+    checks.extend(
+        [
+            check_tools_registered(manifest, registered_tools),
+            check_status_file_tools(manifest),
+            check_cron(manifest),
+            check_relationships(manifest, all_manifests),
+            check_permission_coherence(manifest),
+            check_downstream(manifest, all_manifests),
+        ]
+    )
     if ci:
         skip_j = CheckResult("J", "Warmup files")
         skip_j.skip("Skipped in CI (symlinks not available)")
         checks.append(skip_j)
     else:
         checks.append(check_warmup_files(manifest))
-    checks.extend([
-        check_basic_io_tools(manifest),
-        check_hooks(manifest),
-    ])
+    checks.extend(
+        [
+            check_basic_io_tools(manifest),
+            check_hooks(manifest),
+        ]
+    )
     return checks
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Validate agent manifests against the Engine"
-    )
+    parser = argparse.ArgumentParser(description="Validate agent manifests against the Engine")
     parser.add_argument("--agent", "-a", help="Check a single agent by ID")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show details")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument(
-        "--ci", action="store_true",
+        "--ci",
+        action="store_true",
         help="CI mode: skip checks requiring local symlinks (C, J)",
     )
     args = parser.parse_args()
@@ -540,17 +547,15 @@ def main():
 
     print()
     agents_clean = sum(
-        1 for results in all_results.values()
-        if all(r.status in ("PASS", "SKIP") for r in results)
+        1 for results in all_results.values() if all(r.status in ("PASS", "SKIP") for r in results)
     )
     agents_warn = sum(
-        1 for results in all_results.values()
-        if any(r.status == "WARN" for r in results)
-        and not any(r.status == "FAIL" for r in results)
+        1
+        for results in all_results.values()
+        if any(r.status == "WARN" for r in results) and not any(r.status == "FAIL" for r in results)
     )
     agents_fail = sum(
-        1 for results in all_results.values()
-        if any(r.status == "FAIL" for r in results)
+        1 for results in all_results.values() if any(r.status == "FAIL" for r in results)
     )
     print(
         f"SUMMARY: {len(all_results)} agents -- "

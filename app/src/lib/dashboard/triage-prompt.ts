@@ -6,7 +6,7 @@
  */
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "google/gemini-2.5-flash-lite";
+const MODEL = "google/gemini-2.5-flash-lite-preview-09-2025";
 
 export interface TriageResult {
   shouldUpdate: boolean;

@@ -14,7 +14,6 @@ Exit code: 0 = all pass, 1 = failures
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,7 +41,7 @@ def check(name, fn):
 
 def check_1_service_registry():
     """1. Services discoverable via registry."""
-    from service_registry import list_services, get_service_url, get_health_url, topological_sort
+    from service_registry import get_health_url, get_service_url, list_services, topological_sort
 
     services = list_services()
     if len(services) < 15:
@@ -61,10 +60,7 @@ def check_1_service_registry():
 
     # Topological sort works
     order = topological_sort()
-    if len(order) != len(services):
-        return False
-
-    return True
+    return len(order) == len(services)
 
 
 def check_2_agent_capabilities():
@@ -86,7 +82,7 @@ def check_2_agent_capabilities():
             return False
 
     # Each agent has tools and bridge_endpoints
-    for name, agent in agents.items():
+    for _name, agent in agents.items():
         if "tools" not in agent or "bridge_endpoints" not in agent:
             return False
 
@@ -149,12 +145,11 @@ def check_4_event_bus():
 
         # Verify event_bus module is importable
         import event_bus
+
         if not hasattr(event_bus, "publish"):
             return False
-        if not hasattr(event_bus, "subscribe"):
-            return False
 
-        return True
+        return hasattr(event_bus, "subscribe")
     except Exception:
         return False
 
@@ -210,7 +205,9 @@ def check_6_boot_orchestration():
     try:
         result = subprocess.run(
             [sys.executable, str(script), "--dry-run"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return False
@@ -225,10 +222,7 @@ def check_6_boot_orchestration():
 
     # Verify manifest exists
     manifest = Path.home() / "robothor" / "robothor-services.json"
-    if not manifest.exists():
-        return False
-
-    return True
+    return manifest.exists()
 
 
 def main():

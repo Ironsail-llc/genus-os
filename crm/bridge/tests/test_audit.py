@@ -16,13 +16,12 @@ Tests cover:
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import pytest_asyncio
-import httpx
 from httpx import ASGITransport
-from unittest.mock import AsyncMock
 
 # Add paths
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
@@ -61,7 +60,8 @@ async def client():
 class TestLogEvent:
     def test_basic_event(self):
         result = audit.log_event(
-            "test.basic", f"{TEST_PREFIX} basic event",
+            "test.basic",
+            f"{TEST_PREFIX} basic event",
             category="test",
         )
         assert result is not None
@@ -70,7 +70,8 @@ class TestLogEvent:
 
     def test_all_fields(self):
         result = audit.log_event(
-            "test.full", f"{TEST_PREFIX} full event",
+            "test.full",
+            f"{TEST_PREFIX} full event",
             category="test",
             actor="test-agent",
             session_key="test-session-123",
@@ -93,20 +94,22 @@ class TestLogEvent:
 
     def test_null_details(self):
         result = audit.log_event(
-            "test.null_details", f"{TEST_PREFIX} null details",
+            "test.null_details",
+            f"{TEST_PREFIX} null details",
         )
         assert result is not None
 
     def test_error_status(self):
         result = audit.log_event(
-            "test.error", f"{TEST_PREFIX} error event",
+            "test.error",
+            f"{TEST_PREFIX} error event",
             status="error",
             details={"error": "something went wrong"},
         )
         assert result is not None
 
     def test_default_actor(self):
-        result = audit.log_event("test.actor", f"{TEST_PREFIX} default actor")
+        audit.log_event("test.actor", f"{TEST_PREFIX} default actor")
         rows = audit.query_log(event_type="test.actor", limit=1)
         assert rows[0]["actor"] == "robothor"
 
@@ -118,7 +121,9 @@ class TestLogCrmMutation:
     def test_create_mutation(self):
         test_id = str(uuid.uuid4())
         result = audit.log_crm_mutation(
-            "create", "person", test_id,
+            "create",
+            "person",
+            test_id,
             details={"first_name": "Test", "last_name": "User"},
         )
         assert result is not None
@@ -131,7 +136,9 @@ class TestLogCrmMutation:
     def test_merge_mutation(self):
         keeper_id = str(uuid.uuid4())
         result = audit.log_crm_mutation(
-            "merge", "person", keeper_id,
+            "merge",
+            "person",
+            keeper_id,
             details={"loser_id": "loser-123"},
         )
         assert result is not None
@@ -140,7 +147,9 @@ class TestLogCrmMutation:
 
     def test_error_mutation(self):
         result = audit.log_crm_mutation(
-            "create", "person", None,
+            "create",
+            "person",
+            None,
             details={"error": "validation failed"},
             status="error",
         )
@@ -157,7 +166,9 @@ class TestLogTelemetry:
 
     def test_telemetry_with_details(self):
         ok = audit.log_telemetry(
-            "test-service", "http_status", 200,
+            "test-service",
+            "http_status",
+            200,
             details={"endpoint": "/health"},
         )
         assert ok is True
@@ -288,7 +299,8 @@ class TestCrmDalAudit:
         import crm_dal
 
         person_id = crm_dal.create_person(
-            f"{TEST_PREFIX}AuditTest", "Person",
+            f"{TEST_PREFIX}AuditTest",
+            "Person",
             email=f"{TEST_PREFIX}@test.example.com",
         )
         assert person_id is not None
@@ -337,6 +349,7 @@ class TestCrmDalAudit:
 def configure_robothor_audit():
     """Configure robothor.audit.logger to use the same DSN as the raw audit module."""
     import psycopg2
+
     from robothor.audit import logger as oss_audit
 
     oss_audit.set_connection_factory(
@@ -352,6 +365,7 @@ def cleanup_test_audit_entries():
     yield
     try:
         import psycopg2
+
         conn = psycopg2.connect("dbname=robothor_memory user=philip host=/var/run/postgresql")
         cur = conn.cursor()
         cur.execute("DELETE FROM audit_log WHERE action LIKE %s", (f"%{TEST_PREFIX}%",))

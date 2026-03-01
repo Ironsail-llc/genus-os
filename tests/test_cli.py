@@ -140,9 +140,11 @@ class TestStatusProbes:
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("psycopg2.connect", return_value=mock_conn), \
-             patch("redis.Redis") as mock_redis_cls, \
-             patch("httpx.get") as mock_httpx_get:
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("redis.Redis") as mock_redis_cls,
+            patch("httpx.get") as mock_httpx_get,
+        ):
             mock_redis_cls.return_value.info.side_effect = Exception("refused")
             mock_httpx_get.side_effect = Exception("refused")
 
@@ -155,9 +157,11 @@ class TestStatusProbes:
 
     def test_status_shows_unreachable(self, capsys):
         """Status should show UNREACHABLE when services are down."""
-        with patch("psycopg2.connect", side_effect=Exception("Connection refused")), \
-             patch("redis.Redis") as mock_redis_cls, \
-             patch("httpx.get") as mock_httpx_get:
+        with (
+            patch("psycopg2.connect", side_effect=Exception("Connection refused")),
+            patch("redis.Redis") as mock_redis_cls,
+            patch("httpx.get") as mock_httpx_get,
+        ):
             mock_redis_cls.return_value.info.side_effect = Exception("refused")
             mock_httpx_get.side_effect = Exception("refused")
 

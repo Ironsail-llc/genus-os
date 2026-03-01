@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
+from models import CreateTenantRequest, UpdateTenantRequest
 
 from robothor.crm.dal import (
     create_tenant,
@@ -11,8 +12,6 @@ from robothor.crm.dal import (
     list_tenants,
     update_tenant,
 )
-
-from models import CreateTenantRequest, UpdateTenantRequest
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
@@ -29,7 +28,8 @@ async def api_list_tenants(
 async def api_create_tenant(body: CreateTenantRequest):
     if not body.id or not body.displayName:
         return JSONResponse(
-            {"error": "id and displayName required"}, status_code=400,
+            {"error": "id and displayName required"},
+            status_code=400,
         )
     tenant_id = create_tenant(
         tenant_id=body.id,

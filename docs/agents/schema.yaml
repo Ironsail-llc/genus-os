@@ -188,6 +188,7 @@ optional:
     token_budget:
       type: integer
       default: 0
+      description: "DEPRECATED — auto-derived at runtime from model registry × max_iterations"
     cost_budget_usd:
       type: number
       default: 0.0
@@ -223,7 +224,7 @@ optional:
     token_budget:
       type: integer
       default: 0
-      description: Max tokens per run (0 = unlimited)
+      description: "DEPRECATED — auto-derived at runtime from model registry × max_iterations"
     cost_budget_usd:
       type: number
       default: 0.0

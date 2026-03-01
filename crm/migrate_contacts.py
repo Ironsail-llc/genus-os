@@ -6,7 +6,12 @@ Outputs contact_id_map.json for later reference.
 
 Usage: python3 migrate_contacts.py
 """
-import json, urllib.request, urllib.error, sys, time, os
+
+import json
+import os
+import time
+import urllib.error
+import urllib.request
 
 TWENTY_URL = "http://localhost:3030"
 CONTACTS_FILE = "/home/philip/clawd/memory/contacts.json"
@@ -42,16 +47,25 @@ def get_access_token():
     with urllib.request.urlopen(req) as r:
         lt = json.loads(r.read())["data"]["getLoginTokenFromCredentials"]["loginToken"]["token"]
 
-    data = json.dumps({"query": f'mutation {{ getAuthTokensFromLoginToken(loginToken: "{lt}") {{ tokens {{ accessToken {{ token }} }} }} }}'}).encode()
+    data = json.dumps(
+        {
+            "query": f'mutation {{ getAuthTokensFromLoginToken(loginToken: "{lt}") {{ tokens {{ accessToken {{ token }} }} }} }}'
+        }
+    ).encode()
     req = urllib.request.Request(f"{TWENTY_URL}/graphql", data=data, headers=headers)
     with urllib.request.urlopen(req) as r:
-        return json.loads(r.read())["data"]["getAuthTokensFromLoginToken"]["tokens"]["accessToken"]["token"]
+        return json.loads(r.read())["data"]["getAuthTokensFromLoginToken"]["tokens"]["accessToken"][
+            "token"
+        ]
 
 
 def find_or_create_company(name, token):
     """Find existing company by name or create new one."""
     ename = name.replace('"', '\\"')
-    r = gql(f'{{ companies(filter: {{ name: {{ eq: "{ename}" }} }}) {{ edges {{ node {{ id name }} }} }} }}', token)
+    r = gql(
+        f'{{ companies(filter: {{ name: {{ eq: "{ename}" }} }}) {{ edges {{ node {{ id name }} }} }} }}',
+        token,
+    )
     if r.get("data") and r["data"]["companies"]["edges"]:
         cid = r["data"]["companies"]["edges"][0]["node"]["id"]
         print(f"    Found company: {name} ({cid})")
@@ -83,7 +97,7 @@ def create_person(contact, company_id, token):
     email_part = f'emails: {{ primaryEmail: "{email}" }}' if email else ""
     phone_part = f'phones: {{ primaryPhoneNumber: "{phone}" }}' if phone else ""
     company_part = f'companyId: "{company_id}"' if company_id else ""
-    job_part = f'jobTitle: "{role.replace(chr(34), chr(92)+chr(34))}"' if role else ""
+    job_part = f'jobTitle: "{role.replace(chr(34), chr(92) + chr(34))}"' if role else ""
 
     parts = [f'name: {{ firstName: "{first}", lastName: "{last}" }}']
     if email_part:
@@ -95,7 +109,7 @@ def create_person(contact, company_id, token):
     if company_part:
         parts.append(company_part)
 
-    mutation = f'mutation {{ createPerson(data: {{ {", ".join(parts)} }}) {{ id name {{ firstName lastName }} }} }}'
+    mutation = f"mutation {{ createPerson(data: {{ {', '.join(parts)} }}) {{ id name {{ firstName lastName }} }} }}"
     r = gql(mutation, token)
     if r.get("data") and r["data"].get("createPerson"):
         pid = r["data"]["createPerson"]["id"]
@@ -106,13 +120,16 @@ def create_person(contact, company_id, token):
 
 def create_note(person_id, content, token):
     """Create a note attached to a person."""
-    escaped = content.replace('"', '\\"').replace('\n', '\\n')
+    escaped = content.replace('"', '\\"').replace("\n", "\\n")
     # Twenty notes are created via noteTargets
-    r = gql(f'''mutation {{ createNote(data: {{
+    r = gql(
+        f'''mutation {{ createNote(data: {{
         title: "Migration Notes"
         body: "{escaped}"
         noteTargets: {{ createMany: [{{ personId: "{person_id}" }}] }}
-    }}) {{ id }} }}''', token)
+    }}) {{ id }} }}''',
+        token,
+    )
     return r.get("data") is not None
 
 

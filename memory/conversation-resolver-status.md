@@ -1,10 +1,9 @@
 # Conversation Resolver Status
-Last run: 2026-03-01T12:00:00Z
+Last run: 2026-03-01T19:00:00Z
 Resolved: 0 conversations
-Skipped: 1 (active - Anthropic receipt from Feb 28, less than 7 days old)
+Skipped: 1 (active)
 Open remaining: 1
 
-## Notes
-- worker-handoff.json not found (no escalations to process - expected)
-- Single open conversation is recent (< 48 hours), not stale
-- No action required
+No stale conversations. Active conversation with Dov Braun (last activity 5 hours ago).
+
+Note: worker-handoff.json not found (expected - no pending escalations)

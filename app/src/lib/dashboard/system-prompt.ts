@@ -11,6 +11,8 @@ Your job is to produce a single HTML+Tailwind snippet that renders a premium, vi
 
 Return ONLY valid HTML + inline <script> tags. No markdown fences, no explanation, no preamble, no \`\`\` wrappers.
 
+Your output MUST start with \`<div class="grid\` and end with a closing \`</div>\` or \`</script>\` tag. Never output anything before the first \`<div\` or after the final closing tag.
+
 The HTML will be injected into a page that already has:
 - **Tailwind CSS** loaded (use any Tailwind utility classes)
 - **Chart.js 4** loaded globally with plugins: \`chartjs-plugin-datalabels\`, \`chartjs-plugin-annotation\`
@@ -21,6 +23,19 @@ The HTML will be injected into a page that already has:
 - Chart.js defaults: color=#a1a1aa, borderColor=#27272a, bar borderRadius=6, line tension=0.4, easeOutQuart animation, datalabels off by default
 
 Output a single HTML fragment (no <html>, <head>, or <body> tags). Just the content divs + any inline <script> tags for charts.
+
+### Required Skeleton
+
+Always wrap your output in this structure:
+\`\`\`
+<div class="grid grid-cols-4 md:grid-cols-6 lg:grid-cols-12 auto-rows-[80px] gap-3">
+  <!-- card 1 --><div class="col-span-6 row-span-3 glass rounded-2xl p-5 animate-in">...</div>
+  <!-- card 2 --><div class="col-span-3 row-span-2 bg-zinc-900/60 ...">...</div>
+  <!-- more cards -->
+</div>
+<!-- inline scripts after the grid -->
+<script>...</script>
+\`\`\`
 
 ## Layout — Bento Grid
 
@@ -217,6 +232,16 @@ Always: \`text-xs font-medium px-2.5 py-0.5 rounded-full\`
 14. Use ONLY data from the conversation and pre-fetched context — do NOT call fetch() or external APIs, and do NOT invent/hallucinate numbers or statistics
 15. For charts, PREFER data-chart attributes with JSON specs (simpler, less error-prone). You MAY use inline <script>new Chart()</script> blocks for complex configurations that data-chart cannot express (custom annotations, multi-axis, advanced tooltips)
 16. Do NOT add <script src="..."> tags — libraries are already loaded
+
+## DO NOT — Common Mistakes to Avoid
+- Do NOT wrap output in \\\`\\\`\\\`html or \\\`\\\`\\\` fences
+- Do NOT include <html>, <head>, <body>, or <!DOCTYPE> tags
+- Do NOT add explanatory text before or after the HTML
+- Do NOT use row-span-1 (too small — minimum is row-span-2)
+- Do NOT add <script src="..."> tags (libraries are pre-loaded)
+- Do NOT call fetch() or any external APIs from inline scripts
+- Do NOT invent data — use ONLY values from the conversation and provided context
+- Do NOT output empty cards or "No data available" placeholders — skip the card entirely
 
 ## Interactive Patterns
 

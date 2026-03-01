@@ -10,8 +10,9 @@ Tests cover:
 
 import sys
 import uuid
+from datetime import UTC
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -27,12 +28,15 @@ async def test_create_task_basic(test_client):
     task_id = str(uuid.uuid4())
     with patch("routers.notes_tasks.create_task", return_value=task_id) as mock_create:
         with patch("routers.notes_tasks.publish"):
-            r = await test_client.post("/api/tasks", json={
-                "title": "Reply to sender",
-                "assignedToAgent": "email-responder",
-                "priority": "high",
-                "tags": ["email", "reply-needed"],
-            })
+            r = await test_client.post(
+                "/api/tasks",
+                json={
+                    "title": "Reply to sender",
+                    "assignedToAgent": "email-responder",
+                    "priority": "high",
+                    "tags": ["email", "reply-needed"],
+                },
+            )
     assert r.status_code == 200
     data = r.json()
     assert data["id"] == task_id
@@ -110,10 +114,20 @@ async def test_update_task_not_found(test_client):
 async def test_list_agent_tasks(test_client):
     """GET /api/tasks/agent/{agent_id} returns priority-ordered tasks."""
     mock_tasks = [
-        {"id": str(uuid.uuid4()), "title": "Urgent task", "priority": "urgent",
-         "status": "TODO", "tags": ["email"]},
-        {"id": str(uuid.uuid4()), "title": "Normal task", "priority": "normal",
-         "status": "TODO", "tags": []},
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Urgent task",
+            "priority": "urgent",
+            "status": "TODO",
+            "tags": ["email"],
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Normal task",
+            "priority": "normal",
+            "status": "TODO",
+            "tags": [],
+        },
     ]
     with patch("routers.notes_tasks.list_agent_tasks", return_value=mock_tasks):
         r = await test_client.get("/api/tasks/agent/email-responder")
@@ -184,12 +198,15 @@ async def test_create_task_emits_event(test_client):
     task_id = str(uuid.uuid4())
     with patch("routers.notes_tasks.create_task", return_value=task_id):
         with patch("routers.notes_tasks.publish") as mock_publish:
-            r = await test_client.post("/api/tasks", json={
-                "title": "Test event",
-                "assignedToAgent": "main",
-                "priority": "high",
-                "tags": ["escalation"],
-            })
+            r = await test_client.post(
+                "/api/tasks",
+                json={
+                    "title": "Test event",
+                    "assignedToAgent": "main",
+                    "priority": "high",
+                    "tags": ["escalation"],
+                },
+            )
     assert r.status_code == 200
     mock_publish.assert_called_once()
     call_args = mock_publish.call_args
@@ -204,6 +221,7 @@ async def test_create_task_emits_event(test_client):
 def test_create_task_request_defaults():
     """CreateTaskRequest has sensible defaults."""
     from models import CreateTaskRequest
+
     req = CreateTaskRequest(title="Test")
     assert req.status == "TODO"
     assert req.priority == "normal"
@@ -213,8 +231,9 @@ def test_create_task_request_defaults():
 
 def test_create_task_rejects_invalid_person_id():
     """CreateTaskRequest rejects non-UUID personId with ValidationError."""
-    from pydantic import ValidationError
     from models import CreateTaskRequest
+    from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="personId must be a valid UUID"):
         CreateTaskRequest(
             title="Test",
@@ -224,8 +243,9 @@ def test_create_task_rejects_invalid_person_id():
 
 def test_create_task_rejects_invalid_company_id():
     """CreateTaskRequest rejects non-UUID companyId with ValidationError."""
-    from pydantic import ValidationError
     from models import CreateTaskRequest
+    from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="companyId must be a valid UUID"):
         CreateTaskRequest(title="Test", companyId="not-a-uuid")
 
@@ -233,6 +253,7 @@ def test_create_task_rejects_invalid_company_id():
 def test_create_task_accepts_valid_uuid():
     """CreateTaskRequest accepts valid UUIDs for personId/companyId."""
     from models import CreateTaskRequest
+
     valid_id = str(uuid.uuid4())
     req = CreateTaskRequest(title="Test", personId=valid_id, companyId=valid_id)
     assert req.personId == valid_id
@@ -242,6 +263,7 @@ def test_create_task_accepts_valid_uuid():
 def test_create_task_accepts_none_uuid():
     """CreateTaskRequest accepts None for UUID fields."""
     from models import CreateTaskRequest
+
     req = CreateTaskRequest(title="Test", personId=None)
     assert req.personId is None
 
@@ -249,6 +271,7 @@ def test_create_task_accepts_none_uuid():
 def test_update_task_request_all_none():
     """UpdateTaskRequest with no fields is valid (all optional)."""
     from models import UpdateTaskRequest
+
     req = UpdateTaskRequest()
     assert req.title is None
     assert req.status is None
@@ -260,10 +283,11 @@ def test_update_task_request_all_none():
 
 def test_task_to_dict_new_fields():
     """task_to_dict includes all coordination fields."""
-    from robothor.crm.models import task_to_dict
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.models import task_to_dict
+
+    now = datetime.now(UTC)
     row = {
         "id": uuid.uuid4(),
         "title": "Test task",
@@ -294,10 +318,11 @@ def test_task_to_dict_new_fields():
 
 def test_task_to_dict_backward_compatible():
     """task_to_dict works when new columns are missing (e.g. old rows)."""
-    from robothor.crm.models import task_to_dict
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.models import task_to_dict
+
+    now = datetime.now(UTC)
     row = {
         "id": uuid.uuid4(),
         "title": "Old task",
@@ -321,10 +346,11 @@ def test_task_to_dict_backward_compatible():
 
 def test_task_to_dict_sla_fields():
     """task_to_dict includes SLA and started_at fields."""
-    from robothor.crm.models import task_to_dict
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.models import task_to_dict
+
+    now = datetime.now(UTC)
     row = {
         "id": uuid.uuid4(),
         "title": "SLA task",
@@ -351,6 +377,7 @@ def test_task_to_dict_sla_fields():
 def test_valid_transitions():
     """VALID_TRANSITIONS covers all expected paths."""
     from robothor.crm.dal import VALID_TRANSITIONS
+
     assert "IN_PROGRESS" in VALID_TRANSITIONS["TODO"]
     assert "DONE" in VALID_TRANSITIONS["TODO"]
     assert "REVIEW" in VALID_TRANSITIONS["IN_PROGRESS"]
@@ -363,6 +390,7 @@ def test_valid_transitions():
 def test_validate_transition_valid():
     """_validate_transition allows valid transitions."""
     from robothor.crm.dal import _validate_transition
+
     ok, reason = _validate_transition("TODO", "IN_PROGRESS")
     assert ok is True
     assert reason == ""
@@ -371,6 +399,7 @@ def test_validate_transition_valid():
 def test_validate_transition_invalid():
     """_validate_transition rejects invalid transitions."""
     from robothor.crm.dal import _validate_transition
+
     ok, reason = _validate_transition("TODO", "REVIEW")
     assert ok is False
     assert "Cannot transition" in reason
@@ -379,6 +408,7 @@ def test_validate_transition_invalid():
 def test_validate_transition_review_to_done_requires_resolution():
     """_validate_transition requires resolution for REVIEW -> DONE."""
     from robothor.crm.dal import _validate_transition
+
     ok, reason = _validate_transition("REVIEW", "DONE", resolution=None)
     assert ok is False
     assert "resolution" in reason.lower()
@@ -390,16 +420,18 @@ def test_validate_transition_review_to_done_requires_resolution():
 def test_validate_transition_reopen_from_done():
     """_validate_transition allows DONE -> TODO (reopen)."""
     from robothor.crm.dal import _validate_transition
+
     ok, reason = _validate_transition("DONE", "TODO")
     assert ok is True
 
 
 def test_compute_sla_deadline():
     """_compute_sla_deadline returns a future datetime for valid priorities."""
-    from robothor.crm.dal import _compute_sla_deadline
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.dal import _compute_sla_deadline
+
+    now = datetime.now(UTC)
     deadline = _compute_sla_deadline("urgent")
     assert deadline is not None
     assert deadline > now
@@ -413,7 +445,11 @@ def test_compute_sla_deadline():
 @pytest.mark.asyncio
 async def test_update_task_invalid_transition_returns_422(test_client):
     """PATCH /api/tasks/{id} with invalid transition returns 422."""
-    error_dict = {"error": "Cannot transition from TODO to REVIEW. Allowed: DONE, IN_PROGRESS", "from": "TODO", "to": "REVIEW"}
+    error_dict = {
+        "error": "Cannot transition from TODO to REVIEW. Allowed: DONE, IN_PROGRESS",
+        "from": "TODO",
+        "to": "REVIEW",
+    }
     with patch("routers.notes_tasks.update_task", return_value=error_dict):
         r = await test_client.patch(
             f"/api/tasks/{uuid.uuid4()}",
@@ -445,10 +481,16 @@ async def test_update_task_with_subtask_warning(test_client):
 async def test_get_task_history(test_client):
     """GET /api/tasks/{id}/history returns transition history."""
     mock_history = [
-        {"id": str(uuid.uuid4()), "taskId": str(uuid.uuid4()),
-         "fromStatus": "TODO", "toStatus": "IN_PROGRESS",
-         "changedBy": "email-classifier", "reason": "", "metadata": {},
-         "createdAt": "2026-02-23T12:00:00+00:00"},
+        {
+            "id": str(uuid.uuid4()),
+            "taskId": str(uuid.uuid4()),
+            "fromStatus": "TODO",
+            "toStatus": "IN_PROGRESS",
+            "changedBy": "email-classifier",
+            "reason": "",
+            "metadata": {},
+            "createdAt": "2026-02-23T12:00:00+00:00",
+        },
     ]
     with patch("routers.notes_tasks.get_task_history", return_value=mock_history):
         r = await test_client.get(f"/api/tasks/{uuid.uuid4()}/history")
@@ -460,10 +502,11 @@ async def test_get_task_history(test_client):
 
 def test_history_to_dict():
     """history_to_dict converts a row correctly."""
-    from robothor.crm.models import history_to_dict
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc)
+    from robothor.crm.models import history_to_dict
+
+    now = datetime.now(UTC)
     row = {
         "id": uuid.uuid4(),
         "task_id": uuid.uuid4(),
@@ -489,14 +532,18 @@ async def test_create_task_dedup_returns_existing(test_client):
     """When a task with the same threadId already exists, return it with deduplicated=True."""
     existing = {"id": "existing-task-id", "title": "[EMAIL] Reply to thread", "status": "TODO"}
 
-    with patch("routers.notes_tasks.find_task_by_thread_id", return_value=existing), \
-         patch("routers.notes_tasks.create_task") as mock_create:
-
-        r = await test_client.post("/api/tasks", json={
-            "title": "[EMAIL] Reply to thread abc123",
-            "body": "threadId: abc123\nFrom: test@example.com",
-            "assignedToAgent": "email-responder",
-        })
+    with (
+        patch("routers.notes_tasks.find_task_by_thread_id", return_value=existing),
+        patch("routers.notes_tasks.create_task") as mock_create,
+    ):
+        r = await test_client.post(
+            "/api/tasks",
+            json={
+                "title": "[EMAIL] Reply to thread abc123",
+                "body": "threadId: abc123\nFrom: test@example.com",
+                "assignedToAgent": "email-responder",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["deduplicated"] is True
@@ -508,16 +555,20 @@ async def test_create_task_dedup_returns_existing(test_client):
 @pytest.mark.asyncio
 async def test_create_task_dedup_allows_different_agent(test_client):
     """Same threadId but different assigned agent gets dedup-checked separately."""
-    with patch("routers.notes_tasks.find_task_by_thread_id", return_value=None), \
-         patch("routers.notes_tasks.create_task", return_value="new-task-id"), \
-         patch("routers.notes_tasks.publish"), \
-         patch("routers.notes_tasks.send_notification"):
-
-        r = await test_client.post("/api/tasks", json={
-            "title": "[EMAIL] Analyze thread abc123",
-            "body": "threadId: abc123\nFrom: test@example.com",
-            "assignedToAgent": "email-analyst",
-        })
+    with (
+        patch("routers.notes_tasks.find_task_by_thread_id", return_value=None),
+        patch("routers.notes_tasks.create_task", return_value="new-task-id"),
+        patch("routers.notes_tasks.publish"),
+        patch("routers.notes_tasks.send_notification"),
+    ):
+        r = await test_client.post(
+            "/api/tasks",
+            json={
+                "title": "[EMAIL] Analyze thread abc123",
+                "body": "threadId: abc123\nFrom: test@example.com",
+                "assignedToAgent": "email-analyst",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert "deduplicated" not in data
@@ -527,16 +578,20 @@ async def test_create_task_dedup_allows_different_agent(test_client):
 @pytest.mark.asyncio
 async def test_create_task_no_threadid_skips_dedup(test_client):
     """Tasks without threadId in body skip dedup entirely."""
-    with patch("routers.notes_tasks.find_task_by_thread_id") as mock_find, \
-         patch("routers.notes_tasks.create_task", return_value="new-task-id"), \
-         patch("routers.notes_tasks.publish"), \
-         patch("routers.notes_tasks.send_notification"):
-
-        r = await test_client.post("/api/tasks", json={
-            "title": "Calendar conflict detected",
-            "body": "Meeting overlap on 2026-02-28",
-            "assignedToAgent": "main",
-        })
+    with (
+        patch("routers.notes_tasks.find_task_by_thread_id") as mock_find,
+        patch("routers.notes_tasks.create_task", return_value="new-task-id"),
+        patch("routers.notes_tasks.publish"),
+        patch("routers.notes_tasks.send_notification"),
+    ):
+        r = await test_client.post(
+            "/api/tasks",
+            json={
+                "title": "Calendar conflict detected",
+                "body": "Meeting overlap on 2026-02-28",
+                "assignedToAgent": "main",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["id"] == "new-task-id"
@@ -551,7 +606,10 @@ async def test_create_task_no_threadid_skips_dedup(test_client):
 async def test_toggle_conversation_status(test_client):
     """POST /api/conversations/{id}/toggle_status should return 200."""
     with patch("routers.conversations.toggle_conversation_status", return_value=True):
-        r = await test_client.post("/api/conversations/42/toggle_status", json={
-            "status": "resolved",
-        })
+        r = await test_client.post(
+            "/api/conversations/42/toggle_status",
+            json={
+                "status": "resolved",
+            },
+        )
         assert r.status_code == 200

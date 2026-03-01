@@ -95,12 +95,14 @@ class TestEmailConsumer:
     def test_triggers_hook_script(self, mock_popen, tmp_path):
         # Create a fake script so os.path.exists returns True
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
             f.write(b"pass")
             script_path = f.name
 
         try:
             import os
+
             os.environ["EMAIL_HOOK_SCRIPT"] = script_path
             c = EmailConsumer()
             event = {

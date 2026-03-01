@@ -89,6 +89,13 @@ line-length = 100
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501", "SIM108", "SIM110", "SIM117"]
 
+[tool.ruff.lint.per-file-ignores]
+"crm/bridge/*.py" = ["E402", "N815", "SIM105"]
+"crm/bridge/models.py" = ["N815"]
+"crm/bridge/routers/*.py" = ["N803"]
+"crm/bridge/tests/*.py" = ["E402"]
+"crm/tests/*.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

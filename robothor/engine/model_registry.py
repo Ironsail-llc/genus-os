@@ -29,7 +29,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
     # Claude Sonnet 4.6 via OpenRouter
     "openrouter/anthropic/claude-sonnet-4-6": ModelLimits(
         max_input_tokens=200_000,
-        max_output_tokens=64_000,
+        max_output_tokens=128_000,
         default_output_tokens=16_384,
         input_cost_per_token=0.000_003,  # $3/M
         output_cost_per_token=0.000_015,  # $15/M
@@ -85,6 +85,19 @@ def get_model_limits(model_id: str) -> ModelLimits:
         return limits
     logger.debug("Unknown model '%s', using fallback limits", model_id)
     return _FALLBACK
+
+
+def compute_token_budget(model_id: str, max_iterations: int) -> int:
+    """Compute cumulative token budget for a run from the model's context window.
+
+    Budget = max_input_tokens × max_iterations. This is the theoretical
+    maximum cumulative tokens if every iteration maxed the context window.
+    Returns 0 (unlimited) if max_iterations is 0.
+    """
+    if max_iterations <= 0:
+        return 0
+    limits = get_model_limits(model_id)
+    return limits.max_input_tokens * max_iterations
 
 
 def get_output_tokens(model_id: str, estimated_input_tokens: int = 0) -> int:

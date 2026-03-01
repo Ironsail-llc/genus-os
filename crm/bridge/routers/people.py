@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from models import (
+    CreatePersonRequest,
+    MergeRequest,
+    UpdateCompanyRequest,
+    UpdatePersonRequest,
+)
 
 from robothor.crm.dal import (
-    create_company,
     create_person,
     delete_company,
     delete_person,
@@ -18,14 +24,6 @@ from robothor.crm.dal import (
     merge_people,
     update_company,
     update_person,
-)
-
-from deps import get_tenant_id
-from models import (
-    CreatePersonRequest,
-    MergeRequest,
-    UpdateCompanyRequest,
-    UpdatePersonRequest,
 )
 
 router = APIRouter(prefix="/api", tags=["people", "companies"])
@@ -52,7 +50,9 @@ async def api_create_person(
     if not body.firstName:
         return JSONResponse({"error": "firstName required"}, status_code=400)
 
-    person_id = create_person(body.firstName, body.lastName, body.email, body.phone, tenant_id=tenant_id)
+    person_id = create_person(
+        body.firstName, body.lastName, body.email, body.phone, tenant_id=tenant_id
+    )
     if person_id:
         return {"id": person_id, "firstName": body.firstName, "lastName": body.lastName}
     return JSONResponse({"error": "failed to create person (may be blocked)"}, status_code=500)

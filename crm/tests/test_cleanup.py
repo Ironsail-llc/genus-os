@@ -4,13 +4,10 @@ Tests for the one-time CRM cleanup script.
 All database operations are mocked — no real DB connections.
 """
 
-import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # Add cleanup script's parent to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -35,8 +32,8 @@ def _mock_person_row(pid, first_name, last_name, **extras):
         "linkedin_url": "",
         "company_id": extras.get("company_id"),
         "company_name": extras.get("company_name"),
-        "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2025, 1, 1, tzinfo=UTC),
         "deleted_at": None,
     }
     return base
@@ -54,8 +51,8 @@ def _mock_company_row(cid, name, **extras):
         "address_state": "",
         "linkedin_url": "",
         "ideal_customer_profile": False,
-        "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2025, 1, 1, tzinfo=UTC),
         "deleted_at": None,
     }
 
@@ -97,8 +94,7 @@ class TestFindJunkPeople:
         mock_cur = MagicMock()
         mock_conn.cursor.return_value = mock_cur
         mock_cur.fetchall.return_value = [
-            {"id": "id-1", "first_name": "Philip D'Agostino",
-             "last_name": "(via Google Docs)"},
+            {"id": "id-1", "first_name": "Philip D'Agostino", "last_name": "(via Google Docs)"},
         ]
 
         result = cleanup_crm._find_junk_people(mock_conn)
@@ -144,9 +140,9 @@ class TestDataQuality:
 
         # First call: city nulls, second: job_title nulls, third: email-as-name
         mock_cur.fetchall.side_effect = [
-            [{"id": "id-1", "city": "null"}],     # city
-            [],                                     # job_title
-            [{"id": "id-2", "email": "John Doe"}], # email-as-name
+            [{"id": "id-1", "city": "null"}],  # city
+            [],  # job_title
+            [{"id": "id-2", "email": "John Doe"}],  # email-as-name
         ]
 
         fixes = cleanup_crm._fix_data_quality(mock_conn, dry_run=False)
@@ -180,9 +176,17 @@ class TestRunCleanup:
     @patch("psycopg2.connect")
     @patch("builtins.open", create=True)
     @patch("cleanup_crm.Path")
-    def test_dry_run_returns_counts(self, mock_path, mock_open, mock_pg,
-                                     mock_backup, mock_junk_p, mock_junk_c,
-                                     mock_dal, mock_quality):
+    def test_dry_run_returns_counts(
+        self,
+        mock_path,
+        mock_open,
+        mock_pg,
+        mock_backup,
+        mock_junk_p,
+        mock_junk_c,
+        mock_dal,
+        mock_quality,
+    ):
         # Setup path mocking
         mock_backup_path = MagicMock()
         mock_backup_path.exists.return_value = True  # Skip backup

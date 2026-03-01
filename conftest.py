@@ -7,7 +7,6 @@ repo root.  Bridge tests run from their own rootdir and are unaffected.
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest

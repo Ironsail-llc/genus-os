@@ -22,13 +22,13 @@ import asyncio
 import logging
 
 from robothor.config import get_config
-from robothor.memory.facts import extract_facts, search_facts, store_fact
 from robothor.memory.entities import (
     add_relation,
     extract_and_store_entities,
     get_entity,
     upsert_entity,
 )
+from robothor.memory.facts import extract_facts, search_facts, store_fact
 
 # Set up logging so you can see what's happening
 logging.basicConfig(
@@ -110,7 +110,7 @@ async def demo_search_facts():
     ]
 
     for query in queries:
-        print(f"\n--- Query: \"{query}\" ---")
+        print(f'\n--- Query: "{query}" ---')
 
         results = await search_facts(query, limit=3)
 
@@ -139,8 +139,10 @@ async def demo_entity_graph():
     sarah_id = await upsert_entity("Sarah Chen", "person")
     marcus_id = await upsert_entity("Marcus Rivera", "person")
 
-    print(f"Created entities: Horizon(#{horizon_id}), FastAPI(#{fastapi_id}), "
-          f"React(#{react_id}), Sarah(#{sarah_id}), Marcus(#{marcus_id})")
+    print(
+        f"Created entities: Horizon(#{horizon_id}), FastAPI(#{fastapi_id}), "
+        f"React(#{react_id}), Sarah(#{sarah_id}), Marcus(#{marcus_id})"
+    )
 
     # Add relationships between entities
     await add_relation(horizon_id, fastapi_id, "built_with")
@@ -157,8 +159,10 @@ async def demo_entity_graph():
         "to David Park. The system uses PostgreSQL, Redis, and PyTorch."
     )
     result = await extract_and_store_entities(sample_text)
-    print(f"Auto-extracted: {result['entities_stored']} entities, "
-          f"{result['relations_stored']} relations")
+    print(
+        f"Auto-extracted: {result['entities_stored']} entities, "
+        f"{result['relations_stored']} relations"
+    )
 
 
 async def demo_query_graph():
@@ -170,11 +174,11 @@ async def demo_query_graph():
     entity_names = ["Horizon", "Sarah Chen", "FastAPI"]
 
     for name in entity_names:
-        print(f"\n--- Entity: \"{name}\" ---")
+        print(f'\n--- Entity: "{name}" ---')
 
         entity = await get_entity(name)
         if not entity:
-            print(f"  Not found in knowledge graph.")
+            print("  Not found in knowledge graph.")
             continue
 
         print(f"  Type: {entity['entity_type']}")
@@ -186,11 +190,15 @@ async def demo_query_graph():
             for rel in entity["relations"]:
                 # Determine direction of relationship
                 if rel.get("target_name"):
-                    print(f"    -> {rel['relation_type']} -> {rel['target_name']} "
-                          f"({rel['target_type']})")
+                    print(
+                        f"    -> {rel['relation_type']} -> {rel['target_name']} "
+                        f"({rel['target_type']})"
+                    )
                 elif rel.get("source_name"):
-                    print(f"    <- {rel['relation_type']} <- {rel['source_name']} "
-                          f"({rel['source_type']})")
+                    print(
+                        f"    <- {rel['relation_type']} <- {rel['source_name']} "
+                        f"({rel['source_type']})"
+                    )
         else:
             print("  No relations found.")
 

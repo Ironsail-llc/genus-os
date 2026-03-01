@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -171,8 +171,9 @@ def _build_agent_status() -> dict:
     # Also get recent run counts for health tier (need >= 3 runs)
     run_counts: dict[str, int] = {}
     try:
-        from robothor.db.connection import get_connection
         from psycopg2.extras import RealDictCursor
+
+        from robothor.db.connection import get_connection
 
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -205,7 +206,7 @@ def _build_agent_status() -> dict:
         if last_run_at:
             if isinstance(last_run_at, datetime):
                 last_run_ts = last_run_at.timestamp()
-                last_run_str = last_run_at.astimezone(timezone.utc).isoformat()
+                last_run_str = last_run_at.astimezone(UTC).isoformat()
             else:
                 # Already a string
                 last_run_str = str(last_run_at)
@@ -224,19 +225,21 @@ def _build_agent_status() -> dict:
         # Read status file
         status_summary = _read_status_file(agent_id)
 
-        agents.append({
-            "name": display_name,
-            "agentId": agent_id,
-            "schedule": cron_expr,
-            "lastRun": last_run_str,
-            "lastDuration": last_duration,
-            "lastStatus": schedule.get("last_status"),
-            "status": tier,
-            "statusSummary": status_summary,
-            "errorCount": consecutive_errors,
-            "enabled": enabled,
-            "model": schedule.get("model_primary"),
-        })
+        agents.append(
+            {
+                "name": display_name,
+                "agentId": agent_id,
+                "schedule": cron_expr,
+                "lastRun": last_run_str,
+                "lastDuration": last_duration,
+                "lastStatus": schedule.get("last_status"),
+                "status": tier,
+                "statusSummary": status_summary,
+                "errorCount": consecutive_errors,
+                "enabled": enabled,
+                "model": schedule.get("model_primary"),
+            }
+        )
 
     return {"agents": agents, "summary": summary}
 

@@ -43,8 +43,13 @@ class TestPersonToDict:
         assert result["additionalEmails"] == ["alt@example.com"]
 
     def test_minimal_record(self):
-        row = {"id": "abc", "first_name": None, "last_name": None,
-               "updated_at": None, "created_at": None}
+        row = {
+            "id": "abc",
+            "first_name": None,
+            "last_name": None,
+            "updated_at": None,
+            "created_at": None,
+        }
         result = person_to_dict(row)
         assert result["name"]["firstName"] == ""
         assert result["name"]["lastName"] == ""
@@ -100,9 +105,15 @@ class TestNoteToDict:
         assert result["companyId"] == "comp-1"
 
     def test_no_links(self):
-        row = {"id": "n", "title": "T", "body": "B",
-               "person_id": None, "company_id": None,
-               "updated_at": None, "created_at": None}
+        row = {
+            "id": "n",
+            "title": "T",
+            "body": "B",
+            "person_id": None,
+            "company_id": None,
+            "updated_at": None,
+            "created_at": None,
+        }
         result = note_to_dict(row)
         assert result["personId"] is None
         assert result["companyId"] is None
@@ -153,8 +164,7 @@ class TestConversationToDict:
         assert result["personName"] == "Philip Ironsail"
 
     def test_minimal(self):
-        row = {"id": 1, "updated_at": None, "created_at": None,
-               "last_activity_at": None}
+        row = {"id": 1, "updated_at": None, "created_at": None, "last_activity_at": None}
         result = conversation_to_dict(row)
         assert result["status"] == "open"
         assert result["messagesCount"] == 0

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import httpx
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
@@ -15,7 +14,7 @@ router = APIRouter(tags=["health", "audit"])
 @router.get("/health")
 async def health():
     """Check connectivity to all dependent services."""
-    from bridge_service import http_client, _bridge_config
+    from bridge_service import _bridge_config, http_client
 
     services = {}
 
@@ -58,8 +57,13 @@ async def api_query_audit(
     limit: int = Query(50),
 ):
     results = query_log(
-        limit=limit, event_type=event_type, category=category,
-        actor=actor, target=target, since=since, status=status,
+        limit=limit,
+        event_type=event_type,
+        category=category,
+        actor=actor,
+        target=target,
+        since=since,
+        status=status,
     )
     return {"events": results, "count": len(results)}
 

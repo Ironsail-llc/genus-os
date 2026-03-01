@@ -94,7 +94,7 @@ tags_produced: [vision, unknown-person]
 tags_consumed: []
 
 v2:
-  token_budget: 50000
+  error_feedback: true
 
 changelog:
   - date: "2026-02-28"

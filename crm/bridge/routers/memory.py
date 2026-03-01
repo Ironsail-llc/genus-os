@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from models import (
+    MemoryBlockAppendRequest,
+    MemoryBlockWriteRequest,
+    MemorySearchRequest,
+    MemoryStoreRequest,
+)
 
 from robothor.audit.logger import log_event
 from robothor.db.connection import get_connection
-
-from models import MemoryBlockAppendRequest, MemoryBlockWriteRequest, MemorySearchRequest, MemoryStoreRequest
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -18,6 +22,7 @@ async def memory_search(body: MemorySearchRequest):
     """Semantic search over memory facts."""
     try:
         from robothor.memory.facts import search_facts
+
         results = await search_facts(body.query, limit=body.limit)
         return {"results": results, "count": len(results)}
     except Exception as e:
@@ -29,6 +34,7 @@ async def memory_store(body: MemoryStoreRequest):
     """Store content and extract facts."""
     try:
         from robothor.memory.ingestion import ingest_content
+
         result = await ingest_content(body.content, source_channel=body.content_type)
         return {"status": "ok", "facts_extracted": result}
     except Exception as e:
@@ -40,6 +46,7 @@ async def memory_entity(name: str):
     """Get entity with relationships from the knowledge graph."""
     try:
         from robothor.memory.entities import get_all_about
+
         result = await get_all_about(name)
         return result or {"entity": name, "relations": []}
     except Exception as e:
@@ -78,8 +85,11 @@ async def list_memory_blocks():
             )
             return {
                 "blocks": [
-                    {"name": r[0], "size": r[1],
-                     "last_written_at": r[2].isoformat() if r[2] else None}
+                    {
+                        "name": r[0],
+                        "size": r[1],
+                        "last_written_at": r[2].isoformat() if r[2] else None,
+                    }
                     for r in cur.fetchall()
                 ],
             }
@@ -128,7 +138,8 @@ async def put_memory_block(block_name: str, body: MemoryBlockWriteRequest):
             )
             conn.commit()
             log_event(
-                "crm.update", f"Memory block '{block_name}' updated",
+                "crm.update",
+                f"Memory block '{block_name}' updated",
                 details={"block_name": block_name, "size": len(body.content)},
             )
             return {"success": True, "block_name": block_name}
@@ -141,6 +152,7 @@ async def append_memory_block(block_name: str, body: MemoryBlockAppendRequest):
     """Append a timestamped entry to a memory block, trimming oldest."""
     try:
         from robothor.crm.dal import append_to_block
+
         ok = append_to_block(block_name, body.entry, max_entries=body.maxEntries)
         if ok:
             return {"success": True, "block_name": block_name}
@@ -165,12 +177,14 @@ async def pipeline_status():
                 "FROM ingestion_watermarks ORDER BY source_name",
             )
             watermarks = [
-                {"source": r[0],
-                 "last_ingested_at": r[1].isoformat() if r[1] else None,
-                 "items_ingested": r[2],
-                 "last_error": r[3],
-                 "error_count": r[4],
-                 "updated_at": r[5].isoformat() if r[5] else None}
+                {
+                    "source": r[0],
+                    "last_ingested_at": r[1].isoformat() if r[1] else None,
+                    "items_ingested": r[2],
+                    "last_error": r[3],
+                    "error_count": r[4],
+                    "updated_at": r[5].isoformat() if r[5] else None,
+                }
                 for r in cur.fetchall()
             ]
             # Get recent pipeline runs from audit log
@@ -180,8 +194,13 @@ async def pipeline_status():
                 "ORDER BY timestamp DESC LIMIT 10",
             )
             runs = [
-                {"event_type": r[0], "action": r[1], "timestamp": r[2].isoformat(),
-                 "status": r[3], "details": r[4]}
+                {
+                    "event_type": r[0],
+                    "action": r[1],
+                    "timestamp": r[2].isoformat(),
+                    "status": r[3],
+                    "details": r[4],
+                }
                 for r in cur.fetchall()
             ]
             return {"watermarks": watermarks, "recent_runs": runs}
@@ -216,7 +235,8 @@ async def pipeline_trigger(tier: int):
             stderr=subprocess.DEVNULL,
         )
         log_event(
-            "pipeline.trigger", f"Tier {tier} pipeline triggered",
+            "pipeline.trigger",
+            f"Tier {tier} pipeline triggered",
             details={"tier": tier, "script": str(script), "pid": proc.pid},
         )
         return {"status": "triggered", "tier": tier, "pid": proc.pid}

@@ -24,7 +24,7 @@ import sys
 
 from robothor.config import get_config
 from robothor.rag.pipeline import run_pipeline
-from robothor.rag.search import rag_chat, rag_query
+from robothor.rag.search import rag_chat
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -180,7 +180,8 @@ async def main():
         help="Enable multi-turn conversation mode (preserves history)",
     )
     parser.add_argument(
-        "--question", "-q",
+        "--question",
+        "-q",
         type=str,
         help="Ask a single question and exit (for scripting)",
     )

@@ -156,7 +156,7 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
             warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
             bootstrap_files=raw_heartbeat.get("bootstrap_files", []),
-            token_budget=int(raw_heartbeat.get("token_budget", 0)),
+            # token_budget is auto-derived at runtime from model registry × max_iterations
         )
 
     # v2 enhancement fields
@@ -204,7 +204,7 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 120)),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
-        token_budget=int(v2.get("token_budget", 0)),
+        # token_budget is auto-derived at runtime from model registry × max_iterations
         planning_enabled=v2.get("planning_enabled", False),
         planning_model=v2.get("planning_model", ""),
         scratchpad_enabled=v2.get("scratchpad_enabled", False),

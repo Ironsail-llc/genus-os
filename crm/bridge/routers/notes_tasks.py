@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query, Request
-from fastapi.responses import JSONResponse
-
 import re
+from datetime import UTC
+
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends, Header, Query
+from fastapi.responses import JSONResponse
+from models import (
+    ApproveTaskRequest,
+    CreateNoteRequest,
+    CreateTaskRequest,
+    RejectTaskRequest,
+    UpdateTaskRequest,
+)
 
 from robothor.crm.dal import (
     approve_task,
@@ -26,15 +35,6 @@ from robothor.crm.dal import (
     update_task,
 )
 from robothor.events.bus import publish
-
-from deps import get_tenant_id
-from models import (
-    ApproveTaskRequest,
-    CreateNoteRequest,
-    CreateTaskRequest,
-    RejectTaskRequest,
-    UpdateTaskRequest,
-)
 
 router = APIRouter(prefix="/api", tags=["notes", "tasks"])
 
@@ -151,14 +151,20 @@ async def api_create_task(
         tenant_id=tenant_id,
     )
     if task_id:
-        publish("agent", "task.created", {
-            "task_id": task_id, "title": body.title,
-            "assigned_to_agent": body.assignedToAgent,
-            "created_by_agent": agent_id,
-            "priority": body.priority,
-            "tags": body.tags or [],
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "task.created",
+            {
+                "task_id": task_id,
+                "title": body.title,
+                "assigned_to_agent": body.assignedToAgent,
+                "created_by_agent": agent_id,
+                "priority": body.priority,
+                "tags": body.tags or [],
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         # Auto-send task_assigned notification
         if body.assignedToAgent and agent_id:
             send_notification(
@@ -213,10 +219,16 @@ async def api_update_task(
 ):
     kwargs = {}
     field_map = {
-        "title": "title", "body": "body", "status": "status",
-        "dueAt": "due_at", "personId": "person_id", "companyId": "company_id",
-        "assignedToAgent": "assigned_to_agent", "priority": "priority",
-        "tags": "tags", "parentTaskId": "parent_task_id",
+        "title": "title",
+        "body": "body",
+        "status": "status",
+        "dueAt": "due_at",
+        "personId": "person_id",
+        "companyId": "company_id",
+        "assignedToAgent": "assigned_to_agent",
+        "priority": "priority",
+        "tags": "tags",
+        "parentTaskId": "parent_task_id",
         "resolution": "resolution",
     }
     for api_key, dal_key in field_map.items():
@@ -225,8 +237,9 @@ async def api_update_task(
             kwargs[dal_key] = val
     # Auto-set resolved_at when status changes to DONE
     if body.status and body.status.upper() == "DONE":
-        from datetime import datetime, timezone
-        kwargs["resolved_at"] = datetime.now(timezone.utc).isoformat()
+        from datetime import datetime
+
+        kwargs["resolved_at"] = datetime.now(UTC).isoformat()
     result = update_task(task_id, changed_by=x_agent_id, tenant_id=tenant_id, **kwargs)
     # Handle transition validation errors
     if isinstance(result, dict) and "error" in result:
@@ -235,11 +248,17 @@ async def api_update_task(
         response = {"success": True, "id": task_id}
         if isinstance(result, dict) and "warning" in result:
             response["warning"] = result["warning"]
-        publish("agent", "task.updated", {
-            "task_id": task_id, "fields": list(kwargs.keys()),
-            "agent_id": x_agent_id,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "task.updated",
+            {
+                "task_id": task_id,
+                "fields": list(kwargs.keys()),
+                "agent_id": x_agent_id,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         # Auto-send review_requested notification when moving to REVIEW
         if body.status and body.status.upper() == "REVIEW" and x_agent_id:
             send_notification(
@@ -266,11 +285,17 @@ async def api_resolve_task(
         return JSONResponse({"error": "resolution required"}, status_code=400)
     ok = resolve_task(task_id, resolution, agent_id=x_agent_id, tenant_id=tenant_id)
     if ok:
-        publish("agent", "task.resolved", {
-            "task_id": task_id, "resolution": resolution,
-            "agent_id": x_agent_id,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "task.resolved",
+            {
+                "task_id": task_id,
+                "resolution": resolution,
+                "agent_id": x_agent_id,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
 
@@ -287,10 +312,16 @@ async def api_approve_task(
     if isinstance(result, dict) and "error" in result:
         return JSONResponse(result, status_code=422)
     if result:
-        publish("agent", "task.approved", {
-            "task_id": task_id, "reviewer": reviewer,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "task.approved",
+            {
+                "task_id": task_id,
+                "reviewer": reviewer,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
 
@@ -304,17 +335,25 @@ async def api_reject_task(
 ):
     reviewer = x_agent_id or "helm-user"
     result = reject_task(
-        task_id, body.reason, reviewer,
+        task_id,
+        body.reason,
+        reviewer,
         change_requests=body.changeRequests,
         tenant_id=tenant_id,
     )
     if isinstance(result, dict) and "error" in result:
         return JSONResponse(result, status_code=422)
     if result:
-        publish("agent", "task.rejected", {
-            "task_id": task_id, "reviewer": reviewer,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "task.rejected",
+            {
+                "task_id": task_id,
+                "reviewer": reviewer,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
 

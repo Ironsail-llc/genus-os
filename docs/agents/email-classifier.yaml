@@ -96,7 +96,7 @@ tags_produced: [email, reply-needed, analytical, escalation, needs-philip]
 tags_consumed: []
 
 v2:
-  token_budget: 200000
+  error_feedback: true
 
 changelog:
   - date: "2026-03-01"

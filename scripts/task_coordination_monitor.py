@@ -3,13 +3,13 @@
 
 import json
 import os
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 LOG = "/tmp/task-coord-monitor.log"
+
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -17,6 +17,7 @@ def log(msg):
     print(line)
     with open(LOG, "a") as f:
         f.write(line + "\n")
+
 
 def check():
     log("=" * 60)
@@ -38,13 +39,17 @@ def check():
     if rows:
         log(f"CHECK 6: PASS — {len(rows)} agent-created task(s) found!")
         for r in rows:
-            log(f"  [{r['status']}] {r['created_by_agent']} -> {r['assigned_to_agent']}: {r['title']}")
+            log(
+                f"  [{r['status']}] {r['created_by_agent']} -> {r['assigned_to_agent']}: {r['title']}"
+            )
             log(f"         priority={r['priority']}, tags={r['tags']}")
             if r["resolved_at"]:
                 log(f"         resolved: {r['resolution']}")
 
         # Check 7: Any resolved by responder?
-        responder_resolved = [r for r in rows if r["assigned_to_agent"] == "email-responder" and r["status"] == "DONE"]
+        responder_resolved = [
+            r for r in rows if r["assigned_to_agent"] == "email-responder" and r["status"] == "DONE"
+        ]
         if responder_resolved:
             log(f"CHECK 7: PASS — {len(responder_resolved)} task(s) resolved by email-responder")
         else:
@@ -88,7 +93,7 @@ def check():
             # Check if any recent escalations were created by agents (not infra scripts)
             agent_sources = {"email", "calendar", "crm-steward"}
             recent_agent = []
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             for e in escalations:
                 created = e.get("createdAt", "")
                 source = e.get("source", "")
@@ -101,7 +106,9 @@ def check():
                     except Exception:
                         pass
             if recent_agent:
-                log(f"  WARNING: {len(recent_agent)} recent agent-written escalation(s) — cutover may not be complete")
+                log(
+                    f"  WARNING: {len(recent_agent)} recent agent-written escalation(s) — cutover may not be complete"
+                )
                 for e in recent_agent:
                     log(f"    source={e.get('source')}, summary={e.get('summary', '')[:60]}")
             else:
@@ -112,8 +119,12 @@ def check():
     # 4. Agent last run times
     log("--- Agent Status Files ---")
     memory_dir = os.path.expanduser("~/clawd/memory")
-    for fname in ["email-classifier-status.md", "calendar-monitor-status.md",
-                   "response-status.md", "vision-monitor-status.md"]:
+    for fname in [
+        "email-classifier-status.md",
+        "calendar-monitor-status.md",
+        "response-status.md",
+        "vision-monitor-status.md",
+    ]:
         path = os.path.join(memory_dir, fname)
         if os.path.exists(path):
             with open(path) as f:
@@ -124,6 +135,7 @@ def check():
 
     log("=" * 60)
     log("")
+
 
 if __name__ == "__main__":
     check()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse
+from models import CreateRoutineRequest, UpdateRoutineRequest
 
 from robothor.crm.dal import (
     advance_routine,
@@ -15,9 +17,6 @@ from robothor.crm.dal import (
     update_routine,
 )
 from robothor.events.bus import publish
-
-from deps import get_tenant_id
-from models import CreateRoutineRequest, UpdateRoutineRequest
 
 router = APIRouter(prefix="/api", tags=["routines"])
 
@@ -43,6 +42,7 @@ async def api_create_routine(
     # Validate cron expression
     try:
         from croniter import croniter
+
         croniter(body.cronExpr)
     except (ValueError, KeyError):
         return JSONResponse(
@@ -64,11 +64,17 @@ async def api_create_routine(
         tenant_id=tenant_id,
     )
     if routine_id:
-        publish("agent", "routine.created", {
-            "routine_id": routine_id, "title": body.title,
-            "cron_expr": body.cronExpr,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "routine.created",
+            {
+                "routine_id": routine_id,
+                "title": body.title,
+                "cron_expr": body.cronExpr,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         return {"id": routine_id, "title": body.title}
     return JSONResponse({"error": "failed to create routine"}, status_code=500)
 
@@ -81,10 +87,16 @@ async def api_update_routine(
 ):
     kwargs = {}
     field_map = {
-        "title": "title", "body": "body", "cronExpr": "cron_expr",
-        "timezone": "timezone", "assignedToAgent": "assigned_to_agent",
-        "priority": "priority", "tags": "tags", "active": "active",
-        "personId": "person_id", "companyId": "company_id",
+        "title": "title",
+        "body": "body",
+        "cronExpr": "cron_expr",
+        "timezone": "timezone",
+        "assignedToAgent": "assigned_to_agent",
+        "priority": "priority",
+        "tags": "tags",
+        "active": "active",
+        "personId": "person_id",
+        "companyId": "company_id",
     }
     for api_key, dal_key in field_map.items():
         val = getattr(body, api_key, None)
@@ -95,6 +107,7 @@ async def api_update_routine(
     if body.cronExpr:
         try:
             from croniter import croniter
+
             croniter(body.cronExpr)
         except (ValueError, KeyError):
             return JSONResponse(
@@ -139,10 +152,16 @@ async def api_manual_trigger(
         )
         if task_id:
             advance_routine(routine["id"])
-            publish("agent", "routine.triggered", {
-                "routine_id": routine["id"], "task_id": task_id,
-                "title": routine["title"],
-                "tenant_id": tenant_id,
-            }, source="bridge")
+            publish(
+                "agent",
+                "routine.triggered",
+                {
+                    "routine_id": routine["id"],
+                    "task_id": task_id,
+                    "title": routine["title"],
+                    "tenant_id": tenant_id,
+                },
+                source="bridge",
+            )
             triggered.append({"routineId": routine["id"], "taskId": task_id})
     return {"triggered": triggered, "count": len(triggered)}

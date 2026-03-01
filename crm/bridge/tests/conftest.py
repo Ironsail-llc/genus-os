@@ -7,7 +7,7 @@ Provides async test client, mock helpers for crm_dal and external HTTP calls.
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest

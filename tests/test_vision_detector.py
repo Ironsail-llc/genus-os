@@ -72,12 +72,18 @@ class TestObjectDetector:
 
     def test_has_person_true(self):
         det = ObjectDetector()
-        with patch.object(det, "detect", return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 1, 1]}]):
+        with patch.object(
+            det,
+            "detect",
+            return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 1, 1]}],
+        ):
             assert det.has_person(np.zeros((1, 1, 3), dtype=np.uint8)) is True
 
     def test_has_person_false(self):
         det = ObjectDetector()
-        with patch.object(det, "detect", return_value=[{"class": "cat", "confidence": 0.9, "bbox": [0, 0, 1, 1]}]):
+        with patch.object(
+            det, "detect", return_value=[{"class": "cat", "confidence": 0.9, "bbox": [0, 0, 1, 1]}]
+        ):
             assert det.has_person(np.zeros((1, 1, 3), dtype=np.uint8)) is False
 
     def test_has_person_empty(self):

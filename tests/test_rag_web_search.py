@@ -8,9 +8,7 @@ class TestFormatWebResults:
         assert format_web_results([]) == "No web results found."
 
     def test_single_result(self):
-        results = [
-            {"title": "Test Page", "url": "https://example.com", "content": "Page content"}
-        ]
+        results = [{"title": "Test Page", "url": "https://example.com", "content": "Page content"}]
         formatted = format_web_results(results)
         assert "[Web 1]" in formatted
         assert "Test Page" in formatted
@@ -29,7 +27,13 @@ class TestFormatWebResults:
 class TestWebResultsToMemoryFormat:
     def test_conversion(self):
         web = [
-            {"title": "Article", "url": "https://ex.com", "content": "Body", "source": "google", "score": 0.8}
+            {
+                "title": "Article",
+                "url": "https://ex.com",
+                "content": "Body",
+                "source": "google",
+                "score": 0.8,
+            }
         ]
         converted = web_results_to_memory_format(web)
         assert len(converted) == 1

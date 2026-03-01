@@ -8,7 +8,7 @@ Robothor's command center. Live dashboard and chat interface in a two-panel Dock
 - **Port**: 3004, service: `robothor-app.service`
 - **Chat**: Custom SSE bridge to Agent Engine (same agent as Telegram)
 - **Canvas**: HTML-first rendering via iframe srcdoc (Tailwind CSS), native components as fallback
-- **Dashboard generation**: Gemini 2.5 Flash via OpenRouter (~2-6s)
+- **Dashboard generation**: Gemini 2.5 Flash-Lite (Sep) via OpenRouter (~1-3s)
 
 ## Architecture
 

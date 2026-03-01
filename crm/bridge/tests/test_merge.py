@@ -4,11 +4,10 @@ Tests for merge_people and merge_companies DAL functions + bridge endpoints.
 All database operations are mocked.
 """
 
-import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -33,8 +32,8 @@ def _make_person_row(**overrides):
         "linkedin_url": "",
         "company_id": None,
         "company_name": None,
-        "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2025, 1, 1, tzinfo=UTC),
         "deleted_at": None,
     }
     base.update(overrides)
@@ -53,8 +52,8 @@ def _make_company_row(**overrides):
         "address_state": "",
         "linkedin_url": "",
         "ideal_customer_profile": False,
-        "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2025, 1, 1, tzinfo=UTC),
         "deleted_at": None,
     }
     base.update(overrides)
@@ -73,8 +72,9 @@ class TestMergePeople:
         mock_conn.return_value.cursor.return_value = cur
 
         keeper = _make_person_row(id="keeper-id", job_title="", city="")
-        loser = _make_person_row(id="loser-id", job_title="Manager", city="Chicago",
-                                 email="loser@example.com")
+        loser = _make_person_row(
+            id="loser-id", job_title="Manager", city="Chicago", email="loser@example.com"
+        )
 
         cur.fetchone.side_effect = [keeper, loser]
         mock_get.return_value = {"id": "keeper-id"}
@@ -83,8 +83,7 @@ class TestMergePeople:
 
         assert result is not None
         # Check that UPDATE was called with field fills
-        update_calls = [c for c in cur.execute.call_args_list
-                        if "UPDATE crm_people SET" in str(c)]
+        update_calls = [c for c in cur.execute.call_args_list if "UPDATE crm_people SET" in str(c)]
         assert len(update_calls) >= 1
 
     @patch("crm_dal.get_person")
@@ -120,8 +119,7 @@ class TestMergePeople:
 
         crm_dal.merge_people("keeper-id", "loser-id")
 
-        repoint_calls = [c for c in cur.execute.call_args_list
-                         if "contact_identifiers" in str(c)]
+        repoint_calls = [c for c in cur.execute.call_args_list if "contact_identifiers" in str(c)]
         assert len(repoint_calls) == 1
         sql, params = repoint_calls[0][0]
         assert params == ("keeper-id", "loser-id")
@@ -139,8 +137,7 @@ class TestMergePeople:
 
         crm_dal.merge_people("keeper-id", "loser-id")
 
-        convo_calls = [c for c in cur.execute.call_args_list
-                       if "crm_conversations" in str(c)]
+        convo_calls = [c for c in cur.execute.call_args_list if "crm_conversations" in str(c)]
         assert len(convo_calls) == 1
 
     @patch("crm_dal.get_person")
@@ -156,10 +153,10 @@ class TestMergePeople:
 
         crm_dal.merge_people("keeper-id", "loser-id")
 
-        note_calls = [c for c in cur.execute.call_args_list
-                      if "crm_notes" in str(c) and "UPDATE" in str(c)]
-        task_calls = [c for c in cur.execute.call_args_list
-                      if "crm_tasks" in str(c)]
+        note_calls = [
+            c for c in cur.execute.call_args_list if "crm_notes" in str(c) and "UPDATE" in str(c)
+        ]
+        task_calls = [c for c in cur.execute.call_args_list if "crm_tasks" in str(c)]
         assert len(note_calls) >= 1
         assert len(task_calls) == 1
 
@@ -176,8 +173,11 @@ class TestMergePeople:
 
         crm_dal.merge_people("keeper-id", "loser-id")
 
-        delete_calls = [c for c in cur.execute.call_args_list
-                        if "deleted_at" in str(c) and "crm_people" in str(c)]
+        delete_calls = [
+            c
+            for c in cur.execute.call_args_list
+            if "deleted_at" in str(c) and "crm_people" in str(c)
+        ]
         assert len(delete_calls) >= 1
 
     @patch("crm_dal.get_person")
@@ -193,8 +193,9 @@ class TestMergePeople:
 
         crm_dal.merge_people("keeper-id", "loser-id")
 
-        note_insert_calls = [c for c in cur.execute.call_args_list
-                             if "INSERT INTO crm_notes" in str(c)]
+        note_insert_calls = [
+            c for c in cur.execute.call_args_list if "INSERT INTO crm_notes" in str(c)
+        ]
         assert len(note_insert_calls) == 1
 
     @patch("crm_dal._conn")
@@ -231,7 +232,7 @@ class TestMergePeople:
         crm_dal.merge_people("keeper-id", "loser-id")
 
         # additional_emails should NOT appear in the update since no new emails
-        all_sql = " ".join(str(c) for c in cur.execute.call_args_list)
+        _all_sql = " ".join(str(c) for c in cur.execute.call_args_list)
         # The update for the keeper fields may still happen but additional_emails
         # should only appear if there are actual new emails to add
         # This is a soft check — the key invariant is no duplicate emails
@@ -268,8 +269,11 @@ class TestMergeCompanies:
 
         crm_dal.merge_companies("keep-co", "lose-co")
 
-        people_calls = [c for c in cur.execute.call_args_list
-                        if "crm_people" in str(c) and "company_id" in str(c)]
+        people_calls = [
+            c
+            for c in cur.execute.call_args_list
+            if "crm_people" in str(c) and "company_id" in str(c)
+        ]
         assert len(people_calls) == 1
 
     @patch("crm_dal.get_company")
@@ -285,8 +289,7 @@ class TestMergeCompanies:
 
         crm_dal.merge_companies("keep-co", "lose-co")
 
-        delete_calls = [c for c in cur.execute.call_args_list
-                        if "deleted_at" in str(c)]
+        delete_calls = [c for c in cur.execute.call_args_list if "deleted_at" in str(c)]
         assert len(delete_calls) >= 1
 
     @patch("crm_dal._conn")
@@ -313,10 +316,13 @@ async def test_merge_people_endpoint_missing_params(test_client):
 async def test_merge_people_endpoint_success(test_client):
     """Successful merge returns 200 with merged record."""
     with patch("routers.people.merge_people", return_value={"id": "keeper-id", "name": "Test"}):
-        r = await test_client.post("/api/people/merge", json={
-            "primaryId": "keeper-id",
-            "secondaryId": "loser-id",
-        })
+        r = await test_client.post(
+            "/api/people/merge",
+            json={
+                "primaryId": "keeper-id",
+                "secondaryId": "loser-id",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["success"] is True
@@ -333,9 +339,12 @@ async def test_merge_companies_endpoint_missing_params(test_client):
 async def test_merge_companies_endpoint_success(test_client):
     """Successful company merge returns 200."""
     with patch("routers.people.merge_companies", return_value={"id": "keep-co"}):
-        r = await test_client.post("/api/companies/merge", json={
-            "primaryId": "keep-co",
-            "secondaryId": "lose-co",
-        })
+        r = await test_client.post(
+            "/api/companies/merge",
+            json={
+                "primaryId": "keep-co",
+                "secondaryId": "lose-co",
+            },
+        )
         assert r.status_code == 200
         assert r.json()["success"] is True

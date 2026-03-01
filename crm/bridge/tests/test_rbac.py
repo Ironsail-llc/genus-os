@@ -3,8 +3,8 @@
 Phase 3: Validates agent capability enforcement at the Bridge API layer.
 """
 
-import sys
 import os
+import sys
 
 # Set capabilities manifest path BEFORE importing bridge_service (middleware loads at import time)
 os.environ.setdefault(
@@ -12,14 +12,16 @@ os.environ.setdefault(
     os.path.expanduser("~/clawd/agent_capabilities.json"),
 )
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, "/home/philip/clawd/memory_system")
 
 from bridge_service import app
+
 from robothor.events.capabilities import load_capabilities
 
 
@@ -80,8 +82,7 @@ class TestAuthorizedAgent:
     @pytest.mark.asyncio
     async def test_all_agents_access_health(self, client):
         """Every known agent can access /health (not blocked by RBAC)."""
-        for agent_id in ["email-classifier", "main", "crm-steward",
-                         "vision-monitor", "helm-user"]:
+        for agent_id in ["email-classifier", "main", "crm-steward", "vision-monitor", "helm-user"]:
             resp = await client.get(
                 "/health",
                 headers={"X-Agent-Id": agent_id},

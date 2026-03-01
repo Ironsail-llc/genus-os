@@ -52,7 +52,6 @@ heartbeat:
   context_files: [brain/memory/status.md]
   peer_agents: [email-classifier]
   bootstrap_files: [brain/AGENTS.md]
-  token_budget: 200000
 """
     )
     return manifest_dir
@@ -181,7 +180,6 @@ class TestRunHeartbeat:
                 delivery_to="7636850023",
                 warmup_context_files=["brain/memory/status.md"],
                 bootstrap_files=["brain/AGENTS.md"],
-                token_budget=200000,
             ),
         )
 
@@ -209,8 +207,8 @@ class TestRunHeartbeat:
         # Inherits model + tools from parent
         assert override.model_primary == "anthropic/claude-sonnet-4-6"
         assert override.tools_allowed == ["exec", "read_file", "list_tasks"]
-        # Budget overrides
-        assert override.token_budget == 200000
+        # token_budget is auto-derived at runtime, not from heartbeat config
+        assert override.token_budget == 0
 
     @pytest.mark.asyncio
     async def test_heartbeat_dedup_key_isolation(self, tmp_path):

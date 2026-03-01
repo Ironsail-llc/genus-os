@@ -26,7 +26,12 @@ class TestFormatContext:
 
     def test_multiple_results(self):
         results = [
-            {"content": f"Memory {i}", "tier": "short_term", "similarity": 0.5, "content_type": "note"}
+            {
+                "content": f"Memory {i}",
+                "tier": "short_term",
+                "similarity": 0.5,
+                "content_type": "note",
+            }
             for i in range(3)
         ]
         ctx = format_context(results)
@@ -56,7 +61,14 @@ class TestFormatMergedContext:
         assert format_merged_context([], []) == "No relevant context found."
 
     def test_memory_only(self):
-        memory = [{"content": "Memory fact", "tier": "long_term", "similarity": 0.8, "content_type": "note"}]
+        memory = [
+            {
+                "content": "Memory fact",
+                "tier": "long_term",
+                "similarity": 0.8,
+                "content_type": "note",
+            }
+        ]
         ctx = format_merged_context(memory, [])
         assert "[Memory 1]" in ctx
         assert "Memory fact" in ctx
@@ -69,7 +81,14 @@ class TestFormatMergedContext:
         assert "https://en.wikipedia.org" in ctx
 
     def test_combined(self):
-        memory = [{"content": "Memory fact", "tier": "long_term", "similarity": 0.8, "content_type": "note"}]
+        memory = [
+            {
+                "content": "Memory fact",
+                "tier": "long_term",
+                "similarity": 0.8,
+                "content_type": "note",
+            }
+        ]
         web = [{"title": "Result", "url": "https://example.com", "content": "Web content"}]
         ctx = format_merged_context(memory, web)
         assert "[Memory 1]" in ctx

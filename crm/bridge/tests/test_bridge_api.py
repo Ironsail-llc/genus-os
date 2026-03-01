@@ -22,9 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 @pytest.mark.asyncio
 async def test_health_all_services_ok(test_client, mock_http_client):
     """When CRM and memory are healthy, health reports status: ok."""
-    mock_http_client.get = AsyncMock(
-        return_value=MagicMock(spec=httpx.Response, status_code=200)
-    )
+    mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
 
     with patch("routers.health.check_health", return_value={"status": "ok"}):
         r = await test_client.get("/health")
@@ -38,11 +36,12 @@ async def test_health_all_services_ok(test_client, mock_http_client):
 @pytest.mark.asyncio
 async def test_health_degraded_when_crm_down(test_client, mock_http_client):
     """When CRM check fails, health reports 503 degraded."""
-    mock_http_client.get = AsyncMock(
-        return_value=MagicMock(spec=httpx.Response, status_code=200)
-    )
+    mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
 
-    with patch("routers.health.check_health", return_value={"status": "error", "error": "connection refused"}):
+    with patch(
+        "routers.health.check_health",
+        return_value={"status": "error", "error": "connection refused"},
+    ):
         r = await test_client.get("/health")
         assert r.status_code == 503
         data = r.json()
@@ -91,10 +90,13 @@ async def test_resolve_contact_existing(test_client):
     }
 
     with patch("crm_dal.resolve_contact", return_value=resolved):
-        r = await test_client.post("/resolve-contact", json={
-            "channel": "email",
-            "identifier": "test@test.com",
-        })
+        r = await test_client.post(
+            "/resolve-contact",
+            json={
+                "channel": "email",
+                "identifier": "test@test.com",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["person_id"] == "abc-123"
@@ -125,9 +127,12 @@ async def test_api_get_conversation_not_found(test_client):
 @pytest.mark.asyncio
 async def test_api_create_message_empty_content(test_client):
     """Empty content returns 422 (Pydantic requires non-empty)."""
-    r = await test_client.post("/api/conversations/1/messages", json={
-        "content": "",
-    })
+    r = await test_client.post(
+        "/api/conversations/1/messages",
+        json={
+            "content": "",
+        },
+    )
     # Pydantic model accepts empty string but route validates
     # The route checks `if not body.content` and returns 400
     assert r.status_code == 400
@@ -137,18 +142,24 @@ async def test_api_create_message_empty_content(test_client):
 @pytest.mark.asyncio
 async def test_api_create_person_missing_name(test_client):
     """Missing firstName returns 422 (Pydantic validation)."""
-    r = await test_client.post("/api/people", json={
-        "lastName": "Smith",
-    })
+    r = await test_client.post(
+        "/api/people",
+        json={
+            "lastName": "Smith",
+        },
+    )
     assert r.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_api_create_note_missing_title(test_client):
     """Missing title returns 422 (Pydantic validation)."""
-    r = await test_client.post("/api/notes", json={
-        "body": "some note body",
-    })
+    r = await test_client.post(
+        "/api/notes",
+        json={
+            "body": "some note body",
+        },
+    )
     assert r.status_code == 422
 
 
@@ -165,16 +176,20 @@ async def test_log_interaction_resolves_and_logs(test_client):
         "display_name": "Alice",
     }
 
-    with patch("crm_dal.resolve_contact", return_value=resolved), \
-         patch("crm_dal.get_conversations_for_contact", return_value=[{"id": 10}]), \
-         patch("crm_dal.send_message", return_value={"id": 100}):
-
-        r = await test_client.post("/log-interaction", json={
-            "contact_name": "Alice",
-            "channel": "api",
-            "direction": "outgoing",
-            "content_summary": "Called Alice about project status",
-        })
+    with (
+        patch("crm_dal.resolve_contact", return_value=resolved),
+        patch("crm_dal.get_conversations_for_contact", return_value=[{"id": 10}]),
+        patch("crm_dal.send_message", return_value={"id": 100}),
+    ):
+        r = await test_client.post(
+            "/log-interaction",
+            json={
+                "contact_name": "Alice",
+                "channel": "api",
+                "direction": "outgoing",
+                "content_summary": "Called Alice about project status",
+            },
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "ok"

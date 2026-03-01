@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from models import SendNotificationRequest
 
 from robothor.crm.dal import (
     acknowledge_notification,
@@ -13,9 +15,6 @@ from robothor.crm.dal import (
     send_notification,
 )
 from robothor.events.bus import publish
-
-from deps import get_tenant_id
-from models import SendNotificationRequest
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -38,13 +37,18 @@ async def api_send_notification(
         tenant_id=tenant_id,
     )
     if notification_id:
-        publish("agent", "notification.sent", {
-            "notification_id": notification_id,
-            "from_agent": body.fromAgent,
-            "to_agent": body.toAgent,
-            "type": body.notificationType,
-            "tenant_id": tenant_id,
-        }, source="bridge")
+        publish(
+            "agent",
+            "notification.sent",
+            {
+                "notification_id": notification_id,
+                "from_agent": body.fromAgent,
+                "to_agent": body.toAgent,
+                "type": body.notificationType,
+                "tenant_id": tenant_id,
+            },
+            source="bridge",
+        )
         return {"id": notification_id, "subject": body.subject}
     return JSONResponse({"error": "failed to send notification"}, status_code=500)
 

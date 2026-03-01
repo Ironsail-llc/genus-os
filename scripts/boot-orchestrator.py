@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import json
 import subprocess
 import sys
 import time
@@ -23,11 +22,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "brain" / "memory_system")
 sys.path.insert(0, str(Path.home() / "clawd" / "memory_system"))
 
 from service_registry import (
-    topological_sort,
-    get_service,
     get_health_url,
+    get_service,
     get_systemd_unit,
     list_services,
+    topological_sort,
 )
 
 
@@ -36,7 +35,9 @@ def check_systemd_active(unit: str) -> bool:
     try:
         result = subprocess.run(
             ["sudo", "systemctl", "is-active", unit],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() == "active"
     except (subprocess.TimeoutExpired, subprocess.SubprocessError):
@@ -51,6 +52,7 @@ def check_health(name: str) -> bool:
 
     try:
         import httpx
+
         resp = httpx.get(url, timeout=5.0)
         return resp.status_code < 500
     except Exception:
@@ -70,7 +72,9 @@ def start_service(name: str) -> bool:
     try:
         result = subprocess.run(
             ["sudo", "systemctl", "start", unit],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
@@ -128,7 +132,13 @@ def boot(dry_run: bool = False) -> bool:
             else:
                 status = "started"
 
-        health = "healthy" if check_health(name) else "no health" if not get_health_url(name) else "unhealthy"
+        health = (
+            "healthy"
+            if check_health(name)
+            else "no health"
+            if not get_health_url(name)
+            else "unhealthy"
+        )
         print(f"  {name:<20s} {status:<25s} [{health}]")
 
     print()

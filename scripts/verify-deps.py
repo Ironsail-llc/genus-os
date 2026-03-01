@@ -20,7 +20,9 @@ def get_pip_versions(venv_path: Path) -> dict:
     try:
         result = subprocess.run(
             [str(pip), "list", "--format=json"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return {}
@@ -35,7 +37,9 @@ def get_npm_versions(project_path: Path) -> dict:
     try:
         result = subprocess.run(
             ["pnpm", "list", "--json", "--depth=0"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             cwd=str(project_path),
         )
         if result.returncode != 0:
@@ -57,7 +61,9 @@ def get_system_command_version(cmd: str) -> str:
     try:
         result = subprocess.run(
             [cmd, "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip().split("\n")[0]
     except Exception:
@@ -112,7 +118,9 @@ def main():
 
     # Check Docker
     docker_version = get_system_command_version("docker")
-    print(f"  {'docker':<15s} [{'ok' if 'not found' not in docker_version else 'MISSING'}] {docker_version[:60]}")
+    print(
+        f"  {'docker':<15s} [{'ok' if 'not found' not in docker_version else 'MISSING'}] {docker_version[:60]}"
+    )
 
     # Check services manifest
     print()
