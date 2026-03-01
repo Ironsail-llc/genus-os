@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -26,8 +26,13 @@ def chat_app(engine_config, mock_runner):
     """Create a FastAPI app with chat router mounted."""
     from fastapi import FastAPI
 
+    # Clean sessions BEFORE init to avoid leftover state
+    _sessions.clear()
+
     app = FastAPI()
-    init_chat(mock_runner, engine_config)
+    # Mock DB restore so real DB data doesn't pollute tests
+    with patch("robothor.engine.chat.load_all_sessions", return_value={}):
+        init_chat(mock_runner, engine_config)
     app.include_router(router)
     yield app
     # Clean up sessions between tests

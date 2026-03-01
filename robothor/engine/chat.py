@@ -67,6 +67,21 @@ def _get_session(session_key: str) -> ChatSession:
     return _sessions[session_key]
 
 
+def get_shared_session(session_key: str) -> ChatSession:
+    """Public accessor — returns (or creates) the ChatSession for *session_key*.
+
+    Used by telegram.py so both channels share one in-memory session.
+    """
+    return _get_session(session_key)
+
+
+def get_main_session_key() -> str:
+    """Return the canonical session key configured in EngineConfig."""
+    if _config is not None:
+        return _config.main_session_key
+    return "agent:main:primary"
+
+
 def _restore_sessions(config: EngineConfig) -> None:
     """Restore webchat sessions from PostgreSQL at startup."""
     try:
@@ -76,9 +91,6 @@ def _restore_sessions(config: EngineConfig) -> None:
         )
         restored = 0
         for key, data in sessions.items():
-            # Skip Telegram sessions — those are restored by TelegramBot
-            if key.startswith("telegram:"):
-                continue
             session = _get_session(key)
             history = data.get("history", [])
             if history:
@@ -88,7 +100,7 @@ def _restore_sessions(config: EngineConfig) -> None:
                 session.model_override = model
             restored += 1
         if restored:
-            logger.info("Restored %d webchat sessions from DB", restored)
+            logger.info("Restored %d chat sessions from DB", restored)
     except Exception as e:
         logger.warning("Failed to load persisted webchat sessions: %s", e)
 

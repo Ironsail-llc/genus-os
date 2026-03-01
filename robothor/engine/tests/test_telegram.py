@@ -6,12 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from robothor.engine.chat import _sessions, get_shared_session
 from robothor.engine.telegram import MAX_MESSAGE_LENGTH, TelegramBot
 
 
 @pytest.fixture
 def bot(engine_config):
     """Create a TelegramBot with mocked dependencies."""
+    _sessions.clear()
     with patch("robothor.engine.telegram.Bot") as mock_bot_cls:
         with patch("robothor.engine.telegram.Dispatcher"):
             mock_bot = MagicMock()
@@ -22,48 +24,57 @@ def bot(engine_config):
             bot = TelegramBot(engine_config, runner)
             bot.bot = mock_bot
             yield bot
+    _sessions.clear()
 
 
 class TestChatHistory:
-    def test_history_initially_empty(self, bot):
-        """Chat history starts empty."""
-        assert bot._chat_history == {}
+    def test_shared_session_initially_empty(self, bot):
+        """Shared session history starts empty."""
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        assert session.history == []
 
     def test_clear_history(self, bot):
-        """Clear removes chat history."""
-        bot._chat_history["12345"] = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi"},
-        ]
-        bot._chat_history.pop("12345", None)
-        assert "12345" not in bot._chat_history
+        """Clear removes chat history from shared session."""
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        session.history.extend(
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"},
+            ]
+        )
+        session.history.clear()
+        assert session.history == []
 
     def test_history_cap(self, bot):
         """History is capped at max_history entries."""
-        chat_id = "12345"
-        bot._chat_history[chat_id] = []
-        # Add 30 messages (15 turns) — should be capped at 20
-        for i in range(15):
-            bot._chat_history[chat_id].append({"role": "user", "content": f"msg {i}"})
-            bot._chat_history[chat_id].append({"role": "assistant", "content": f"reply {i}"})
-        hist = bot._chat_history[chat_id]
-        if len(hist) > bot._max_history:
-            bot._chat_history[chat_id] = hist[-bot._max_history :]
-        assert len(bot._chat_history[chat_id]) == 20
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        # Add 50 messages (25 turns) — should be capped at 40
+        for i in range(25):
+            session.history.append({"role": "user", "content": f"msg {i}"})
+            session.history.append({"role": "assistant", "content": f"reply {i}"})
+        if len(session.history) > bot._max_history:
+            session.history[:] = session.history[-bot._max_history :]
+        assert len(session.history) == 40
 
     def test_reset_clears_history(self, bot):
-        """Reset clears both model override and chat history."""
+        """Reset clears both model override and shared session history."""
         bot._model_override["12345"] = "some-model"
-        bot._chat_history["12345"] = [{"role": "user", "content": "test"}]
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        session.history.append({"role": "user", "content": "test"})
         # Simulate /reset behavior
         bot._model_override.pop("12345", None)
-        bot._chat_history.pop("12345", None)
+        session.history.clear()
+        session.model_override = None
         assert "12345" not in bot._model_override
-        assert "12345" not in bot._chat_history
+        assert session.history == []
 
     def test_max_history_default(self, bot):
-        """Default max history is 20."""
-        assert bot._max_history == 20
+        """Default max history is 40 (matching chat.py MAX_HISTORY)."""
+        assert bot._max_history == 40
 
 
 class TestMessageSplitting:

@@ -32,9 +32,9 @@ from aiogram.types import (
     Message,
 )
 
+from robothor.engine.chat import get_main_session_key, get_shared_session
 from robothor.engine.chat_store import (
     clear_session_async,
-    load_all_sessions,
     save_exchange_async,
     update_model_override_async,
 )
@@ -105,10 +105,9 @@ class TelegramBot:
         # Per-chat state (in-memory, resets on restart)
         self._model_override: dict[str, str] = {}  # chat_id → model_id
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}  # chat_id → running task
-        self._chat_history: dict[str, list[dict[str, str]]] = {}  # chat_id → messages
 
         # Max conversation history entries (user + assistant pairs)
-        self._max_history = 20
+        self._max_history = 40  # match chat.py MAX_HISTORY
 
         self._setup_handlers()
 
@@ -156,7 +155,8 @@ class TelegramBot:
         @self.dp.message(Command("clear"))
         async def cmd_clear(message: Message) -> None:
             chat_id = str(message.chat.id)
-            self._chat_history.pop(chat_id, None)
+            session = get_shared_session(self._session_key(chat_id))
+            session.history.clear()
             asyncio.create_task(
                 clear_session_async(
                     self._session_key(chat_id),
@@ -169,7 +169,9 @@ class TelegramBot:
         async def cmd_reset(message: Message) -> None:
             chat_id = str(message.chat.id)
             self._model_override.pop(chat_id, None)
-            self._chat_history.pop(chat_id, None)
+            session = get_shared_session(self._session_key(chat_id))
+            session.history.clear()
+            session.model_override = None
             asyncio.create_task(
                 clear_session_async(
                     self._session_key(chat_id),
@@ -196,7 +198,8 @@ class TelegramBot:
         @self.dp.message(Command("context"))
         async def cmd_context(message: Message) -> None:
             chat_id = str(message.chat.id)
-            history = self._chat_history.get(chat_id, [])
+            session = get_shared_session(self._session_key(chat_id))
+            history = list(session.history)
 
             from robothor.engine.context import get_context_stats
 
@@ -256,6 +259,9 @@ class TelegramBot:
                 return
 
             self._model_override[chat_id] = model_id
+            # Sync to shared session so webchat also picks up the override
+            session = get_shared_session(self._session_key(chat_id))
+            session.model_override = model_id
             asyncio.create_task(
                 update_model_override_async(
                     self._session_key(chat_id),
@@ -367,7 +373,22 @@ class TelegramBot:
 
             # ── Execute agent ──
             model = self._model_override.get(chat_id)
-            history = list(self._chat_history.get(chat_id, []))
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            # Wait if the shared session is busy (e.g. Helm webchat is active)
+            if session.lock.locked():
+                with contextlib.suppress(Exception):
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text="One moment \u2014 finishing up in the Helm...",
+                        parse_mode=None,
+                    )
+                await session.lock.acquire()
+                session.lock.release()
+
+            history = list(session.history)
 
             async def run_agent() -> None:
                 nonlocal stream_msg_id
@@ -382,19 +403,18 @@ class TelegramBot:
                         conversation_history=history or None,
                     )
 
-                    # Save conversation history
+                    # Save conversation history to shared session
                     if run.output_text:
-                        chat_hist = self._chat_history.setdefault(chat_id, [])
-                        chat_hist.append({"role": "user", "content": user_text})
-                        chat_hist.append({"role": "assistant", "content": run.output_text})
-                        # Cap at max_history entries (trim from front)
-                        if len(chat_hist) > self._max_history:
-                            self._chat_history[chat_id] = chat_hist[-self._max_history :]
+                        session.history.append({"role": "user", "content": user_text})
+                        session.history.append({"role": "assistant", "content": run.output_text})
+                        # Trim from front
+                        if len(session.history) > self._max_history:
+                            session.history[:] = session.history[-self._max_history :]
 
                         # Persist to DB (fire-and-forget)
                         asyncio.create_task(
                             save_exchange_async(
-                                self._session_key(chat_id),
+                                session_key,
                                 user_text,
                                 run.output_text,
                                 channel="telegram",
@@ -445,11 +465,25 @@ class TelegramBot:
             self._active_tasks[chat_id] = task
 
     def _session_key(self, chat_id: str) -> str:
-        """Return a DB session key for a Telegram chat."""
+        """Return a DB session key for a Telegram chat.
+
+        Philip's chat (matches default_chat_id) maps to the canonical
+        shared session key so Telegram and Helm share one conversation.
+        Other chats keep the telegram: prefix.
+        """
+        if chat_id == self.config.default_chat_id:
+            return get_main_session_key()
         return f"telegram:{chat_id}"
 
     def _load_persisted_history(self) -> None:
-        """Restore chat history and model overrides from PostgreSQL."""
+        """Restore model overrides for non-primary Telegram chats.
+
+        The canonical shared session (Philip's chat) is restored by
+        chat.py's _restore_sessions() at startup — no duplicate load needed.
+        Only non-primary telegram: chats need their own restore here.
+        """
+        from robothor.engine.chat_store import load_all_sessions
+
         try:
             sessions = load_all_sessions(
                 limit_per_session=self._max_history,
@@ -460,15 +494,18 @@ class TelegramBot:
                 if not key.startswith("telegram:"):
                     continue
                 chat_id = key.removeprefix("telegram:")
+                # Load into shared session store
+                session = get_shared_session(key)
                 history = data.get("history", [])
                 if history:
-                    self._chat_history[chat_id] = history
+                    session.history = history
                 model = data.get("model_override")
                 if model:
                     self._model_override[chat_id] = model
+                    session.model_override = model
                 restored += 1
             if restored:
-                logger.info("Restored %d Telegram chat sessions from DB", restored)
+                logger.info("Restored %d non-primary Telegram sessions from DB", restored)
         except Exception as e:
             logger.warning("Failed to load persisted chat history: %s", e)
 
