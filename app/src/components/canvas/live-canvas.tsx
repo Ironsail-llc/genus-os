@@ -62,8 +62,11 @@ export function LiveCanvas() {
           body: JSON.stringify({}),
           signal: abort.signal,
         }).then(async (res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
+          // Response may contain leading whitespace (keepalive padding) —
+          // parse from text to be safe across all runtimes.
+          const text = await res.text();
+          const data = JSON.parse(text.trim());
+          if (data.error) throw new Error(data.error);
           if (data.html) {
             setDashboardCode(data.html, data.type || "html");
           } else {

@@ -45,12 +45,13 @@ describe("POST /api/dashboard/welcome", () => {
     const res = await POST();
     expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.html).toContain("Welcome");
     expect(body.type).toBeTruthy();
   });
 
-  it("returns 502 on OpenRouter failure", async () => {
+  it("returns error JSON on OpenRouter failure", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
@@ -58,14 +59,15 @@ describe("POST /api/dashboard/welcome", () => {
     });
 
     const res = await POST();
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.error).toBe("Dashboard service temporarily unavailable");
     expect(body.error).not.toContain("OpenRouter");
   });
 
-  it("returns 422 if generated code fails validation", async () => {
+  it("returns error JSON if generated code fails validation", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
@@ -82,20 +84,21 @@ describe("POST /api/dashboard/welcome", () => {
     mockFetch.mockResolvedValue({ ok: true, body: stream });
 
     const res = await POST();
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.error).toBe("Generated dashboard failed quality check");
-    expect(body.error).not.toContain("validation");
   });
 
-  it("returns 500 on unexpected error with sanitized message", async () => {
+  it("returns error JSON on unexpected error with sanitized message", async () => {
     mockFetch.mockRejectedValue(new Error("Network timeout"));
 
     const res = await POST();
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const text = await res.text();
+    const body = JSON.parse(text.trim());
     expect(body.error).toBe("Dashboard generation failed");
     expect(body.error).not.toContain("Network timeout");
   });

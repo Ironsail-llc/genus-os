@@ -77,7 +77,7 @@ export function ChatPanel() {
         }
       })
       .catch(() => {
-        // Gateway not available, that's ok
+        // Engine not available on mount
       });
   }, []);
 
@@ -108,7 +108,19 @@ export function ChatPanel() {
       });
 
       if (!res.ok || !res.body) {
-        throw new Error("Failed to send message");
+        let errorText = `Server error (${res.status}). Please try again.`;
+        try {
+          const errBody = await res.json();
+          if (errBody.error) errorText = errBody.error;
+        } catch { /* ignore */ }
+        const errorMsg: ChatMessage = {
+          id: `err-${Date.now()}`, role: "assistant",
+          content: errorText, timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        setIsStreaming(false);
+        setStreamingText("");
+        return;
       }
 
       const reader = res.body.getReader();
@@ -216,7 +228,7 @@ export function ChatPanel() {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: "Sorry, I couldn't connect to the gateway. Please try again.",
+          content: "Something went wrong. Please try again.",
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
