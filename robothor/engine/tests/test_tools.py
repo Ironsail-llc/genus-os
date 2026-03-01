@@ -326,7 +326,7 @@ class TestObservabilityTools:
                 "agent_id": "email-classifier",
                 "enabled": True,
                 "cron_expr": "0 6-22/2 * * *",
-                "timezone": "America/Grenada",
+                "timezone": "America/New_York",
                 "timeout_seconds": 480,
                 "model_primary": "kimi-k2.5",
                 "last_run_at": "2026-02-27 10:00:00",

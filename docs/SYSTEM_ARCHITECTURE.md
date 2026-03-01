@@ -14,7 +14,7 @@
 5. [Network Edge — Cloudflare Tunnel](#network-edge--cloudflare-tunnel)
 6. [Data Layer](#data-layer)
 7. [Intelligence Pipeline](#intelligence-pipeline)
-8. [Triage & Supervisor Pipeline](#triage--supervisor-pipeline)
+8. [Triage & Heartbeat Pipeline](#triage--heartbeat-pipeline)
 9. [Vision System](#vision-system)
 10. [CRM Stack](#crm-stack)
 11. [Memory System](#memory-system)
@@ -86,7 +86,7 @@ Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manag
 
 | Model | Role |
 |-------|------|
-| Kimi K2.5 | Triage worker, supervisor, cron agent jobs |
+| Kimi K2.5 | Triage worker, cron agent jobs |
 | Claude Opus 4.6 | Fallback for agent work, Claude Code sessions |
 
 ---
@@ -132,7 +132,7 @@ Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manag
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                  TRIAGE PIPELINE (Kimi K2.5)                     │   │
-│  │  prep → worker (*/15) → cleanup → relay → supervisor (*/17)     │   │
+│  │  prep → worker (*/15) → cleanup → relay → heartbeat (4h)        │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌──────────────────────────────────┐  ┌──────────────┐                  │
@@ -311,7 +311,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 
 ---
 
-## Triage & Supervisor Pipeline
+## Triage & Heartbeat Pipeline
 
 Converts raw log data into prioritized actions, with an LLM gatekeeper controlling what reaches Philip.
 
@@ -345,15 +345,15 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
   │  Layer 3: supervisor_relay.py (*/10, 06:00–23:00)               │
   │  - Meeting alerts → Telegram (the ONLY automated Telegram path) │
   │  - Stale worker / CRM health issues → handoff.json (not Telegram│
-  │  - Respects waking hours (07:00–22:00 AST for stale/CRM alerts) │
+  │  - Respects waking hours (07:00–22:00 ET for stale/CRM alerts) │
   │  - Cooldowns: stale=60 min, CRM=30 min                         │
   └──────────────────────────┬──────────────────────────────────────┘
                               │
                               ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │  Layer 3.5: LLM Supervisor (Kimi K2.5, */17, 07:00–22:00)      │
+  │  Layer 3.5: Main Heartbeat (Sonnet 4.6, 4h 6-22, TELEGRAM)      │
   │  - Runs ON TELEGRAM (direct channel to Philip)                  │
-  │  - Reads triage-status.md + worker-handoff.json                 │
+  │  - Reads *-status.md + worker-handoff.json                      │
   │  - Investigates before surfacing (no raw log dumps)             │
   │  - Sole gatekeeper: decides what's worth Philip's attention     │
   │  - Audits all logs for completeness                             │
@@ -361,7 +361,7 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
 ```
 
 **Design principles:**
-- LLM supervisor never sends directly to Telegram via API — it runs as a Telegram agent session
+- Main heartbeat never sends directly to Telegram via API — it runs as a Telegram agent session
 - Python relay is the only script that calls the Telegram Bot API (meeting alerts only)
 - Only 3 Engine jobs deliver to Telegram: Morning Briefing, Evening Wind-Down, SMS Status Check
 - Calendar items older than 24h auto-expire in triage_prep
@@ -613,7 +613,7 @@ Two runtime environments access the same underlying DAL:
 | Schedule | Job | Purpose |
 |----------|-----|---------|
 | `0 6-22 * * *` | Email Classifier | Classify emails, route or escalate |
-| `*/17 6-22 * * *` | Supervisor Heartbeat | Surface escalations, audit logs |
+| `0 6-22/4 * * *` | Main Heartbeat | Surface escalations, audit logs |
 | `*/10 * * * *` | Vision Monitor | Check motion events, alert on visitors |
 | `30 6 * * *` | Morning Briefing | Daily briefing → Telegram |
 | `0 21 * * *` | Evening Wind-Down | Tomorrow preview, open items → Telegram |

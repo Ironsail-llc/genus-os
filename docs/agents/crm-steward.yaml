@@ -4,10 +4,10 @@ description: CRM data hygiene, duplicate merge, and contact enrichment
 version: "2026-02-24"
 department: crm
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: []
 receives_tasks_from: []
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/moonshotai/kimi-k2.5
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 10 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 600
   max_iterations: 10
   session_target: isolated
@@ -93,6 +93,10 @@ bootstrap_files:
 
 tags_produced: [crm-hygiene, dedup, enrichment]
 tags_consumed: [crm-hygiene]
+
+v2:
+  token_budget: 100000
+  cost_budget_usd: 0.10
 
 changelog:
   - date: "2026-02-28"

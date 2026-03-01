@@ -4,10 +4,10 @@ description: Classifies incoming emails, creates tasks, routes to analyst or res
 version: "2026-02-24"
 department: email
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: [email-analyst, email-responder]
 receives_tasks_from: []
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/moonshotai/kimi-k2.5
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 6-22/6 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 600
   max_iterations: 10
   session_target: isolated
@@ -91,6 +91,10 @@ downstream_agents:
 
 tags_produced: [email, reply-needed, analytical, escalation, needs-philip]
 tags_consumed: []
+
+v2:
+  token_budget: 200000
+  cost_budget_usd: 0.15
 
 changelog:
   - date: "2026-02-28"

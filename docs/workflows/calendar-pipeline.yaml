@@ -15,7 +15,7 @@ triggers:
     event_type: calendar.modified
   - type: cron
     cron: "0 6-22/6 * * *"
-    timezone: America/Grenada
+    timezone: America/New_York
 
 timeout_seconds: 600
 

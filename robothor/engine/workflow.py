@@ -86,7 +86,7 @@ def parse_workflow(data: dict) -> WorkflowDef:
                 stream=t.get("stream", ""),
                 event_type=t.get("event_type", ""),
                 cron=t.get("cron", ""),
-                timezone=t.get("timezone", "America/Grenada"),
+                timezone=t.get("timezone", "America/New_York"),
             )
         )
 

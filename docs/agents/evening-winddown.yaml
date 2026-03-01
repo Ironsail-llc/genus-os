@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 21 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 10
   session_target: isolated
@@ -70,6 +70,10 @@ bootstrap_files:
 
 tags_produced: []
 tags_consumed: []
+
+v2:
+  token_budget: 100000
+  cost_budget_usd: 0.10
 
 changelog:
   - date: "2026-02-28"

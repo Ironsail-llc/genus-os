@@ -4,10 +4,10 @@ description: Checks for urgent unread messages in open conversations
 version: "2026-02-24"
 department: communications
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: []
 receives_tasks_from: []
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/moonshotai/kimi-k2.5
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 6-22 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 5
   session_target: isolated
@@ -78,6 +78,10 @@ bootstrap_files:
 
 tags_produced: [conversation, escalation]
 tags_consumed: []
+
+v2:
+  token_budget: 50000
+  cost_budget_usd: 0.05
 
 changelog:
   - date: "2026-02-24"

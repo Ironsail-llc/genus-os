@@ -4,10 +4,10 @@ description: Composes and sends email replies via gog gmail
 version: "2026-02-24"
 department: email
 
-reports_to: supervisor
+reports_to: main
 creates_tasks_for: []
 receives_tasks_from: [email-classifier]
-escalates_to: supervisor
+escalates_to: main
 
 model:
   primary: openrouter/anthropic/claude-sonnet-4.6
@@ -18,7 +18,7 @@ model:
 
 schedule:
   cron: "0 8-20/4 * * *"
-  timezone: America/Grenada
+  timezone: America/New_York
   timeout_seconds: 600
   max_iterations: 15
   session_target: isolated
@@ -92,6 +92,10 @@ bootstrap_files:
 
 tags_produced: []
 tags_consumed: [email, reply-needed]
+
+v2:
+  token_budget: 300000
+  cost_budget_usd: 0.50
 
 changelog:
   - date: "2026-02-28"
