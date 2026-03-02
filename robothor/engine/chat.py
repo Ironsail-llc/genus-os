@@ -171,10 +171,18 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 conversation_history=list(session.history),
             )
 
-            # Append to session history
+            # Always record user message in session history
             session.history.append({"role": "user", "content": message})
             if run.output_text:
                 session.history.append({"role": "assistant", "content": run.output_text})
+            elif run.error_message:
+                # Record error so the next run knows what failed
+                session.history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"[Run failed: {run.error_message}]",
+                    }
+                )
 
             # Trim history (in-place slice for safety under concurrency)
             if len(session.history) > MAX_HISTORY:
@@ -210,6 +218,16 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
             logger.error("Chat agent error: %s", e, exc_info=True)
+            # Record the failed attempt so next run has context
+            session.history.append({"role": "user", "content": message})
+            session.history.append(
+                {
+                    "role": "assistant",
+                    "content": f"[Internal error — run failed: {e}]",
+                }
+            )
+            if len(session.history) > MAX_HISTORY:
+                session.history[:] = session.history[-MAX_HISTORY:]
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)  # Sentinel

@@ -31,6 +31,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    PhotoSize,
 )
 
 from robothor.engine.chat import (
@@ -61,6 +62,33 @@ STREAM_EDIT_INTERVAL = 0.5  # seconds between message edits
 STREAM_MIN_NEW_CHARS = 20  # min new chars before editing
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
+
+# File handling — max size for text extraction (5 MB)
+MAX_FILE_SIZE = 5 * 1024 * 1024
+# Extensions we'll try to read as text
+TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".csv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".py",
+    ".js",
+    ".ts",
+    ".sh",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".log",
+    ".eml",
+    ".tex",
+    ".rst",
+    ".sql",
+    ".env",
+}
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
@@ -94,6 +122,28 @@ def _md_to_html(text: str) -> str:
     # Links [text](url)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
     return text
+
+
+async def _extract_pdf_text(raw_bytes: bytes) -> str:
+    """Best-effort text extraction from a PDF."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"[Page {i + 1}]\n{text}")
+        if pages:
+            return "\n\n".join(pages)
+        return "[PDF: no extractable text (may be image-based)]"
+    except ImportError:
+        return "[PDF file — install pypdf for text extraction]"
+    except Exception as e:
+        return f"[PDF text extraction failed: {e}]"
 
 
 class TelegramBot:
@@ -365,6 +415,131 @@ class TelegramBot:
                 pass
             await callback.answer(f"Switched to {display}")
 
+        # ── File/document/photo messages ──
+
+        @self.dp.message(F.document | F.photo)
+        async def handle_file(message: Message) -> None:
+            """Handle file/document/photo attachments — extract content and process."""
+            if not message.from_user:
+                return
+
+            chat_id = str(message.chat.id)
+            caption = (message.caption or "").strip()
+
+            # Determine what was sent
+            file_desc = ""
+            file_content = ""
+            file_name = ""
+
+            if message.document:
+                doc = message.document
+                file_name = doc.file_name or "unnamed_file"
+                file_size = doc.file_size or 0
+
+                if file_size > MAX_FILE_SIZE:
+                    await message.answer(
+                        f"File too large ({file_size // 1024}KB). Max {MAX_FILE_SIZE // 1024 // 1024}MB."
+                    )
+                    return
+
+                # Download and try to extract text
+                try:
+                    file = await self.bot.get_file(doc.file_id)
+                    if file.file_path:
+                        from io import BytesIO
+
+                        buf = BytesIO()
+                        await self.bot.download_file(file.file_path, buf)
+                        raw_bytes = buf.getvalue()
+
+                        # Check extension for text extraction
+                        ext = "." + file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+
+                        if ext in TEXT_EXTENSIONS:
+                            try:
+                                file_content = raw_bytes.decode("utf-8", errors="replace")
+                            except Exception:
+                                file_content = "[Binary content — could not decode as text]"
+                        elif ext == ".pdf":
+                            file_content = await _extract_pdf_text(raw_bytes)
+                        else:
+                            file_content = f"[Binary file: {file_name}, {len(raw_bytes)} bytes]"
+                except Exception as e:
+                    logger.warning("Failed to download file %s: %s", file_name, e)
+                    file_content = f"[Failed to download file: {e}]"
+
+                file_desc = f"[File: {file_name}]"
+
+            elif message.photo:
+                # Get highest resolution photo
+                photo: PhotoSize = message.photo[-1]
+                file_desc = "[Photo attached]"
+                try:
+                    file = await self.bot.get_file(photo.file_id)
+                    if file.file_path:
+                        file_name = f"photo_{photo.file_unique_id}.jpg"
+                        file_content = f"[Image: {photo.width}x{photo.height}px — text extraction not available for photos]"
+                except Exception as e:
+                    logger.warning("Failed to process photo: %s", e)
+                    file_content = "[Failed to process photo]"
+
+            # Build the user message with file context
+            parts = []
+            if caption:
+                parts.append(caption)
+            if file_desc:
+                parts.append(file_desc)
+            if file_content and file_content.startswith("["):
+                # Just a descriptor, include it
+                parts.append(file_content)
+            elif file_content:
+                # Actual text content — wrap it
+                # Truncate very long files to avoid blowing context
+                max_chars = 50_000
+                if len(file_content) > max_chars:
+                    file_content = (
+                        file_content[:max_chars]
+                        + f"\n\n[... truncated, {len(file_content)} total chars]"
+                    )
+                parts.append(
+                    f"--- File content: {file_name} ---\n{file_content}\n--- End of file ---"
+                )
+
+            user_text = "\n\n".join(parts) if parts else file_desc
+
+            logger.info(
+                "Telegram file from %s (chat %s): %s, caption=%s",
+                message.from_user.first_name,
+                chat_id,
+                file_name or "photo",
+                caption[:50] if caption else "(none)",
+            )
+
+            # Route through the same execution path as text messages
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            # Check for pending plan
+            if session.active_plan and session.active_plan.status == "pending":
+                if not _plan_is_expired(session.active_plan):
+                    # File message = feedback on plan, re-plan
+                    session.active_plan.rejection_feedback = user_text
+                    session.active_plan.status = "superseded"
+                    session.active_plan = None
+                    await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                    return
+                else:
+                    session.active_plan.status = "expired"
+                    session.active_plan = None
+
+            if session.plan_mode:
+                session.plan_mode = False
+                await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                return
+
+            # Execute via _run_interactive (shared with handle_text)
+            await self._run_interactive(chat_id, session_key, session, user_text)
+
         # ── Interactive text messages ──
 
         @self.dp.message(F.text)
@@ -414,156 +589,185 @@ class TelegramBot:
                 await self._run_plan_mode(chat_id, session_key, session, user_text, message)
                 return
 
-            # ── Typing indicator ──
-            typing_active = True
+            # Execute via _run_interactive (shared with handle_file)
+            await self._run_interactive(chat_id, session_key, session, user_text)
 
-            async def typing_loop() -> None:
-                while typing_active:
-                    with contextlib.suppress(Exception):
-                        await self.bot.send_chat_action(
-                            chat_id=int(chat_id), action=ChatAction.TYPING
-                        )
-                    await asyncio.sleep(TYPING_INTERVAL)
+    async def _run_interactive(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+        user_text: str,
+    ) -> None:
+        """Execute an interactive agent run with streaming, typing indicator, and history management.
 
-            typing_task = asyncio.create_task(typing_loop())
+        Shared by handle_text and handle_file — the single execution path for
+        interactive Telegram messages.
+        """
+        # ── Typing indicator ──
+        typing_active = True
 
-            # ── Send "Thinking..." immediately ──
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        # ── Send "Thinking..." immediately ──
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text=THINKING_TEXT,
+                parse_mode=None,
+            )
+            stream_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            stream_msg_id = None
+
+        # ── Streaming state ──
+        last_edit_time: float = 0.0
+        last_edit_len: int = 0
+        first_content = True
+
+        async def on_content(accumulated_text: str) -> None:
+            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+
+            now = time.monotonic()
+            text_len = len(accumulated_text)
+
+            if first_content:
+                first_content = False
+            else:
+                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
+                if not time_ok and not chars_ok:
+                    return
+
+            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
+
             try:
-                thinking_msg = await self.bot.send_message(
-                    chat_id=int(chat_id),
-                    text=THINKING_TEXT,
-                    parse_mode=None,
-                )
-                stream_msg_id: int | None = thinking_msg.message_id
-            except Exception:
-                stream_msg_id = None
-
-            # ── Streaming state ──
-            last_edit_time: float = 0.0
-            last_edit_len: int = 0
-            first_content = True
-
-            async def on_content(accumulated_text: str) -> None:
-                nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-
-                now = time.monotonic()
-                text_len = len(accumulated_text)
-
-                # First real content replaces "Thinking..." immediately
-                if first_content:
-                    first_content = False
-                    # Force immediate edit on first content
+                if stream_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text=display,
+                        parse_mode=None,
+                    )
                 else:
-                    # Throttle subsequent edits
-                    time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
-                    chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
-                    if not time_ok and not chars_ok:
-                        return
+                    sent = await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=display,
+                        parse_mode=None,
+                    )
+                    stream_msg_id = sent.message_id
+            except Exception:
+                pass
 
-                display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
+            last_edit_time = now
+            last_edit_len = text_len
 
-                try:
+        # ── Execute agent ──
+        model = self._model_override.get(chat_id)
+
+        async def run_agent() -> None:
+            nonlocal stream_msg_id
+            try:
+                history = list(session.history)
+                run = await self.runner.execute(
+                    agent_id=self.config.default_chat_agent,
+                    message=user_text,
+                    trigger_type=TriggerType.TELEGRAM,
+                    trigger_detail=f"chat:{chat_id}",
+                    on_content=on_content,
+                    model_override=model,
+                    conversation_history=history or None,
+                )
+
+                # Always record user message in session history
+                session.history.append({"role": "user", "content": user_text})
+
+                if run.output_text:
+                    session.history.append({"role": "assistant", "content": run.output_text})
+                elif run.error_message:
+                    # Record error so the next run knows what failed
+                    session.history.append(
+                        {
+                            "role": "assistant",
+                            "content": f"[Run failed: {run.error_message}]",
+                        }
+                    )
+
+                # Trim from front
+                if len(session.history) > self._max_history:
+                    session.history[:] = session.history[-self._max_history :]
+
+                # Persist to DB (fire-and-forget)
+                if run.output_text:
+                    asyncio.create_task(
+                        save_exchange_async(
+                            session_key,
+                            user_text,
+                            run.output_text,
+                            channel="telegram",
+                            model_override=model,
+                            tenant_id=self.config.tenant_id,
+                        )
+                    )
+
+                if run.output_text:
                     if stream_msg_id is not None:
+                        await self._edit_final(chat_id, stream_msg_id, run.output_text)
+                    else:
+                        await self.send_message(chat_id, run.output_text)
+                elif run.error_message:
+                    err = f"Error: {run.error_message}"
+                    if stream_msg_id is not None:
+                        await self._edit_final(chat_id, stream_msg_id, err)
+                    else:
+                        await self.send_message(chat_id, err)
+                else:
+                    if stream_msg_id is not None:
+                        await self._edit_final(
+                            chat_id,
+                            stream_msg_id,
+                            "Done. No output produced.",
+                        )
+                    else:
+                        await self.send_message(chat_id, "Done. No output produced.")
+
+            except asyncio.CancelledError:
+                # /stop was called during execution
+                if stream_msg_id is not None:
+                    with contextlib.suppress(Exception):
                         await self.bot.edit_message_text(
                             chat_id=int(chat_id),
                             message_id=stream_msg_id,
-                            text=display,
+                            text="Stopped.",
                             parse_mode=None,
                         )
-                    else:
-                        sent = await self.bot.send_message(
-                            chat_id=int(chat_id),
-                            text=display,
-                            parse_mode=None,
-                        )
-                        stream_msg_id = sent.message_id
-                except Exception:
-                    pass
+            except Exception as e:
+                logger.error("Failed to process message: %s", e, exc_info=True)
+                # Record the failed attempt so next run has context
+                session.history.append({"role": "user", "content": user_text})
+                session.history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"[Internal error — run failed: {e}]",
+                    }
+                )
+                if len(session.history) > self._max_history:
+                    session.history[:] = session.history[-self._max_history :]
+                await self.send_message(chat_id, f"Internal error: {html.escape(str(e))}")
+            finally:
+                nonlocal typing_active
+                typing_active = False
+                typing_task.cancel()
+                self._active_tasks.pop(chat_id, None)
 
-                last_edit_time = now
-                last_edit_len = text_len
-
-            # ── Execute agent ──
-            model = self._model_override.get(chat_id)
-            session_key = self._session_key(chat_id)
-            session = get_shared_session(session_key)
-
-            async def run_agent() -> None:
-                nonlocal stream_msg_id
-                try:
-                    history = list(session.history)
-                    run = await self.runner.execute(
-                        agent_id=self.config.default_chat_agent,
-                        message=user_text,
-                        trigger_type=TriggerType.TELEGRAM,
-                        trigger_detail=f"chat:{chat_id}",
-                        on_content=on_content,
-                        model_override=model,
-                        conversation_history=history or None,
-                    )
-
-                    # Save conversation history to shared session
-                    if run.output_text:
-                        session.history.append({"role": "user", "content": user_text})
-                        session.history.append({"role": "assistant", "content": run.output_text})
-                        # Trim from front
-                        if len(session.history) > self._max_history:
-                            session.history[:] = session.history[-self._max_history :]
-
-                        # Persist to DB (fire-and-forget)
-                        asyncio.create_task(
-                            save_exchange_async(
-                                session_key,
-                                user_text,
-                                run.output_text,
-                                channel="telegram",
-                                model_override=model,
-                                tenant_id=self.config.tenant_id,
-                            )
-                        )
-
-                    if run.output_text:
-                        if stream_msg_id is not None:
-                            await self._edit_final(chat_id, stream_msg_id, run.output_text)
-                        else:
-                            await self.send_message(chat_id, run.output_text)
-                    elif run.error_message:
-                        err = f"Error: {run.error_message}"
-                        if stream_msg_id is not None:
-                            await self._edit_final(chat_id, stream_msg_id, err)
-                        else:
-                            await self.send_message(chat_id, err)
-                    else:
-                        if stream_msg_id is not None:
-                            await self._edit_final(
-                                chat_id,
-                                stream_msg_id,
-                                "Done. No output produced.",
-                            )
-                        else:
-                            await self.send_message(chat_id, "Done. No output produced.")
-
-                except asyncio.CancelledError:
-                    # /stop was called during execution
-                    if stream_msg_id is not None:
-                        with contextlib.suppress(Exception):
-                            await self.bot.edit_message_text(
-                                chat_id=int(chat_id),
-                                message_id=stream_msg_id,
-                                text="Stopped.",
-                                parse_mode=None,
-                            )
-                except Exception as e:
-                    logger.error("Failed to process message: %s", e, exc_info=True)
-                    await self.send_message(chat_id, f"Internal error: {html.escape(str(e))}")
-                finally:
-                    nonlocal typing_active
-                    typing_active = False
-                    typing_task.cancel()
-                    self._active_tasks.pop(chat_id, None)
-
-            task = asyncio.create_task(run_agent())
-            self._active_tasks[chat_id] = task
+        task = asyncio.create_task(run_agent())
+        self._active_tasks[chat_id] = task
 
     async def _run_plan_mode(
         self,
