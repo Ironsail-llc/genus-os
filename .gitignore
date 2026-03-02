@@ -73,3 +73,10 @@ brain/memory/rlm-traces/
 status/
 !app/src/app/api/**/status/
 memory/response-analysis.json
+
+# Instance-specific data and local overrides
+local/
+!local/owner.env.example
+crm/cleanup_crm.py
+crm/cleanup_backup.json
+crm/migrate_contacts.py

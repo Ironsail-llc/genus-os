@@ -30,7 +30,7 @@ schedule:
 delivery:
   mode: none
   channel: telegram
-  to: "7636850023"
+  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
 
 tools_allowed:
   - list_conversations
@@ -142,7 +142,7 @@ heartbeat:
   delivery:
     mode: announce
     channel: telegram
-    to: "7636850023"
+    to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
   context_files:
     - brain/memory/email-classifier-status.md
     - brain/memory/response-status.md
