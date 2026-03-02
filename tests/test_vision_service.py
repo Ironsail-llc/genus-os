@@ -671,3 +671,252 @@ class TestLazyCv2Import:
         with patch.object(builtins, "__import__", side_effect=mock_import):
             with pytest.raises(ImportError, match="pip install robothor\\[vision\\]"):
                 _get_cv2()
+
+
+# ─── Photo-Based Enrollment ──────────────────────────────────
+
+
+class TestEnrollFromImage:
+    def test_enroll_from_valid_images(self, service, tmp_dirs):
+        face_dir = tmp_dirs[1]
+        # Create a fake image file
+        img_path = str(face_dir / "test.jpg")
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = fake_frame
+        embedding = np.random.randn(512).astype(np.float32)
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=mock_cv2),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[{"bbox": [0, 0, 50, 50], "embedding": embedding, "det_score": 0.95}],
+            ),
+            patch.object(service.recognizer, "_ensure_loaded"),
+            patch.object(service.recognizer, "enroll", return_value=True),
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            result = service.enroll_from_image("Philip", [img_path])
+        assert result["success"] is True
+        assert result["name"] == "Philip"
+        assert result["samples"] == 1
+
+    def test_enroll_from_missing_file(self, service):
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=MagicMock()),
+            patch.object(service.recognizer, "_ensure_loaded"),
+        ):
+            result = service.enroll_from_image("Philip", ["/nonexistent/photo.jpg"])
+        assert result["success"] is False
+        assert "No usable face" in result["error"]
+
+    def test_enroll_from_no_face_detected(self, service, tmp_dirs):
+        face_dir = tmp_dirs[1]
+        img_path = str(face_dir / "noface.jpg")
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=mock_cv2),
+            patch.object(service.recognizer, "detect", return_value=[]),
+            patch.object(service.recognizer, "_ensure_loaded"),
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            result = service.enroll_from_image("Philip", [img_path])
+        assert result["success"] is False
+        assert any("No face" in e for e in result["details"])
+
+    @pytest.mark.asyncio
+    async def test_enroll_from_image_http_route(self, service):
+        with patch.object(
+            service,
+            "enroll_from_image",
+            return_value={"success": True, "name": "Philip", "samples": 3},
+        ):
+            resp = await service._route_request(
+                "POST",
+                "/enroll-from-image",
+                '{"name": "Philip", "image_paths": ["/tmp/a.jpg"]}',
+            )
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_enroll_from_image_missing_name(self, service):
+        resp = await service._route_request(
+            "POST", "/enroll-from-image", '{"name": "", "image_paths": ["/tmp/a.jpg"]}'
+        )
+        assert b"400" in resp
+
+    @pytest.mark.asyncio
+    async def test_enroll_from_image_missing_paths(self, service):
+        resp = await service._route_request(
+            "POST", "/enroll-from-image", '{"name": "Philip", "image_paths": []}'
+        )
+        assert b"400" in resp
+
+
+# ─── Enrolled Faces Listing ──────────────────────────────────
+
+
+class TestEnrolledEndpoint:
+    @pytest.mark.asyncio
+    async def test_enrolled_list(self, service):
+        service.recognizer.enrolled = {"Philip": np.ones(512), "Samantha": np.ones(512)}
+        resp = await service._route_request("GET", "/enrolled", "")
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["count"] == 2
+        assert "Philip" in body["enrolled_faces"]
+
+
+# ─── Unenroll Endpoint ──────────────────────────────────────
+
+
+class TestUnenrollEndpoint:
+    @pytest.mark.asyncio
+    async def test_unenroll_existing(self, service):
+        service.recognizer.enrolled = {"Philip": np.ones(512)}
+        with patch.object(service.recognizer, "unenroll", return_value=True):
+            resp = await service._route_request("POST", "/unenroll", '{"name": "Philip"}')
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_unenroll_not_found(self, service):
+        with patch.object(service.recognizer, "unenroll", return_value=False):
+            resp = await service._route_request("POST", "/unenroll", '{"name": "Nobody"}')
+        assert b"404" in resp
+
+
+# ─── Alert Suppression ──────────────────────────────────────
+
+
+class TestAlertSuppression:
+    def test_on_known_person_seen_suppresses(self, service):
+        assert service.alerts_suppressed is False
+        service._on_known_person_seen()
+        assert service.alerts_suppressed is True
+        assert service.last_known_person_seen > 0
+
+    def test_on_known_person_seen_idempotent(self, service):
+        service._on_known_person_seen()
+        first_time = service.last_known_person_seen
+        time.sleep(0.01)
+        service._on_known_person_seen()
+        # Still suppressed, time updated
+        assert service.alerts_suppressed is True
+        assert service.last_known_person_seen >= first_time
+
+    @pytest.mark.asyncio
+    async def test_auto_arm_after_delay(self, service):
+        service.alerts_suppressed = True
+        service.auto_arm_delay = 1  # 1 second for testing
+        service.last_known_person_seen = time.time() - 2  # 2 seconds ago
+        with patch.object(service, "publish_event", new_callable=AsyncMock) as mock_pub:
+            await service._check_auto_arm()
+        assert service.alerts_suppressed is False
+        mock_pub.assert_called_once()
+        assert mock_pub.call_args[0][0] == "vision.auto_armed"
+
+    @pytest.mark.asyncio
+    async def test_auto_arm_not_triggered_when_recent(self, service):
+        service.alerts_suppressed = True
+        service.auto_arm_delay = 1800
+        service.last_known_person_seen = time.time()  # just now
+        await service._check_auto_arm()
+        assert service.alerts_suppressed is True
+
+    @pytest.mark.asyncio
+    async def test_suppression_skips_alert_basic_mode(self, service, fake_frame):
+        service.alerts_suppressed = True
+        service._last_person_alert_time = 0
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=(None, 0.2)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "publish_event", new_callable=AsyncMock),
+            patch.object(service, "_check_auto_arm", new_callable=AsyncMock),
+        ):
+            await service.process_frame_basic(fake_frame)
+        # Alert should NOT fire because suppressed
+        mock_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_known_person_triggers_suppression_in_basic(self, service, fake_frame):
+        service.alerts_suppressed = False
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(
+                service.recognizer,
+                "detect",
+                return_value=[
+                    {"bbox": [0, 0, 50, 50], "embedding": np.ones(512), "det_score": 0.95}
+                ],
+            ),
+            patch.object(service.recognizer, "match", return_value=("Philip", 0.92)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "ingest_event", new_callable=AsyncMock),
+            patch.object(service, "publish_event", new_callable=AsyncMock),
+            patch.object(service, "_check_auto_arm", new_callable=AsyncMock),
+        ):
+            await service.process_frame_basic(fake_frame)
+        assert service.alerts_suppressed is True
+
+
+# ─── Suppression Persistence ────────────────────────────────
+
+
+class TestSuppressionPersistence:
+    def test_save_and_load(self, service, tmp_dirs):
+        service.alerts_suppressed = True
+        service.last_known_person_seen = 1234567890.0
+        service.save_suppression()
+        # Reset and reload
+        service.alerts_suppressed = False
+        service.last_known_person_seen = 0.0
+        service.load_suppression()
+        assert service.alerts_suppressed is True
+        assert service.last_known_person_seen == 1234567890.0
+
+    def test_load_missing_file(self, service):
+        # No file exists — should not crash
+        service.load_suppression()
+        assert service.alerts_suppressed is False
+
+    @pytest.mark.asyncio
+    async def test_suppression_http_get(self, service):
+        service.alerts_suppressed = True
+        service.last_known_person_seen = 12345.0
+        resp = await service._route_request("GET", "/suppression", "")
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["alerts_suppressed"] is True
+
+    @pytest.mark.asyncio
+    async def test_suppression_http_post(self, service):
+        resp = await service._route_request("POST", "/suppression", '{"suppressed": true}')
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["alerts_suppressed"] is True
+        assert service.alerts_suppressed is True

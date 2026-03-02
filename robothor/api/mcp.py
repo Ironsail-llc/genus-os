@@ -159,6 +159,38 @@ def get_tool_definitions() -> list[dict]:
                 "required": ["mode"],
             },
         },
+        {
+            "name": "enroll_face_from_image",
+            "description": "Enroll a person's face from saved image files (snapshots, photos). Does not require the person to be in front of the camera.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the person to enroll"},
+                    "image_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of absolute file paths to images containing the person's face",
+                    },
+                },
+                "required": ["name", "image_paths"],
+            },
+        },
+        {
+            "name": "list_enrolled_faces",
+            "description": "List all enrolled faces in the vision system.",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "unenroll_face",
+            "description": "Remove a person from face enrollment.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the person to unenroll"}
+                },
+                "required": ["name"],
+            },
+        },
         # Memory block tools
         {
             "name": "memory_block_read",
@@ -1169,6 +1201,45 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
                 return resp.json()  # type: ignore[no-any-return]
         except Exception as e:
             return {"error": f"Mode switch failed: {e}"}
+
+    elif name == "enroll_face_from_image":
+        face_name = arguments.get("name", "")
+        image_paths = arguments.get("image_paths", [])
+        if not face_name:
+            return {"error": "Name is required"}
+        if not image_paths:
+            return {"error": "image_paths is required"}
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    _svc_url("vision", "/enroll-from-image"),
+                    json={"name": face_name, "image_paths": image_paths},
+                )
+                resp.raise_for_status()
+                return resp.json()  # type: ignore[no-any-return]
+        except Exception as e:
+            return {"error": f"Image-based enrollment failed: {e}"}
+
+    elif name == "list_enrolled_faces":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(_svc_url("vision", "/enrolled"))
+                resp.raise_for_status()
+                return resp.json()  # type: ignore[no-any-return]
+        except Exception as e:
+            return {"error": f"Failed to list enrolled faces: {e}"}
+
+    elif name == "unenroll_face":
+        face_name = arguments.get("name", "")
+        if not face_name:
+            return {"error": "Name is required"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(_svc_url("vision", "/unenroll"), json={"name": face_name})
+                resp.raise_for_status()
+                return resp.json()  # type: ignore[no-any-return]
+        except Exception as e:
+            return {"error": f"Unenrollment failed: {e}"}
 
     # ── Memory block tools ──
 

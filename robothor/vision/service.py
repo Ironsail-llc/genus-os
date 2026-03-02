@@ -179,6 +179,12 @@ class VisionService:
             if token and chat_id:
                 self.alerts.add_handler(TelegramAlert(bot_token=token, chat_id=chat_id))
 
+        # Alert suppression (presence-aware)
+        self.auto_arm_delay = float(os.environ.get("AUTO_ARM_DELAY", "1800"))
+        self.alerts_suppressed: bool = False
+        self.last_known_person_seen: float = 0.0
+        self._suppression_announced: bool = False  # one-shot event flag
+
         # State
         self.people_present: dict[str, dict] = {}
         self.last_detection_time: str | None = None
@@ -356,6 +362,8 @@ class VisionService:
 
     async def process_frame_basic(self, frame: np.ndarray) -> None:
         """Basic mode: motion -> YOLO -> face ID -> alert unknown."""
+        await self._check_auto_arm()
+
         motion_detected, motion_score, self._prev_gray = detect_motion(
             frame, self._prev_gray, self.motion_threshold
         )
@@ -402,6 +410,7 @@ class VisionService:
         for face in faces:
             name, sim = self.recognizer.match(face["embedding"])
             if name:
+                self._on_known_person_seen()
                 if name not in self.people_present:
                     snapshot_path = self.save_snapshot(frame)
                     self.people_present[name] = {
@@ -410,6 +419,12 @@ class VisionService:
                         "snapshot": snapshot_path,
                     }
                     logger.info("Known person detected: %s (sim=%.3f)", name, sim)
+                    if not self._suppression_announced:
+                        self._suppression_announced = True
+                        await self.publish_event(
+                            "vision.known_person_home",
+                            {"name": name, "camera": self.camera_id},
+                        )
                     await self.ingest_event(
                         f"{name} detected at {self.camera_id}",
                         {
@@ -436,10 +451,14 @@ class VisionService:
                     "snapshot": snapshot_path,
                     "unknown": True,
                 }
-                logger.info("UNKNOWN person detected (id=%s) — sending alert", unknown_id)
-                await self._alert_unknown(
-                    frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
-                )
+                logger.info("UNKNOWN person detected (id=%s)", unknown_id)
+                if not self.alerts_suppressed:
+                    logger.info("Sending alert for %s", unknown_id)
+                    await self._alert_unknown(
+                        frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
+                    )
+                else:
+                    logger.debug("Alert suppressed (known person home) for %s", unknown_id)
                 await self.publish_event(
                     "vision.person_unknown",
                     {
@@ -454,10 +473,13 @@ class VisionService:
                 return
             self._last_person_alert_time = now_ts
             snapshot_path = self.save_snapshot(frame)
-            logger.info("Person detected (no face visible) — sending alert")
-            await self._alert_unknown(
-                frame, snapshot_path, f"Person detected at {self.camera_id} (face not visible)"
-            )
+            if not self.alerts_suppressed:
+                logger.info("Person detected (no face visible) — sending alert")
+                await self._alert_unknown(
+                    frame, snapshot_path, f"Person detected at {self.camera_id} (face not visible)"
+                )
+            else:
+                logger.debug("Person detected (no face) — alert suppressed")
             await self.ingest_event(
                 f"Person detected at {self.camera_id} (face not visible)",
                 {
@@ -474,6 +496,8 @@ class VisionService:
 
     async def process_frame_armed(self, frame: np.ndarray) -> None:
         """Armed mode: YOLO + face ID on every motion frame, full tracking."""
+        await self._check_auto_arm()
+
         now = datetime.now()
         now_str = now.isoformat()
 
@@ -529,6 +553,7 @@ class VisionService:
             for face in faces:
                 name, sim = self.recognizer.match(face["embedding"])
                 if name:
+                    self._on_known_person_seen()
                     seen_this_frame.add(name)
                     if name not in self.people_present:
                         snapshot_path = self.save_snapshot(frame)
@@ -538,6 +563,12 @@ class VisionService:
                             "snapshot": snapshot_path,
                         }
                         logger.info("Person appeared: %s (sim=%.3f)", name, sim)
+                        if not self._suppression_announced:
+                            self._suppression_announced = True
+                            await self.publish_event(
+                                "vision.known_person_home",
+                                {"name": name, "camera": self.camera_id},
+                            )
                         await self.ingest_event(
                             f"{name} detected at {self.camera_id}",
                             {
@@ -561,10 +592,13 @@ class VisionService:
                         "unknown": True,
                     }
                     seen_this_frame.add(unknown_id)
-                    logger.info("UNKNOWN person detected (id=%s) — sending alert", unknown_id)
-                    await self._alert_unknown(
-                        frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
-                    )
+                    logger.info("UNKNOWN person detected (id=%s)", unknown_id)
+                    if not self.alerts_suppressed:
+                        await self._alert_unknown(
+                            frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
+                        )
+                    else:
+                        logger.debug("Alert suppressed (known person home) for %s", unknown_id)
 
             if persons and not faces:
                 key = "_person_no_face"
@@ -576,12 +610,15 @@ class VisionService:
                         "snapshot": snapshot_path,
                     }
                     seen_this_frame.add(key)
-                    logger.info("Person detected (no face visible) — sending alert")
-                    await self._alert_unknown(
-                        frame,
-                        snapshot_path,
-                        f"Person detected at {self.camera_id} (face not visible)",
-                    )
+                    if not self.alerts_suppressed:
+                        logger.info("Person detected (no face visible) — sending alert")
+                        await self._alert_unknown(
+                            frame,
+                            snapshot_path,
+                            f"Person detected at {self.camera_id} (face not visible)",
+                        )
+                    else:
+                        logger.debug("Person detected (no face) — alert suppressed")
                     await self.ingest_event(
                         f"Person detected at {self.camera_id} (face not visible)",
                         {
@@ -686,6 +723,104 @@ class VisionService:
             "snapshot_path": snapshot_path,
         }
 
+    def enroll_from_image(self, name: str, image_paths: list[str]) -> dict:
+        """Enroll a person from saved image files (snapshots, photos, etc.)."""
+        cv2 = _get_cv2()
+        self.recognizer._ensure_loaded()
+        embeddings = []
+        errors = []
+
+        for path in image_paths:
+            if not Path(path).exists():
+                errors.append(f"File not found: {path}")
+                continue
+            frame = cv2.imread(path)
+            if frame is None:
+                errors.append(f"Could not read image: {path}")
+                continue
+            faces = self.recognizer.detect(frame)
+            if not faces:
+                errors.append(f"No face detected in: {path}")
+                continue
+            best = max(faces, key=lambda f: f["det_score"])
+            embeddings.append(best["embedding"])
+
+        if not embeddings:
+            return {
+                "success": False,
+                "error": "No usable face embeddings found",
+                "details": errors,
+            }
+
+        ok = self.recognizer.enroll(name, embeddings)
+        if not ok:
+            return {"success": False, "error": "Enrollment failed"}
+
+        logger.info(
+            "Enrolled %s from %d images (%d usable)", name, len(image_paths), len(embeddings)
+        )
+        return {
+            "success": True,
+            "name": name,
+            "samples": len(embeddings),
+            "images_provided": len(image_paths),
+            "errors": errors if errors else None,
+        }
+
+    # ── Alert Suppression Persistence ────────────────────────────
+
+    def _suppression_file(self) -> Path:
+        return self.state_dir / "alert_suppression.json"
+
+    def load_suppression(self) -> None:
+        """Load suppression state from disk."""
+        f = self._suppression_file()
+        if f.exists():
+            try:
+                data = json.loads(f.read_text())
+                self.alerts_suppressed = data.get("suppressed", False)
+                self.last_known_person_seen = data.get("last_known_person_seen", 0.0)
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    def save_suppression(self) -> None:
+        """Persist suppression state to disk."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._suppression_file().write_text(
+            json.dumps(
+                {
+                    "suppressed": self.alerts_suppressed,
+                    "last_known_person_seen": self.last_known_person_seen,
+                }
+            )
+        )
+
+    def _on_known_person_seen(self) -> None:
+        """Update suppression state when a known (enrolled) person is detected."""
+        self.last_known_person_seen = time.time()
+        if not self.alerts_suppressed:
+            self.alerts_suppressed = True
+            self._suppression_announced = False
+            self.save_suppression()
+            logger.info("Known person home — alerts suppressed")
+
+    async def _check_auto_arm(self) -> None:
+        """Re-enable alerts if no known person seen for auto_arm_delay seconds."""
+        if not self.alerts_suppressed:
+            return
+        if self.last_known_person_seen <= 0:
+            return
+        elapsed = time.time() - self.last_known_person_seen
+        if elapsed > self.auto_arm_delay:
+            self.alerts_suppressed = False
+            self._suppression_announced = False
+            self.save_suppression()
+            logger.info(
+                "No known person seen for %ds — alerts re-enabled",
+                int(elapsed),
+            )
+            await self.publish_event("vision.auto_armed", {"delay": int(elapsed)})
+
     # ── HTTP Server ──────────────────────────────────────────────
 
     def _json_response(self, status: str, body: dict) -> bytes:
@@ -734,6 +869,7 @@ class VisionService:
                     "last_detection_details": self.last_detection_details,
                     "last_motion_score": self._last_motion_score,
                     "motion_threshold": self.motion_threshold,
+                    "alerts_suppressed": self.alerts_suppressed,
                     "enrolled_faces": self.recognizer.enrolled_names,
                     "models_loaded": self.detector.loaded and self.recognizer.loaded,
                     "camera_url": self.rtsp_url,
@@ -841,6 +977,84 @@ class VisionService:
                     )
             return self._json_response("503 Service Unavailable", {"error": "Camera unavailable"})
 
+        if path == "/enroll-from-image" and method == "POST":
+            try:
+                req_data = json.loads(body)
+                name = req_data.get("name", "")
+                image_paths = req_data.get("image_paths", [])
+                if not name:
+                    return self._json_response("400 Bad Request", {"error": "Name is required"})
+                if not image_paths:
+                    return self._json_response(
+                        "400 Bad Request", {"error": "image_paths is required"}
+                    )
+                result = self.enroll_from_image(name, image_paths)
+                status = "200 OK" if result.get("success") else "422 Unprocessable Entity"
+                return self._json_response(status, result)
+            except json.JSONDecodeError:
+                return self._json_response("400 Bad Request", {"error": "Invalid JSON"})
+
+        if path == "/enrolled" and method == "GET":
+            return self._json_response(
+                "200 OK",
+                {
+                    "enrolled_faces": self.recognizer.enrolled_names,
+                    "count": len(self.recognizer.enrolled_names),
+                },
+            )
+
+        if path == "/unenroll" and method == "POST":
+            try:
+                req_data = json.loads(body)
+                name = req_data.get("name", "")
+                if not name:
+                    return self._json_response("400 Bad Request", {"error": "Name is required"})
+                ok = self.recognizer.unenroll(name)
+                if ok:
+                    return self._json_response(
+                        "200 OK", {"success": True, "message": f"Unenrolled {name}"}
+                    )
+                return self._json_response(
+                    "404 Not Found", {"success": False, "error": f"{name} not enrolled"}
+                )
+            except json.JSONDecodeError:
+                return self._json_response("400 Bad Request", {"error": "Invalid JSON"})
+
+        if path == "/suppression" and method == "GET":
+            return self._json_response(
+                "200 OK",
+                {
+                    "alerts_suppressed": self.alerts_suppressed,
+                    "last_known_person_seen": self.last_known_person_seen,
+                    "auto_arm_delay": self.auto_arm_delay,
+                },
+            )
+
+        if path == "/suppression" and method == "POST":
+            try:
+                req_data = json.loads(body)
+                suppressed = req_data.get("suppressed")
+                if suppressed is None:
+                    return self._json_response(
+                        "400 Bad Request",
+                        {"error": 'Send JSON: {"suppressed": true|false}'},
+                    )
+                self.alerts_suppressed = bool(suppressed)
+                if self.alerts_suppressed:
+                    self.last_known_person_seen = time.time()
+                self.save_suppression()
+                return self._json_response(
+                    "200 OK",
+                    {
+                        "alerts_suppressed": self.alerts_suppressed,
+                        "message": "Alerts suppressed"
+                        if self.alerts_suppressed
+                        else "Alerts enabled",
+                    },
+                )
+            except json.JSONDecodeError:
+                return self._json_response("400 Bad Request", {"error": "Invalid JSON"})
+
         return self._json_response(
             "404 Not Found",
             {
@@ -852,6 +1066,11 @@ class VisionService:
                     "GET /detections",
                     "GET /identifications",
                     "POST /enroll",
+                    "POST /enroll-from-image",
+                    "GET /enrolled",
+                    "POST /unenroll",
+                    "GET /suppression",
+                    "POST /suppression",
                     "POST /look",
                 ],
             },
@@ -913,7 +1132,12 @@ class VisionService:
 
         self.start_time = datetime.now().isoformat()
         self.current_mode = self.load_mode()
-        logger.info("Vision Service starting (mode=%s)...", self.current_mode)
+        self.load_suppression()
+        logger.info(
+            "Vision Service starting (mode=%s, suppressed=%s)...",
+            self.current_mode,
+            self.alerts_suppressed,
+        )
 
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.face_data_dir.mkdir(parents=True, exist_ok=True)

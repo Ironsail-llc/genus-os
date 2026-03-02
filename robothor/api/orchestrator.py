@@ -131,6 +131,15 @@ class VisionModeRequest(BaseModel):
     mode: str = Field(..., description="Vision mode: disarmed, basic, or armed")
 
 
+class VisionEnrollFromImageRequest(BaseModel):
+    name: str = Field(..., description="Name of the person to enroll")
+    image_paths: list[str] = Field(..., description="List of image file paths")
+
+
+class VisionSuppressionRequest(BaseModel):
+    suppressed: bool = Field(..., description="True to suppress alerts, False to enable")
+
+
 # ─── Core Endpoints ──────────────────────────────────────────────────
 
 
@@ -373,3 +382,45 @@ async def vision_mode_set(req: VisionModeRequest):
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail="Vision service not reachable") from e
+
+
+@app.post("/vision/enroll-from-image")
+async def vision_enroll_from_image(req: VisionEnrollFromImageRequest):
+    """Enroll a face from saved image files (snapshots, photos)."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                _vision_url("/enroll-from-image"),
+                json={"name": req.name, "image_paths": req.image_paths},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    except httpx.ConnectError as e:
+        raise HTTPException(status_code=503, detail="Vision service not running") from e
+
+
+@app.get("/vision/enrolled")
+async def vision_enrolled():
+    """List all enrolled faces."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(_vision_url("/enrolled"))
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return {"enrolled_faces": [], "count": 0, "error": "Vision service not reachable"}
+
+
+@app.post("/vision/unenroll")
+async def vision_unenroll(req: VisionEnrollRequest):
+    """Remove a person from face enrollment."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(_vision_url("/unenroll"), json={"name": req.name})
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    except httpx.ConnectError as e:
+        raise HTTPException(status_code=503, detail="Vision service not running") from e
