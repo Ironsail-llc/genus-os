@@ -41,8 +41,10 @@ from robothor.engine.chat import (
     get_shared_session,
 )
 from robothor.engine.chat_store import (
+    clear_plan_state_async,
     clear_session_async,
     save_exchange_async,
+    save_plan_state_async,
     update_model_override_async,
 )
 from robothor.engine.delivery import set_telegram_sender
@@ -65,6 +67,24 @@ THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
+
+
+def _plan_state_to_dict(plan: PlanState) -> dict:
+    """Serialize PlanState to dict for DB persistence."""
+    return {
+        "plan_id": plan.plan_id,
+        "plan_text": plan.plan_text,
+        "original_message": plan.original_message,
+        "status": plan.status,
+        "created_at": plan.created_at,
+        "exploration_run_id": plan.exploration_run_id,
+        "rejection_feedback": plan.rejection_feedback,
+        "revision_count": plan.revision_count,
+        "revision_history": plan.revision_history,
+        "execution_run_id": plan.execution_run_id,
+    }
+
+
 # Extensions we'll try to read as text
 TEXT_EXTENSIONS = {
     ".txt",
@@ -365,8 +385,15 @@ class TelegramBot:
                 except Exception:
                     pass
                 await self._execute_approved_plan(chat_id, session_key, session)
+            elif action == "revise":
+                await callback.answer("Send your feedback and I'll revise the plan.")
+                await self.send_message(chat_id, "Send your feedback and I'll revise the plan.")
             elif action == "reject":
                 session.active_plan.status = "rejected"
+                # Persist cleared state
+                asyncio.create_task(
+                    clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+                )
                 session.active_plan = None
                 # Remove inline keyboard
                 try:
@@ -376,7 +403,7 @@ class TelegramBot:
                 except Exception:
                     pass
                 await callback.answer("Plan rejected")
-                await self.send_message(chat_id, "Plan rejected. Send feedback or a new message.")
+                await self.send_message(chat_id, "Plan rejected. Send a new message.")
 
         @self.dp.callback_query(F.data.startswith("model:"))
         async def on_model_select(callback: CallbackQuery) -> None:
@@ -561,23 +588,11 @@ class TelegramBot:
             session_key = self._session_key(chat_id)
             session = get_shared_session(session_key)
 
-            # ── Check for pending plan — treat text as feedback ──
+            # ── Check for pending plan — ANY text = feedback for revision ──
+            # Approval/rejection only via inline keyboard buttons.
             if session.active_plan and session.active_plan.status == "pending":
                 if not _plan_is_expired(session.active_plan):
-                    lower = user_text.lower()
-                    if lower in ("yes", "approve", "go", "ok", "do it"):
-                        await self._execute_approved_plan(chat_id, session_key, session)
-                        return
-                    if lower in ("no", "reject", "cancel", "nope"):
-                        session.active_plan.status = "rejected"
-                        session.active_plan = None
-                        await message.answer("Plan rejected.")
-                        return
-                    # Any other text = feedback, re-plan with feedback as the message
-                    session.active_plan.rejection_feedback = user_text
-                    session.active_plan.status = "superseded"
-                    session.active_plan = None
-                    await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                    await self._iterate_plan(chat_id, session_key, session, user_text)
                     return
                 else:
                     session.active_plan.status = "expired"
@@ -873,6 +888,15 @@ class TelegramBot:
                 )
                 session.active_plan = plan
 
+                # Persist plan state to DB
+                asyncio.create_task(
+                    save_plan_state_async(
+                        session_key,
+                        _plan_state_to_dict(plan),
+                        tenant_id=self.config.tenant_id,
+                    )
+                )
+
                 # Display plan with approval keyboard
                 if stream_msg_id is not None:
                     await self._edit_final(chat_id, stream_msg_id, plan_text)
@@ -973,30 +997,48 @@ class TelegramBot:
 
         try:
             model = self._model_override.get(chat_id)
-            # Inject plan as system context
-            plan_context = (
-                f"[APPROVED PLAN] The following plan was approved. Execute it now.\n\n"
-                f"{plan.plan_text}"
+
+            # CONTEXT RESET — clean execution context, no planning history.
+            # The LLM only sees the plan + original request. This structurally
+            # prevents re-planning (the agent never sees its own plan output
+            # as part of a conversation it needs to continue).
+            execution_message = (
+                "Execute the following approved plan. "
+                "Use your tools to carry out each step.\n"
+                "Do NOT re-plan, re-draft, or produce another version. ACT.\n\n"
+                f"Original request: {plan.original_message}\n\n"
+                f"Approved plan:\n{plan.plan_text}"
             )
-            history = list(session.history)
-            history.append({"role": "system", "content": plan_context})
 
             run = await self.runner.execute(
                 agent_id=self.config.default_chat_agent,
-                message=plan.original_message,
+                message=execution_message,
                 trigger_type=TriggerType.TELEGRAM,
                 trigger_detail=f"plan-exec:{chat_id}",
                 on_content=on_content,
                 model_override=model,
-                conversation_history=history or None,
+                conversation_history=None,  # CLEAN CONTEXT
+                execution_mode=True,
             )
 
-            # Save history
+            # Track execution run ID on plan
+            plan.execution_run_id = run.id
+
+            # Merge execution result back into session history for follow-up continuity
+            session.history.append(
+                {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
+            )
             if run.output_text:
-                session.history.append({"role": "user", "content": plan.original_message})
                 session.history.append({"role": "assistant", "content": run.output_text})
-                if len(session.history) > self._max_history:
-                    session.history[:] = session.history[-self._max_history :]
+            elif run.error_message:
+                session.history.append(
+                    {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
+                )
+            if len(session.history) > self._max_history:
+                session.history[:] = session.history[-self._max_history :]
+
+            # Persist to DB
+            if run.output_text:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
@@ -1008,8 +1050,11 @@ class TelegramBot:
                     )
                 )
 
-            # Clear plan
+            # Clear plan + persist
             session.active_plan = None
+            asyncio.create_task(
+                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+            )
 
             if run.output_text:
                 if stream_msg_id is not None:
@@ -1034,14 +1079,180 @@ class TelegramBot:
             typing_active = False
             typing_task.cancel()
 
-    def _build_plan_keyboard(self, plan_id: str) -> InlineKeyboardMarkup:
-        """Build inline keyboard for plan approval."""
+    async def _iterate_plan(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+        feedback: str,
+    ) -> None:
+        """Revise the active plan based on user feedback (keeps same plan_id)."""
+        from datetime import datetime
+
+        plan = session.active_plan
+        if not plan:
+            await self.send_message(chat_id, "No pending plan to revise.")
+            return
+
+        # Save current plan text to revision history
+        plan.revision_history.append(
+            {
+                "plan_text": plan.plan_text,
+                "feedback": feedback,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
+        plan.revision_count += 1
+
+        # Typing indicator
+        typing_active = True
+
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text=f"\u270f\ufe0f Revising plan (v{plan.revision_count + 1})...",
+                parse_mode=None,
+            )
+            stream_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            stream_msg_id = None
+
+        last_edit_time: float = 0.0
+        last_edit_len: int = 0
+        first_content = True
+
+        async def on_content(accumulated_text: str) -> None:
+            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            now = time.monotonic()
+            text_len = len(accumulated_text)
+            if first_content:
+                first_content = False
+            else:
+                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
+                if not time_ok and not chars_ok:
+                    return
+            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
+            try:
+                if stream_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text=display,
+                        parse_mode=None,
+                    )
+                else:
+                    sent = await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=display,
+                        parse_mode=None,
+                    )
+                    stream_msg_id = sent.message_id
+            except Exception:
+                pass
+            last_edit_time = now
+            last_edit_len = text_len
+
+        try:
+            model = self._model_override.get(chat_id)
+
+            # Build iteration prompt with current plan + feedback
+            iteration_message = (
+                "[PLAN REVISION]\n"
+                "The user reviewed your plan and gave this feedback:\n"
+                f'"{feedback}"\n\n'
+                f"Current plan:\n{plan.plan_text}\n\n"
+                "Revise the plan to address their feedback. "
+                "Keep everything they didn't object to.\n"
+                'Start with "Changes:" summarizing what you changed.\n'
+                "End with [PLAN_READY]."
+            )
+
+            history = list(session.history)
+
+            run = await self.runner.execute(
+                agent_id=self.config.default_chat_agent,
+                message=iteration_message,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail=f"plan-revise:{chat_id}",
+                on_content=on_content,
+                model_override=model,
+                conversation_history=history or None,
+                readonly_mode=True,
+            )
+
+            revised_plan_text = _extract_plan_text(run.output_text or "")
+
+            # Update history
+            session.history.append({"role": "user", "content": feedback})
+            if run.output_text:
+                session.history.append({"role": "assistant", "content": run.output_text})
+            if len(session.history) > self._max_history:
+                session.history[:] = session.history[-self._max_history :]
+
+            if revised_plan_text:
+                # Update plan in-place (same plan_id)
+                plan.plan_text = revised_plan_text
+
+                # Display revised plan with approval keyboard
+                revision_label = f"<b>Plan v{plan.revision_count + 1}</b>"
+                if stream_msg_id is not None:
+                    await self._edit_final(chat_id, stream_msg_id, revised_plan_text)
+                else:
+                    await self.send_message(chat_id, revised_plan_text)
+
+                kb = self._build_plan_keyboard(plan.plan_id, plan.revision_count)
+                await self.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=f"{revision_label} — Approve this plan?",
+                    reply_markup=kb,
+                )
+
+                # Persist updated plan state
+                asyncio.create_task(
+                    save_plan_state_async(
+                        session_key,
+                        _plan_state_to_dict(plan),
+                        tenant_id=self.config.tenant_id,
+                    )
+                )
+            else:
+                # Agent didn't produce a revised plan
+                if stream_msg_id is not None:
+                    await self._edit_final(
+                        chat_id,
+                        stream_msg_id,
+                        run.output_text or "No revised plan produced.",
+                    )
+                else:
+                    await self.send_message(chat_id, run.output_text or "No revised plan produced.")
+        except Exception as e:
+            logger.error("Plan iteration failed: %s", e, exc_info=True)
+            await self.send_message(chat_id, f"Revision error: {html.escape(str(e))}")
+        finally:
+            typing_active = False
+            typing_task.cancel()
+
+    def _build_plan_keyboard(self, plan_id: str, revision_count: int = 0) -> InlineKeyboardMarkup:
+        """Build inline keyboard for plan approval (3-button: Approve / Revise / Reject)."""
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
                         text="\u2705 Approve",
                         callback_data=f"plan:approve:{plan_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="\u270f\ufe0f Revise",
+                        callback_data=f"plan:revise:{plan_id}",
                     ),
                     InlineKeyboardButton(
                         text="\u274c Reject",

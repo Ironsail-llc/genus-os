@@ -189,7 +189,7 @@ def load_all_sessions(
         # Get active sessions within TTL
         cur.execute(
             """
-            SELECT id, session_key, model_override
+            SELECT id, session_key, model_override, plan_state
             FROM chat_sessions
             WHERE tenant_id = %s
               AND last_active_at >= NOW() - INTERVAL '%s days'
@@ -218,10 +218,13 @@ def load_all_sessions(
             rows = cur.fetchall()
             messages = [row["message"] for row in reversed(rows)]
 
-            result[sess["session_key"]] = {
+            data: dict[str, Any] = {
                 "history": messages,
                 "model_override": sess["model_override"],
             }
+            if sess.get("plan_state"):
+                data["plan_state"] = sess["plan_state"]
+            result[sess["session_key"]] = data
 
         return result
 
@@ -261,6 +264,77 @@ def update_model_override(
             (model_id, tenant_id, session_key),
         )
         conn.commit()
+
+
+def save_plan_state(
+    session_key: str,
+    plan_dict: dict,
+    tenant_id: str = DEFAULT_TENANT,
+) -> None:
+    """Persist plan state JSONB to the chat_sessions row."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE chat_sessions
+            SET plan_state = %s::jsonb, last_active_at = NOW()
+            WHERE tenant_id = %s AND session_key = %s
+            """,
+            (json.dumps(plan_dict), tenant_id, session_key),
+        )
+        if cur.rowcount == 0:
+            # Session row doesn't exist yet — upsert it
+            cur.execute(
+                """
+                INSERT INTO chat_sessions (tenant_id, session_key, channel, plan_state)
+                VALUES (%s, %s, 'telegram', %s::jsonb)
+                ON CONFLICT (tenant_id, session_key) DO UPDATE SET
+                    plan_state = EXCLUDED.plan_state,
+                    last_active_at = NOW()
+                """,
+                (tenant_id, session_key, json.dumps(plan_dict)),
+            )
+        conn.commit()
+
+
+def clear_plan_state(
+    session_key: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> None:
+    """Clear plan state (set to NULL) on the chat_sessions row."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE chat_sessions
+            SET plan_state = NULL, last_active_at = NOW()
+            WHERE tenant_id = %s AND session_key = %s
+            """,
+            (tenant_id, session_key),
+        )
+        conn.commit()
+
+
+def load_plan_state(
+    session_key: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any] | None:
+    """Load plan state from DB. Returns the dict or None if not found/empty."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT plan_state
+            FROM chat_sessions
+            WHERE tenant_id = %s AND session_key = %s
+              AND plan_state IS NOT NULL
+            """,
+            (tenant_id, session_key),
+        )
+        row = cur.fetchone()
+        if row and row["plan_state"]:
+            return row["plan_state"]
+        return None
 
 
 def cleanup_stale_sessions(ttl_days: int = 7) -> int:
@@ -345,6 +419,37 @@ async def clear_session_async(
         )
     except Exception as e:
         logger.warning("Failed to clear chat session %s: %s", session_key, e)
+
+
+async def save_plan_state_async(
+    session_key: str,
+    plan_dict: dict,
+    tenant_id: str = DEFAULT_TENANT,
+) -> None:
+    """Non-blocking wrapper around save_plan_state."""
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: save_plan_state(session_key, plan_dict, tenant_id=tenant_id),
+        )
+    except Exception as e:
+        logger.warning("Failed to persist plan state for %s: %s", session_key, e)
+
+
+async def clear_plan_state_async(
+    session_key: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> None:
+    """Non-blocking wrapper around clear_plan_state."""
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: clear_plan_state(session_key, tenant_id=tenant_id),
+        )
+    except Exception as e:
+        logger.warning("Failed to clear plan state for %s: %s", session_key, e)
 
 
 async def update_model_override_async(

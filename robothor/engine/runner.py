@@ -103,6 +103,13 @@ Respond normally WITHOUT [PLAN_READY]. The user will reply and you'll continue.
 If the user gives feedback on a previous plan, refine it — don't start over.
 Address their specific feedback while keeping parts they didn't object to."""
 
+EXECUTION_MODE_PREAMBLE = """\
+[EXECUTION MODE]
+A plan has been approved. Your job is to EXECUTE it using your tools.
+Do NOT discuss, re-plan, re-draft, or ask for confirmation. ACT on each step.
+If a step fails, try alternatives. Report what you did and the results.
+"""
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -147,9 +154,13 @@ class AgentRunner:
         resume_from_run_id: str | None = None,
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
+        execution_mode: bool = False,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
+        Args:
+            execution_mode: When True, prepend EXECUTION_MODE_PREAMBLE to
+                system prompt to enforce plan execution (no re-planning).
         Returns the completed AgentRun with full metadata.
         """
         # Load agent config from manifest if not provided
@@ -188,6 +199,10 @@ class AgentRunner:
         else:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
+
+        # Execution mode: prepend enforcement preamble (full tools already loaded above)
+        if execution_mode and not readonly_mode:
+            system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
 
         # Warmup: prepend context for scheduled/event/workflow triggers
         # Interactive (TELEGRAM) and SUB_AGENT runs skip warmup — they have

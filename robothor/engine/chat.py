@@ -14,6 +14,7 @@ Endpoints:
   POST /chat/plan/start   — Start plan mode: explore with read-only tools
   POST /chat/plan/approve — Approve pending plan: execute with full tools
   POST /chat/plan/reject  — Reject pending plan (optional feedback)
+  POST /chat/plan/iterate — Revise pending plan with feedback (keeps same plan_id)
   GET  /chat/plan/status  — Check plan state for a session
 """
 
@@ -31,10 +32,12 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.engine.chat_store import (
+    clear_plan_state_async,
     clear_session_async,
     load_all_sessions,
     save_exchange_async,
     save_message_async,
+    save_plan_state_async,
 )
 from robothor.engine.models import PLAN_TTL_SECONDS, PlanState, TriggerType
 
@@ -106,6 +109,24 @@ def _restore_sessions(config: EngineConfig) -> None:
             model = data.get("model_override")
             if model:
                 session.model_override = model
+            # Hydrate pending plan if present and not expired
+            plan_data = data.get("plan_state")
+            if plan_data and isinstance(plan_data, dict):
+                plan = PlanState(
+                    plan_id=plan_data.get("plan_id", ""),
+                    plan_text=plan_data.get("plan_text", ""),
+                    original_message=plan_data.get("original_message", ""),
+                    status=plan_data.get("status", "pending"),
+                    created_at=plan_data.get("created_at", ""),
+                    exploration_run_id=plan_data.get("exploration_run_id", ""),
+                    rejection_feedback=plan_data.get("rejection_feedback", ""),
+                    revision_count=plan_data.get("revision_count", 0),
+                    revision_history=plan_data.get("revision_history", []),
+                    execution_run_id=plan_data.get("execution_run_id", ""),
+                )
+                if plan.status == "pending" and not _plan_is_expired(plan):
+                    session.active_plan = plan
+                    logger.info("Restored pending plan %s for session %s", plan.plan_id, key)
             restored += 1
         if restored:
             logger.info("Restored %d chat sessions from DB", restored)
@@ -398,6 +419,9 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "created_at": plan.created_at,
         "exploration_run_id": plan.exploration_run_id,
         "rejection_feedback": plan.rejection_feedback,
+        "revision_count": plan.revision_count,
+        "revision_history": plan.revision_history,
+        "execution_run_id": plan.execution_run_id,
     }
 
 
@@ -494,6 +518,16 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     exploration_run_id=run.id,
                 )
                 session.active_plan = plan
+
+                # Persist plan state to DB
+                if _config:
+                    asyncio.create_task(
+                        save_plan_state_async(
+                            session_key,
+                            _plan_to_dict(plan),
+                            tenant_id=_config.tenant_id,
+                        )
+                    )
 
                 # Send plan event
                 await queue.put(
@@ -605,29 +639,40 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
-            # Inject plan as context so the agent knows what was approved
-            plan_context = (
-                f"[APPROVED PLAN] The following plan was approved. Execute it now.\n\n"
-                f"{plan.plan_text}"
+            # CONTEXT RESET — clean execution context, no planning history.
+            execution_message = (
+                "Execute the following approved plan. "
+                "Use your tools to carry out each step.\n"
+                "Do NOT re-plan, re-draft, or produce another version. ACT.\n\n"
+                f"Original request: {plan.original_message}\n\n"
+                f"Approved plan:\n{plan.plan_text}"
             )
-            history = list(session.history)
-            history.append({"role": "system", "content": plan_context})
 
             run = await _runner.execute(
                 agent_id=agent_id,
-                message=plan.original_message,
+                message=execution_message,
                 trigger_type=TriggerType.WEBCHAT,
                 trigger_detail=f"plan-exec:{session_key}",
                 on_content=on_content,
                 on_tool=on_tool,
                 model_override=session.model_override,
-                conversation_history=history,
+                conversation_history=None,  # CLEAN CONTEXT
+                execution_mode=True,
             )
 
-            # Update session history
-            session.history.append({"role": "user", "content": plan.original_message})
+            # Track execution run ID
+            plan.execution_run_id = run.id
+
+            # Merge execution result back into session history for continuity
+            session.history.append(
+                {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
+            )
             if run.output_text:
                 session.history.append({"role": "assistant", "content": run.output_text})
+            elif run.error_message:
+                session.history.append(
+                    {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
+                )
             if len(session.history) > MAX_HISTORY:
                 session.history[:] = session.history[-MAX_HISTORY:]
 
@@ -644,8 +689,12 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     )
                 )
 
-            # Clear plan
+            # Clear plan + persist
             session.active_plan = None
+            if _config:
+                asyncio.create_task(
+                    clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                )
 
             await queue.put(
                 {
@@ -728,7 +777,177 @@ async def plan_reject(request: Request) -> JSONResponse:
         )
 
     session.active_plan = None
+
+    # Persist cleared state
+    if _config:
+        asyncio.create_task(clear_plan_state_async(session_key, tenant_id=_config.tenant_id))
+
     return JSONResponse({"ok": True})
+
+
+@router.post("/plan/iterate", response_model=None)
+async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
+    """Iterate on a pending plan with feedback — revise without restarting."""
+    if _runner is None or _config is None:
+        return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+
+    body = await request.json()
+    session_key: str = body.get("session_key", "")
+    plan_id: str = body.get("plan_id", "")
+    feedback: str = body.get("feedback", "")
+
+    if not session_key or not plan_id or not feedback:
+        return JSONResponse(
+            {"error": "session_key, plan_id, and feedback required"}, status_code=400
+        )
+
+    session = _get_session(session_key)
+
+    if not session.active_plan or session.active_plan.plan_id != plan_id:
+        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
+
+    if _plan_is_expired(session.active_plan):
+        session.active_plan.status = "expired"
+        session.active_plan = None
+        return JSONResponse({"error": "Plan expired"}, status_code=410)
+
+    plan = session.active_plan
+
+    # Save current plan to revision history
+    plan.revision_history.append(
+        {
+            "plan_text": plan.plan_text,
+            "feedback": feedback,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
+    plan.revision_count += 1
+
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def run_iteration() -> None:
+        """Revise the plan with read-only tools."""
+        try:
+            last_sent_len = 0
+
+            async def on_content(cumulative: str) -> None:
+                nonlocal last_sent_len
+                if len(cumulative) > last_sent_len:
+                    delta = cumulative[last_sent_len:]
+                    last_sent_len = len(cumulative)
+                    await queue.put({"event": "delta", "data": {"text": delta}})
+
+            async def on_tool(event: dict) -> None:
+                await queue.put({"event": event["event"], "data": event})
+
+            agent_id = _config.default_chat_agent if _config else "main"
+            parts = session_key.split(":")
+            if len(parts) >= 2:
+                agent_id = parts[1]
+
+            iteration_message = (
+                "[PLAN REVISION]\n"
+                "The user reviewed your plan and gave this feedback:\n"
+                f'"{feedback}"\n\n'
+                f"Current plan:\n{plan.plan_text}\n\n"
+                "Revise the plan to address their feedback. "
+                "Keep everything they didn't object to.\n"
+                'Start with "Changes:" summarizing what you changed.\n'
+                "End with [PLAN_READY]."
+            )
+
+            run = await _runner.execute(
+                agent_id=agent_id,
+                message=iteration_message,
+                trigger_type=TriggerType.WEBCHAT,
+                trigger_detail=f"plan-revise:{session_key}",
+                on_content=on_content,
+                on_tool=on_tool,
+                model_override=session.model_override,
+                conversation_history=list(session.history),
+                readonly_mode=True,
+            )
+
+            revised_plan_text = _extract_plan_text(run.output_text or "")
+
+            # Update history
+            session.history.append({"role": "user", "content": feedback})
+            if run.output_text:
+                session.history.append({"role": "assistant", "content": run.output_text})
+            if len(session.history) > MAX_HISTORY:
+                session.history[:] = session.history[-MAX_HISTORY:]
+
+            if revised_plan_text:
+                plan.plan_text = revised_plan_text
+
+                # Persist updated plan state
+                asyncio.create_task(
+                    save_plan_state_async(
+                        session_key,
+                        _plan_to_dict(plan),
+                        tenant_id=_config.tenant_id,
+                    )
+                )
+
+                await queue.put(
+                    {
+                        "event": "plan",
+                        "data": _plan_to_dict(plan),
+                    }
+                )
+
+            await queue.put(
+                {
+                    "event": "done",
+                    "data": {
+                        "text": run.output_text or "",
+                        "model": run.model_used,
+                        "input_tokens": run.input_tokens,
+                        "output_tokens": run.output_tokens,
+                        "duration_ms": run.duration_ms,
+                        "plan_id": plan.plan_id,
+                        "revision_count": plan.revision_count,
+                    },
+                }
+            )
+        except asyncio.CancelledError:
+            await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
+        except Exception as e:
+            logger.error("Plan iteration error: %s", e, exc_info=True)
+            await queue.put({"event": "error", "data": {"error": str(e)}})
+        finally:
+            await queue.put(None)
+            session.active_task = None
+
+    task = asyncio.create_task(run_iteration())
+    session.active_task = task
+
+    async def sse_generator():
+        import json as _json
+
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    break
+                event = item["event"]
+                data = _json.dumps(item["data"])
+                yield f"event: {event}\ndata: {data}\n\n"
+        except asyncio.CancelledError:
+            task.cancel()
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 
 @router.get("/plan/status")

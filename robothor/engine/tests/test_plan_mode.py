@@ -37,6 +37,9 @@ class TestPlanStateModel:
         assert plan.status == "pending"
         assert plan.rejection_feedback == ""
         assert plan.created_at == ""
+        assert plan.revision_count == 0
+        assert plan.revision_history == []
+        assert plan.execution_run_id == ""
 
     def test_step_type_includes_plan_proposal(self):
         assert StepType.PLAN_PROPOSAL == "plan_proposal"
@@ -185,6 +188,26 @@ class TestPlanToDict:
         assert d["plan_text"] == "Do X"
         assert d["original_message"] == "plan X"
         assert d["status"] == "pending"
+        assert d["revision_count"] == 0
+        assert d["revision_history"] == []
+        assert d["execution_run_id"] == ""
+
+    def test_serializes_revision_fields(self):
+        plan = PlanState(
+            plan_id="abc",
+            plan_text="Revised plan",
+            original_message="plan X",
+            revision_count=2,
+            revision_history=[
+                {"plan_text": "v1", "feedback": "add tests", "timestamp": "2026-03-01T00:00:00"},
+                {"plan_text": "v2", "feedback": "more detail", "timestamp": "2026-03-01T00:01:00"},
+            ],
+            execution_run_id="run-exec-1",
+        )
+        d = _plan_to_dict(plan)
+        assert d["revision_count"] == 2
+        assert len(d["revision_history"]) == 2
+        assert d["execution_run_id"] == "run-exec-1"
 
 
 # ─── Chat Endpoint Tests ──────────────────────────────────────────────
@@ -363,6 +386,85 @@ class TestPlanApprove:
         assert session.active_plan is None
 
     @pytest.mark.asyncio
+    async def test_approve_uses_context_reset(self, client, mock_runner):
+        """Approval passes conversation_history=None (context reset) and execution_mode=True."""
+        session = _get_session("ctx-reset:main:test")
+        # Pre-populate history to prove it's NOT passed through
+        session.history = [
+            {"role": "user", "content": "plan something"},
+            {"role": "assistant", "content": "Here's my plan..."},
+        ]
+        session.active_plan = PlanState(
+            plan_id="reset-plan",
+            plan_text="1. Create file\n2. Run tests",
+            original_message="create a service",
+            status="pending",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Service created and tests pass.",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        captured_kwargs = {}
+
+        async def fake_execute(**kwargs):
+            captured_kwargs.update(kwargs)
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/plan/approve",
+            json={"session_key": "ctx-reset:main:test", "plan_id": "reset-plan"},
+        )
+        assert res.status_code == 200
+        _ = res.text  # consume SSE stream
+
+        # Context reset: no conversation history passed
+        assert captured_kwargs.get("conversation_history") is None
+        # Execution mode enabled
+        assert captured_kwargs.get("execution_mode") is True
+        # Message contains both original request and plan text
+        msg = captured_kwargs.get("message", "")
+        assert "create a service" in msg
+        assert "Create file" in msg
+
+    @pytest.mark.asyncio
+    async def test_approve_merges_result_into_history(self, client, mock_runner):
+        """After execution, the result is merged back into session history."""
+        session = _get_session("merge:main:test")
+        session.active_plan = PlanState(
+            plan_id="merge-plan",
+            plan_text="1. Do X",
+            original_message="do something",
+            status="pending",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+        run = AgentRun(
+            id="exec-run-123",
+            status=RunStatus.COMPLETED,
+            output_text="Done: X completed.",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+        mock_runner.execute = AsyncMock(return_value=run)
+
+        res = await client.post(
+            "/chat/plan/approve",
+            json={"session_key": "merge:main:test", "plan_id": "merge-plan"},
+        )
+        assert res.status_code == 200
+        _ = res.text
+
+        # History should contain the execution result
+        assert len(session.history) >= 2
+        assert "[Plan executed]" in session.history[-2]["content"]
+        assert "Done: X completed." in session.history[-1]["content"]
+
+    @pytest.mark.asyncio
     async def test_approve_wrong_plan_id(self, client):
         session = _get_session("wrong:main:test")
         session.active_plan = PlanState(
@@ -479,6 +581,107 @@ class TestPlanStatus:
         res = await client.get("/chat/plan/status?session_key=stale:main:test")
         data = res.json()
         assert data["active"] is False
+
+
+class TestPlanIterate:
+    @pytest.mark.asyncio
+    async def test_iterate_revises_plan_text(self, client, mock_runner):
+        """POST /plan/iterate revises the plan and keeps same plan_id."""
+        session = _get_session("iter:main:test")
+        session.active_plan = PlanState(
+            plan_id="iter-plan-1",
+            plan_text="1. Do X\n2. Do Y",
+            original_message="build feature",
+            status="pending",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Changes: Added step 3.\n\n1. Do X\n2. Do Y\n3. Do Z\n\n[PLAN_READY]",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            # Should be readonly (plan iteration uses read-only tools)
+            assert kwargs.get("readonly_mode") is True
+            # Message should contain feedback and current plan
+            msg = kwargs.get("message", "")
+            assert "add step 3" in msg
+            assert "Do X" in msg
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/plan/iterate",
+            json={
+                "session_key": "iter:main:test",
+                "plan_id": "iter-plan-1",
+                "feedback": "add step 3",
+            },
+        )
+        assert res.status_code == 200
+
+        events = _parse_sse(res.text)
+        plan_events = [e for e in events if e["event"] == "plan"]
+        assert len(plan_events) == 1
+        assert "Do Z" in plan_events[0]["data"]["plan_text"]
+
+        # Same plan_id preserved
+        assert session.active_plan.plan_id == "iter-plan-1"
+        assert session.active_plan.revision_count == 1
+        assert len(session.active_plan.revision_history) == 1
+        assert session.active_plan.revision_history[0]["feedback"] == "add step 3"
+
+    @pytest.mark.asyncio
+    async def test_iterate_missing_feedback(self, client):
+        res = await client.post(
+            "/chat/plan/iterate",
+            json={"session_key": "x", "plan_id": "y"},
+        )
+        assert res.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_iterate_wrong_plan_id(self, client):
+        session = _get_session("iter-wrong:main:test")
+        session.active_plan = PlanState(
+            plan_id="plan-a",
+            plan_text="x",
+            original_message="x",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+        res = await client.post(
+            "/chat/plan/iterate",
+            json={
+                "session_key": "iter-wrong:main:test",
+                "plan_id": "plan-b",
+                "feedback": "change it",
+            },
+        )
+        assert res.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_iterate_expired_plan(self, client):
+        session = _get_session("iter-exp:main:test")
+        old_time = datetime.now(UTC) - timedelta(seconds=PLAN_TTL_SECONDS + 60)
+        session.active_plan = PlanState(
+            plan_id="exp-plan",
+            plan_text="x",
+            original_message="x",
+            created_at=old_time.isoformat(),
+        )
+
+        res = await client.post(
+            "/chat/plan/iterate",
+            json={
+                "session_key": "iter-exp:main:test",
+                "plan_id": "exp-plan",
+                "feedback": "change it",
+            },
+        )
+        assert res.status_code == 410
 
 
 class TestChatSessionPlanFields:
@@ -615,6 +818,81 @@ class TestPlanModeSystemPrompt:
 
         system_msg = mock_llm.call_args.kwargs["messages"][0]["content"]
         assert "PLAN MODE" not in system_msg
+
+
+class TestExecutionModePreamble:
+    """Verify execution_mode=True injects the execution preamble."""
+
+    @pytest.mark.asyncio
+    async def test_execution_mode_injects_preamble(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """execution_mode=True prepends EXECUTION_MODE_PREAMBLE to system prompt."""
+        response = mock_litellm_response(content="Task created successfully.")
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "Execute the plan",
+                            agent_config=sample_agent_config,
+                            execution_mode=True,
+                        )
+
+        system_msg = mock_llm.call_args.kwargs["messages"][0]["content"]
+        assert "EXECUTION MODE" in system_msg
+        assert "Do NOT discuss, re-plan" in system_msg
+
+    @pytest.mark.asyncio
+    async def test_execution_mode_off_no_preamble(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """execution_mode=False (default) does NOT inject the preamble."""
+        response = mock_litellm_response(content="Done")
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        system_msg = mock_llm.call_args.kwargs["messages"][0]["content"]
+        assert "EXECUTION MODE" not in system_msg
+
+    @pytest.mark.asyncio
+    async def test_execution_mode_not_combined_with_readonly(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """execution_mode is ignored when readonly_mode is True (plan mode takes priority)."""
+        response = mock_litellm_response(content="Plan\n\n[PLAN_READY]")
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "check tasks",
+                            agent_config=sample_agent_config,
+                            readonly_mode=True,
+                            execution_mode=True,  # should be ignored
+                        )
+
+        system_msg = mock_llm.call_args.kwargs["messages"][0]["content"]
+        assert "PLAN MODE" in system_msg
+        assert "EXECUTION MODE" not in system_msg
 
 
 class TestPlanModeResearchNudge:

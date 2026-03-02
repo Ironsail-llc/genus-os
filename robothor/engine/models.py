@@ -295,16 +295,23 @@ class PlanState:
 
     Created when an agent runs in plan mode (readonly tools only).
     Philip reviews the plan via Telegram inline keyboard or Helm approval card,
-    then approves, rejects (with feedback), or edits.
+    then approves, rejects (with feedback), or iterates with text feedback.
     """
 
     plan_id: str
     plan_text: str  # Markdown plan the agent produced
     original_message: str  # User's original request
-    status: str = "pending"  # pending | approved | rejected | expired
+    status: str = "pending"  # pending | approved | rejected | expired | superseded
     created_at: str = ""  # ISO timestamp
     exploration_run_id: str = ""  # Run ID of the read-only phase
     rejection_feedback: str = ""  # Why Philip rejected (fed back to agent on re-plan)
+
+    # Iterative refinement
+    revision_count: int = 0
+    revision_history: list[dict] = field(default_factory=list)  # [{plan_text, feedback, timestamp}]
+
+    # Execution tracking
+    execution_run_id: str = ""  # Run ID of the execution phase (after approval)
 
 
 # ─── Workflow Engine Models ────────────────────────────────────────────
