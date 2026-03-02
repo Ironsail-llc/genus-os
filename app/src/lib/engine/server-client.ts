@@ -79,6 +79,74 @@ class EngineClient {
     }
     return res.json();
   }
+
+  // ── Plan Mode ──
+
+  /** Start plan mode: explore with read-only tools. Returns SSE stream. */
+  async planStart(sessionKey: string, message: string): Promise<Response> {
+    const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_key: sessionKey, message }),
+    });
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res;
+  }
+
+  /** Approve a pending plan. Returns SSE stream of execution. */
+  async planApprove(sessionKey: string, planId: string): Promise<Response> {
+    const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_key: sessionKey, plan_id: planId }),
+    });
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res;
+  }
+
+  /** Reject a pending plan with optional feedback. */
+  async planReject(
+    sessionKey: string,
+    planId: string,
+    feedback?: string
+  ): Promise<{ ok: boolean }> {
+    const res = await fetch(`${ENGINE_URL}/chat/plan/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_key: sessionKey, plan_id: planId, feedback }),
+    });
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  /** Check plan state for a session. */
+  async planStatus(
+    sessionKey: string
+  ): Promise<{ active: boolean; plan?: PlanState }> {
+    const res = await fetch(
+      `${ENGINE_URL}/chat/plan/status?session_key=${encodeURIComponent(sessionKey)}`
+    );
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  }
+}
+
+export interface PlanState {
+  plan_id: string;
+  plan_text: string;
+  original_message: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  created_at: string;
+  exploration_run_id: string;
+  rejection_feedback: string;
 }
 
 // Singleton instance

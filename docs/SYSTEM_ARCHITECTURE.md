@@ -28,7 +28,7 @@
 
 ## Executive Summary
 
-Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manages Philip's communications, calendar, contacts, security monitoring, and knowledge base — acting as a partner rather than an assistant.
+Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manages the owner's communications, calendar, contacts, security monitoring, and knowledge base — acting as a partner rather than an assistant.
 
 **Core capabilities:**
 
@@ -186,7 +186,7 @@ All external access routes through a single Cloudflare Tunnel. No ports are expo
 
 ### Protected Routes (Cloudflare Access — email OTP)
 
-Authorized emails: `philip@ironsail.ai`, `robothor@ironsail.ai`
+Authorized emails: configured in Cloudflare Access (owner + Robothor service account)
 
 | Subdomain | Port | Service |
 |-----------|------|---------|
@@ -283,7 +283,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 
 1. **Relationship mapping** — Strength and recency of connections between entities
 2. **Contact enrichment** — Email domain → company lookup, LLM-inferred job titles and cities
-3. **Engagement scoring** — Who is Philip interacting with most, and through which channels
+3. **Engagement scoring** — Who is the owner interacting with most, and through which channels
 4. **Pattern detection** — Recurring topics, communication trends
 5. **Data quality** — Stale facts, orphaned entities, confidence decay
 
@@ -313,7 +313,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 
 ## Triage & Heartbeat Pipeline
 
-Converts raw log data into prioritized actions, with an LLM gatekeeper controlling what reaches Philip.
+Converts raw log data into prioritized actions, with an LLM gatekeeper controlling what reaches the owner.
 
 ```
   ┌─────────────────────────────────────────────────────────────────┐
@@ -352,10 +352,10 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
                               ▼
   ┌─────────────────────────────────────────────────────────────────┐
   │  Layer 3.5: Main Heartbeat (Sonnet 4.6, 4h 6-22, TELEGRAM)      │
-  │  - Runs ON TELEGRAM (direct channel to Philip)                  │
+  │  - Runs ON TELEGRAM (direct channel to the owner)               │
   │  - Reads *-status.md + worker-handoff.json                      │
   │  - Investigates before surfacing (no raw log dumps)             │
-  │  - Sole gatekeeper: decides what's worth Philip's attention     │
+  │  - Sole gatekeeper: decides what's worth the owner's attention  │
   │  - Audits all logs for completeness                             │
   └─────────────────────────────────────────────────────────────────┘
 ```
@@ -395,7 +395,7 @@ Always-on computer vision with three operational modes:
        ├── Known person → log arrival, NO alert
        │
        └── Unknown person
-            ├── send_telegram_photo() → Philip's Telegram (<2 seconds)
+            ├── send_telegram_photo() → owner's Telegram (<2 seconds)
             └── escalate_unknown_vlm() → async fire-and-forget
                  ├── llama3.2-vision:11b scene analysis
                  ├── send_telegram_text() → VLM description follow-up
@@ -696,7 +696,7 @@ robothor/                                 Project root (git repo)
 │   ├── MEMORY.md                         Curated long-term memory
 │   ├── SECURITY.md                       Security policies
 │   ├── TOOLS.md                          API keys, models, Cloudflare
-│   ├── USER.md                           Philip's profile
+│   ├── USER.md                           Owner's profile
 │   ├── VISION.md                         Vision system reference
 │   │
 │   ├── memory/                           Runtime data (JSON logs)
@@ -821,4 +821,4 @@ robothor/                                 Project root (git repo)
 
 ---
 
-*Updated 2026-02-27. For questions, contact philip@ironsail.ai.*
+*Updated 2026-03-01.*

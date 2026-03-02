@@ -95,6 +95,65 @@ def _get_spawn_semaphore() -> asyncio.Semaphore:
 
 SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
 
+# ─── Read-only tools for plan mode ────────────────────────────────────
+# Tools with no side effects — safe to run during exploration phase.
+
+READONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        # File/system
+        "read_file",
+        # Web
+        "web_fetch",
+        "web_search",
+        # Memory (read)
+        "search_memory",
+        "get_entity",
+        "memory_block_read",
+        "memory_block_list",
+        # CRM read
+        "list_conversations",
+        "get_conversation",
+        "list_messages",
+        "list_people",
+        "get_person",
+        "list_companies",
+        "get_company",
+        "list_notes",
+        "get_note",
+        "list_tasks",
+        "list_my_tasks",
+        "get_task",
+        "search_records",
+        "get_metadata_objects",
+        "get_object_metadata",
+        "get_inbox",
+        # Vision (read)
+        "look",
+        "who_is_here",
+        # Engine status
+        "list_agent_runs",
+        "get_agent_run",
+        "list_agent_schedules",
+        "get_agent_stats",
+        # Vault (read)
+        "vault_get",
+        "vault_list",
+        # Healthcare (read)
+        "search_patients",
+        "get_patient_details",
+        "get_patient_clinical_notes",
+        "get_patient_prescriptions",
+        "search_prescriptions",
+        "get_prescription_status",
+        "search_medications",
+        "search_pharmacies",
+        "get_appointments",
+        "list_actable_providers",
+        # Reasoning
+        "deep_reason",
+    }
+)
+
 
 class ToolRegistry:
     """Registry of available tools with schema filtering per agent."""
@@ -658,6 +717,21 @@ class ToolRegistry:
             names = [n for n in names if n not in SPAWN_TOOLS]
 
         return [self._schemas[n] for n in names]
+
+    def build_readonly_for_agent(self, config: AgentConfig) -> list[dict]:
+        """Return only read-only tool schemas for plan mode.
+
+        Intersects the agent's allowed tools with READONLY_TOOLS so the agent
+        can explore and read but cannot make changes.
+        """
+        full_names = set(self.get_tool_names(config))
+        readonly_names = sorted(full_names & READONLY_TOOLS)
+        return [self._schemas[n] for n in readonly_names if n in self._schemas]
+
+    def get_readonly_tool_names(self, config: AgentConfig) -> list[str]:
+        """Return read-only tool names for plan mode."""
+        full_names = set(self.get_tool_names(config))
+        return sorted(full_names & READONLY_TOOLS)
 
     def get_tool_names(self, config: AgentConfig) -> list[str]:
         """Return filtered tool names for an agent."""

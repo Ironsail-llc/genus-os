@@ -184,8 +184,8 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 ## Notes
 
 - All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical).
-- Only 3 agents talk to Philip: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
-- Main heartbeat runs every 4 hours and reads all worker status files. Biased toward silence — only speaks when Philip needs to make a decision.
+- Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
+- Main heartbeat runs every 4 hours and reads all worker status files. Biased toward silence — only speaks when the owner needs to make a decision.
 - Workers write status files and stop silently. HEARTBEAT_OK is heartbeat-only.
 - Main session has `activeHours: 06:00-22:00 ET` — no wakeups during quiet hours (10 PM - 6 AM).
 - **Event-driven hooks are the primary trigger** for email, calendar, and vision agents. Crons are 6h safety nets.

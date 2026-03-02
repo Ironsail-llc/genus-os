@@ -1,6 +1,6 @@
 # Data Flow
 
-End-to-end flow from external APIs to Philip.
+End-to-end flow from external APIs to the owner.
 
 Canonical reference: `brain/ARCHITECTURE.md`
 
@@ -80,15 +80,15 @@ Canonical reference: `brain/ARCHITECTURE.md`
 ┌──────────────────────────────────────────────────────────────┐
 │  LAYER 3.5: SUPERVISOR (Kimi K2.5, hourly 7-22h, TELEGRAM)   │
 │                                                              │
-│  • Philip's sole gatekeeper — investigates before surfacing  │
+│  • Owner's sole gatekeeper — investigates before surfacing   │
 │  • Reads triage-status.md + worker-handoff.json              │
-│  • Surfaces concise alerts to Philip via Telegram             │
+│  • Surfaces concise alerts to the owner via Telegram          │
 │  • HEARTBEAT_OK only when truly nothing to report             │
 └──────────────────────────────┬────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                     PHILIP (via Telegram)                      │
+│                     OWNER (via Telegram)                       │
 │                                                              │
 │  Receives: escalation alerts, meeting reminders,              │
 │            morning briefings, evening wind-downs,             │
@@ -120,7 +120,7 @@ worker creates → supervisor surfaces → supervisor resolves
 
 | Field | null | timestamp |
 |-------|------|-----------|
-| surfacedAt | Not shown to Philip | Philip was notified |
+| surfacedAt | Not shown to the owner | Owner was notified |
 | resolvedAt | Not yet acted on | Action completed |
 
 ## Memory Ingestion Flow

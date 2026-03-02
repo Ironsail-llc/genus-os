@@ -112,6 +112,13 @@ export async function POST(req: Request) {
                     )
                   );
                   sentDone = true;
+                } else if (eventType === "plan") {
+                  // Forward plan events from engine to browser
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: plan\ndata: ${JSON.stringify(data)}\n\n`
+                    )
+                  );
                 } else if (eventType === "error") {
                   controller.enqueue(
                     encoder.encode(

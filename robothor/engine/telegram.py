@@ -17,6 +17,7 @@ import html
 import logging
 import re
 import time
+from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -32,14 +33,19 @@ from aiogram.types import (
     Message,
 )
 
-from robothor.engine.chat import get_main_session_key, get_shared_session
+from robothor.engine.chat import (
+    _extract_plan_text,
+    _plan_is_expired,
+    get_main_session_key,
+    get_shared_session,
+)
 from robothor.engine.chat_store import (
     clear_session_async,
     save_exchange_async,
     update_model_override_async,
 )
 from robothor.engine.delivery import set_telegram_sender
-from robothor.engine.models import TriggerType
+from robothor.engine.models import PlanState, TriggerType
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -123,6 +129,7 @@ class TelegramBot:
         async def cmd_help(message: Message) -> None:
             await message.answer(
                 "<b>Robothor Commands</b>\n\n"
+                "/plan — Plan before executing (review + approve)\n"
                 "/model — Switch AI model\n"
                 "/clear — Clear conversation history\n"
                 "/context — Context window stats\n"
@@ -245,7 +252,81 @@ class TelegramBot:
             except Exception as e:
                 await message.answer(f"Failed to fetch status: {html.escape(str(e))}")
 
+        @self.dp.message(Command("plan"))
+        async def cmd_plan(message: Message) -> None:
+            """Start plan mode for the given message, or toggle plan_mode flag."""
+            chat_id = str(message.chat.id)
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            # Parse: /plan <message> runs plan immediately, /plan alone toggles
+            user_text = (message.text or "").strip()
+            plan_arg = user_text.removeprefix("/plan").strip()
+
+            if not plan_arg:
+                session.plan_mode = not session.plan_mode
+                state = "ON" if session.plan_mode else "OFF"
+                await message.answer(
+                    f"Plan mode: <b>{state}</b>\nNext message will be planned before execution."
+                    if session.plan_mode
+                    else f"Plan mode: <b>{state}</b>"
+                )
+                return
+
+            # Execute plan mode immediately with the argument
+            await self._run_plan_mode(chat_id, session_key, session, plan_arg, message)
+
         # ── Inline keyboard callbacks ──
+
+        @self.dp.callback_query(F.data.startswith("plan:"))
+        async def on_plan_decision(callback: CallbackQuery) -> None:
+            """Handle plan approve/reject from inline keyboard."""
+            if not callback.data or not callback.message:
+                return
+            chat_id = str(callback.message.chat.id)
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            parts = callback.data.split(":", 2)
+            if len(parts) < 3:
+                await callback.answer("Invalid callback")
+                return
+
+            action = parts[1]  # approve or reject
+            plan_id = parts[2]
+
+            if not session.active_plan or session.active_plan.plan_id != plan_id:
+                await callback.answer("Plan no longer active")
+                return
+
+            if _plan_is_expired(session.active_plan):
+                session.active_plan.status = "expired"
+                session.active_plan = None
+                await callback.answer("Plan expired")
+                return
+
+            if action == "approve":
+                await callback.answer("Executing plan...")
+                # Remove inline keyboard
+                try:
+                    msg = callback.message
+                    if msg and hasattr(msg, "edit_reply_markup"):
+                        await msg.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                await self._execute_approved_plan(chat_id, session_key, session)
+            elif action == "reject":
+                session.active_plan.status = "rejected"
+                session.active_plan = None
+                # Remove inline keyboard
+                try:
+                    msg = callback.message
+                    if msg and hasattr(msg, "edit_reply_markup"):
+                        await msg.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                await callback.answer("Plan rejected")
+                await self.send_message(chat_id, "Plan rejected. Send feedback or a new message.")
 
         @self.dp.callback_query(F.data.startswith("model:"))
         async def on_model_select(callback: CallbackQuery) -> None:
@@ -301,6 +382,37 @@ class TelegramBot:
                 chat_id,
                 user_text[:100],
             )
+
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            # ── Check for pending plan — treat text as feedback ──
+            if session.active_plan and session.active_plan.status == "pending":
+                if not _plan_is_expired(session.active_plan):
+                    lower = user_text.lower()
+                    if lower in ("yes", "approve", "go", "ok", "do it"):
+                        await self._execute_approved_plan(chat_id, session_key, session)
+                        return
+                    if lower in ("no", "reject", "cancel", "nope"):
+                        session.active_plan.status = "rejected"
+                        session.active_plan = None
+                        await message.answer("Plan rejected.")
+                        return
+                    # Any other text = feedback, re-plan with feedback as the message
+                    session.active_plan.rejection_feedback = user_text
+                    session.active_plan.status = "superseded"
+                    session.active_plan = None
+                    await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                    return
+                else:
+                    session.active_plan.status = "expired"
+                    session.active_plan = None
+
+            # ── Check plan_mode toggle — route through plan pipeline ──
+            if session.plan_mode:
+                session.plan_mode = False  # One-shot: auto-disable after use
+                await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                return
 
             # ── Typing indicator ──
             typing_active = True
@@ -452,6 +564,288 @@ class TelegramBot:
 
             task = asyncio.create_task(run_agent())
             self._active_tasks[chat_id] = task
+
+    async def _run_plan_mode(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+        user_text: str,
+        message: Message,
+    ) -> None:
+        """Execute agent in plan mode with read-only tools, display plan with approval keyboard."""
+        import uuid
+        from datetime import datetime
+
+        # Typing indicator
+        typing_active = True
+
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text="\U0001f4cb Planning...",
+                parse_mode=None,
+            )
+            stream_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            stream_msg_id = None
+
+        last_edit_time: float = 0.0
+        last_edit_len: int = 0
+        first_content = True
+
+        async def on_content(accumulated_text: str) -> None:
+            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            now = time.monotonic()
+            text_len = len(accumulated_text)
+            if first_content:
+                first_content = False
+            else:
+                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
+                if not time_ok and not chars_ok:
+                    return
+            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
+            try:
+                if stream_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text=display,
+                        parse_mode=None,
+                    )
+                else:
+                    sent = await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=display,
+                        parse_mode=None,
+                    )
+                    stream_msg_id = sent.message_id
+            except Exception:
+                pass
+            last_edit_time = now
+            last_edit_len = text_len
+
+        try:
+            model = self._model_override.get(chat_id)
+            history = list(session.history)
+
+            run = await self.runner.execute(
+                agent_id=self.config.default_chat_agent,
+                message=user_text,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail=f"plan:{chat_id}",
+                on_content=on_content,
+                model_override=model,
+                conversation_history=history or None,
+                readonly_mode=True,
+            )
+
+            plan_text = _extract_plan_text(run.output_text or "")
+
+            # Accumulate history so revisions have full context
+            session.history.append({"role": "user", "content": user_text})
+            if run.output_text:
+                session.history.append({"role": "assistant", "content": run.output_text})
+            if len(session.history) > self._max_history:
+                session.history[:] = session.history[-self._max_history :]
+
+            if plan_text:
+                plan = PlanState(
+                    plan_id=str(uuid.uuid4()),
+                    plan_text=plan_text,
+                    original_message=user_text,
+                    status="pending",
+                    created_at=datetime.now(UTC).isoformat(),
+                    exploration_run_id=run.id,
+                )
+                session.active_plan = plan
+
+                # Display plan with approval keyboard
+                if stream_msg_id is not None:
+                    await self._edit_final(chat_id, stream_msg_id, plan_text)
+                else:
+                    await self.send_message(chat_id, plan_text)
+
+                kb = self._build_plan_keyboard(plan.plan_id)
+                await self.bot.send_message(
+                    chat_id=int(chat_id),
+                    text="<b>Approve this plan?</b>",
+                    reply_markup=kb,
+                )
+            else:
+                if stream_msg_id is not None:
+                    await self._edit_final(
+                        chat_id,
+                        stream_msg_id,
+                        run.output_text or "No plan produced.",
+                    )
+                else:
+                    await self.send_message(chat_id, run.output_text or "No plan produced.")
+        except Exception as e:
+            logger.error("Plan mode failed: %s", e, exc_info=True)
+            await self.send_message(chat_id, f"Plan mode error: {html.escape(str(e))}")
+        finally:
+            typing_active = False
+            typing_task.cancel()
+
+    async def _execute_approved_plan(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+    ) -> None:
+        """Execute an approved plan with full tools."""
+        plan = session.active_plan
+        if not plan:
+            await self.send_message(chat_id, "No pending plan to execute.")
+            return
+
+        plan.status = "approved"
+
+        typing_active = True
+
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text="\u2705 Executing plan...",
+                parse_mode=None,
+            )
+            stream_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            stream_msg_id = None
+
+        last_edit_time: float = 0.0
+        last_edit_len: int = 0
+        first_content = True
+
+        async def on_content(accumulated_text: str) -> None:
+            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            now = time.monotonic()
+            text_len = len(accumulated_text)
+            if first_content:
+                first_content = False
+            else:
+                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
+                if not time_ok and not chars_ok:
+                    return
+            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
+            try:
+                if stream_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text=display,
+                        parse_mode=None,
+                    )
+                else:
+                    sent = await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=display,
+                        parse_mode=None,
+                    )
+                    stream_msg_id = sent.message_id
+            except Exception:
+                pass
+            last_edit_time = now
+            last_edit_len = text_len
+
+        try:
+            model = self._model_override.get(chat_id)
+            # Inject plan as system context
+            plan_context = (
+                f"[APPROVED PLAN] The following plan was approved. Execute it now.\n\n"
+                f"{plan.plan_text}"
+            )
+            history = list(session.history)
+            history.append({"role": "system", "content": plan_context})
+
+            run = await self.runner.execute(
+                agent_id=self.config.default_chat_agent,
+                message=plan.original_message,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail=f"plan-exec:{chat_id}",
+                on_content=on_content,
+                model_override=model,
+                conversation_history=history or None,
+            )
+
+            # Save history
+            if run.output_text:
+                session.history.append({"role": "user", "content": plan.original_message})
+                session.history.append({"role": "assistant", "content": run.output_text})
+                if len(session.history) > self._max_history:
+                    session.history[:] = session.history[-self._max_history :]
+                asyncio.create_task(
+                    save_exchange_async(
+                        session_key,
+                        plan.original_message,
+                        run.output_text,
+                        channel="telegram",
+                        model_override=model,
+                        tenant_id=self.config.tenant_id,
+                    )
+                )
+
+            # Clear plan
+            session.active_plan = None
+
+            if run.output_text:
+                if stream_msg_id is not None:
+                    await self._edit_final(chat_id, stream_msg_id, run.output_text)
+                else:
+                    await self.send_message(chat_id, run.output_text)
+            elif run.error_message:
+                err = f"Error: {run.error_message}"
+                if stream_msg_id is not None:
+                    await self._edit_final(chat_id, stream_msg_id, err)
+                else:
+                    await self.send_message(chat_id, err)
+            else:
+                if stream_msg_id is not None:
+                    await self._edit_final(chat_id, stream_msg_id, "Done. No output.")
+                else:
+                    await self.send_message(chat_id, "Done. No output.")
+        except Exception as e:
+            logger.error("Plan execution failed: %s", e, exc_info=True)
+            await self.send_message(chat_id, f"Execution error: {html.escape(str(e))}")
+        finally:
+            typing_active = False
+            typing_task.cancel()
+
+    def _build_plan_keyboard(self, plan_id: str) -> InlineKeyboardMarkup:
+        """Build inline keyboard for plan approval."""
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="\u2705 Approve",
+                        callback_data=f"plan:approve:{plan_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="\u274c Reject",
+                        callback_data=f"plan:reject:{plan_id}",
+                    ),
+                ]
+            ]
+        )
 
     def _session_key(self, chat_id: str) -> str:
         """Return a DB session key for a Telegram chat.
@@ -616,6 +1010,7 @@ class TelegramBot:
         try:
             await self.bot.set_my_commands(
                 [
+                    BotCommand(command="plan", description="Plan before executing"),
                     BotCommand(command="model", description="Switch AI model"),
                     BotCommand(command="clear", description="Clear conversation history"),
                     BotCommand(command="context", description="Context window stats"),

@@ -48,9 +48,7 @@ class TestValidatePersonInput:
         assert "@" in reason
 
     def test_accepts_normal_input(self):
-        ok, reason = crm_dal.validate_person_input(
-            "Philip", "D'Agostino", email="philip@ironsail.ai"
-        )
+        ok, reason = crm_dal.validate_person_input("Jane", "Smith", email="jane@example.com")
         assert ok
         assert reason == "ok"
 
