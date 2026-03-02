@@ -8,6 +8,7 @@ from robothor.engine.config import (
     BOOTSTRAP_MAX_CHARS_PER_FILE,
     BOOTSTRAP_TOTAL_MAX_CHARS,
     EngineConfig,
+    _resolve_env_vars,
     build_system_prompt,
     load_agent_config,
     load_all_manifests,
@@ -22,12 +23,14 @@ class TestEngineConfig:
         monkeypatch.delenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_CHAT_ID", raising=False)
         monkeypatch.delenv("ROBOTHOR_ENGINE_PORT", raising=False)
         config = EngineConfig.from_env()
         assert config.port == 18800
         assert config.tenant_id == "robothor-primary"
         assert config.max_iterations == 20
         assert config.bot_token == ""
+        assert config.default_chat_id == ""
 
     def test_from_env_custom(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", "my-token")
@@ -215,7 +218,7 @@ class TestManifestToAgentConfig:
                 "delivery": {
                     "mode": "announce",
                     "channel": "telegram",
-                    "to": "7636850023",
+                    "to": "99999999",
                 },
                 "context_files": ["brain/memory/status.md"],
                 "peer_agents": ["email-classifier"],
@@ -232,7 +235,7 @@ class TestManifestToAgentConfig:
         assert config.heartbeat.timeout_seconds == 600
         assert config.heartbeat.delivery_mode == DeliveryMode.ANNOUNCE
         assert config.heartbeat.delivery_channel == "telegram"
-        assert config.heartbeat.delivery_to == "7636850023"
+        assert config.heartbeat.delivery_to == "99999999"
         assert config.heartbeat.warmup_context_files == ["brain/memory/status.md"]
         assert config.heartbeat.warmup_peer_agents == ["email-classifier"]
         assert config.heartbeat.bootstrap_files == ["brain/AGENTS.md"]
@@ -349,3 +352,40 @@ class TestBuildSystemPrompt:
         # Only time context when no files exist
         assert "Current time:" in prompt
         assert "UTC offset:" in prompt
+
+
+class TestResolveEnvVars:
+    def test_expands_string(self, monkeypatch):
+        monkeypatch.setenv("MY_VAR", "hello")
+        assert _resolve_env_vars("${MY_VAR}") == "hello"
+
+    def test_missing_var_becomes_empty(self, monkeypatch):
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        assert _resolve_env_vars("${MISSING_VAR}") == ""
+
+    def test_nested_dict(self, monkeypatch):
+        monkeypatch.setenv("CHAT_ID", "12345")
+        data = {"delivery": {"to": "${CHAT_ID}", "mode": "announce"}}
+        result = _resolve_env_vars(data)
+        assert result["delivery"]["to"] == "12345"
+        assert result["delivery"]["mode"] == "announce"
+
+    def test_nested_list(self, monkeypatch):
+        monkeypatch.setenv("VAL", "resolved")
+        data = ["${VAL}", "plain"]
+        result = _resolve_env_vars(data)
+        assert result == ["resolved", "plain"]
+
+    def test_non_string_passthrough(self):
+        assert _resolve_env_vars(42) == 42
+        assert _resolve_env_vars(True) is True
+        assert _resolve_env_vars(None) is None
+
+    def test_manifest_env_var_expansion(self, tmp_path, monkeypatch):
+        """load_manifest expands ${VAR} patterns from env vars."""
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "99999999")
+        manifest = tmp_path / "test.yaml"
+        manifest.write_text('id: test\ndelivery:\n  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"\n')
+        data = load_manifest(manifest)
+        assert data is not None
+        assert data["delivery"]["to"] == "99999999"

@@ -36,7 +36,7 @@ schedule:
 delivery:
   mode: none
   channel: telegram
-  to: "7636850023"
+  to: "99999999"
 tools_allowed: [exec, read_file]
 instruction_file: brain/SOUL.md
 heartbeat:
@@ -48,7 +48,7 @@ heartbeat:
   delivery:
     mode: announce
     channel: telegram
-    to: "7636850023"
+    to: "99999999"
   context_files: [brain/memory/status.md]
   peer_agents: [email-classifier]
   bootstrap_files: [brain/AGENTS.md]
@@ -177,7 +177,7 @@ class TestRunHeartbeat:
                 timeout_seconds=600,
                 delivery_mode=DeliveryMode.ANNOUNCE,
                 delivery_channel="telegram",
-                delivery_to="7636850023",
+                delivery_to="99999999",
                 warmup_context_files=["brain/memory/status.md"],
                 bootstrap_files=["brain/AGENTS.md"],
             ),
@@ -203,7 +203,7 @@ class TestRunHeartbeat:
         assert override.session_target == "isolated"
         assert override.max_iterations == 15
         assert override.delivery_mode == DeliveryMode.ANNOUNCE
-        assert override.delivery_to == "7636850023"
+        assert override.delivery_to == "99999999"
         # Inherits model + tools from parent
         assert override.model_primary == "anthropic/claude-sonnet-4-6"
         assert override.tools_allowed == ["exec", "read_file", "list_tasks"]
