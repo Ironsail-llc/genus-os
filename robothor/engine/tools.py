@@ -130,6 +130,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Vision (read)
         "look",
         "who_is_here",
+        "list_enrolled_faces",
         # Engine status
         "list_agent_runs",
         "get_agent_run",
@@ -799,6 +800,9 @@ _ASYNC_TOOLS = (
             "look",
             "who_is_here",
             "enroll_face",
+            "enroll_face_from_image",
+            "list_enrolled_faces",
+            "unenroll_face",
             "set_vision_mode",
             "log_interaction",
             "web_fetch",
@@ -920,6 +924,36 @@ async def _handle_async_tool(
             return {"error": "Name is required for face enrollment"}
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{_cfg().vision_url}/enroll", json={"name": face_name})
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    if name == "enroll_face_from_image":
+        face_name = args.get("name", "")
+        image_paths = args.get("image_paths", [])
+        if not face_name:
+            return {"error": "Name is required"}
+        if not image_paths:
+            return {"error": "image_paths is required"}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{_cfg().vision_url}/enroll-from-image",
+                json={"name": face_name, "image_paths": image_paths},
+            )
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    if name == "list_enrolled_faces":
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{_cfg().vision_url}/enrolled")
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    if name == "unenroll_face":
+        face_name = args.get("name", "")
+        if not face_name:
+            return {"error": "Name is required"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{_cfg().vision_url}/unenroll", json={"name": face_name})
             resp.raise_for_status()
             return dict(resp.json())
 
