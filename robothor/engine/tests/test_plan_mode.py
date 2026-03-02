@@ -576,12 +576,23 @@ class TestPlanModeSystemPrompt:
         messages = call_args.kwargs["messages"]
         system_msg = messages[0]["content"]
 
-        assert "[PLAN MODE — READ-ONLY EXPLORATION]" in system_msg
-        assert "Ask questions" in system_msg
-        assert "Propose when ready" in system_msg
+        # Preamble (prepended before identity)
+        assert "PLAN MODE — STRATEGIC PAUSE" in system_msg
+        assert "Do NOT try workarounds" in system_msg
+        assert "Channel your drive into research and analysis" in system_msg
+
+        # Suffix (appended after identity)
+        assert "PLAN MODE REMINDER" in system_msg
         assert "[PLAN_READY]" in system_msg
         assert "On revision" in system_msg
         assert "refine it" in system_msg
+
+        # Positional: preamble appears BEFORE identity text, suffix AFTER
+        preamble_pos = system_msg.index("PLAN MODE — STRATEGIC PAUSE")
+        suffix_pos = system_msg.index("PLAN MODE REMINDER")
+        assert preamble_pos < suffix_pos
+        # Preamble should be at the very start
+        assert preamble_pos < 5  # allows for leading newline/bracket
 
     @pytest.mark.asyncio
     async def test_normal_mode_no_plan_prompt(
