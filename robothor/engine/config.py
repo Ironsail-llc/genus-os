@@ -178,7 +178,8 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
             delivery_to=hb_delivery.get("to", "")
-            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", ""),
+            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
+            or os.environ.get("TELEGRAM_CHAT_ID", ""),
             warmup_context_files=raw_heartbeat.get("context_files", []),
             warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
@@ -203,7 +204,9 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         session_target=schedule.get("session_target", "isolated"),
         delivery_mode=delivery_mode,
         delivery_channel=delivery.get("channel", ""),
-        delivery_to=delivery.get("to", "") or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", ""),
+        delivery_to=delivery.get("to", "")
+        or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
+        or os.environ.get("TELEGRAM_CHAT_ID", ""),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
         instruction_file=manifest.get("instruction_file", ""),

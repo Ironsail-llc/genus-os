@@ -389,3 +389,79 @@ class TestResolveEnvVars:
         data = load_manifest(manifest)
         assert data is not None
         assert data["delivery"]["to"] == "99999999"
+
+
+class TestDeliveryToFallbackChain:
+    """delivery_to falls back from ROBOTHOR_TELEGRAM_CHAT_ID to TELEGRAM_CHAT_ID."""
+
+    def test_agent_delivery_to_prefers_prefixed_var(self, monkeypatch):
+        """ROBOTHOR_TELEGRAM_CHAT_ID takes priority over TELEGRAM_CHAT_ID."""
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "111")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "222")
+        config = manifest_to_agent_config({"id": "test", "delivery": {"mode": "announce"}})
+        assert config.delivery_to == "111"
+
+    def test_agent_delivery_to_falls_back_to_unprefixed(self, monkeypatch):
+        """When ROBOTHOR_TELEGRAM_CHAT_ID is missing, TELEGRAM_CHAT_ID is used."""
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_CHAT_ID", raising=False)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "222")
+        config = manifest_to_agent_config({"id": "test", "delivery": {"mode": "announce"}})
+        assert config.delivery_to == "222"
+
+    def test_agent_delivery_to_manifest_value_wins(self, monkeypatch):
+        """Explicit delivery.to in manifest overrides env vars."""
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "111")
+        manifest = {"id": "test", "delivery": {"mode": "announce", "to": "999"}}
+        config = manifest_to_agent_config(manifest)
+        assert config.delivery_to == "999"
+
+    def test_heartbeat_delivery_to_falls_back_to_unprefixed(self, monkeypatch):
+        """Heartbeat delivery_to uses TELEGRAM_CHAT_ID when prefixed is missing."""
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_CHAT_ID", raising=False)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "333")
+        manifest = {
+            "id": "main",
+            "heartbeat": {
+                "cron": "0 * * * *",
+                "delivery": {"mode": "announce", "channel": "telegram"},
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.delivery_to == "333"
+
+    def test_heartbeat_delivery_to_prefers_prefixed(self, monkeypatch):
+        """Heartbeat delivery_to prefers ROBOTHOR_TELEGRAM_CHAT_ID."""
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "444")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "555")
+        manifest = {
+            "id": "main",
+            "heartbeat": {
+                "cron": "0 * * * *",
+                "delivery": {"mode": "announce"},
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.delivery_to == "444"
+
+    def test_heartbeat_delivery_to_manifest_wins(self, monkeypatch):
+        """Explicit heartbeat delivery.to overrides env vars."""
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "444")
+        manifest = {
+            "id": "main",
+            "heartbeat": {
+                "cron": "0 * * * *",
+                "delivery": {"mode": "announce", "to": "777"},
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.delivery_to == "777"
+
+    def test_both_missing_gives_empty(self, monkeypatch):
+        """When both env vars are missing, delivery_to is empty."""
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_CHAT_ID", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        config = manifest_to_agent_config({"id": "test", "delivery": {"mode": "announce"}})
+        assert config.delivery_to == ""

@@ -77,6 +77,9 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
     if not chat_id:
         logger.warning("No delivery_to chat ID for %s", config.id)
         return False
+    if "${" in chat_id:
+        logger.error("Unexpanded env var in delivery_to for %s: %s", config.id, chat_id)
+        return False
 
     try:
         # Prefix with agent name for context
