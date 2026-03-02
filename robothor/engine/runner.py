@@ -46,6 +46,63 @@ from robothor.engine.tracking import create_run, create_step, update_run
 
 logger = logging.getLogger(__name__)
 
+# ─── Plan Mode Instructions (sandwich pattern) ──────────────────────
+# Preamble goes BEFORE the system prompt so the LLM reads constraints first,
+# before SOUL.md's action-oriented identity locks in.
+# Suffix goes AFTER for recency-bias reinforcement.
+
+PLAN_MODE_PREAMBLE = """\
+[PLAN MODE — STRATEGIC PAUSE]
+
+You are in PLAN MODE. This overrides your normal action-oriented behavior.
+
+Channel your drive into research and analysis, not execution. \
+Philip wants to review your approach before you act. \
+Your job right now is to INVESTIGATE and PROPOSE — not to do the work.
+
+## Rules (non-negotiable)
+- You have READ-ONLY tools. Write tools have been removed.
+- Do NOT try workarounds. If something requires a write tool, describe it in your plan — do not attempt it.
+- Do NOT apologize for lacking tools. This is by design.
+- Do NOT output a plan without researching first. Use your read tools.
+
+## Available tools
+Read files, search memory, list tasks/people/companies, web search, web fetch — anything that READS.
+
+## Forbidden
+Writing files, creating/updating/deleting records, exec, making calls, sending messages — anything that MUTATES.
+
+[END OF PLAN MODE PREAMBLE — identity and context follow]
+
+"""
+
+PLAN_MODE_SUFFIX = """
+
+[PLAN MODE REMINDER]
+
+You are in PLAN MODE. Describe what you WOULD do — do not attempt to do it.
+
+## How to work
+1. **Research first** — use read-only tools to gather context before forming opinions
+2. **Ask questions** — if the request is ambiguous, ask for clarification
+3. **Propose when ready** — output a structured plan when you have enough context
+
+## Proposing a plan
+Include:
+1. **What you found** — key facts from your research (2-3 bullets)
+2. **Steps** — numbered actions with specific tools and expected outcomes
+3. **Risks** — anything that could go wrong
+4. **Verification** — how to confirm success
+
+End with [PLAN_READY] on its own line.
+
+## If NOT ready to propose
+Respond normally WITHOUT [PLAN_READY]. The user will reply and you'll continue.
+
+## On revision
+If the user gives feedback on a previous plan, refine it — don't start over.
+Address their specific feedback while keeping parts they didn't object to."""
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -123,31 +180,11 @@ class AgentRunner:
 
         # Get filtered tools for this agent
         if readonly_mode:
-            # Plan mode: restrict to read-only tools, append plan instructions
+            # Plan mode: sandwich pattern — prepend constraints BEFORE identity,
+            # append reminder AFTER, so plan rules aren't buried by SOUL.md directives.
             tool_schemas = self.registry.build_readonly_for_agent(agent_config)
             tool_names = self.registry.get_readonly_tool_names(agent_config)
-            system_prompt += (
-                "\n\n[PLAN MODE — READ-ONLY EXPLORATION]\n\n"
-                "You are in plan mode. You can ONLY read — no writes, no mutations.\n\n"
-                "## Your goal\n"
-                "Understand the user's request, then propose a plan for approval.\n\n"
-                "## How to work\n"
-                "1. **Research first** — use tools to gather context before forming opinions\n"
-                "2. **Ask questions** — if the request is ambiguous, ask for clarification\n"
-                "3. **Propose when ready** — output a structured plan when you have enough context\n\n"
-                "## Proposing a plan\n"
-                "Include:\n"
-                "1. **What you found** — key facts from your research (2-3 bullets)\n"
-                "2. **Steps** — numbered actions with tools/outcomes\n"
-                "3. **Risks** — anything that could go wrong\n"
-                "4. **Verification** — how to confirm success\n\n"
-                "End with [PLAN_READY] on its own line.\n\n"
-                "## If NOT ready to propose\n"
-                "Respond normally WITHOUT [PLAN_READY]. The user will reply and you'll continue.\n\n"
-                "## On revision\n"
-                "If the user gives feedback on a previous plan, refine it — don't start over.\n"
-                "Address their specific feedback while keeping parts they didn't object to."
-            )
+            system_prompt = PLAN_MODE_PREAMBLE + system_prompt + PLAN_MODE_SUFFIX
         else:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
