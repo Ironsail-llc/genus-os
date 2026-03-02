@@ -499,7 +499,7 @@ tools_allowed:
 | Max nesting depth | 3 (configurable, capped) | Prevents infinite recursion |
 | Max parallel sub-agents | 5 (via `spawn_agents`) | Resource protection |
 | Concurrency semaphore | 3 simultaneous spawns | Matches `max_concurrent_agents` |
-| Delivery | Forced `NONE` on children | Sub-agents never message Philip |
+| Delivery | Forced `NONE` on children | Sub-agents never message the owner |
 | Budget | `min(child_config, parent_remaining)` | Child can't exceed parent's budget |
 | Dedup | Namespaced `sub:{parent_run_id}:{agent_id}` | Won't collide with cron triggers |
 

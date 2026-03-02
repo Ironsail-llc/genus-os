@@ -12,6 +12,24 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 vi.mock("lucide-react", () => ({
   Send: () => <span data-testid="send-icon">Send</span>,
   Square: () => <span>Square</span>,
+  Check: () => <span>Check</span>,
+  X: () => <span>X</span>,
+  ClipboardList: () => <span>ClipboardList</span>,
+  MessageSquareText: () => <span>MessageSquareText</span>,
+}));
+
+// Mock UI components that use radix-ui internally
+vi.mock("@/components/ui/badge", () => ({
+  Badge: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
+    <span {...props}>{children}</span>
+  ),
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  Tooltip: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  TooltipTrigger: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  TooltipContent: ({ children }: React.PropsWithChildren) => <span>{children}</span>,
 }));
 
 // Mock visual state
@@ -188,7 +206,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -205,8 +223,8 @@ describe("ChatPanel", () => {
 
       const { getByTestId } = render(<ChatPanel />);
 
-      // Wait for history fetch
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      // Wait for mount fetches (history + plan status)
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "Show contacts" } });
@@ -229,7 +247,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -251,7 +269,7 @@ describe("ChatPanel", () => {
       });
 
       const { getByTestId } = render(<ChatPanel />);
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "What's the weather?" } });
@@ -276,7 +294,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -291,7 +309,7 @@ describe("ChatPanel", () => {
       });
 
       const { getByTestId } = render(<ChatPanel />);
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "Check services" } });
@@ -309,7 +327,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -325,7 +343,7 @@ describe("ChatPanel", () => {
       });
 
       const { getByTestId, getAllByTestId } = render(<ChatPanel />);
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "Hi" } });
@@ -346,7 +364,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -362,7 +380,7 @@ describe("ChatPanel", () => {
       });
 
       const { getByTestId, getAllByTestId } = render(<ChatPanel />);
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "Check health" } });
@@ -383,7 +401,7 @@ describe("ChatPanel", () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
+        if (callCount <= 2) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({ messages: [] }),
@@ -402,7 +420,7 @@ describe("ChatPanel", () => {
       });
 
       const { getByTestId } = render(<ChatPanel />);
-      await vi.waitFor(() => expect(callCount).toBe(1), { timeout: 1000 });
+      await vi.waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2), { timeout: 1000 });
 
       const input = getByTestId("chat-input");
       fireEvent.change(input, { target: { value: "Render contacts" } });

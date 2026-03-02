@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -61,7 +62,7 @@ class EngineConfig:
             bot_token=os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
             or os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             default_chat_id=os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
-            or os.environ.get("TELEGRAM_CHAT_ID", "7636850023"),
+            or os.environ.get("TELEGRAM_CHAT_ID", ""),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
             tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary"),
             workspace=workspace,
@@ -79,13 +80,32 @@ class EngineConfig:
         )
 
 
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _resolve_env_vars(obj: object) -> object:
+    """Recursively expand ``${VAR_NAME}`` patterns in strings from env vars."""
+    if isinstance(obj, str):
+        return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), ""), obj)
+    if isinstance(obj, dict):
+        return {k: _resolve_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_env_vars(item) for item in obj]
+    return obj
+
+
 def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
-    """Load a single YAML manifest file."""
+    """Load a single YAML manifest file.
+
+    After parsing YAML, ``${VAR_NAME}`` patterns in string values are expanded
+    from environment variables so manifests can reference secrets without
+    hardcoding them.
+    """
     try:
         with open(manifest_path) as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
-            return data  # type: ignore[no-any-return]
+            return _resolve_env_vars(data)  # type: ignore[return-value]
         return None
     except Exception as e:
         logger.error("Failed to load manifest %s: %s", manifest_path, e)
@@ -157,7 +177,8 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
             timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 600)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
-            delivery_to=hb_delivery.get("to", ""),
+            delivery_to=hb_delivery.get("to", "")
+            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", ""),
             warmup_context_files=raw_heartbeat.get("context_files", []),
             warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
@@ -182,7 +203,7 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         session_target=schedule.get("session_target", "isolated"),
         delivery_mode=delivery_mode,
         delivery_channel=delivery.get("channel", ""),
-        delivery_to=delivery.get("to", ""),
+        delivery_to=delivery.get("to", "") or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", ""),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
         instruction_file=manifest.get("instruction_file", ""),

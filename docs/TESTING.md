@@ -68,7 +68,7 @@ for fact in result:
     assert 0 <= fact["confidence"] <= 1.0
 
 # Bad: test exact output
-assert result[0]["fact_text"] == "Philip uses Neovim"
+assert result[0]["fact_text"] == "Alice uses Neovim"
 ```
 
 ### 2. Golden Datasets
@@ -77,7 +77,7 @@ Curated input/output pairs. Test for >=80% match rate, not 100%.
 
 ```python
 GOLDEN = [
-    ("Philip uses VS Code", {"category": "preference", "entities": ["Philip", "VS Code"]}),
+    ("Alice uses VS Code", {"category": "preference", "entities": ["Alice", "VS Code"]}),
     ...
 ]
 
@@ -333,26 +333,26 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 pytest -m "not slow and not llm and not e2e"
 
 # Bridge tests only
-cd /home/philip/robothor && crm/bridge/venv/bin/pytest crm/bridge/tests/ -v
+cd ~/robothor && crm/bridge/venv/bin/pytest crm/bridge/tests/ -v
 
 # Memory system tests (uses its own venv)
-cd /home/philip/robothor/brain/memory_system && ./run_tests.sh
+cd ~/robothor/brain/memory_system && ./run_tests.sh
 
 # Contact matching tests only (fast, pure unit tests)
-cd /home/philip/robothor/brain/memory_system && ./venv/bin/pytest test_contact_matching.py -v
+cd ~/robothor/brain/memory_system && ./venv/bin/pytest test_contact_matching.py -v
 
 # Contact reconciliation tests (integration, needs DB)
-cd /home/philip/robothor/brain/memory_system && ./venv/bin/pytest test_contact_reconciliation.py -v
+cd ~/robothor/brain/memory_system && ./venv/bin/pytest test_contact_reconciliation.py -v
 
 # Intelligence pipeline tests (continuous ingest + periodic analysis + intelligence pipeline)
-cd /home/philip/robothor/brain/memory_system && ./venv/bin/pytest test_intelligence.py -v
+cd ~/robothor/brain/memory_system && ./venv/bin/pytest test_intelligence.py -v
 
 # CRM shell tests
-bash /home/philip/robothor/crm/tests/test_regression.sh
+bash ~/robothor/crm/tests/test_regression.sh
 
 # Unified runner (all modules)
-bash /home/philip/robothor/run_tests.sh
+bash ~/robothor/run_tests.sh
 
 # Full suite including LLM tests
-bash /home/philip/robothor/run_tests.sh --all
+bash ~/robothor/run_tests.sh --all
 ```

@@ -46,6 +46,7 @@ class StepType(StrEnum):
     ESCALATION = "escalation"
     GUARDRAIL = "guardrail"
     SPAWN_AGENT = "spawn_agent"
+    PLAN_PROPOSAL = "plan_proposal"
 
 
 class DeliveryMode(StrEnum):
@@ -281,6 +282,29 @@ class SpawnContext:
     remaining_cost_budget_usd: float = 0.0
     parent_trace_id: str = ""
     parent_span_id: str = ""
+
+
+# ─── Plan Mode ────────────────────────────────────────────────────────
+
+PLAN_TTL_SECONDS = 1800  # 30 minutes — stale plans auto-expire
+
+
+@dataclass
+class PlanState:
+    """State of a pending plan awaiting approval.
+
+    Created when an agent runs in plan mode (readonly tools only).
+    Philip reviews the plan via Telegram inline keyboard or Helm approval card,
+    then approves, rejects (with feedback), or edits.
+    """
+
+    plan_id: str
+    plan_text: str  # Markdown plan the agent produced
+    original_message: str  # User's original request
+    status: str = "pending"  # pending | approved | rejected | expired
+    created_at: str = ""  # ISO timestamp
+    exploration_run_id: str = ""  # Run ID of the read-only phase
+    rejection_feedback: str = ""  # Why Philip rejected (fed back to agent on re-plan)
 
 
 # ─── Workflow Engine Models ────────────────────────────────────────────
