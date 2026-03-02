@@ -16,7 +16,7 @@ model:
 schedule:
   cron: ""
   timezone: America/New_York
-  timeout_seconds: 120
+  timeout_seconds: 300
   max_iterations: 10
   session_target: isolated
 
