@@ -34,6 +34,18 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ErrorType(StrEnum):
+    AUTH = "auth"
+    RATE_LIMIT = "rate_limit"
+    NOT_FOUND = "not_found"
+    DEPENDENCY = "dependency"
+    TIMEOUT = "timeout"
+    PERMISSION = "permission"
+    API_DEPRECATED = "api_deprecated"
+    LOGIC = "logic"
+    UNKNOWN = "unknown"
+
+
 class StepType(StrEnum):
     LLM_CALL = "llm_call"
     TOOL_CALL = "tool_call"
@@ -47,6 +59,8 @@ class StepType(StrEnum):
     GUARDRAIL = "guardrail"
     SPAWN_AGENT = "spawn_agent"
     PLAN_PROPOSAL = "plan_proposal"
+    REPLAN = "replan"
+    ERROR_RECOVERY = "error_recovery"
 
 
 class DeliveryMode(StrEnum):
@@ -282,6 +296,16 @@ class SpawnContext:
     remaining_cost_budget_usd: float = 0.0
     parent_trace_id: str = ""
     parent_span_id: str = ""
+
+
+@dataclass
+class RecoveryAction:
+    """Describes how to recover from a classified error."""
+
+    action: str  # "spawn", "retry", "backoff", "inject"
+    agent_id: str = ""  # for spawn actions
+    message: str = ""  # context message (spawn prompt or injection text)
+    delay_seconds: int = 0  # for backoff actions
 
 
 # ─── Plan Mode ────────────────────────────────────────────────────────

@@ -378,6 +378,10 @@ class AgentRunner:
         # Track models that hit permanent errors (401/403/429) across iterations
         broken_models: set[str] = set()
 
+        # Error recovery state
+        _helper_spawns_used: int = 0
+        _replan_count: int = 0
+
         # Set spawn context for sub-agent tools (via contextvars)
         if spawn_context:
             # This is a sub-agent run — use the provided context
@@ -420,6 +424,10 @@ class AgentRunner:
         escalation = self._create_escalation(agent_config)
         checkpoint = self._create_checkpoint(agent_config, route, session.run_id)
         guardrail_engine = self._create_guardrails(agent_config)
+
+        # Wire plan into scratchpad for progress tracking
+        if scratchpad and plan_result and hasattr(plan_result, "plan") and plan_result.plan:
+            scratchpad.set_plan(plan_result.plan)
 
         budget_warning_sent = False
         plan_steps = 0
@@ -509,7 +517,7 @@ class AgentRunner:
                 return
 
             # ── Execute tool calls ──
-            iteration_errors: list[tuple[str, str]] = []
+            iteration_errors: list[tuple[str, str, Any]] = []
 
             for tc in assistant_msg.tool_calls:
                 tool_name = tc.function.name
@@ -532,7 +540,7 @@ class AgentRunner:
                             tool_call_id=tc.id,
                             error_message=gr_error_msg,
                         )
-                        iteration_errors.append((tool_name, gr_error_msg))
+                        iteration_errors.append((tool_name, gr_error_msg, None))
                         if scratchpad:
                             scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                         if escalation:
@@ -609,6 +617,13 @@ class AgentRunner:
                     error_message=error_msg,
                 )
 
+                # ── [ERROR CLASSIFICATION] Classify error type ──
+                error_type = None
+                if error_msg:
+                    from robothor.engine.error_recovery import classify_error
+
+                    error_type = classify_error(tool_name, error_msg)
+
                 # ── [SCRATCHPAD] Record tool call ──
                 if scratchpad:
                     scratchpad.record_tool_call(tool_name, error=error_msg)
@@ -616,7 +631,9 @@ class AgentRunner:
                 # ── [ESCALATION] Record error/success ──
                 if escalation:
                     if error_msg:
-                        escalation.record_error()
+                        from robothor.engine.models import ErrorType
+
+                        escalation.record_error(error_type or ErrorType.UNKNOWN)
                     else:
                         escalation.record_success()
 
@@ -626,11 +643,82 @@ class AgentRunner:
 
                 # Track errors for this iteration
                 if error_msg:
-                    iteration_errors.append((tool_name, error_msg))
+                    iteration_errors.append((tool_name, error_msg, error_type))
+
+            # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
+            recovery_applied = False
+            if iteration_errors and not readonly_mode:
+                from robothor.engine.error_recovery import get_recovery_action
+
+                for err_tool, err_msg, err_type in iteration_errors:
+                    if err_type is None:
+                        continue
+                    action = get_recovery_action(
+                        error_type=err_type,
+                        consecutive_count=escalation.consecutive_errors if escalation else 1,
+                        agent_config=agent_config,
+                        tool_name=err_tool,
+                        error_msg=err_msg,
+                        helper_spawns_used=_helper_spawns_used,
+                    )
+                    if action is None:
+                        continue
+
+                    if action.action == "backoff":
+                        await asyncio.sleep(action.delay_seconds)
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": f"[SYSTEM] {action.message} Retrying now.",
+                            }
+                        )
+                        recovery_applied = True
+
+                    elif action.action == "retry":
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": f"[SYSTEM] {action.message}",
+                            }
+                        )
+                        recovery_applied = True
+
+                    elif action.action == "spawn" and agent_config.can_spawn_agents:
+                        helper_result = await self._spawn_recovery_helper(
+                            agent_config=agent_config,
+                            session=session,
+                            action=action,
+                            spawn_context=spawn_context,
+                            trace=trace,
+                        )
+                        if helper_result:
+                            _helper_spawns_used += 1
+                            session.messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"[ERROR RECOVERY — Helper agent result]\n"
+                                        f"{helper_result}\n\n"
+                                        "Use this information to adjust your approach."
+                                    ),
+                                }
+                            )
+                            recovery_applied = True
+
+                    elif action.action == "inject":
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": f"[SYSTEM — Recovery guidance] {action.message}",
+                            }
+                        )
+                        recovery_applied = True
 
             # ── [ERROR FEEDBACK] Inject analysis prompt on errors ──
-            if iteration_errors and agent_config.error_feedback:
-                error_lines = "\n".join(f"- {name}: {msg}" for name, msg in iteration_errors)
+            if iteration_errors and agent_config.error_feedback and not recovery_applied:
+                error_lines = "\n".join(
+                    f"- {name}: {msg}" for name, msg, _etype in iteration_errors
+                )
                 session.messages.append(
                     {
                         "role": "user",
@@ -653,6 +741,42 @@ class AgentRunner:
                 esc_msg = escalation.get_escalation_message()
                 if esc_msg:
                     session.messages.append({"role": "user", "content": esc_msg})
+
+            # ── [REPLANNING] Check if mid-run replan is needed ──
+            if (
+                plan_result
+                and scratchpad
+                and escalation
+                and agent_config.planning_enabled
+                and not readonly_mode
+            ):
+                from robothor.engine.planner import should_replan as _should_replan
+
+                budget_pct = 0.0
+                if session.run.token_budget > 0:
+                    used = session.run.input_tokens + session.run.output_tokens
+                    budget_pct = used / session.run.token_budget
+
+                if _should_replan(scratchpad, plan_result, escalation, _replan_count, budget_pct):
+                    from robothor.engine.planner import format_plan_context, replan
+
+                    new_plan = await replan(
+                        plan_result,
+                        scratchpad,
+                        models[0],
+                        fallback_models=models[1:2],
+                    )
+                    if new_plan.success and new_plan.plan:
+                        plan_result = new_plan
+                        _replan_count += 1
+                        scratchpad.set_plan(new_plan.plan)
+                        plan_context = format_plan_context(new_plan)
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}",
+                            }
+                        )
 
             # ── [CHECKPOINT] Save state ──
             if checkpoint and checkpoint.should_checkpoint():
@@ -775,6 +899,45 @@ class AgentRunner:
             broken_models=broken_models,
             temperature=temperature,
         )
+
+    # ─── Error Recovery Helper ──────────────────────────────────────
+
+    async def _spawn_recovery_helper(
+        self,
+        agent_config: AgentConfig,
+        session: AgentSession,
+        action: Any,
+        spawn_context: SpawnContext | None = None,
+        trace: Any = None,
+    ) -> str | None:
+        """Spawn a helper agent to diagnose/fix an error. Returns helper output or None."""
+        try:
+            from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent
+
+            ctx = _current_spawn_context.get()
+            if ctx is None:
+                logger.debug("No spawn context — cannot spawn recovery helper")
+                return None
+
+            result = await _handle_spawn_agent(
+                {
+                    "agent_id": action.agent_id or "main",
+                    "message": action.message,
+                    "max_iterations": 5,
+                    "timeout_seconds": 60,
+                },
+                agent_id=agent_config.id,
+            )
+
+            if isinstance(result, dict):
+                if result.get("error"):
+                    logger.debug("Recovery helper failed: %s", result["error"])
+                    return None
+                return result.get("output_text", "")
+            return None
+        except Exception as e:
+            logger.debug("Failed to spawn recovery helper: %s", e)
+            return None
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
 

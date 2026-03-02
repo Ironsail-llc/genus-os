@@ -1,0 +1,44 @@
+id: canary
+name: Canary
+description: Test agent for validating error recovery, replanning, and helper spawning
+version: "2026-03-02"
+department: operations
+
+reports_to: main
+escalates_to: main
+
+model:
+  primary: openrouter/moonshotai/kimi-k2.5
+  fallbacks:
+    - openrouter/minimax/minimax-m2.5
+  payload_alias: kimi
+
+schedule:
+  cron: ""
+  timezone: America/New_York
+  timeout_seconds: 120
+  max_iterations: 10
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - web_fetch
+  - search_memory
+  - store_memory
+
+instruction_file: brain/instructions/CANARY.md
+bootstrap_files: []
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  scratchpad_enabled: true
+  can_spawn_agents: true
+  max_nesting_depth: 2
+  sub_agent_max_iterations: 5
+  sub_agent_timeout_seconds: 60

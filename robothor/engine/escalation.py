@@ -8,7 +8,9 @@ Resets on success. Prevents agents from spinning in retry loops.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from robothor.engine.models import ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +28,15 @@ class EscalationManager:
     consecutive_errors: int = 0
     total_errors: int = 0
     _stop_issued: bool = False
+    _last_error_type: ErrorType = ErrorType.UNKNOWN
+    _error_type_counts: dict[ErrorType, int] = field(default_factory=dict)
 
-    def record_error(self) -> None:
-        """Record a tool call error."""
+    def record_error(self, error_type: ErrorType = ErrorType.UNKNOWN) -> None:
+        """Record a tool call error with optional type classification."""
         self.consecutive_errors += 1
         self.total_errors += 1
+        self._last_error_type = error_type
+        self._error_type_counts[error_type] = self._error_type_counts.get(error_type, 0) + 1
 
     def record_success(self) -> None:
         """Record a successful tool call. Resets consecutive count."""
@@ -73,3 +79,8 @@ class EscalationManager:
                 "strategy — different tools, different arguments, or different order."
             )
         return None
+
+    @property
+    def at_change_strategy_threshold(self) -> bool:
+        """Whether we're at or past the CHANGE_STRATEGY threshold."""
+        return self.consecutive_errors >= THRESHOLD_DIFFERENT_STRATEGY
