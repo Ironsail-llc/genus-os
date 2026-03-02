@@ -315,14 +315,17 @@ class TestBuildSystemPrompt:
     def test_missing_instruction_file(self, tmp_path):
         config = AgentConfig(id="t", name="t", instruction_file="missing.md")
         prompt = build_system_prompt(config, tmp_path)
-        assert prompt == ""
+        # Only the time context is present when instruction file is missing
+        assert "Current time:" in prompt
 
     def test_truncation(self, tmp_path):
         big_content = "x" * (BOOTSTRAP_MAX_CHARS_PER_FILE + 1000)
         (tmp_path / "big.md").write_text(big_content)
         config = AgentConfig(id="t", name="t", instruction_file="big.md")
         prompt = build_system_prompt(config, tmp_path)
-        assert len(prompt) == BOOTSTRAP_MAX_CHARS_PER_FILE
+        # Instruction content is truncated; time context is appended after
+        assert prompt.startswith("x" * 100)
+        assert "Current time:" in prompt
 
     def test_total_limit(self, tmp_path):
         # Create files that together exceed total limit
@@ -343,4 +346,6 @@ class TestBuildSystemPrompt:
     def test_no_files(self):
         config = AgentConfig(id="t", name="t")
         prompt = build_system_prompt(config, Path("/nonexistent"))
-        assert prompt == ""
+        # Only time context when no files exist
+        assert "Current time:" in prompt
+        assert "UTC offset:" in prompt
