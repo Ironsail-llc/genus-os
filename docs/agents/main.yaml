@@ -144,10 +144,13 @@ heartbeat:
     channel: telegram
     to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
   context_files:
+    - brain/memory/cron-health-status.md
     - brain/memory/email-classifier-status.md
     - brain/memory/response-status.md
     - brain/memory/calendar-monitor-status.md
     - brain/memory/vision-monitor-status.md
+    - brain/memory/crm-steward-status.md
+    - brain/memory/garmin-health.md
   peer_agents: [email-classifier, email-responder, calendar-monitor]
   bootstrap_files: [brain/AGENTS.md, brain/TOOLS.md]
 

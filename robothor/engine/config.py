@@ -8,7 +8,9 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml  # type: ignore[import-untyped]
 
@@ -299,5 +301,14 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
             logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
         parts.append(content)
         total_chars += len(content)
+
+    # Inject current time context so agents know the date, time, and UTC offset
+    tz = ZoneInfo(config.timezone or "America/New_York")
+    now = datetime.now(tz)
+    time_context = (
+        f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "
+        f"(UTC offset: {now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
+    )
+    parts.append(time_context)
 
     return "\n\n---\n\n".join(parts)
