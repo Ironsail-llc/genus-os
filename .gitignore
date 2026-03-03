@@ -1,6 +1,6 @@
 # Symlinked directories (tracked in their own repos)
 brain/
-templates/
+/templates/
 /tunnel/
 
 # Sensitive docs (symlinked from ~/clawd/, tracked there)
@@ -75,6 +75,7 @@ status/
 memory/response-analysis.json
 
 # Instance-specific data and local overrides
+.robothor/
 local/
 !local/owner.env.example
 crm/cleanup_crm.py
