@@ -3,11 +3,10 @@ import { SESSION_KEY } from "@/lib/engine/session-state";
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const message = body.message;
-  const deepPlan = body.deep_plan === true;
+  const query = body.query || body.message;
 
-  if (!message || typeof message !== "string") {
-    return new Response(JSON.stringify({ error: "message required" }), {
+  if (!query || typeof query !== "string") {
+    return new Response(JSON.stringify({ error: "query required" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -16,7 +15,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.planStart(SESSION_KEY, message, deepPlan);
+    const engineRes = await client.deepStart(SESSION_KEY, query);
 
     if (!engineRes.body) {
       return new Response(
@@ -25,7 +24,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Proxy the SSE stream directly — plan events pass through as-is
+    // Proxy the SSE stream directly
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -46,7 +45,6 @@ export async function POST(req: Request) {
               controller.enqueue(encoder.encode(line + "\n"));
             }
           }
-          // Flush remaining
           if (buffer) {
             controller.enqueue(encoder.encode(buffer));
           }

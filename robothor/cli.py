@@ -128,6 +128,12 @@ def main(argv: list[str] | None = None) -> int:
         "--message", "-m", default=None, help="User message (default: cron payload)"
     )
     eng_run.add_argument("--trigger", default="manual", help="Trigger type")
+    eng_run.add_argument(
+        "--deep",
+        action="store_true",
+        default=False,
+        help="Use deep reasoning (RLM) instead of the normal agent loop",
+    )
     eng_sub.add_parser("start", help="Start the engine daemon")
     eng_sub.add_parser("stop", help="Stop the engine daemon")
     eng_sub.add_parser("status", help="Show engine status")
@@ -760,6 +766,10 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     agent_id = args.agent_id
     trigger = TriggerType(args.trigger) if args.trigger != "manual" else TriggerType.MANUAL
 
+    # Deep mode: bypass agent loop, call RLM directly
+    if getattr(args, "deep", False):
+        return _cmd_engine_run_deep(args, config)
+
     agent_config = load_agent_config(agent_id, config.manifest_dir)
     if not agent_config:
         print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}")
@@ -797,6 +807,58 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     print(f"Duration: {run.duration_ms}ms")
     print(f"Model: {run.model_used}")
     print(f"Tokens: {run.input_tokens} in / {run.output_tokens} out")
+    print(f"Steps: {len(run.steps)}")
+    print()
+
+    if run.output_text:
+        print("─── Output ───")
+        print(run.output_text)
+    if run.error_message:
+        print("─── Error ───")
+        print(run.error_message)
+
+    return 0 if run.status.value == "completed" else 1
+
+
+def _cmd_engine_run_deep(args: argparse.Namespace, config) -> int:
+    """Run deep reasoning (RLM) from the CLI."""
+    import asyncio
+    import sys
+    import time
+
+    message = args.message
+    if not message:
+        print("Error: --deep requires --message/-m")
+        return 1
+
+    print(f"Deep reasoning: {message[:80]}{'...' if len(message) > 80 else ''}")
+    print()
+
+    start = time.monotonic()
+
+    async def _run():
+        from robothor.engine.runner import AgentRunner
+
+        runner = AgentRunner(config)
+
+        async def on_progress(progress: dict) -> None:
+            elapsed = progress.get("elapsed_s", 0)
+            sys.stdout.write(f"\r... {elapsed}s elapsed")
+            sys.stdout.flush()
+
+        return await runner.execute_deep(
+            query=message,
+            on_progress=on_progress,
+        )
+
+    run = asyncio.run(_run())
+
+    elapsed = time.monotonic() - start
+    sys.stdout.write("\r" + " " * 40 + "\r")  # Clear progress line
+
+    print(f"Status: {run.status.value}")
+    print(f"Duration: {elapsed:.1f}s")
+    print(f"Cost: ${run.total_cost_usd:.4f}")
     print(f"Steps: {len(run.steps)}")
     print()
 

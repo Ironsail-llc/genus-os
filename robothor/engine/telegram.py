@@ -83,6 +83,7 @@ def _plan_state_to_dict(plan: PlanState) -> dict:
         "revision_count": plan.revision_count,
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
+        "deep_plan": plan.deep_plan,
     }
 
 
@@ -350,7 +351,7 @@ class TelegramBot:
 
         @self.dp.message(Command("deep"))
         async def cmd_deep(message: Message) -> None:
-            """Start deep reasoning via RLM."""
+            """Start deep reasoning via RLM — plans first, then routes to RLM."""
             chat_id = str(message.chat.id)
             session_key = self._session_key(chat_id)
             session = get_shared_session(session_key)
@@ -362,14 +363,18 @@ class TelegramBot:
                 await message.answer(
                     "<b>/deep — Deep Reasoning (RLM)</b>\n\n"
                     "Usage: <code>/deep &lt;question&gt;</code>\n\n"
-                    "Invokes the Recursive Language Model for complex reasoning "
-                    "with up to 10M token context. Typical cost: $0.50–$2.00.\n\n"
+                    "Plans first (gathers context), then invokes the Recursive "
+                    "Language Model with rich context for complex reasoning.\n"
+                    "Typical cost: $0.50–$2.00.\n\n"
                     "Example:\n"
                     "<code>/deep What calendar conflicts do I have this week?</code>"
                 )
                 return
 
-            await self._run_deep_mode(chat_id, session_key, session, deep_arg, message)
+            # Route through plan mode with deep_plan=True
+            await self._run_plan_mode(
+                chat_id, session_key, session, deep_arg, message, deep_plan=True
+            )
 
         # ── Inline keyboard callbacks ──
 
@@ -820,6 +825,7 @@ class TelegramBot:
         session: Any,
         user_text: str,
         message: Message,
+        deep_plan: bool = False,
     ) -> None:
         """Execute agent in plan mode with read-only tools, display plan with approval keyboard."""
         import uuid
@@ -836,10 +842,12 @@ class TelegramBot:
 
         typing_task = asyncio.create_task(typing_loop())
 
+        thinking_emoji = "\U0001f9e0" if deep_plan else "\U0001f4cb"
+        thinking_label = "Gathering context for deep reasoning..." if deep_plan else "Planning..."
         try:
             thinking_msg = await self.bot.send_message(
                 chat_id=int(chat_id),
-                text="\U0001f4cb Planning...",
+                text=f"{thinking_emoji} {thinking_label}",
                 parse_mode=None,
             )
             stream_msg_id: int | None = thinking_msg.message_id
@@ -899,6 +907,7 @@ class TelegramBot:
                 model_override=model,
                 conversation_history=history or None,
                 readonly_mode=True,
+                deep_plan=deep_plan,
             )
 
             plan_text = _extract_plan_text(run.output_text or "")
@@ -918,6 +927,7 @@ class TelegramBot:
                     status="pending",
                     created_at=datetime.now(UTC).isoformat(),
                     exploration_run_id=run.id,
+                    deep_plan=deep_plan,
                 )
                 session.active_plan = plan
 
@@ -936,10 +946,13 @@ class TelegramBot:
                 else:
                     await self.send_message(chat_id, plan_text)
 
+                label = (
+                    "<b>Approve this deep plan?</b>" if deep_plan else "<b>Approve this plan?</b>"
+                )
                 kb = self._build_plan_keyboard(plan.plan_id)
                 await self.bot.send_message(
                     chat_id=int(chat_id),
-                    text="<b>Approve this plan?</b>",
+                    text=label,
                     reply_markup=kb,
                 )
             else:
@@ -1082,13 +1095,18 @@ class TelegramBot:
         session_key: str,
         session: Any,
     ) -> None:
-        """Execute an approved plan with full tools."""
+        """Execute an approved plan — full tools or deep reasoning."""
         plan = session.active_plan
         if not plan:
             await self.send_message(chat_id, "No pending plan to execute.")
             return
 
         plan.status = "approved"
+
+        # Deep plan: route to RLM with rich context instead of agent execution
+        if plan.deep_plan:
+            await self._execute_deep_plan(chat_id, session_key, session)
+            return
 
         typing_active = True
 
@@ -1230,6 +1248,142 @@ class TelegramBot:
         except Exception as e:
             logger.error("Plan execution failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Execution error: {html.escape(str(e))}")
+        finally:
+            typing_active = False
+            typing_task.cancel()
+
+    async def _execute_deep_plan(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+    ) -> None:
+        """Execute approved deep plan — route to RLM with rich context."""
+        plan = session.active_plan
+        if not plan:
+            await self.send_message(chat_id, "No pending plan.")
+            return
+
+        typing_active = True
+
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text="\U0001f9e0 Deep reasoning...",
+                parse_mode=None,
+            )
+            progress_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            progress_msg_id = None
+
+        async def on_progress(progress: dict) -> None:
+            nonlocal progress_msg_id
+            elapsed = progress.get("elapsed_s", 0)
+            text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"
+            try:
+                if progress_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=progress_msg_id,
+                        text=text,
+                        parse_mode=None,
+                    )
+            except Exception:
+                pass
+
+        try:
+            # Build rich context from plan + exploration output
+            exploration_output = ""
+            for msg in reversed(session.history):
+                if msg.get("role") == "assistant" and msg.get("content"):
+                    exploration_output = msg["content"]
+                    break
+
+            context = (
+                f"Original request: {plan.original_message}\n\n"
+                f"Research plan:\n{plan.plan_text}\n\n"
+                f"Exploration output:\n{exploration_output}"
+            )
+
+            run = await self.runner.execute_deep(
+                query=plan.original_message,
+                on_progress=on_progress,
+                context_override=context,
+            )
+
+            # Track execution run ID
+            plan.execution_run_id = run.id
+
+            # Record in session history
+            session.history.append(
+                {"role": "user", "content": f"[Deep plan executed] {plan.original_message}"}
+            )
+            if run.output_text:
+                session.history.append({"role": "assistant", "content": run.output_text})
+            elif run.error_message:
+                session.history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"[Deep reasoning failed: {run.error_message}]",
+                    }
+                )
+            if len(session.history) > self._max_history:
+                session.history[:] = session.history[-self._max_history :]
+
+            # Persist exchange to DB
+            if run.output_text:
+                asyncio.create_task(
+                    save_exchange_async(
+                        session_key,
+                        plan.original_message,
+                        run.output_text,
+                        channel="telegram",
+                        model_override=self._model_override.get(chat_id),
+                        tenant_id=self.config.tenant_id,
+                    )
+                )
+
+            # Clear plan + persist
+            session.active_plan = None
+            asyncio.create_task(
+                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+            )
+
+            # Display result
+            if run.output_text:
+                duration_s = (run.duration_ms or 0) / 1000
+                cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
+                footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
+
+                if progress_msg_id is not None:
+                    await self._edit_final(chat_id, progress_msg_id, run.output_text)
+                    await self.bot.send_message(chat_id=int(chat_id), text=footer)
+                else:
+                    await self.send_message(chat_id, run.output_text + footer)
+            elif run.error_message:
+                error_text = f"\u274c Deep reasoning failed: {html.escape(run.error_message)}"
+                if progress_msg_id is not None:
+                    try:
+                        await self.bot.edit_message_text(
+                            chat_id=int(chat_id),
+                            message_id=progress_msg_id,
+                            text=error_text,
+                        )
+                    except Exception:
+                        await self.send_message(chat_id, error_text)
+                else:
+                    await self.send_message(chat_id, error_text)
+        except Exception as e:
+            logger.error("Deep plan execution failed: %s", e, exc_info=True)
+            await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
         finally:
             typing_active = False
             typing_task.cancel()
@@ -1627,6 +1781,7 @@ class TelegramBot:
         try:
             await self.bot.set_my_commands(
                 [
+                    BotCommand(command="deep", description="Deep reasoning via RLM"),
                     BotCommand(command="plan", description="Plan before executing"),
                     BotCommand(command="model", description="Switch AI model"),
                     BotCommand(command="clear", description="Clear conversation history"),

@@ -198,6 +198,90 @@ class TestAbortClear:
         await client.close()
 
 
+class TestDeepSSEParsing:
+    """Test SSE parsing for deep reasoning events."""
+
+    @pytest.mark.asyncio
+    async def test_parse_deep_progress_events(self):
+        """Deep progress events are parsed correctly."""
+        sse_lines = [
+            "event: deep_start",
+            'data: {"deep_id": "d-123", "query": "Analyze calendar"}',
+            "",
+            "event: deep_progress",
+            'data: {"elapsed_s": 5, "status": "running"}',
+            "",
+            "event: deep_progress",
+            'data: {"elapsed_s": 10, "status": "running"}',
+            "",
+            "event: deep_result",
+            'data: {"response": "Here is the analysis", "execution_time_s": 12.5, "cost_usd": 0.75, "context_chars": 3000}',
+            "",
+            "event: done",
+            'data: {"text": "Here is the analysis", "execution_time_s": 12.5, "cost_usd": 0.75}',
+            "",
+        ]
+
+        events = list(_parse_sse_lines(sse_lines))
+        assert len(events) == 5
+        assert events[0].event == "deep_start"
+        assert events[0].data["deep_id"] == "d-123"
+        assert events[1].event == "deep_progress"
+        assert events[1].data["elapsed_s"] == 5
+        assert events[2].event == "deep_progress"
+        assert events[2].data["elapsed_s"] == 10
+        assert events[3].event == "deep_result"
+        assert events[3].data["response"] == "Here is the analysis"
+        assert events[3].data["cost_usd"] == 0.75
+        assert events[4].event == "done"
+
+    @pytest.mark.asyncio
+    async def test_parse_deep_error_event(self):
+        """Deep error events are parsed correctly."""
+        sse_lines = [
+            "event: deep_start",
+            'data: {"deep_id": "d-456", "query": "Test"}',
+            "",
+            "event: error",
+            'data: {"error": "RLM budget exceeded"}',
+            "",
+        ]
+
+        events = list(_parse_sse_lines(sse_lines))
+        assert len(events) == 2
+        assert events[1].event == "error"
+        assert "budget exceeded" in events[1].data["error"]
+
+
+class TestPlanSSEParsing:
+    """Test SSE parsing for plan mode events."""
+
+    @pytest.mark.asyncio
+    async def test_parse_plan_events(self):
+        """Plan events are parsed correctly from SSE stream."""
+        sse_lines = [
+            "event: delta",
+            'data: {"text": "Step 1: "}',
+            "",
+            "event: delta",
+            'data: {"text": "Analyze emails"}',
+            "",
+            "event: plan",
+            'data: {"plan_id": "p-123", "plan_text": "Step 1: Analyze emails"}',
+            "",
+            "event: done",
+            'data: {"text": "Step 1: Analyze emails"}',
+            "",
+        ]
+
+        events = list(_parse_sse_lines(sse_lines))
+        assert len(events) == 4
+        assert events[0].event == "delta"
+        assert events[2].event == "plan"
+        assert events[2].data["plan_id"] == "p-123"
+        assert events[3].event == "done"
+
+
 def _parse_sse_lines(lines: list[str]) -> list[SSEEvent]:
     """Helper to parse SSE lines into events (mirrors client logic)."""
     events = []

@@ -38,6 +38,7 @@ async function setupMocks(
     dashboardHtml?: string;
     dashboard204?: boolean;
     welcomeHtml?: string;
+    skipSessionMock?: boolean;
   }
 ) {
   // Mock chat history
@@ -47,6 +48,14 @@ async function setupMocks(
       contentType: "application/json",
       body: JSON.stringify({ messages: [] }),
     });
+  });
+
+  // Mock plan/deep status (loaded on mount)
+  await page.route("**/api/chat/plan/status", (route: Route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ active: false, plan: null }) });
+  });
+  await page.route("**/api/chat/deep/status", (route: Route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ active: false, deep: null }) });
   });
 
   // Mock chat send
@@ -81,17 +90,43 @@ async function setupMocks(
     });
   }
 
-  // Mock welcome dashboard
+  // Mock welcome dashboard (JSON response — live-canvas reads as JSON.parse)
   if (opts.welcomeHtml) {
     await page.route("**/api/dashboard/welcome", (route: Route) => {
       route.fulfill({
         status: 200,
-        contentType: "text/event-stream",
-        headers: { "Cache-Control": "no-cache", Connection: "keep-alive" },
-        body: mockDashboardSSE(opts.welcomeHtml!),
+        contentType: "application/json",
+        body: JSON.stringify({ html: opts.welcomeHtml!, type: "html" }),
       });
     });
   }
+
+  // Mock session restore (no saved dashboard)
+  await page.route("**/api/session", (route: Route) => {
+    if (route.request().method() === "GET") {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({}),
+      });
+    } else {
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    }
+  });
+
+  // Mock events stream (prevents networkidle timeout from open SSE)
+  await page.route("**/api/events/stream*", (route: Route) => {
+    route.abort();
+  });
+
+  // Mock health
+  await page.route("**/api/health", (route: Route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "healthy", agents: {} }),
+    });
+  });
 }
 
 /** Send a message via the chat input */

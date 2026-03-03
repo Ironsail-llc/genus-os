@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 # Command registry: name → (handler_name, description)
 COMMANDS: dict[str, tuple[str, str]] = {
+    "/deep": ("cmd_deep", "Deep reasoning via RLM ($0.50-$2.00)"),
+    "/plan": ("cmd_plan", "Plan before executing (review + approve)"),
     "/status": ("cmd_status", "Engine health and agent summary"),
     "/agents": ("cmd_agents", "List agents with status"),
     "/costs": ("cmd_costs", "Cost breakdown (default 24h)"),
@@ -49,6 +51,35 @@ async def handle_command(app: RobothorApp, text: str) -> tuple[bool, str | None]
 
     output = await handler(app, args)
     return True, output
+
+
+async def cmd_deep(app: RobothorApp, args: str) -> str:
+    """Start deep reasoning via RLM."""
+    if not args.strip():
+        return (
+            "[bold]Deep Reasoning (RLM)[/bold]\n\n"
+            "Usage: /deep <question>\n\n"
+            "Invokes the Recursive Language Model for complex reasoning "
+            "with up to 10M token context. Typical cost: $0.50\u2013$2.00.\n\n"
+            "Example: /deep What calendar conflicts do I have this week?"
+        )
+    # Delegate to the app's streaming deep handler
+    await app._stream_deep(args.strip())
+    return ""
+
+
+async def cmd_plan(app: RobothorApp, args: str) -> str:
+    """Start plan mode — explore with read-only tools."""
+    if not args.strip():
+        return (
+            "[bold]Plan Mode[/bold]\n\n"
+            "Usage: /plan <request>\n\n"
+            "Explores your request using read-only tools, then proposes a plan "
+            "for your approval before executing.\n\n"
+            "Example: /plan Reorganize my calendar for next week"
+        )
+    await app._stream_plan(args.strip())
+    return ""
 
 
 async def cmd_status(app: RobothorApp, args: str) -> str:

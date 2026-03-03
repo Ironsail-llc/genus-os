@@ -61,6 +61,7 @@ class StepType(StrEnum):
     PLAN_PROPOSAL = "plan_proposal"
     REPLAN = "replan"
     ERROR_RECOVERY = "error_recovery"
+    DEEP_REASON = "deep_reason"
 
 
 class DeliveryMode(StrEnum):
@@ -330,12 +331,40 @@ class PlanState:
     exploration_run_id: str = ""  # Run ID of the read-only phase
     rejection_feedback: str = ""  # Why Philip rejected (fed back to agent on re-plan)
 
+    # Deep plan mode — when True, approval routes to execute_deep() instead of execute()
+    deep_plan: bool = False
+
     # Iterative refinement
     revision_count: int = 0
     revision_history: list[dict] = field(default_factory=list)  # [{plan_text, feedback, timestamp}]
 
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)
+
+
+# ─── Deep Mode ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class DeepRunState:
+    """State of an active /deep reasoning session.
+
+    Created when a user invokes /deep from any surface.  The RLM runs
+    synchronously in a background thread; progress is pushed to UIs
+    via elapsed-time heartbeats.
+    """
+
+    deep_id: str
+    query: str
+    status: str = "running"  # running | completed | failed
+    started_at: str = ""
+    completed_at: str = ""
+    response: str = ""
+    execution_time_s: float = 0.0
+    cost_usd: float = 0.0
+    context_chars: int = 0
+    trajectory_file: str = ""
+    error: str = ""
 
 
 # ─── Workflow Engine Models ────────────────────────────────────────────
