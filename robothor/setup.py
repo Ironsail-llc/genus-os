@@ -207,6 +207,10 @@ def run_init(args) -> int:
     if wrote:
         print(f"  Saving config to {env_path} ... done")
 
+    # 12. Agent template setup (if templates exist)
+    if not yes:
+        _offer_agent_setup(workspace)
+
     # Summary
     print()
     print("  Setup complete!")
@@ -574,6 +578,30 @@ def _ollama_config_from_env() -> OllamaConfig:
         host=os.environ.get("ROBOTHOR_OLLAMA_HOST", "127.0.0.1"),
         port=int(os.environ.get("ROBOTHOR_OLLAMA_PORT", "11434")),
     )
+
+
+def _offer_agent_setup(workspace: Path) -> None:
+    """Offer agent preset installation if templates are available."""
+    try:
+        from robothor.templates.catalog import Catalog
+
+        catalog = Catalog()
+        templates = catalog.list_available_templates()
+        if not templates:
+            return
+
+        print()
+        answer = input("  Set up agent templates? [y/N]: ").strip().lower()
+        if answer != "y":
+            return
+
+        # Delegate to the agent setup wizard
+        from robothor.cli import _cmd_agent_setup
+
+        _cmd_agent_setup()
+    except Exception:
+        # Template system is optional — don't fail init if it's broken
+        pass
 
 
 def _install_hint(apt_pkg: str, brew_pkg: str) -> str:
