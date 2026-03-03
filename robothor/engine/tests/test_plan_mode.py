@@ -53,6 +53,9 @@ class TestReadonlyTools:
     def test_readonly_tools_contains_read_file(self):
         assert "read_file" in READONLY_TOOLS
 
+    def test_readonly_tools_contains_list_directory(self):
+        assert "list_directory" in READONLY_TOOLS
+
     def test_readonly_tools_contains_web_search(self):
         assert "web_search" in READONLY_TOOLS
 
@@ -781,14 +784,21 @@ class TestPlanModeSystemPrompt:
 
         # Preamble (prepended before identity)
         assert "PLAN MODE — STRATEGIC PAUSE" in system_msg
-        assert "Do NOT try workarounds" in system_msg
         assert "Channel your drive into research and analysis" in system_msg
+
+        # New preamble sections
+        assert "Discovery strategy" in system_msg
+        assert "list_directory" in system_msg
+        assert "Autonomy (CRITICAL)" in system_msg
+        assert "NEVER ask Philip to run commands" in system_msg
 
         # Suffix (appended after identity)
         assert "PLAN MODE REMINDER" in system_msg
         assert "[PLAN_READY]" in system_msg
         assert "On revision" in system_msg
         assert "refine it" in system_msg
+        assert "Discover, don't guess" in system_msg
+        assert "Ask only about intent" in system_msg
 
         # Positional: preamble appears BEFORE identity text, suffix AFTER
         preamble_pos = system_msg.index("PLAN MODE — STRATEGIC PAUSE")
@@ -796,6 +806,40 @@ class TestPlanModeSystemPrompt:
         assert preamble_pos < suffix_pos
         # Preamble should be at the very start
         assert preamble_pos < 5  # allows for leading newline/bracket
+
+    @pytest.mark.asyncio
+    async def test_plan_prompt_injects_dynamic_tool_names(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Plan mode injects the actual readonly tool names into the preamble."""
+        response = mock_litellm_response(content="Here is my plan\n\n[PLAN_READY]")
+        # Set up registry to return specific readonly tool names
+        runner.registry.get_readonly_tool_names.return_value = [
+            "read_file",
+            "list_directory",
+            "web_search",
+        ]
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "check tasks",
+                            agent_config=sample_agent_config,
+                            readonly_mode=True,
+                        )
+
+        system_msg = mock_llm.call_args.kwargs["messages"][0]["content"]
+        # Dynamic tool names should appear in the preamble
+        assert "`list_directory`" in system_msg
+        assert "`read_file`" in system_msg
+        assert "`web_search`" in system_msg
+        # The placeholder should be replaced
+        assert "{tool_names_placeholder}" not in system_msg
 
     @pytest.mark.asyncio
     async def test_normal_mode_no_plan_prompt(
@@ -939,6 +983,11 @@ class TestPlanModeResearchNudge:
             if m.get("role") == "user" and "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 1
+        # Nudge mentions discovery tools
+        assert "list_directory" in nudge_msgs[0]["content"]
+        assert "read_file" in nudge_msgs[0]["content"]
+        # Nudge discourages asking the user
+        assert "Do NOT ask the user" in nudge_msgs[0]["content"]
 
     @pytest.mark.asyncio
     async def test_nudge_does_not_fire_in_normal_mode(

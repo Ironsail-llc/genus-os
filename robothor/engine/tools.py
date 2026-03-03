@@ -102,6 +102,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
     {
         # File/system
         "read_file",
+        "list_directory",
         # Web
         "web_fetch",
         "web_search",
@@ -208,6 +209,31 @@ class ToolRegistry:
                         "path": {
                             "type": "string",
                             "description": "File path (relative to workspace or absolute)",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+        self._schemas["list_directory"] = {
+            "type": "function",
+            "function": {
+                "name": "list_directory",
+                "description": "List files and directories. Use to discover file paths before reading them.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path (relative to workspace or absolute)",
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob filter, e.g. '*.yaml', '*.md' (optional)",
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Search subdirectories (default false)",
                         },
                     },
                     "required": ["path"],
@@ -1712,6 +1738,54 @@ def _handle_sync_tool(
             return {"content": content[:50000], "path": str(path), "chars": len(content)}
         except Exception as e:
             return {"error": f"Failed to read file: {e}"}
+
+    if name == "list_directory":
+        from pathlib import Path
+
+        path = Path(args.get("path", ""))
+        if not path.is_absolute() and workspace:
+            path = Path(workspace) / path
+        if not path.exists():
+            return {"error": f"Path does not exist: {path}"}
+        if not path.is_dir():
+            return {"error": f"Not a directory: {path}"}
+        try:
+            pattern = args.get("pattern", "")
+            recursive = args.get("recursive", False)
+            entries = []
+            max_entries = 200
+            if pattern:
+                gen = path.rglob(pattern) if recursive else path.glob(pattern)
+                for p in gen:
+                    entries.append(
+                        {
+                            "name": str(p.relative_to(path)),
+                            "type": "dir" if p.is_dir() else "file",
+                            "size": p.stat().st_size if p.is_file() else 0,
+                        }
+                    )
+                    if len(entries) >= max_entries:
+                        break
+            else:
+                for p in sorted(path.iterdir()):
+                    entries.append(
+                        {
+                            "name": p.name,
+                            "type": "dir" if p.is_dir() else "file",
+                            "size": p.stat().st_size if p.is_file() else 0,
+                        }
+                    )
+                    if len(entries) >= max_entries:
+                        break
+            truncated = len(entries) >= max_entries
+            return {
+                "path": str(path),
+                "entries": entries,
+                "count": len(entries),
+                "truncated": truncated,
+            }
+        except Exception as e:
+            return {"error": f"Failed to list directory: {e}"}
 
     if name == "write_file":
         from pathlib import Path

@@ -1,7 +1,7 @@
 id: morning-briefing
 name: Morning Briefing
 description: Daily morning briefing with weather, news, calendar, and CRM activity
-version: "2026-02-24"
+version: "2026-03-03"
 department: briefings
 
 reports_to: null
@@ -10,11 +10,11 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: openrouter/anthropic/claude-sonnet-4.6
   fallbacks:
-    - openrouter/minimax/minimax-m2.5
+    - openrouter/moonshotai/kimi-k2.5
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: sonnet
 
 schedule:
   cron: "30 6 * * *"
@@ -28,16 +28,11 @@ delivery:
   channel: telegram
   to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
 
-tools_allowed:
-  - exec
-  - read_file
-  - write_file
-  - search_memory
-  - get_entity
-  - store_memory
-  - list_conversations
+tools_allowed: []
 tools_denied:
-  - message
+  - create_message
+  - make_call
+  - transmit_prescription
 bridge_endpoints:
   - "GET /health"
   - "GET /api/conversations"
@@ -60,10 +55,13 @@ shared_working_state: false
 warmup:
   memory_blocks:
     - user_profile
+    - shared_working_state
   context_files:
     - brain/memory/garmin-health.md
+    - brain/memory/cron-health-status.md
+    - brain/memory/email-classifier-status.md
 
-instruction_file: null
+instruction_file: brain/agents/morning-briefing.md
 bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
@@ -75,6 +73,8 @@ v2:
   error_feedback: true
 
 changelog:
+  - date: "2026-03-03"
+    change: "Fix instruction_file (was null), upgrade model to Sonnet 4.6, add missing tools (list_tasks, list_my_tasks, memory_block_read, etc), add shared_working_state warmup + status file context"
   - date: "2026-02-28"
     change: "Wire garmin-health.md into warmup context_files (was missing despite changelog claim)"
   - date: "2026-02-27"

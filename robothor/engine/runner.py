@@ -69,15 +69,24 @@ Your job right now is to INVESTIGATE and PROPOSE — not to do the work.
 
 ## Rules (non-negotiable)
 - You have READ-ONLY tools. Write tools have been removed.
-- Do NOT try workarounds. If something requires a write tool, describe it in your plan — do not attempt it.
+- Do NOT attempt write operations or workarounds that mutate state. If something requires a write tool, describe it in your plan.
 - Do NOT apologize for lacking tools. This is by design.
 - Do NOT output a plan without researching first. Use your read tools.
 
-## Available tools
-Read files, search memory, list tasks/people/companies, web search, web fetch — anything that READS.
+## Discovery strategy
+1. Use `list_directory` to explore directories and find file paths
+2. Use `read_file` to read the actual content of files you discover
+3. Use `search_memory` / `get_entity` for known facts and context
+4. Try obvious paths first (e.g. `brain/agents/`, `docs/agents/`, `robothor/engine/`) before broad searches
+5. Web search/fetch for external information
 
-## Forbidden
-Writing files, creating/updating/deleting records, exec, making calls, sending messages — anything that MUTATES.
+## Autonomy (CRITICAL)
+NEVER ask Philip to run commands, look up paths, or do research on your behalf. \
+You have the tools to discover everything yourself. \
+Asking the user to do your research is a FAILURE MODE.
+
+## Your tools
+{tool_names_placeholder}
 
 [END OF PLAN MODE PREAMBLE — identity and context follow]
 
@@ -90,9 +99,10 @@ PLAN_MODE_SUFFIX = """
 You are in PLAN MODE. Describe what you WOULD do — do not attempt to do it.
 
 ## How to work
-1. **Research first** — use read-only tools to gather context before forming opinions
-2. **Ask questions** — if the request is ambiguous, ask for clarification
-3. **Propose when ready** — output a structured plan when you have enough context
+1. **Discover, don't guess** — use `list_directory` to find files rather than assuming paths. Explore before you propose.
+2. **Research first** — use read-only tools to gather context before forming opinions
+3. **Ask only about intent** — if you need clarification, ask about WHAT Philip wants, not ask him to look things up for you
+4. **Propose when ready** — output a structured plan when you have enough context
 
 ## Proposing a plan
 Include:
@@ -244,7 +254,12 @@ class AgentRunner:
             if deep_plan:
                 system_prompt = DEEP_PLAN_PREAMBLE + system_prompt + DEEP_PLAN_SUFFIX
             else:
-                system_prompt = PLAN_MODE_PREAMBLE + system_prompt + PLAN_MODE_SUFFIX
+                # Inject actual tool names into the preamble
+                tool_list_str = (
+                    ", ".join(f"`{t}`" for t in sorted(tool_names)) if tool_names else "(none)"
+                )
+                preamble = PLAN_MODE_PREAMBLE.replace("{tool_names_placeholder}", tool_list_str)
+                system_prompt = preamble + system_prompt + PLAN_MODE_SUFFIX
         else:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
@@ -718,9 +733,10 @@ class AgentRunner:
                             "role": "user",
                             "content": (
                                 "[SYSTEM] You proposed a plan without using any tools to "
-                                "research first. Before finalizing, use at least one tool "
-                                "to verify your assumptions. For example: check current "
-                                "tasks, read relevant memory, or search for context."
+                                "research first. Before finalizing, use your tools to discover "
+                                "and verify. For example: `list_directory` to find files, "
+                                "`read_file` to read them, `search_memory` for context. "
+                                "Do NOT ask the user to look things up for you."
                             ),
                         }
                     )

@@ -84,6 +84,7 @@ tools_allowed:
   - web_search
   - web_fetch
   - read_file
+  - list_directory
   - write_file
   - exec
   - list_agent_runs
