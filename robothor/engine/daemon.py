@@ -108,7 +108,7 @@ async def main() -> None:
             serve_health(config, runner=runner, workflow_engine=workflow_engine),
             name="health",
         ),
-        asyncio.create_task(_watchdog(config), name="watchdog"),
+        asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
     ]
 
     logger.info("All subsystems started")
@@ -173,7 +173,7 @@ async def main() -> None:
     logger.info("Engine stopped")
 
 
-async def _watchdog(config: EngineConfig) -> None:
+async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 60s, cleans stale chat sessions daily."""
     pg_failures = 0
     redis_failures = 0
@@ -214,6 +214,16 @@ async def _watchdog(config: EngineConfig) -> None:
         except Exception as e:
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
+
+        # Schedule reconciliation (every 5 ticks = 5 minutes)
+        if tick_count % 5 == 0:
+            try:
+                loop = asyncio.get_running_loop()
+                pruned = await loop.run_in_executor(None, scheduler.reconcile_schedules)
+                if pruned:
+                    logger.info("Watchdog: reconciled schedules, pruned: %s", pruned)
+            except Exception as e:
+                logger.warning("Watchdog: schedule reconciliation failed: %s", e)
 
         # Zombie run reaper (every 20 ticks = 20 minutes)
         if tick_count % 20 == 0:

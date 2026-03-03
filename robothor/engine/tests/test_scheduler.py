@@ -285,3 +285,80 @@ class TestStaleSchedulePruning:
         mock_delete.assert_called_once()
         active_ids = mock_delete.call_args[0][0]
         assert "worker" in active_ids
+
+
+class TestReconcileSchedules:
+    """reconcile_schedules() prunes orphaned DB rows and APScheduler jobs."""
+
+    def test_reconcile_prunes_stale_db_rows(self, no_heartbeat_manifest):
+        """delete_stale_schedules is called with the correct active ID set."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(
+            manifest_dir=no_heartbeat_manifest,
+            workspace=no_heartbeat_manifest.parent.parent,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        mock_delete = MagicMock(return_value=["supervisor"])
+        with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
+            pruned = scheduler.reconcile_schedules()
+
+        mock_delete.assert_called_once()
+        active_ids = mock_delete.call_args[0][0]
+        assert "worker" in active_ids
+        assert "supervisor" in pruned
+
+    def test_reconcile_removes_stale_apscheduler_jobs(self, no_heartbeat_manifest):
+        """Orphaned APScheduler jobs are removed; legitimate jobs are kept."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(
+            manifest_dir=no_heartbeat_manifest,
+            workspace=no_heartbeat_manifest.parent.parent,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        # Simulate APScheduler having a stale job and a legit one
+        stale_job = MagicMock()
+        stale_job.id = "supervisor"
+        legit_job = MagicMock()
+        legit_job.id = "worker"
+
+        scheduler.scheduler = MagicMock()
+        scheduler.scheduler.get_jobs.return_value = [stale_job, legit_job]
+
+        with patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]):
+            pruned = scheduler.reconcile_schedules()
+
+        stale_job.remove.assert_called_once()
+        legit_job.remove.assert_not_called()
+        assert "supervisor" in pruned
+
+    def test_reconcile_skips_workflow_jobs(self, no_heartbeat_manifest):
+        """workflow:* prefixed jobs are never removed by reconciliation."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(
+            manifest_dir=no_heartbeat_manifest,
+            workspace=no_heartbeat_manifest.parent.parent,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        wf_job = MagicMock()
+        wf_job.id = "workflow:daily-report"
+
+        scheduler.scheduler = MagicMock()
+        scheduler.scheduler.get_jobs.return_value = [wf_job]
+
+        with patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]):
+            pruned = scheduler.reconcile_schedules()
+
+        wf_job.remove.assert_not_called()
+        assert "workflow:daily-report" not in pruned

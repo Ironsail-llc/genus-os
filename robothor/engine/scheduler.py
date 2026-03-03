@@ -521,6 +521,43 @@ class CronScheduler:
             f"Execute your scheduled tasks as described in your instructions."
         )
 
+    def reconcile_schedules(self) -> list[str]:
+        """Reconcile DB + in-memory jobs against current manifests.
+
+        Removes orphaned schedule rows and APScheduler jobs for agents
+        whose manifests no longer exist. Skips workflow:* jobs.
+        Returns list of pruned agent IDs.
+        """
+        manifests = load_all_manifests(self.config.manifest_dir)
+        active_ids: set[str] = set()
+
+        for manifest in manifests:
+            agent_config = manifest_to_agent_config(manifest)
+            if agent_config.cron_expr:
+                active_ids.add(agent_config.id)
+            if agent_config.heartbeat and agent_config.heartbeat.cron_expr:
+                active_ids.add(f"{agent_config.id}:heartbeat")
+
+        # Prune stale DB rows
+        pruned: list[str] = []
+        if active_ids:
+            try:
+                pruned = delete_stale_schedules(active_ids, tenant_id=self.config.tenant_id)
+            except Exception as e:
+                logger.warning("Reconcile: failed to prune stale DB rows: %s", e)
+
+        # Remove orphaned APScheduler in-memory jobs
+        for job in self.scheduler.get_jobs():
+            if job.id.startswith("workflow:"):
+                continue
+            if job.id not in active_ids:
+                logger.info("Reconcile: removing orphaned job %s", job.id)
+                job.remove()
+                if job.id not in pruned:
+                    pruned.append(job.id)
+
+        return pruned
+
     async def stop(self) -> None:
         """Shut down the scheduler."""
         if self.scheduler.running:
