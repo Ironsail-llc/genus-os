@@ -24,6 +24,7 @@ import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
@@ -199,6 +200,7 @@ class TelegramBot:
         async def cmd_help(message: Message) -> None:
             await message.answer(
                 "<b>Robothor Commands</b>\n\n"
+                "/deep — Deep reasoning via RLM ($0.50-$2.00)\n"
                 "/plan — Plan before executing (review + approve)\n"
                 "/model — Switch AI model\n"
                 "/clear — Clear conversation history\n"
@@ -345,6 +347,29 @@ class TelegramBot:
 
             # Execute plan mode immediately with the argument
             await self._run_plan_mode(chat_id, session_key, session, plan_arg, message)
+
+        @self.dp.message(Command("deep"))
+        async def cmd_deep(message: Message) -> None:
+            """Start deep reasoning via RLM."""
+            chat_id = str(message.chat.id)
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            user_text = (message.text or "").strip()
+            deep_arg = user_text.removeprefix("/deep").strip()
+
+            if not deep_arg:
+                await message.answer(
+                    "<b>/deep — Deep Reasoning (RLM)</b>\n\n"
+                    "Usage: <code>/deep &lt;question&gt;</code>\n\n"
+                    "Invokes the Recursive Language Model for complex reasoning "
+                    "with up to 10M token context. Typical cost: $0.50–$2.00.\n\n"
+                    "Example:\n"
+                    "<code>/deep What calendar conflicts do I have this week?</code>"
+                )
+                return
+
+            await self._run_deep_mode(chat_id, session_key, session, deep_arg, message)
 
         # ── Inline keyboard callbacks ──
 
@@ -645,9 +670,11 @@ class TelegramBot:
         last_edit_time: float = 0.0
         last_edit_len: int = 0
         first_content = True
+        stream_edit_interval: float = STREAM_EDIT_INTERVAL
 
         async def on_content(accumulated_text: str) -> None:
             nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            nonlocal stream_edit_interval
 
             now = time.monotonic()
             text_len = len(accumulated_text)
@@ -655,7 +682,7 @@ class TelegramBot:
             if first_content:
                 first_content = False
             else:
-                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                time_ok = (now - last_edit_time) >= stream_edit_interval
                 chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
                 if not time_ok and not chars_ok:
                     return
@@ -677,6 +704,8 @@ class TelegramBot:
                         parse_mode=None,
                     )
                     stream_msg_id = sent.message_id
+            except TelegramRetryAfter as e:
+                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
             except Exception:
                 pass
 
@@ -820,15 +849,17 @@ class TelegramBot:
         last_edit_time: float = 0.0
         last_edit_len: int = 0
         first_content = True
+        stream_edit_interval: float = STREAM_EDIT_INTERVAL
 
         async def on_content(accumulated_text: str) -> None:
             nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            nonlocal stream_edit_interval
             now = time.monotonic()
             text_len = len(accumulated_text)
             if first_content:
                 first_content = False
             else:
-                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                time_ok = (now - last_edit_time) >= stream_edit_interval
                 chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
                 if not time_ok and not chars_ok:
                     return
@@ -848,6 +879,8 @@ class TelegramBot:
                         parse_mode=None,
                     )
                     stream_msg_id = sent.message_id
+            except TelegramRetryAfter as e:
+                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
             except Exception:
                 pass
             last_edit_time = now
@@ -925,6 +958,124 @@ class TelegramBot:
             typing_active = False
             typing_task.cancel()
 
+    async def _run_deep_mode(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+        query: str,
+        message: Message,
+    ) -> None:
+        """Execute deep reasoning via RLM, show progress edits and result."""
+        # Typing indicator
+        typing_active = True
+
+        async def typing_loop() -> None:
+            while typing_active:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        typing_task = asyncio.create_task(typing_loop())
+
+        try:
+            thinking_msg = await self.bot.send_message(
+                chat_id=int(chat_id),
+                text="\U0001f9e0 Deep reasoning...",
+                parse_mode=None,
+            )
+            progress_msg_id: int | None = thinking_msg.message_id
+        except Exception:
+            progress_msg_id = None
+
+        async def on_progress(progress: dict) -> None:
+            nonlocal progress_msg_id
+            elapsed = progress.get("elapsed_s", 0)
+            text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"
+            try:
+                if progress_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=progress_msg_id,
+                        text=text,
+                        parse_mode=None,
+                    )
+            except Exception:
+                pass
+
+        try:
+            history = list(session.history)
+
+            run = await self.runner.execute_deep(
+                query=query,
+                on_progress=on_progress,
+                conversation_history=history or None,
+            )
+
+            # Record in session history
+            session.history.append({"role": "user", "content": f"/deep {query}"})
+            if run.output_text:
+                session.history.append({"role": "assistant", "content": run.output_text})
+            elif run.error_message:
+                session.history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"[Deep reasoning failed: {run.error_message}]",
+                    }
+                )
+            if len(session.history) > self._max_history:
+                session.history[:] = session.history[-self._max_history :]
+
+            # Persist exchange to DB
+            if run.output_text:
+                asyncio.create_task(
+                    save_exchange_async(
+                        session_key,
+                        f"/deep {query}",
+                        run.output_text,
+                        channel="telegram",
+                        tenant_id=self.config.tenant_id,
+                    )
+                )
+
+            # Display result
+            if run.output_text:
+                # Cost/time footer
+                duration_s = (run.duration_ms or 0) / 1000
+                cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
+                footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
+
+                result_text = run.output_text
+                if progress_msg_id is not None:
+                    # Edit the progress message with the full result
+                    await self._edit_final(chat_id, progress_msg_id, result_text)
+                    # Send cost footer as separate message (final text may be at Telegram limit)
+                    await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=footer,
+                    )
+                else:
+                    await self.send_message(chat_id, result_text + footer)
+            elif run.error_message:
+                error_text = f"\u274c Deep reasoning failed: {html.escape(run.error_message)}"
+                if progress_msg_id is not None:
+                    try:
+                        await self.bot.edit_message_text(
+                            chat_id=int(chat_id),
+                            message_id=progress_msg_id,
+                            text=error_text,
+                        )
+                    except Exception:
+                        await self.send_message(chat_id, error_text)
+                else:
+                    await self.send_message(chat_id, error_text)
+        except Exception as e:
+            logger.error("Deep mode failed: %s", e, exc_info=True)
+            await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
+        finally:
+            typing_active = False
+            typing_task.cancel()
+
     async def _execute_approved_plan(
         self,
         chat_id: str,
@@ -962,15 +1113,17 @@ class TelegramBot:
         last_edit_time: float = 0.0
         last_edit_len: int = 0
         first_content = True
+        stream_edit_interval: float = STREAM_EDIT_INTERVAL
 
         async def on_content(accumulated_text: str) -> None:
             nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            nonlocal stream_edit_interval
             now = time.monotonic()
             text_len = len(accumulated_text)
             if first_content:
                 first_content = False
             else:
-                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                time_ok = (now - last_edit_time) >= stream_edit_interval
                 chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
                 if not time_ok and not chars_ok:
                     return
@@ -990,6 +1143,8 @@ class TelegramBot:
                         parse_mode=None,
                     )
                     stream_msg_id = sent.message_id
+            except TelegramRetryAfter as e:
+                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
             except Exception:
                 pass
             last_edit_time = now
@@ -1128,15 +1283,17 @@ class TelegramBot:
         last_edit_time: float = 0.0
         last_edit_len: int = 0
         first_content = True
+        stream_edit_interval: float = STREAM_EDIT_INTERVAL
 
         async def on_content(accumulated_text: str) -> None:
             nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
+            nonlocal stream_edit_interval
             now = time.monotonic()
             text_len = len(accumulated_text)
             if first_content:
                 first_content = False
             else:
-                time_ok = (now - last_edit_time) >= STREAM_EDIT_INTERVAL
+                time_ok = (now - last_edit_time) >= stream_edit_interval
                 chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
                 if not time_ok and not chars_ok:
                     return
@@ -1156,6 +1313,8 @@ class TelegramBot:
                         parse_mode=None,
                     )
                     stream_msg_id = sent.message_id
+            except TelegramRetryAfter as e:
+                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
             except Exception:
                 pass
             last_edit_time = now
@@ -1336,6 +1495,41 @@ class TelegramBot:
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    async def _retry_on_flood(
+        self,
+        coro_factory: Any,
+        max_retries: int = 3,
+    ) -> Any:
+        """Retry a Telegram API call on flood control (rate limit).
+
+        Args:
+            coro_factory: Zero-arg callable returning an awaitable. Must be a
+                factory (not a pre-built coroutine) since you can't await twice.
+            max_retries: Maximum retry attempts.
+
+        Returns:
+            The result of the awaitable on success.
+
+        Raises:
+            TelegramRetryAfter: If all retries are exhausted.
+        """
+        last_exc: TelegramRetryAfter | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                return await coro_factory()
+            except TelegramRetryAfter as e:
+                last_exc = e
+                wait = e.retry_after + 0.5  # buffer — retry_after is an int
+                logger.warning(
+                    "Telegram flood control: retry %d/%d, waiting %.1fs",
+                    attempt,
+                    max_retries,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+        logger.error("Telegram flood control: all %d retries exhausted", max_retries)
+        raise last_exc  # type: ignore[misc]
+
     async def _edit_final(self, chat_id: str, message_id: int, text: str) -> None:
         """Edit a streamed message with the final text. Tries HTML, falls back to plain."""
         if len(text) > MAX_MESSAGE_LENGTH:
@@ -1344,25 +1538,29 @@ class TelegramBot:
             await self.send_message(chat_id, text)
             return
 
-        # Try HTML (converted from markdown)
+        # Try HTML (converted from markdown) — with flood-control retry
         try:
-            await self.bot.edit_message_text(
-                chat_id=int(chat_id),
-                message_id=message_id,
-                text=_md_to_html(text),
-                parse_mode=ParseMode.HTML,
+            await self._retry_on_flood(
+                lambda: self.bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=message_id,
+                    text=_md_to_html(text),
+                    parse_mode=ParseMode.HTML,
+                )
             )
             return
         except Exception:
             pass
 
-        # Fallback to plain text
+        # Fallback to plain text — with flood-control retry
         try:
-            await self.bot.edit_message_text(
-                chat_id=int(chat_id),
-                message_id=message_id,
-                text=text,
-                parse_mode=None,
+            await self._retry_on_flood(
+                lambda: self.bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=message_id,
+                    text=text,
+                    parse_mode=None,
+                )
             )
         except Exception as e:
             logger.error("Failed to edit final message: %s", e)
@@ -1376,17 +1574,21 @@ class TelegramBot:
         for chunk in chunks:
             html_chunk = _md_to_html(chunk)
             try:
-                await self.bot.send_message(
-                    chat_id=int(chat_id),
-                    text=html_chunk,
-                    parse_mode=ParseMode.HTML,
+                await self._retry_on_flood(
+                    lambda c=html_chunk: self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=c,
+                        parse_mode=ParseMode.HTML,
+                    )
                 )
             except Exception:
                 try:
-                    await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=chunk,
-                        parse_mode=None,
+                    await self._retry_on_flood(
+                        lambda c=chunk: self.bot.send_message(
+                            chat_id=int(chat_id),
+                            text=c,
+                            parse_mode=None,
+                        )
                     )
                 except Exception as e:
                     logger.error("Failed to send Telegram message: %s", e)

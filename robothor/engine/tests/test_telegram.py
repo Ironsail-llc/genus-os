@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram.exceptions import TelegramRetryAfter
 
 from robothor.engine.chat import _sessions, get_shared_session
 from robothor.engine.telegram import MAX_MESSAGE_LENGTH, TelegramBot
@@ -172,3 +173,94 @@ class TestConcurrentHistory:
         assert "re: telegram: hello" in contents
         assert "helm: world" in contents
         assert "re: helm: world" in contents
+
+
+def _make_flood_error(retry_after: int = 0) -> TelegramRetryAfter:
+    """Create a TelegramRetryAfter exception for testing."""
+    method = MagicMock()
+    type(method).__name__ = "sendMessage"
+    return TelegramRetryAfter(method=method, message="Flood control", retry_after=retry_after)
+
+
+class TestFloodControl:
+    """Tests for Telegram flood control (rate limit) retry logic."""
+
+    @pytest.mark.asyncio
+    async def test_retry_on_flood_succeeds_after_retry(self, bot):
+        """Retries on TelegramRetryAfter and succeeds."""
+        call_count = 0
+
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _make_flood_error(retry_after=0)
+            return "ok"
+
+        result = await bot._retry_on_flood(flaky)
+        assert result == "ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_flood_raises_after_max_retries(self, bot):
+        """Raises TelegramRetryAfter when all retries exhausted."""
+
+        async def always_flood():
+            raise _make_flood_error(retry_after=0)
+
+        with pytest.raises(TelegramRetryAfter):
+            await bot._retry_on_flood(always_flood, max_retries=2)
+
+    @pytest.mark.asyncio
+    async def test_retry_on_flood_passes_non_flood_exceptions(self, bot):
+        """Non-flood exceptions are not caught."""
+
+        async def bad():
+            raise ValueError("not a flood")
+
+        with pytest.raises(ValueError, match="not a flood"):
+            await bot._retry_on_flood(bad)
+
+    @pytest.mark.asyncio
+    async def test_send_message_retries_on_flood(self, bot):
+        """send_message retries on flood control and succeeds."""
+        flood = _make_flood_error(retry_after=0)
+        bot.bot.send_message = AsyncMock(side_effect=[flood, None])
+
+        await bot.send_message("12345", "Hello")
+        assert bot.bot.send_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_message_flood_exhausted_falls_to_plain(self, bot):
+        """When HTML send exhausts retries, falls back to plain text."""
+        flood = _make_flood_error(retry_after=0)
+        # 3 flood errors for HTML (exhausts retries) → then plain succeeds
+        bot.bot.send_message = AsyncMock(side_effect=[flood, flood, flood, None])
+
+        await bot.send_message("12345", "Hello")
+        assert bot.bot.send_message.call_count == 4
+        # Last call should be plain text (parse_mode=None)
+        last_call = bot.bot.send_message.call_args
+        assert last_call.kwargs.get("parse_mode") is None
+
+    @pytest.mark.asyncio
+    async def test_edit_final_retries_on_flood(self, bot):
+        """_edit_final retries on flood control and succeeds."""
+        flood = _make_flood_error(retry_after=0)
+        bot.bot.edit_message_text = AsyncMock(side_effect=[flood, None])
+
+        await bot._edit_final("12345", 42, "Final text")
+        assert bot.bot.edit_message_text.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_edit_final_flood_exhausted_falls_to_plain(self, bot):
+        """When HTML edit exhausts retries, falls back to plain text."""
+        flood = _make_flood_error(retry_after=0)
+        # 3 flood errors for HTML (exhausts retries) → then plain succeeds
+        bot.bot.edit_message_text = AsyncMock(side_effect=[flood, flood, flood, None])
+
+        await bot._edit_final("12345", 42, "Final text")
+        assert bot.bot.edit_message_text.call_count == 4
+        # Last call should be plain text (parse_mode=None)
+        last_call = bot.bot.edit_message_text.call_args
+        assert last_call.kwargs.get("parse_mode") is None
