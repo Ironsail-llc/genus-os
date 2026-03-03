@@ -653,9 +653,17 @@ class AgentRunner:
                 for err_tool, err_msg, err_type in iteration_errors:
                     if err_type is None:
                         continue
+                    consec = escalation.consecutive_errors if escalation else 1
+                    logger.debug(
+                        "Error recovery: tool=%s type=%s consecutive=%d spawns_used=%d",
+                        err_tool,
+                        err_type,
+                        consec,
+                        _helper_spawns_used,
+                    )
                     action = get_recovery_action(
                         error_type=err_type,
-                        consecutive_count=escalation.consecutive_errors if escalation else 1,
+                        consecutive_count=consec,
                         agent_config=agent_config,
                         tool_name=err_tool,
                         error_msg=err_msg,
@@ -663,6 +671,7 @@ class AgentRunner:
                     )
                     if action is None:
                         continue
+                    logger.debug("Error recovery: action=%s for %s", action.action, err_tool)
 
                     if action.action == "backoff":
                         await asyncio.sleep(action.delay_seconds)
@@ -684,6 +693,7 @@ class AgentRunner:
                         recovery_applied = True
 
                     elif action.action == "spawn" and agent_config.can_spawn_agents:
+                        logger.debug("Error recovery: spawning helper for %s", err_tool)
                         helper_result = await self._spawn_recovery_helper(
                             agent_config=agent_config,
                             session=session,
@@ -912,29 +922,55 @@ class AgentRunner:
     ) -> str | None:
         """Spawn a helper agent to diagnose/fix an error. Returns helper output or None."""
         try:
-            from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent
+            from robothor.engine.config import load_agent_config as _load_cfg
+            from robothor.engine.models import DeliveryMode, TriggerType
+            from robothor.engine.tools import _current_spawn_context
 
             ctx = _current_spawn_context.get()
             if ctx is None:
                 logger.debug("No spawn context — cannot spawn recovery helper")
                 return None
 
-            result = await _handle_spawn_agent(
-                {
-                    "agent_id": action.agent_id or "main",
-                    "message": action.message,
-                    "max_iterations": 5,
-                    "timeout_seconds": 60,
-                },
-                agent_id=agent_config.id,
+            helper_agent_id = action.agent_id or "main"
+            child_config = _load_cfg(helper_agent_id, self.config.manifest_dir)
+            if child_config is None:
+                logger.debug("Recovery helper config not found: %s", helper_agent_id)
+                return None
+
+            # Safety: force delivery off, cap iterations/timeout, prevent deep nesting
+            child_config.delivery_mode = DeliveryMode.NONE
+            child_config.max_iterations = min(child_config.max_iterations, 5)
+            child_config.timeout_seconds = min(child_config.timeout_seconds, 60)
+            child_depth = ctx.nesting_depth + 1
+            if child_depth >= ctx.max_nesting_depth:
+                child_config.can_spawn_agents = False
+
+            child_ctx = SpawnContext(
+                parent_run_id=ctx.parent_run_id,
+                parent_agent_id=agent_config.id,
+                correlation_id=ctx.correlation_id,
+                nesting_depth=child_depth,
+                max_nesting_depth=ctx.max_nesting_depth,
+                remaining_token_budget=ctx.remaining_token_budget,
+                remaining_cost_budget_usd=ctx.remaining_cost_budget_usd,
+                parent_trace_id=ctx.parent_trace_id,
+                parent_span_id=ctx.parent_span_id,
             )
 
-            if isinstance(result, dict):
-                if result.get("error"):
-                    logger.debug("Recovery helper failed: %s", result["error"])
-                    return None
-                return result.get("output_text", "")
-            return None
+            run = await self.execute(
+                agent_id=helper_agent_id,
+                message=action.message,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=f"recovery_helper:{agent_config.id}",
+                correlation_id=ctx.correlation_id,
+                agent_config=child_config,
+                spawn_context=child_ctx,
+            )
+
+            if run.error_message:
+                logger.debug("Recovery helper failed: %s", run.error_message)
+                return None
+            return run.output_text or ""
         except Exception as e:
             logger.debug("Failed to spawn recovery helper: %s", e)
             return None
