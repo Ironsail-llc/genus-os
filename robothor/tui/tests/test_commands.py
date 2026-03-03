@@ -45,6 +45,8 @@ class TestHandleCommand:
     async def test_all_commands_registered(self):
         """All expected commands are in the registry."""
         expected = {
+            "/deep",
+            "/plan",
             "/status",
             "/agents",
             "/costs",
@@ -175,3 +177,56 @@ class TestQuitCommand:
         handled, output = await handle_command(mock_app, "/exit")
         assert handled is True
         mock_app.exit.assert_called_once()
+
+
+class TestDeepCommand:
+    @pytest.mark.asyncio
+    async def test_deep_no_args_shows_usage(self, mock_app):
+        """Deep with no args shows usage information."""
+        handled, output = await handle_command(mock_app, "/deep")
+        assert handled is True
+        assert "Usage" in output
+        assert "RLM" in output
+        assert "$0.50" in output
+
+    @pytest.mark.asyncio
+    async def test_deep_with_query_delegates_to_stream(self, mock_app):
+        """Deep with query delegates to app._stream_deep."""
+        mock_app._stream_deep = AsyncMock()
+        handled, output = await handle_command(mock_app, "/deep What is 2+2?")
+        assert handled is True
+        mock_app._stream_deep.assert_called_once_with("What is 2+2?")
+
+    @pytest.mark.asyncio
+    async def test_deep_strips_query(self, mock_app):
+        """Deep strips whitespace from query."""
+        mock_app._stream_deep = AsyncMock()
+        handled, output = await handle_command(mock_app, "/deep   Analyze calendar  ")
+        assert handled is True
+        mock_app._stream_deep.assert_called_once_with("Analyze calendar")
+
+
+class TestPlanCommand:
+    @pytest.mark.asyncio
+    async def test_plan_no_args_shows_usage(self, mock_app):
+        """Plan with no args shows usage information."""
+        handled, output = await handle_command(mock_app, "/plan")
+        assert handled is True
+        assert "Usage" in output
+        assert "Plan Mode" in output
+
+    @pytest.mark.asyncio
+    async def test_plan_with_message_delegates_to_stream(self, mock_app):
+        """Plan with message delegates to app._stream_plan."""
+        mock_app._stream_plan = AsyncMock()
+        handled, output = await handle_command(mock_app, "/plan Reorganize my week")
+        assert handled is True
+        mock_app._stream_plan.assert_called_once_with("Reorganize my week")
+
+    @pytest.mark.asyncio
+    async def test_help_includes_deep_and_plan(self, mock_app):
+        """Help output includes /deep and /plan commands."""
+        handled, output = await handle_command(mock_app, "/help")
+        assert handled is True
+        assert "/deep" in output
+        assert "/plan" in output

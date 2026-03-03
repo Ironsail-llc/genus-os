@@ -39,7 +39,14 @@ from robothor.engine.config import (
     build_system_prompt,
     load_agent_config,
 )
-from robothor.engine.models import AgentConfig, AgentRun, SpawnContext, TriggerType
+from robothor.engine.models import (
+    AgentConfig,
+    AgentRun,
+    RunStep,
+    SpawnContext,
+    StepType,
+    TriggerType,
+)
 from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
@@ -110,6 +117,44 @@ Do NOT discuss, re-plan, re-draft, or ask for confirmation. ACT on each step.
 If a step fails, try alternatives. Report what you did and the results.
 """
 
+# ─── Deep Plan Mode Instructions ─────────────────────────────────────
+# Used when /deep triggers planning first — gathers rich context for the RLM.
+
+DEEP_PLAN_PREAMBLE = """\
+[DEEP PLAN MODE — CONTEXT GATHERING FOR RLM]
+
+You are preparing context for a deep reasoning (RLM) session.
+Your goal: gather ALL relevant context that the RLM will need.
+
+## Your job
+1. Research the query using read-only tools — search memory, read files, list tasks/contacts
+2. Summarize what you found — key facts, relevant data, file contents
+3. Propose what the RLM should reason about and what context it needs
+
+## Important
+- The RLM has a 10M token context window — be generous with context
+- Include raw data (file contents, task lists, contact info) — don't just summarize
+- The RLM will receive everything you output as context
+
+[END DEEP PLAN PREAMBLE — identity and context follow]
+
+"""
+
+DEEP_PLAN_SUFFIX = """
+
+[DEEP PLAN REMINDER — CONTEXT GATHERING]
+
+You are gathering context for deep reasoning. Include ALL relevant data.
+
+## Proposing a plan
+Include:
+1. **Context gathered** — raw data, file contents, memory facts
+2. **Question refinement** — the specific question for the RLM
+3. **Missing context** — anything else needed
+
+End with [PLAN_READY] on its own line.
+"""
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -155,6 +200,7 @@ class AgentRunner:
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
         execution_mode: bool = False,
+        deep_plan: bool = False,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -195,7 +241,10 @@ class AgentRunner:
             # append reminder AFTER, so plan rules aren't buried by SOUL.md directives.
             tool_schemas = self.registry.build_readonly_for_agent(agent_config)
             tool_names = self.registry.get_readonly_tool_names(agent_config)
-            system_prompt = PLAN_MODE_PREAMBLE + system_prompt + PLAN_MODE_SUFFIX
+            if deep_plan:
+                system_prompt = DEEP_PLAN_PREAMBLE + system_prompt + DEEP_PLAN_SUFFIX
+            else:
+                system_prompt = PLAN_MODE_PREAMBLE + system_prompt + PLAN_MODE_SUFFIX
         else:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
@@ -356,6 +405,168 @@ class AgentRunner:
                 )
 
         return self._finish_run(session.complete(output_text), trace=trace)
+
+    # ─── Deep Mode (RLM bypass) ───────────────────────────────────────
+
+    async def execute_deep(
+        self,
+        query: str,
+        *,
+        on_progress: Callable[[dict], Awaitable[None]] | None = None,
+        conversation_history: list[dict] | None = None,
+        context_override: str | None = None,
+    ) -> AgentRun:
+        """Execute a deep reasoning session via the RLM, bypassing the LLM loop.
+
+        This is the engine-side implementation for /deep.  Unlike execute(),
+        it calls execute_deep_reason() directly — the user explicitly requested
+        the RLM, so no LLM needs to "decide" to invoke the tool.
+
+        Args:
+            query: The user's question / reasoning request.
+            on_progress: Optional callback emitting {elapsed_s, status} every 5s.
+            conversation_history: Recent conversation for context (not sent to RLM
+                as messages — summarised as context string).
+
+        Returns:
+            AgentRun with output_text set to the RLM response, cost unified.
+        """
+        import uuid
+
+        from robothor.engine.session import AgentSession
+
+        agent_id = "main"
+        session = AgentSession(
+            agent_id=agent_id,
+            trigger_type=TriggerType.MANUAL,
+            trigger_detail="deep_reason",
+            tenant_id=self.config.tenant_id,
+        )
+        session.start(
+            system_prompt="",
+            user_message=query,
+            tools_provided=["deep_reason"],
+            delivery_mode="none",
+        )
+
+        # Record run in DB
+        try:
+            create_run(session.run)
+        except Exception as e:
+            logger.warning("Failed to record deep run start: %s", e)
+
+        # Build context — use override (from deep plan) or fall back to conversation history
+        if context_override:
+            context = context_override
+        else:
+            context = ""
+            if conversation_history:
+                recent = conversation_history[-10:]  # Last 5 turns
+                context_parts = []
+                for msg in recent:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role in ("user", "assistant") and content:
+                        context_parts.append(f"{role}: {content[:500]}")
+                if context_parts:
+                    context = "Recent conversation context:\n" + "\n".join(context_parts)
+
+        start_time = time.monotonic()
+
+        # Progress heartbeat: emit elapsed time every 5s while RLM runs
+        progress_stop = asyncio.Event()
+
+        async def _progress_loop() -> None:
+            elapsed = 0
+            while not progress_stop.is_set():
+                await asyncio.sleep(5)
+                if progress_stop.is_set():
+                    break
+                elapsed = int(time.monotonic() - start_time)
+                if on_progress:
+                    with contextlib.suppress(Exception):
+                        await on_progress({"elapsed_s": elapsed, "status": "running"})
+
+        progress_task = asyncio.create_task(_progress_loop())
+
+        try:
+            from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
+
+            config = DeepReasonConfig(workspace=str(self.config.workspace))
+            result = await asyncio.to_thread(
+                execute_deep_reason,
+                query=query,
+                context=context,
+                config=config,
+            )
+
+            progress_stop.set()
+            progress_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await progress_task
+
+            elapsed = time.monotonic() - start_time
+
+            if "error" in result:
+                error_msg = result["error"]
+                session.record_error(error_msg)
+
+                # Record deep_reason step even on failure
+                step = RunStep(
+                    id=str(uuid.uuid4()),
+                    run_id=session.run.id,
+                    step_number=1,
+                    step_type=StepType.DEEP_REASON,
+                    tool_name="deep_reason",
+                    tool_input={"query": query},
+                    tool_output=result,
+                    duration_ms=int(elapsed * 1000),
+                    error_message=error_msg,
+                )
+                session.run.steps.append(step)
+
+                return self._finish_run(session.fail(error_msg))
+
+            # Success
+            response_text = result.get("response", "")
+            cost_usd = result.get("cost_usd", 0.0)
+            execution_time_s = result.get("execution_time_s", round(elapsed, 1))
+            context_chars = result.get("context_chars", 0)
+            trajectory_file = result.get("trajectory_file", "")
+
+            # Unify cost into run totals
+            session.run.total_cost_usd += cost_usd
+
+            # Record deep_reason step
+            step = RunStep(
+                id=str(uuid.uuid4()),
+                run_id=session.run.id,
+                step_number=1,
+                step_type=StepType.DEEP_REASON,
+                tool_name="deep_reason",
+                tool_input={"query": query, "context_chars": context_chars},
+                tool_output={
+                    "response_chars": len(response_text),
+                    "cost_usd": cost_usd,
+                    "execution_time_s": execution_time_s,
+                    "trajectory_file": trajectory_file,
+                },
+                duration_ms=int(elapsed * 1000),
+            )
+            session.run.steps.append(step)
+
+            return self._finish_run(session.complete(response_text))
+
+        except Exception as e:
+            progress_stop.set()
+            progress_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await progress_task
+
+            tb = traceback.format_exc()
+            logger.error("execute_deep failed: %s", e, exc_info=True)
+            session.record_error(str(e), tb)
+            return self._finish_run(session.fail(str(e), tb))
 
     async def _run_loop(
         self,
@@ -587,6 +798,12 @@ class AgentRunner:
                     post_gr = guardrail_engine.check_post_execution(tool_name, result)
                     if post_gr.action == "warned":
                         logger.warning("Guardrail warning for %s: %s", tool_name, post_gr.reason)
+
+                # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
+                if isinstance(result, dict) and not error_msg:
+                    tool_cost = result.get("cost_usd")
+                    if tool_cost and isinstance(tool_cost, (int, float)) and tool_cost > 0:
+                        session.run.total_cost_usd += tool_cost
 
                 # Emit tool_end event
                 if on_tool:

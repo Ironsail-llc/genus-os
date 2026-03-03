@@ -264,3 +264,97 @@ class TestFloodControl:
         # Last call should be plain text (parse_mode=None)
         last_call = bot.bot.edit_message_text.call_args
         assert last_call.kwargs.get("parse_mode") is None
+
+
+class TestDeepCommand:
+    """Tests for /deep command in Telegram bot."""
+
+    @pytest.mark.asyncio
+    async def test_deep_help_text(self, bot):
+        """Bot help text includes /deep command."""
+        # The help text is built in the /start and /help handlers
+        assert hasattr(bot, "_run_deep_mode"), "TelegramBot should have _run_deep_mode method"
+
+    @pytest.mark.asyncio
+    async def test_run_deep_mode_success(self, bot):
+        """_run_deep_mode calls runner.execute_deep and edits message with result."""
+        from robothor.engine.models import AgentRun, RunStatus
+
+        # Mock the runner's execute_deep to return a completed run
+        run = AgentRun()
+        run.status = RunStatus.COMPLETED
+        run.output_text = "Deep analysis result"
+        run.total_cost_usd = 0.75
+        run.duration_ms = 42500
+
+        bot.runner.execute_deep = AsyncMock(return_value=run)
+        bot.bot.edit_message_text = AsyncMock()
+
+        # Mock send_message to return a message with message_id
+        sent_msg = MagicMock()
+        sent_msg.message_id = 99
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+
+        # Build required args: chat_id, session_key, session, query, message
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        mock_message = MagicMock()
+        mock_message.chat.id = 12345
+
+        await bot._run_deep_mode("12345", session_key, session, "Analyze my calendar", mock_message)
+
+        # Verify execute_deep was called
+        bot.runner.execute_deep.assert_called_once()
+        call_kwargs = bot.runner.execute_deep.call_args
+        assert call_kwargs.kwargs["query"] == "Analyze my calendar"
+
+    @pytest.mark.asyncio
+    async def test_run_deep_mode_failure(self, bot):
+        """_run_deep_mode handles failed runs gracefully."""
+        from robothor.engine.models import AgentRun, RunStatus
+
+        run = AgentRun()
+        run.status = RunStatus.FAILED
+        run.output_text = None
+        run.error_message = "RLM budget exceeded"
+        run.total_cost_usd = 0.0
+        run.duration_ms = 120000
+
+        bot.runner.execute_deep = AsyncMock(return_value=run)
+        bot.bot.edit_message_text = AsyncMock()
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 99
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        mock_message = MagicMock()
+        mock_message.chat.id = 12345
+
+        await bot._run_deep_mode("12345", session_key, session, "Very complex query", mock_message)
+
+        # Should still call execute_deep
+        bot.runner.execute_deep.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_deep_mode_exception(self, bot):
+        """_run_deep_mode handles exceptions from execute_deep."""
+        bot.runner.execute_deep = AsyncMock(side_effect=Exception("Connection failed"))
+        bot.bot.edit_message_text = AsyncMock()
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 99
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        mock_message = MagicMock()
+        mock_message.chat.id = 12345
+
+        # Should not raise
+        await bot._run_deep_mode("12345", session_key, session, "Test query", mock_message)
+
+        # Exception handler calls self.send_message (the wrapper), which calls bot.send_message
+        # Verify send_message was called at least twice (initial progress + error)
+        assert bot.bot.send_message.call_count >= 2

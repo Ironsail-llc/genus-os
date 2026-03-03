@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
-import { Send, Square, Check, X, ClipboardList, MessageSquareText } from "lucide-react";
+import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
 interface ChatMessage {
   id: string;
@@ -27,6 +27,7 @@ interface ActivePlan {
   plan_text: string;
   original_message: string;
   status: string;
+  deep_plan?: boolean;
 }
 
 /** Strip any residual markers from messages (history or live).
@@ -56,6 +57,11 @@ export function ChatPanel() {
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [planFeedback, setPlanFeedback] = useState("");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  const [deepMode, setDeepMode] = useState(false);
+  const [deepPlan, setDeepPlan] = useState(false);
+  const [isDeepReasoning, setIsDeepReasoning] = useState(false);
+  const [deepElapsed, setDeepElapsed] = useState(0);
+  const [deepCost, setDeepCost] = useState<{ time_s: number; cost: number } | null>(null);
   const throttledStreamingText = useThrottle(streamingText, 100);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -65,7 +71,7 @@ export function ChatPanel() {
   // Scroll to bottom on new messages (throttled during streaming)
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, throttledStreamingText, activePlan]);
+  }, [messages, throttledStreamingText, activePlan, isDeepReasoning]);
 
   // Load history on mount
   useEffect(() => {
@@ -115,6 +121,7 @@ export function ChatPanel() {
             plan_text: data.plan.plan_text,
             original_message: data.plan.original_message,
             status: data.plan.status,
+            deep_plan: data.plan.deep_plan || false,
           });
         }
       })
@@ -123,17 +130,46 @@ export function ChatPanel() {
       });
   }, []);
 
-  // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode
+  // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "P") {
         e.preventDefault();
         setPlanMode((prev) => !prev);
+        setDeepMode(false);
+        setDeepPlan(false);
+        inputRef.current?.focus();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
+        e.preventDefault();
+        setDeepMode((prev) => {
+          const next = !prev;
+          if (next) {
+            setPlanMode(true);
+            setDeepPlan(true);
+          } else {
+            setPlanMode(false);
+            setDeepPlan(false);
+          }
+          return next;
+        });
         inputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // Recover active deep reasoning on page refresh
+  useEffect(() => {
+    fetch("/api/chat/deep/status")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.active && data.deep?.status === "running") {
+          setIsDeepReasoning(true);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
@@ -158,7 +194,7 @@ export function ChatPanel() {
       const res = await fetch("/api/chat/plan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, deep_plan: deepPlan }),
         signal: controller.signal,
       });
 
@@ -198,6 +234,7 @@ export function ChatPanel() {
               plan_text: parsed.plan_text,
               original_message: parsed.original_message,
               status: parsed.status,
+              deep_plan: parsed.deep_plan || false,
             });
           } else if (eventType === "tool_start") {
             setActiveToolName(parsed.tool || null);
@@ -263,10 +300,141 @@ export function ChatPanel() {
       setActiveToolName(null);
       abortRef.current = null;
     }
-  }, [input, isStreaming, isPlanning]);
+  }, [input, isStreaming, isPlanning, deepPlan]);
+
+  const sendDeepMessage = useCallback(async () => {
+    const text = input.trim();
+    if (!text || isStreaming || isDeepReasoning) return;
+
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: text,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setDeepMode(false); // One-shot: auto-disable after submit
+    setIsDeepReasoning(true);
+    setDeepElapsed(0);
+    setDeepCost(null);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await fetch("/api/chat/deep/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        setMessages((prev) => [
+          ...prev,
+          { id: `err-${Date.now()}`, role: "assistant", content: `Deep reasoning failed (${res.status}).`, timestamp: new Date() },
+        ]);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = "";
+      let sseEventType = "";
+      let sseData = "";
+      let fullResponse = "";
+      let costInfo: { time_s: number; cost: number } | null = null;
+
+      const handleSSEEvent = (eventType: string, data: string) => {
+        try {
+          const parsed = JSON.parse(data);
+          if (eventType === "deep_progress") {
+            setDeepElapsed(parsed.elapsed_s || 0);
+          } else if (eventType === "deep_result") {
+            fullResponse = parsed.response || "";
+            costInfo = {
+              time_s: parsed.execution_time_s || 0,
+              cost: parsed.cost_usd || 0,
+            };
+          } else if (eventType === "done") {
+            if (parsed.text && !fullResponse) fullResponse = parsed.text;
+            if (parsed.cost_usd && !costInfo) {
+              costInfo = {
+                time_s: parsed.execution_time_s || 0,
+                cost: parsed.cost_usd || parsed.total_cost_usd || 0,
+              };
+            }
+          } else if (eventType === "error") {
+            fullResponse = `Error: ${parsed.error || "Unknown error"}`;
+          }
+        } catch {
+          // skip
+        }
+      };
+
+      const processLine = (line: string) => {
+        if (line === "") {
+          if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
+          sseEventType = "";
+          sseData = "";
+        } else if (line.startsWith("event: ")) {
+          sseEventType = line.slice(7);
+        } else if (line.startsWith("data: ")) {
+          sseData += (sseData ? "\n" : "") + line.slice(6);
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split("\n");
+        sseBuffer = lines.pop() || "";
+        for (const line of lines) processLine(line);
+      }
+      sseBuffer += decoder.decode();
+      if (sseBuffer.length > 0) {
+        for (const line of sseBuffer.split("\n")) processLine(line);
+      }
+      if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
+
+      // Type assertion — TypeScript can't track closure mutations from handleSSEEvent
+      const finalCost = costInfo as { time_s: number; cost: number } | null;
+      if (finalCost) setDeepCost(finalCost);
+
+      if (fullResponse) {
+        const costSuffix = finalCost
+          ? `\n\n---\n*RLM: ${finalCost.time_s.toFixed(1)}s / $${finalCost.cost.toFixed(2)}*`
+          : "";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `asst-${Date.now()}`,
+            role: "assistant",
+            content: stripResidualMarkers(fullResponse).trim() + costSuffix,
+            timestamp: new Date(),
+          },
+        ]);
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { id: `err-${Date.now()}`, role: "assistant", content: "Deep reasoning failed.", timestamp: new Date() },
+        ]);
+      }
+    } finally {
+      setIsDeepReasoning(false);
+      setDeepElapsed(0);
+      abortRef.current = null;
+    }
+  }, [input, isStreaming, isDeepReasoning]);
 
   const sendMessage = useCallback(async () => {
-    if (planMode) {
+    if (deepMode || planMode) {
+      // Deep mode routes through plan mode (deep always plans first).
+      // Standalone plan mode also uses sendPlanMessage.
       return sendPlanMessage();
     }
 
@@ -341,6 +509,7 @@ export function ChatPanel() {
               plan_text: parsed.plan_text,
               original_message: parsed.original_message,
               status: parsed.status,
+              deep_plan: parsed.deep_plan || false,
             });
           } else if (eventType === "done") {
             fullResponse = parsed.text || fullResponse;
@@ -434,13 +603,23 @@ export function ChatPanel() {
       setStreamingText("");
       abortRef.current = null;
     }
-  }, [input, isStreaming, planMode, sendPlanMessage, notifyConversationUpdate, setRender]);
+  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, notifyConversationUpdate, setRender]);
 
   const handlePlanApprove = useCallback(async () => {
     if (!activePlan) return;
+    const isDeepPlan = activePlan.deep_plan === true;
     setPlanMode(false);
+    setDeepMode(false);
+    setDeepPlan(false);
     setIsPlanExecuting(true);
     setStreamingText("");
+
+    // Show deep reasoning progress if this is a deep plan
+    if (isDeepPlan) {
+      setIsDeepReasoning(true);
+      setDeepElapsed(0);
+      setDeepCost(null);
+    }
 
     try {
       const res = await fetch("/api/chat/plan/approve", {
@@ -453,6 +632,7 @@ export function ChatPanel() {
 
       if (!res.ok || !res.body) {
         setIsPlanExecuting(false);
+        setIsDeepReasoning(false);
         return;
       }
 
@@ -463,6 +643,7 @@ export function ChatPanel() {
       let sseEventType = "";
       let sseData = "";
       let fullResponse = "";
+      let costInfo: { time_s: number; cost: number } | null = null;
 
       const processLine = (line: string) => {
         if (line === "") {
@@ -472,8 +653,24 @@ export function ChatPanel() {
               if (sseEventType === "delta") {
                 fullResponse += parsed.text || "";
                 setStreamingText(fullResponse);
+              } else if (sseEventType === "deep_progress") {
+                setDeepElapsed(parsed.elapsed_s || 0);
+              } else if (sseEventType === "deep_result") {
+                fullResponse = parsed.response || fullResponse;
+                costInfo = {
+                  time_s: parsed.execution_time_s || 0,
+                  cost: parsed.cost_usd || 0,
+                };
               } else if (sseEventType === "done") {
-                fullResponse = parsed.text || fullResponse;
+                if (parsed.text) fullResponse = parsed.text;
+                if (parsed.cost_usd && !costInfo) {
+                  costInfo = {
+                    time_s: parsed.execution_time_s || 0,
+                    cost: parsed.cost_usd || 0,
+                  };
+                }
+              } else if (sseEventType === "error") {
+                fullResponse = `Error: ${parsed.error || "Unknown error"}`;
               }
             } catch { /* skip */ }
           }
@@ -505,14 +702,20 @@ export function ChatPanel() {
         } catch { /* skip */ }
       }
 
+      const finalCost = costInfo as { time_s: number; cost: number } | null;
+      if (finalCost) setDeepCost(finalCost);
+
       setStreamingText("");
       if (fullResponse.trim()) {
+        const costSuffix = finalCost
+          ? `\n\n---\n*RLM: ${finalCost.time_s.toFixed(1)}s / $${finalCost.cost.toFixed(2)}*`
+          : "";
         setMessages((prev) => [
           ...prev,
           {
             id: `asst-${Date.now()}`,
             role: "assistant",
-            content: stripResidualMarkers(fullResponse).trim(),
+            content: stripResidualMarkers(fullResponse).trim() + costSuffix,
             timestamp: new Date(),
           },
         ]);
@@ -521,6 +724,8 @@ export function ChatPanel() {
       // ignore
     } finally {
       setIsPlanExecuting(false);
+      setIsDeepReasoning(false);
+      setDeepElapsed(0);
       setStreamingText("");
     }
   }, [activePlan]);
@@ -580,13 +785,33 @@ export function ChatPanel() {
           <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-400 animate-ping opacity-40" />
         </div>
         <span className="text-sm font-semibold">{process.env.NEXT_PUBLIC_AI_NAME || "Robothor"}</span>
-        {planMode && (
+        {planMode && !deepMode && (
           <Badge
             variant="outline"
             className="border-amber-500/50 text-amber-400 text-[10px] px-1.5 py-0"
             data-testid="plan-mode-badge"
           >
             Plan Mode
+          </Badge>
+        )}
+        {deepMode && (
+          <Badge
+            variant="outline"
+            className="border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0"
+            data-testid="deep-mode-badge"
+          >
+            <Brain className="w-3 h-3 mr-1 inline" />
+            Deep Plan
+          </Badge>
+        )}
+        {isDeepReasoning && (
+          <Badge
+            variant="outline"
+            className="border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 animate-pulse"
+            data-testid="deep-reasoning-badge"
+          >
+            <Brain className="w-3 h-3 mr-1 inline" />
+            Deep reasoning... {deepElapsed}s
           </Badge>
         )}
       </div>
@@ -646,10 +871,10 @@ export function ChatPanel() {
           {/* Plan approval card */}
           {activePlan && !isPlanExecuting && (
             <div className="flex justify-start" data-testid="plan-card">
-              <div className="max-w-[90%] rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
-                <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
-                  <ClipboardList className="w-4 h-4" />
-                  <span>Proposed Plan</span>
+              <div className={`max-w-[90%] rounded-lg border p-4 space-y-3 ${activePlan.deep_plan ? "border-violet-500/30 bg-violet-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+                <div className={`flex items-center gap-2 text-sm font-semibold ${activePlan.deep_plan ? "text-violet-400" : "text-amber-400"}`}>
+                  {activePlan.deep_plan ? <Brain className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
+                  <span>{activePlan.deep_plan ? "Deep Research Plan" : "Proposed Plan"}</span>
                 </div>
                 <div className="prose prose-sm prose-invert max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -762,10 +987,12 @@ export function ChatPanel() {
                   variant="ghost"
                   onClick={() => {
                     setPlanMode((prev) => !prev);
+                    setDeepMode(false);
+                    setDeepPlan(false);
                     inputRef.current?.focus();
                   }}
-                  className={planMode ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : "text-muted-foreground hover:text-foreground"}
-                  disabled={isStreaming || isPlanExecuting || isPlanning}
+                  className={planMode && !deepMode ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : planMode && deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                  disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
                   data-testid="plan-toggle"
                 >
                   <ClipboardList className="w-4 h-4" />
@@ -775,19 +1002,49 @@ export function ChatPanel() {
                 <p>Plan mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+P)</p>
               </TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => {
+                    setDeepMode((prev) => {
+                      const next = !prev;
+                      if (next) {
+                        setPlanMode(true);
+                        setDeepPlan(true);
+                      } else {
+                        setPlanMode(false);
+                        setDeepPlan(false);
+                      }
+                      return next;
+                    });
+                    inputRef.current?.focus();
+                  }}
+                  className={deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                  disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                  data-testid="deep-toggle"
+                >
+                  <Brain className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Deep mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+D)</p>
+              </TooltipContent>
+            </Tooltip>
           </TooltipProvider>
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={planMode ? "Describe what you want planned..." : "Ask me anything..."}
-            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[40px] max-h-[120px] focus:outline-none focus:ring-1 ${planMode ? "border-amber-500/30 focus:ring-amber-500/50" : "border-border focus:ring-ring"}`}
+            placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : "Ask me anything..."}
+            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[40px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-violet-500/30 focus:ring-violet-500/50" : planMode ? "border-amber-500/30 focus:ring-amber-500/50" : "border-border focus:ring-ring"}`}
             rows={1}
-            disabled={isStreaming || isPlanExecuting || isPlanning}
+            disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"
           />
-          {isStreaming || isPlanning ? (
+          {isStreaming || isPlanning || isDeepReasoning ? (
             <Button
               size="icon"
               variant="ghost"

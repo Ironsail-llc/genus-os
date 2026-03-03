@@ -16,6 +16,8 @@ Endpoints:
   POST /chat/plan/reject  — Reject pending plan (optional feedback)
   POST /chat/plan/iterate — Revise pending plan with feedback (keeps same plan_id)
   GET  /chat/plan/status  — Check plan state for a session
+  POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
+  GET  /chat/deep/status  — Check active deep reasoning state
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from robothor.engine.chat_store import (
     save_message_async,
     save_plan_state_async,
 )
-from robothor.engine.models import PLAN_TTL_SECONDS, PlanState, TriggerType
+from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -66,6 +68,7 @@ class ChatSession:
     model_override: str | None = None
     plan_mode: bool = False
     active_plan: PlanState | None = None
+    active_deep: DeepRunState | None = None
 
 
 # In-memory session store
@@ -232,6 +235,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,
                         "duration_ms": run.duration_ms,
+                        "total_cost_usd": round(run.total_cost_usd, 4),
+                        "run_id": run.id,
                     },
                 }
             )
@@ -422,6 +427,7 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "revision_count": plan.revision_count,
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
+        "deep_plan": plan.deep_plan,
     }
 
 
@@ -437,6 +443,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     body = await request.json()
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
+    deep_plan: bool = body.get("deep_plan", False)
 
     if not session_key or not message:
         return JSONResponse({"error": "session_key and message required"}, status_code=400)
@@ -485,6 +492,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 model_override=session.model_override,
                 conversation_history=list(session.history),
                 readonly_mode=True,
+                deep_plan=deep_plan,
             )
 
             # Extract plan from output
@@ -516,6 +524,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     status="pending",
                     created_at=datetime.now(UTC).isoformat(),
                     exploration_run_id=run.id,
+                    deep_plan=deep_plan,
                 )
                 session.active_plan = plan
 
@@ -620,94 +629,203 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
     async def run_approved() -> None:
-        """Execute the approved plan with full tools."""
+        """Execute the approved plan — normal execution or deep reasoning."""
         try:
-            last_sent_len = 0
+            if plan.deep_plan:
+                # ── Deep plan: route to execute_deep with rich context ──
+                # Build context from plan + exploration output (last assistant message)
+                exploration_output = ""
+                for msg in reversed(session.history):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        exploration_output = msg["content"]
+                        break
 
-            async def on_content(cumulative: str) -> None:
-                nonlocal last_sent_len
-                if len(cumulative) > last_sent_len:
-                    delta = cumulative[last_sent_len:]
-                    last_sent_len = len(cumulative)
-                    await queue.put({"event": "delta", "data": {"text": delta}})
+                context = (
+                    f"Original request: {plan.original_message}\n\n"
+                    f"Research plan:\n{plan.plan_text}\n\n"
+                    f"Exploration output:\n{exploration_output}"
+                )
 
-            async def on_tool(event: dict) -> None:
-                await queue.put({"event": event["event"], "data": event})
+                # Emit deep_start event
+                deep_id = str(uuid.uuid4())
+                await queue.put(
+                    {
+                        "event": "deep_start",
+                        "data": {"deep_id": deep_id, "query": plan.original_message},
+                    }
+                )
 
-            agent_id = _config.default_chat_agent if _config else "main"
-            parts = session_key.split(":")
-            if len(parts) >= 2:
-                agent_id = parts[1]
+                async def on_deep_progress(progress: dict) -> None:
+                    await queue.put({"event": "deep_progress", "data": progress})
 
-            # CONTEXT RESET — clean execution context, no planning history.
-            execution_message = (
-                "Execute the following approved plan. "
-                "Use your tools to carry out each step.\n"
-                "Do NOT re-plan, re-draft, or produce another version. ACT.\n\n"
-                f"Original request: {plan.original_message}\n\n"
-                f"Approved plan:\n{plan.plan_text}"
-            )
+                run = await _runner.execute_deep(
+                    query=plan.original_message,
+                    on_progress=on_deep_progress,
+                    context_override=context,
+                )
 
-            run = await _runner.execute(
-                agent_id=agent_id,
-                message=execution_message,
-                trigger_type=TriggerType.WEBCHAT,
-                trigger_detail=f"plan-exec:{session_key}",
-                on_content=on_content,
-                on_tool=on_tool,
-                model_override=session.model_override,
-                conversation_history=None,  # CLEAN CONTEXT
-                execution_mode=True,
-            )
+                # Track execution run ID
+                plan.execution_run_id = run.id
 
-            # Track execution run ID
-            plan.execution_run_id = run.id
-
-            # Merge execution result back into session history for continuity
-            session.history.append(
-                {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
-            )
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            elif run.error_message:
+                # Merge into history
                 session.history.append(
-                    {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
+                    {"role": "user", "content": f"[Deep plan executed] {plan.original_message}"}
                 )
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
-
-            # Persist to DB
-            if run.output_text and _config:
-                asyncio.create_task(
-                    save_exchange_async(
-                        session_key,
-                        plan.original_message,
-                        run.output_text,
-                        channel="webchat",
-                        model_override=session.model_override,
-                        tenant_id=_config.tenant_id,
+                if run.output_text:
+                    session.history.append({"role": "assistant", "content": run.output_text})
+                elif run.error_message:
+                    session.history.append(
+                        {
+                            "role": "assistant",
+                            "content": f"[Deep reasoning failed: {run.error_message}]",
+                        }
                     )
+                if len(session.history) > MAX_HISTORY:
+                    session.history[:] = session.history[-MAX_HISTORY:]
+
+                # Persist to DB
+                if run.output_text and _config:
+                    asyncio.create_task(
+                        save_exchange_async(
+                            session_key,
+                            plan.original_message,
+                            run.output_text,
+                            channel="webchat",
+                            model_override=session.model_override,
+                            tenant_id=_config.tenant_id,
+                        )
+                    )
+
+                # Clear plan + persist
+                session.active_plan = None
+                if _config:
+                    asyncio.create_task(
+                        clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                    )
+
+                # Emit deep result + done
+                duration_s = (run.duration_ms or 0) / 1000
+                cost_usd = run.total_cost_usd or 0.0
+
+                if run.output_text:
+                    await queue.put(
+                        {
+                            "event": "deep_result",
+                            "data": {
+                                "response": run.output_text,
+                                "execution_time_s": round(duration_s, 1),
+                                "cost_usd": round(cost_usd, 2),
+                            },
+                        }
+                    )
+                    await queue.put(
+                        {
+                            "event": "done",
+                            "data": {
+                                "text": run.output_text,
+                                "execution_time_s": round(duration_s, 1),
+                                "cost_usd": round(cost_usd, 2),
+                                "duration_ms": run.duration_ms,
+                            },
+                        }
+                    )
+                elif run.error_message:
+                    await queue.put({"event": "error", "data": {"error": run.error_message}})
+                    await queue.put(
+                        {"event": "done", "data": {"text": "", "error": run.error_message}}
+                    )
+                else:
+                    await queue.put(
+                        {"event": "done", "data": {"text": "", "duration_ms": run.duration_ms}}
+                    )
+            else:
+                # ── Normal plan execution with full tools ──
+                last_sent_len = 0
+
+                async def on_content(cumulative: str) -> None:
+                    nonlocal last_sent_len
+                    if len(cumulative) > last_sent_len:
+                        delta = cumulative[last_sent_len:]
+                        last_sent_len = len(cumulative)
+                        await queue.put({"event": "delta", "data": {"text": delta}})
+
+                async def on_tool(event: dict) -> None:
+                    await queue.put({"event": event["event"], "data": event})
+
+                agent_id = _config.default_chat_agent if _config else "main"
+                parts = session_key.split(":")
+                if len(parts) >= 2:
+                    agent_id = parts[1]
+
+                # CONTEXT RESET — clean execution context, no planning history.
+                execution_message = (
+                    "Execute the following approved plan. "
+                    "Use your tools to carry out each step.\n"
+                    "Do NOT re-plan, re-draft, or produce another version. ACT.\n\n"
+                    f"Original request: {plan.original_message}\n\n"
+                    f"Approved plan:\n{plan.plan_text}"
                 )
 
-            # Clear plan + persist
-            session.active_plan = None
-            if _config:
-                asyncio.create_task(
-                    clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                run = await _runner.execute(
+                    agent_id=agent_id,
+                    message=execution_message,
+                    trigger_type=TriggerType.WEBCHAT,
+                    trigger_detail=f"plan-exec:{session_key}",
+                    on_content=on_content,
+                    on_tool=on_tool,
+                    model_override=session.model_override,
+                    conversation_history=None,  # CLEAN CONTEXT
+                    execution_mode=True,
                 )
 
-            await queue.put(
-                {
-                    "event": "done",
-                    "data": {
-                        "text": run.output_text or "",
-                        "model": run.model_used,
-                        "input_tokens": run.input_tokens,
-                        "output_tokens": run.output_tokens,
-                        "duration_ms": run.duration_ms,
-                    },
-                }
-            )
+                # Track execution run ID
+                plan.execution_run_id = run.id
+
+                # Merge execution result back into session history for continuity
+                session.history.append(
+                    {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
+                )
+                if run.output_text:
+                    session.history.append({"role": "assistant", "content": run.output_text})
+                elif run.error_message:
+                    session.history.append(
+                        {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
+                    )
+                if len(session.history) > MAX_HISTORY:
+                    session.history[:] = session.history[-MAX_HISTORY:]
+
+                # Persist to DB
+                if run.output_text and _config:
+                    asyncio.create_task(
+                        save_exchange_async(
+                            session_key,
+                            plan.original_message,
+                            run.output_text,
+                            channel="webchat",
+                            model_override=session.model_override,
+                            tenant_id=_config.tenant_id,
+                        )
+                    )
+
+                # Clear plan + persist
+                session.active_plan = None
+                if _config:
+                    asyncio.create_task(
+                        clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                    )
+
+                await queue.put(
+                    {
+                        "event": "done",
+                        "data": {
+                            "text": run.output_text or "",
+                            "model": run.model_used,
+                            "input_tokens": run.input_tokens,
+                            "output_tokens": run.output_tokens,
+                            "duration_ms": run.duration_ms,
+                        },
+                    }
+                )
         except asyncio.CancelledError:
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
@@ -971,3 +1089,189 @@ async def plan_status(session_key: str = "") -> JSONResponse:
             }
         )
     return JSONResponse({"active": False, "plan": None})
+
+
+# ─── Deep Mode Endpoints ─────────────────────────────────────────────
+
+
+def _deep_to_dict(deep: DeepRunState) -> dict[str, Any]:
+    """Serialize DeepRunState for JSON responses."""
+    return {
+        "deep_id": deep.deep_id,
+        "query": deep.query,
+        "status": deep.status,
+        "started_at": deep.started_at,
+        "completed_at": deep.completed_at,
+        "response": deep.response,
+        "execution_time_s": deep.execution_time_s,
+        "cost_usd": deep.cost_usd,
+        "context_chars": deep.context_chars,
+        "trajectory_file": deep.trajectory_file,
+        "error": deep.error,
+    }
+
+
+@router.post("/deep/start", response_model=None)
+async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
+    """Start deep reasoning: call RLM directly, return SSE stream with progress."""
+    if _runner is None or _config is None:
+        return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+
+    body = await request.json()
+    session_key: str = body.get("session_key", "")
+    query: str = (body.get("query", "") or body.get("message", "")).strip()
+
+    if not session_key or not query:
+        return JSONResponse({"error": "session_key and query required"}, status_code=400)
+
+    session = _get_session(session_key)
+
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def run_deep() -> None:
+        """Execute RLM in background, push progress events to queue."""
+        deep_id = str(uuid.uuid4())
+        deep = DeepRunState(
+            deep_id=deep_id,
+            query=query,
+            status="running",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        session.active_deep = deep
+
+        try:
+            # Acknowledge start
+            await queue.put({"event": "deep_start", "data": {"deep_id": deep_id, "query": query}})
+
+            async def on_progress(progress: dict) -> None:
+                await queue.put({"event": "deep_progress", "data": progress})
+
+            run = await _runner.execute_deep(
+                query=query,
+                on_progress=on_progress,
+                conversation_history=list(session.history),
+            )
+
+            deep.completed_at = datetime.now(UTC).isoformat()
+
+            if run.error_message:
+                deep.status = "failed"
+                deep.error = run.error_message
+                await queue.put({"event": "error", "data": {"error": run.error_message}})
+            else:
+                deep.status = "completed"
+                deep.response = run.output_text or ""
+                deep.execution_time_s = (run.duration_ms or 0) / 1000
+                deep.cost_usd = run.total_cost_usd
+
+                await queue.put(
+                    {
+                        "event": "deep_result",
+                        "data": {
+                            "response": deep.response,
+                            "execution_time_s": deep.execution_time_s,
+                            "cost_usd": round(deep.cost_usd, 4),
+                            "context_chars": deep.context_chars,
+                            "trajectory_file": deep.trajectory_file,
+                        },
+                    }
+                )
+
+            # Record in session history for continuity
+            session.history.append({"role": "user", "content": f"/deep {query}"})
+            if deep.response:
+                session.history.append({"role": "assistant", "content": deep.response})
+            elif deep.error:
+                session.history.append(
+                    {"role": "assistant", "content": f"[Deep reasoning failed: {deep.error}]"}
+                )
+            if len(session.history) > MAX_HISTORY:
+                session.history[:] = session.history[-MAX_HISTORY:]
+
+            # Persist to DB
+            if run.output_text and _config:
+                asyncio.create_task(
+                    save_exchange_async(
+                        session_key,
+                        f"/deep {query}",
+                        run.output_text,
+                        channel="webchat",
+                        model_override=session.model_override,
+                        tenant_id=_config.tenant_id,
+                    )
+                )
+
+            # Signal completion
+            await queue.put(
+                {
+                    "event": "done",
+                    "data": {
+                        "text": run.output_text or "",
+                        "execution_time_s": deep.execution_time_s,
+                        "cost_usd": round(deep.cost_usd, 4),
+                        "run_id": run.id,
+                        "total_cost_usd": round(run.total_cost_usd, 4),
+                    },
+                }
+            )
+        except asyncio.CancelledError:
+            deep.status = "failed"
+            deep.error = "Cancelled"
+            await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
+        except Exception as e:
+            logger.error("Deep reasoning error: %s", e, exc_info=True)
+            deep.status = "failed"
+            deep.error = str(e)
+            await queue.put({"event": "error", "data": {"error": str(e)}})
+        finally:
+            await queue.put(None)
+            session.active_task = None
+            session.active_deep = None
+
+    task = asyncio.create_task(run_deep())
+    session.active_task = task
+
+    async def sse_generator():
+        import json as _json
+
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    break
+                event = item["event"]
+                data = _json.dumps(item["data"])
+                yield f"event: {event}\ndata: {data}\n\n"
+        except asyncio.CancelledError:
+            task.cancel()
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@router.get("/deep/status")
+async def deep_status(session_key: str = "") -> JSONResponse:
+    """Check deep reasoning state for a session."""
+    if not session_key:
+        return JSONResponse({"error": "session_key required"}, status_code=400)
+
+    session = _get_session(session_key)
+
+    if session.active_deep:
+        return JSONResponse(
+            {
+                "active": True,
+                "deep": _deep_to_dict(session.active_deep),
+            }
+        )
+    return JSONResponse({"active": False, "deep": None})

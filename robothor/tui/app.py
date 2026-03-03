@@ -231,6 +231,111 @@ class RobothorApp(App):
         finally:
             self._stream_task = None
 
+    async def _stream_deep(self, query: str) -> None:
+        """Stream a deep reasoning response from the engine."""
+        chat_scroll = self.query_one("#chat-scroll")
+
+        # Show user message
+        await chat_scroll.mount(MessageDisplay(content=f"/deep {query}", role="user"))
+        chat_scroll.scroll_end(animate=False)
+
+        # Create the progress/result widget
+        msg_widget = MessageDisplay(content="\U0001f9e0 Deep reasoning...", role="assistant")
+        await chat_scroll.mount(msg_widget)
+        chat_scroll.scroll_end(animate=False)
+
+        try:
+            result_text = ""
+            async for event in self.client.deep_start(query):
+                if event.event == "deep_progress":
+                    elapsed = event.data.get("elapsed_s", 0)
+                    msg_widget.update_content(f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed")
+
+                elif event.event == "deep_result":
+                    result_text = event.data.get("response", "")
+                    cost = event.data.get("cost_usd", 0)
+                    time_s = event.data.get("execution_time_s", 0)
+                    msg_widget.update_content(result_text)
+                    # Show cost footer
+                    cost_widget = MessageDisplay(
+                        content=f"[dim]RLM: {time_s:.1f}s / ${cost:.2f}[/dim]",
+                        role="system",
+                    )
+                    await chat_scroll.mount(cost_widget)
+
+                elif event.event == "done":
+                    if not result_text:
+                        final = event.data.get("text", "")
+                        if final:
+                            msg_widget.update_content(final)
+
+                elif event.event == "error":
+                    msg_widget.update_content(
+                        f"[red]Deep reasoning error: {event.data.get('error', 'Unknown')}[/red]"
+                    )
+
+                chat_scroll.scroll_end(animate=False)
+        except asyncio.CancelledError:
+            msg_widget.update_content(
+                msg_widget._content + "\n[dim](aborted)[/dim]"
+                if hasattr(msg_widget, "_content")
+                else "[dim](aborted)[/dim]"
+            )
+        except Exception as e:
+            msg_widget.update_content(f"[red]Connection error: {e}[/red]")
+
+    async def _stream_plan(self, message: str) -> None:
+        """Stream a plan exploration from the engine."""
+        chat_scroll = self.query_one("#chat-scroll")
+
+        await chat_scroll.mount(MessageDisplay(content=f"/plan {message}", role="user"))
+        chat_scroll.scroll_end(animate=False)
+
+        msg_widget = MessageDisplay(content="\U0001f4cb Planning...", role="assistant")
+        await chat_scroll.mount(msg_widget)
+        chat_scroll.scroll_end(animate=False)
+
+        plan_text = ""
+
+        try:
+            async for event in self.client.plan_start(message):
+                if event.event == "delta":
+                    plan_text += event.data.get("text", "")
+                    msg_widget.update_content(plan_text)
+
+                elif event.event == "plan":
+                    _ = event.data.get("plan_id", "")
+                    plan_text = event.data.get("plan_text", plan_text)
+                    msg_widget.update_content(plan_text)
+
+                    # Show approve/reject prompt
+                    action_widget = MessageDisplay(
+                        content=(
+                            "[bold]Plan ready.[/bold] "
+                            "Type [bold green]approve[/bold green] or "
+                            "[bold red]reject[/bold red] (with optional feedback)."
+                        ),
+                        role="system",
+                    )
+                    await chat_scroll.mount(action_widget)
+
+                elif event.event == "done":
+                    if not plan_text:
+                        final = event.data.get("text", "")
+                        if final:
+                            msg_widget.update_content(final)
+
+                elif event.event == "error":
+                    msg_widget.update_content(
+                        f"[red]Plan error: {event.data.get('error', 'Unknown')}[/red]"
+                    )
+
+                chat_scroll.scroll_end(animate=False)
+        except asyncio.CancelledError:
+            msg_widget.update_content(plan_text + "\n[dim](aborted)[/dim]")
+        except Exception as e:
+            msg_widget.update_content(f"[red]Connection error: {e}[/red]")
+
     async def action_abort(self) -> None:
         """Cancel the running stream and tell the engine."""
         if self._stream_task and not self._stream_task.done():

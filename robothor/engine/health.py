@@ -175,6 +175,48 @@ def create_health_app(
         except Exception as e:
             return {"error": str(e)}
 
+    @app.get("/costs/deep")
+    async def costs_deep(hours: int = 24):
+        """RLM deep reasoning cost tracking — queries runs with deep_reason steps."""
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(DISTINCT r.id) AS total_calls,
+                        COALESCE(SUM(r.total_cost_usd), 0) AS total_cost_usd,
+                        COALESCE(AVG(r.total_cost_usd), 0) AS avg_cost_usd,
+                        COALESCE(AVG(r.duration_ms / 1000.0), 0) AS avg_duration_s
+                    FROM agent_runs r
+                    JOIN agent_run_steps s ON s.run_id = r.id
+                    WHERE s.step_type = 'deep_reason'
+                      AND r.started_at >= NOW() - make_interval(hours => %s)
+                      AND r.tenant_id = %s
+                    """,
+                    (hours, config.tenant_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "hours": hours,
+                        "total_calls": row[0],
+                        "total_cost_usd": round(float(row[1]), 4),
+                        "avg_cost_usd": round(float(row[2]), 4),
+                        "avg_duration_s": round(float(row[3]), 1),
+                    }
+                return {
+                    "hours": hours,
+                    "total_calls": 0,
+                    "total_cost_usd": 0,
+                    "avg_cost_usd": 0,
+                    "avg_duration_s": 0,
+                }
+        except Exception as e:
+            return {"error": str(e)}
+
     # ── Workflow API endpoints ───────────────────────────────────────
 
     @app.get("/api/workflows")

@@ -66,6 +66,14 @@ npx vitest run    # unit tests (187 tests)
 npx playwright test  # E2E tests
 ```
 
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+D` | Toggle deep reasoning mode (RLM) |
+| `Ctrl+Shift+P` | Toggle plan mode |
+| `Enter` | Send message |
+
 ## Tests
 
 - **187 unit tests** across 19 files (vitest + happy-dom + @testing-library/react)

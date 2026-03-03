@@ -83,11 +83,11 @@ class EngineClient {
   // ── Plan Mode ──
 
   /** Start plan mode: explore with read-only tools. Returns SSE stream. */
-  async planStart(sessionKey: string, message: string): Promise<Response> {
+  async planStart(sessionKey: string, message: string, deepPlan = false): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_key: sessionKey, message }),
+      body: JSON.stringify({ session_key: sessionKey, message, deep_plan: deepPlan }),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -137,6 +137,34 @@ class EngineClient {
     }
     return res.json();
   }
+
+  // ── Deep Mode ──
+
+  /** Start deep reasoning. Returns SSE stream. */
+  async deepStart(sessionKey: string, query: string): Promise<Response> {
+    const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_key: sessionKey, query }),
+    });
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res;
+  }
+
+  /** Check deep reasoning state for a session. */
+  async deepStatus(
+    sessionKey: string
+  ): Promise<{ active: boolean; deep?: DeepState }> {
+    const res = await fetch(
+      `${ENGINE_URL}/chat/deep/status?session_key=${encodeURIComponent(sessionKey)}`
+    );
+    if (!res.ok) {
+      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  }
 }
 
 export interface PlanState {
@@ -147,6 +175,18 @@ export interface PlanState {
   created_at: string;
   exploration_run_id: string;
   rejection_feedback: string;
+}
+
+export interface DeepState {
+  deep_id: string;
+  query: string;
+  status: "running" | "completed" | "failed";
+  started_at: string;
+  completed_at: string;
+  response: string;
+  execution_time_s: number;
+  cost_usd: number;
+  error: string;
 }
 
 // Singleton instance

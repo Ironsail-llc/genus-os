@@ -16,6 +16,7 @@ vi.mock("lucide-react", () => ({
   X: () => <span>X</span>,
   ClipboardList: () => <span>ClipboardList</span>,
   MessageSquareText: () => <span>MessageSquareText</span>,
+  Brain: () => <span>Brain</span>,
 }));
 
 // Mock UI components that use radix-ui internally
