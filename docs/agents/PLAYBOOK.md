@@ -523,8 +523,84 @@ tools_allowed:
 
 ---
 
-Updated: 2026-02-28
+---
+
+## 9. Template System
+
+Agent templates are parameterized bundles that can be installed, removed, updated, and shared. The engine is unchanged — templates output the same `docs/agents/*.yaml` manifests.
+
+### Template Bundle Format
+
+```
+templates/agents/<department>/<agent-id>/
+  SKILL.md                    # Hub-ready metadata (AAIF standard)
+  manifest.template.yaml      # Parameterized manifest ({{ variable }} syntax)
+  instructions.template.md    # Parameterized instruction file
+  setup.yaml                  # Variable definitions + defaults
+  programmatic.json           # Hub claiming metadata
+```
+
+### CLI Commands
+
+```bash
+# Browse available templates
+robothor agent catalog
+robothor agent catalog --department email
+
+# Preview variable resolution (dry run)
+robothor agent resolve templates/agents/email/email-classifier/
+
+# Install from template bundle
+robothor agent install templates/agents/email/email-classifier/ --yes
+robothor agent install email-classifier  # By agent ID (looks up template)
+robothor agent install --preset standard --yes  # Install a preset group
+
+# List installed agents
+robothor agent list
+
+# Remove an installed agent
+robothor agent remove email-classifier
+robothor agent remove email-classifier --archive  # Preserve in .robothor/archive/
+
+# Update from template (re-resolve with latest template)
+robothor agent update email-classifier
+robothor agent update  # Update all
+
+# Reverse-engineer existing manifest into template
+robothor agent import email-classifier
+
+# Interactive onboarding wizard
+robothor agent setup
+```
+
+### Variable Resolution Priority (last wins)
+
+1. `templates/agents/_defaults.yaml` — global defaults
+2. `setup.yaml` — template defaults
+3. `.robothor/config.yaml` — instance config
+4. `.robothor/overrides/<id>.yaml` — per-agent overrides
+5. CLI `--set key=value` — highest priority
+
+### Instance Config (.robothor/)
+
+```
+.robothor/
+  config.yaml         # Instance defaults (timezone, model, delivery)
+  installed.yaml      # Tracks installed agents (source, version, variables)
+  overrides/           # Per-agent customizations (preserved across updates)
+```
+
+### Converting Existing Agents
+
+```bash
+# Import all 13 agents into template bundles
+for id in $(robothor engine list 2>/dev/null | tail -n +3 | awk '{print $1}'); do
+  robothor agent import "$id"
+done
+```
+
+Updated: 2026-03-03
 
 ---
 
-*Contracts: `docs/agents/schema.yaml` · `docs/agents/INSTRUCTION_CONTRACT.md` · Templates: `templates/agent-manifest.yaml` · `templates/agent-instructions.md`*
+*Contracts: `docs/agents/schema.yaml` · `docs/agents/INSTRUCTION_CONTRACT.md` · Templates: `templates/agent-manifest.yaml` · `templates/agent-instructions.md` · Template System: `robothor/templates/`*
