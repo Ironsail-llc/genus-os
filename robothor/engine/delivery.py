@@ -47,11 +47,12 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         run.delivery_status = "no_output"
         return True
 
-    # Suppress HEARTBEAT_OK messages
+    # Strip any trailing HEARTBEAT_OK the LLM may hallucinate
     text = run.output_text.strip()
-    if text == "HEARTBEAT_OK":
-        logger.debug("Suppressing HEARTBEAT_OK for %s", config.id)
-        run.delivery_status = "suppressed_heartbeat_ok"
+    text = text.removesuffix("HEARTBEAT_OK").strip()
+    if not text:
+        logger.debug("Output was only HEARTBEAT_OK for %s, treating as no output", config.id)
+        run.delivery_status = "no_output"
         return True
 
     mode = config.delivery_mode

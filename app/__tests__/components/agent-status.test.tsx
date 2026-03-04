@@ -18,7 +18,7 @@ const mockAgents = [
     lastRun: new Date(Date.now() - 3600_000).toISOString(),
     lastDuration: 5000,
     errorCount: 1,
-    statusSummary: "HEARTBEAT_OK",
+    statusSummary: "All workers reporting. No escalations.",
   },
   {
     name: "crm-steward",
@@ -73,6 +73,6 @@ describe("AgentStatus", () => {
 
   it("shows status summary text", () => {
     render(<AgentStatus agents={mockAgents} />);
-    expect(screen.getByText("HEARTBEAT_OK")).toBeDefined();
+    expect(screen.getByText("All workers reporting. No escalations.")).toBeDefined();
   });
 });

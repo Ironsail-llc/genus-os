@@ -83,7 +83,6 @@ Canonical reference: `brain/ARCHITECTURE.md`
 │  • Owner's sole gatekeeper — investigates before surfacing   │
 │  • Reads triage-status.md + worker-handoff.json              │
 │  • Surfaces concise alerts to the owner via Telegram          │
-│  • HEARTBEAT_OK only when truly nothing to report             │
 └──────────────────────────────┬────────────────────────────────┘
                                │
                                ▼

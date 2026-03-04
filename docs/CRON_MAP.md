@@ -22,7 +22,7 @@ Every 30 min   │ Jira sync (crontab, 6-22h M-F) — brain/scripts/jira_sync.py
 
 Hourly         │ Email Classifier (Engine, 2h safety net 6-22, silent, primary: hook email.new + triage.refreshed) — classify emails, route or escalate
                │ Calendar Monitor (Engine, 6h safety net 6-22, silent, primary: hook calendar.*) — detect conflicts, cancellations, changes
-               │ Main Heartbeat (Engine, hourly 6-22, → Telegram) — reads all status files, surfaces decisions (HEARTBEAT_OK on quiet cycles)
+               │ Main Heartbeat (Engine, hourly 6-22, → Telegram) — reads all status files, surfaces decisions
                │ Vision Monitor (Engine, 6h safety net 6-22, silent, primary: hook vision.person_unknown) — check motion events, write status file
                │ Conversation Inbox Monitor (Engine, hourly 6-22, silent) — check urgent messages, write status file
                │ System health check (crontab) — brain/scripts/system_health_check.py
@@ -190,7 +190,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 - All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical).
 - Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
 - Main heartbeat runs hourly and reads all worker status files. Always sends a report — never silent.
-- Workers write status files and stop silently. HEARTBEAT_OK is heartbeat-only.
+- Workers write status files and stop silently.
 - Main session has `activeHours: 06:00-22:00 ET` — no wakeups during quiet hours (10 PM - 6 AM).
 - **Event-driven hooks are the primary trigger** for email, calendar, and vision agents. Crons are 6h safety nets.
 - **Declarative workflow engine** (`robothor/engine/workflow.py`) provides multi-step agent pipelines with conditional routing. Workflows are defined in `docs/workflows/*.yaml`.
