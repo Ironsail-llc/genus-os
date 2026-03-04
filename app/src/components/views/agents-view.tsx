@@ -14,6 +14,7 @@ interface AgentsViewProps {
 export function AgentsView({ visible, agents, summary, isLoading }: AgentsViewProps) {
   const metrics = [
     { title: "Healthy", value: summary.healthy },
+    { title: "Sleeping", value: summary.sleeping },
     { title: "Degraded", value: summary.degraded },
     { title: "Failed", value: summary.failed },
     { title: "Total Agents", value: summary.total },

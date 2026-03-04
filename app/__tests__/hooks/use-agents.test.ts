@@ -47,6 +47,7 @@ describe("useAgents", () => {
       healthy: 1,
       degraded: 1,
       failed: 1,
+      sleeping: 0,
       total: 3,
     });
   });

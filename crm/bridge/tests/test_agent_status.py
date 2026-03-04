@@ -5,12 +5,65 @@ Tests for agent status endpoint — health tier computation and cron monitoring.
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+# ─── Active Hour Parsing ─────────────────────────────────────────────
+
+
+def test_parse_active_hours_range_step():
+    """'6-22/2' → (6, 22)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("0 6-22/2 * * *") == (6, 22)
+
+
+def test_parse_active_hours_range():
+    """'8-20' → (8, 20)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("0 8-20 * * *") == (8, 20)
+
+
+def test_parse_active_hours_comma():
+    """'8,14,20' → (8, 20)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("0 8,14,20 * * *") == (8, 20)
+
+
+def test_parse_active_hours_star():
+    """'*' → None (always active)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("0 * * * *") is None
+
+
+def test_parse_active_hours_star_step():
+    """'*/2' → None (always active, every 2h)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("0 */2 * * *") is None
+
+
+def test_parse_active_hours_single():
+    """Single hour '6' → (6, 6)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("30 6 * * *") == (6, 6)
+
+
+def test_parse_active_hours_minute_star():
+    """'*/10 * * * *' → None (minute-interval, always active)."""
+    from routers.agents import _parse_active_hours
+
+    assert _parse_active_hours("*/10 * * * *") is None
 
 
 # ─── Health Tier Computation ──────────────────────────────────────────
@@ -21,7 +74,7 @@ def test_healthy_agent():
     from routers.agents import _compute_health_tier
 
     # Last run 5 min ago, interval 10 min
-    tier = _compute_health_tier(time.time() - 300, 600, 0, True, 10)
+    tier = _compute_health_tier(time.time() - 300, 600, 0, True, 10, "*/10 * * * *")
     assert tier == "healthy"
 
 
@@ -30,7 +83,7 @@ def test_degraded_agent_late():
     from routers.agents import _compute_health_tier
 
     # Last run 16 min ago, interval 10 min (1.5x = 15 min)
-    tier = _compute_health_tier(time.time() - 960, 600, 0, True, 10)
+    tier = _compute_health_tier(time.time() - 960, 600, 0, True, 10, "*/10 * * * *")
     assert tier == "degraded"
 
 
@@ -38,7 +91,7 @@ def test_degraded_agent_one_error():
     """Agent with 1 consecutive error is degraded."""
     from routers.agents import _compute_health_tier
 
-    tier = _compute_health_tier(time.time() - 300, 600, 1, True, 10)
+    tier = _compute_health_tier(time.time() - 300, 600, 1, True, 10, "*/10 * * * *")
     assert tier == "degraded"
 
 
@@ -46,7 +99,7 @@ def test_failed_agent_two_errors():
     """Agent with 2+ consecutive errors is failed."""
     from routers.agents import _compute_health_tier
 
-    tier = _compute_health_tier(time.time() - 300, 600, 2, True, 10)
+    tier = _compute_health_tier(time.time() - 300, 600, 2, True, 10, "*/10 * * * *")
     assert tier == "failed"
 
 
@@ -55,7 +108,7 @@ def test_failed_agent_very_late():
     from routers.agents import _compute_health_tier
 
     # Last run 25 min ago, interval 10 min (2x = 20 min)
-    tier = _compute_health_tier(time.time() - 1500, 600, 0, True, 10)
+    tier = _compute_health_tier(time.time() - 1500, 600, 0, True, 10, "*/10 * * * *")
     assert tier == "failed"
 
 
@@ -63,7 +116,7 @@ def test_unknown_disabled():
     """Disabled agent is unknown."""
     from routers.agents import _compute_health_tier
 
-    tier = _compute_health_tier(time.time() - 100, 600, 0, False, 10)
+    tier = _compute_health_tier(time.time() - 100, 600, 0, False, 10, "*/10 * * * *")
     assert tier == "unknown"
 
 
@@ -71,8 +124,161 @@ def test_unknown_insufficient_runs():
     """Agent with <3 runs is unknown."""
     from routers.agents import _compute_health_tier
 
-    tier = _compute_health_tier(time.time() - 100, 600, 0, True, 2)
+    tier = _compute_health_tier(time.time() - 100, 600, 0, True, 2, "*/10 * * * *")
     assert tier == "unknown"
+
+
+# ─── Sleeping Tier ───────────────────────────────────────────────────
+
+
+def _make_local_time(hour: int) -> datetime:
+    """Create a datetime at the given hour in the agent timezone."""
+    from routers.agents import _AGENT_TZ
+
+    now = datetime.now(_AGENT_TZ)
+    return now.replace(hour=hour, minute=30, second=0, microsecond=0)
+
+
+def test_sleeping_outside_window():
+    """Agent with '0 6-22/2 * * *' at hour 3 → sleeping."""
+    from routers.agents import _compute_health_tier
+
+    # Mock time to 3:30 AM local
+    fake_now = _make_local_time(3)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 28800,  # last run 8h ago
+            7200,  # 2h interval
+            0,
+            True,
+            10,
+            "0 6-22/2 * * *",
+        )
+    assert tier == "sleeping"
+
+
+def test_sleeping_before_window():
+    """Agent with '0 8-20/2 * * *' at hour 5 → sleeping."""
+    from routers.agents import _compute_health_tier
+
+    fake_now = _make_local_time(5)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 36000,
+            7200,
+            0,
+            True,
+            10,
+            "0 8-20/2 * * *",
+        )
+    assert tier == "sleeping"
+
+
+def test_sleeping_after_window():
+    """Agent with '0 6-22/2 * * *' at hour 23 → sleeping."""
+    from routers.agents import _compute_health_tier
+
+    fake_now = _make_local_time(23)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 7200,
+            7200,
+            0,
+            True,
+            10,
+            "0 6-22/2 * * *",
+        )
+    assert tier == "sleeping"
+
+
+def test_healthy_inside_window():
+    """Agent with '0 6-22/2 * * *' at hour 10 with recent run → healthy."""
+    from routers.agents import _compute_health_tier
+
+    fake_now = _make_local_time(10)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 3600,  # last run 1h ago, interval 2h
+            7200,
+            0,
+            True,
+            10,
+            "0 6-22/2 * * *",
+        )
+    assert tier == "healthy"
+
+
+def test_healthy_window_just_opened():
+    """At hour 6 with last run at 22:00 (8h ago) → healthy (grace period)."""
+    from routers.agents import _compute_health_tier
+
+    fake_now = _make_local_time(6)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 28800,  # 8h ago
+            7200,  # 2h interval
+            0,
+            True,
+            10,
+            "0 6-22/2 * * *",
+        )
+    assert tier == "healthy"
+
+
+def test_no_sleeping_for_always_active():
+    """Agent with '*/10 * * * *' never gets sleeping tier."""
+    from routers.agents import _compute_health_tier
+
+    # Even at 3 AM, always-active agents don't sleep
+    fake_now = _make_local_time(3)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 300,
+            600,
+            0,
+            True,
+            10,
+            "*/10 * * * *",
+        )
+    assert tier == "healthy"
+
+
+def test_sleeping_comma_hours():
+    """Agent with '0 8,14,20 * * *' at hour 2 → sleeping."""
+    from routers.agents import _compute_health_tier
+
+    fake_now = _make_local_time(2)
+    with patch("routers.agents.datetime") as mock_dt:
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+        tier = _compute_health_tier(
+            time.time() - 21600,
+            21600,
+            0,
+            True,
+            10,
+            "0 8,14,20 * * *",
+        )
+    assert tier == "sleeping"
 
 
 # ─── Interval Parsing ─────────────────────────────────────────────────
@@ -161,7 +367,14 @@ async def test_agent_status_endpoint(test_client):
                 "agents": [
                     {"name": "email-classifier", "status": "healthy", "schedule": "0 6-22 * * *"}
                 ],
-                "summary": {"healthy": 1, "degraded": 0, "failed": 0, "unknown": 0, "total": 1},
+                "summary": {
+                    "healthy": 1,
+                    "degraded": 0,
+                    "failed": 0,
+                    "sleeping": 0,
+                    "unknown": 0,
+                    "total": 1,
+                },
             }
             with patch.object(agents_module, "_build_agent_status", return_value=mock_result):
                 r = await test_client.get("/api/agents/status")
@@ -179,7 +392,14 @@ async def test_agent_status_cache(test_client):
 
     cached = {
         "agents": [{"name": "cached-agent", "status": "healthy"}],
-        "summary": {"healthy": 1, "degraded": 0, "failed": 0, "unknown": 0, "total": 1},
+        "summary": {
+            "healthy": 1,
+            "degraded": 0,
+            "failed": 0,
+            "sleeping": 0,
+            "unknown": 0,
+            "total": 1,
+        },
     }
     agents_module._cache = {"data": cached, "expires": time.time() + 60}
 

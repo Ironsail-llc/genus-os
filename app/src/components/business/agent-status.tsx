@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import cronstrue from "cronstrue";
 
-type HealthTier = "healthy" | "degraded" | "failed" | "unknown";
+type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
 interface AgentInfo {
   name: string;
@@ -22,13 +22,14 @@ interface AgentInfo {
 
 interface AgentStatusProps {
   agents: AgentInfo[];
-  summary?: { healthy: number; degraded: number; failed: number; total: number };
+  summary?: { healthy: number; degraded: number; failed: number; sleeping: number; total: number };
 }
 
 const tierConfig: Record<HealthTier, { color: string; bg: string; dotBg: string; border: string; label: string }> = {
   healthy: { color: "text-emerald-400", bg: "bg-emerald-500/20", dotBg: "bg-emerald-400", border: "border-l-emerald-400", label: "Healthy" },
   degraded: { color: "text-amber-400", bg: "bg-amber-500/20", dotBg: "bg-amber-400", border: "border-l-amber-400", label: "Degraded" },
   failed: { color: "text-red-400", bg: "bg-red-500/20", dotBg: "bg-red-400", border: "border-l-red-400", label: "Failed" },
+  sleeping: { color: "text-blue-400", bg: "bg-blue-500/20", dotBg: "bg-blue-400", border: "border-l-blue-400", label: "Sleeping" },
   unknown: { color: "text-zinc-500", bg: "bg-zinc-700/20", dotBg: "bg-zinc-500", border: "border-l-zinc-500", label: "Unknown" },
 };
 
@@ -68,6 +69,9 @@ export function AgentStatus({ agents, summary }: AgentStatusProps) {
           </Badge>
           <Badge className={tierConfig.failed.bg + " " + tierConfig.failed.color}>
             {summary.failed} failed
+          </Badge>
+          <Badge className={tierConfig.sleeping.bg + " " + tierConfig.sleeping.color}>
+            {summary.sleeping} sleeping
           </Badge>
         </div>
       )}
