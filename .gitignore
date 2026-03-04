@@ -4,7 +4,7 @@ brain/
 /tunnel/
 
 # Sensitive docs (symlinked from ~/clawd/, tracked there)
-CLAUDE.md
+/CLAUDE.md
 SERVICES.md
 INFRASTRUCTURE.md
 

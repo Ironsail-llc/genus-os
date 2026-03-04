@@ -32,6 +32,31 @@ One repo. One CLI. Your hardware.
 
 **Operations** — Outbound voice calling (Twilio + Gemini Live). Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline (failure analysis &rarr; improvement proposals &rarr; draft PRs). MCP server exposes 65 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel, self-healing watchdogs.
 
+## Getting Started
+
+1. **Clone and install:**
+   ```bash
+   git clone https://github.com/Ironsail-llc/robothor.git
+   cd robothor
+   python3 -m venv venv && source venv/bin/activate
+   pip install -e ".[all]"
+   ```
+
+2. **Activate the onboarding guide:**
+   ```bash
+   cp docs/ONBOARDING.md CLAUDE.md
+   ```
+
+3. **Open Claude Code and ask:** "Help me get started"
+   The guide walks through prerequisites, API keys, identity, agents, and first run.
+
+4. When done, delete `CLAUDE.md` or replace with your own project instructions.
+
+To build custom agents later:
+```bash
+cp docs/AGENT_BUILDER.md .claude/AGENT_BUILDER.md
+```
+
 ## Quick Start
 
 ```bash
