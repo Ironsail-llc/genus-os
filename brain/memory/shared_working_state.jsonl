@@ -1,0 +1,1 @@
+{"timestamp": "2026-02-27T11:10:00Z", "agent": "email-classifier", "summary": "Processed 42 emails: 16 already done, 15 dismissed, 4 routed to email-responder, 9 to email-analyst, 1 escalated to supervisor (IdentoGO bg-check urgent). Created 14 new tasks."}

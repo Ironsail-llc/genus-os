@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-013",
+  "title": "Reply: Sprint Planning calendar update",
+  "assignedToAgent": "email-responder",
+  "status": "TODO",
+  "priority": "normal",
+  "tags": ["email", "reply-needed", "calendar", "rochelle"],
+  "body": "Thread ID: 19c9b227c96c462e\nFrom: Rochelle Blaza <rochelle@ironsail.ai>\nSubject: Updated invitation: Sprint Planning @ Fri Feb 27, 2026 11am - 12pm (EST)\nDate: 2026-02-26\n\nAction: Review Sprint Planning calendar update and acknowledge if needed.",
+  "threadId": "19c9b227c96c462e",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}

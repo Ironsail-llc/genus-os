@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-011",
+  "title": "Reply: Robothor Walkthrough calendar update",
+  "assignedToAgent": "email-responder",
+  "status": "TODO",
+  "priority": "normal",
+  "tags": ["email", "reply-needed", "calendar", "joshua"],
+  "body": "Thread ID: 19c96f0933ac4303\nFrom: Joshua Quijano <joshua@ironsail.ai>\nSubject: Updated invitation with note: Robothor Walkthrough @ Wed Mar 4, 2026 12:15pm - 1:15pm (EST)\nDate: 2026-02-25\n\nAction: Review calendar update with note and acknowledge if needed. Check if response required.",
+  "threadId": "19c96f0933ac4303",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}
