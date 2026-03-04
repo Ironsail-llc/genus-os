@@ -291,7 +291,7 @@ export function ChatPanel() {
       if ((err as Error).name !== "AbortError") {
         setMessages((prev) => [
           ...prev,
-          { id: `err-${Date.now()}`, role: "assistant", content: "Something went wrong. Please try again.", timestamp: new Date() },
+          { id: `err-${Date.now()}`, role: "assistant", content: `Connection error: ${(err as Error).message}. Please try again.`, timestamp: new Date() },
         ]);
       }
     } finally {
@@ -593,7 +593,7 @@ export function ChatPanel() {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: "Something went wrong. Please try again.",
+          content: `Connection error: ${(err as Error).message}. Please try again.`,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -832,7 +832,7 @@ export function ChatPanel() {
                       setInput(prompt);
                       setTimeout(() => inputRef.current?.focus(), 0);
                     }}
-                    className="text-xs px-3 py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    className="text-xs px-3 py-2 md:py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[44px] md:min-h-0"
                     data-testid="suggested-prompt"
                   >
                     {prompt}
@@ -1039,7 +1039,7 @@ export function ChatPanel() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : "Ask me anything..."}
-            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[40px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-violet-500/30 focus:ring-violet-500/50" : planMode ? "border-amber-500/30 focus:ring-amber-500/50" : "border-border focus:ring-ring"}`}
+            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-violet-500/30 focus:ring-violet-500/50" : planMode ? "border-amber-500/30 focus:ring-amber-500/50" : "border-border focus:ring-ring"}`}
             rows={1}
             disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"

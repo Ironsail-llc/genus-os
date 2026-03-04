@@ -17,7 +17,7 @@ export const SANITIZE_CONFIG = {
 
 const OPENROUTER_API_KEY = () => process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "google/gemini-2.5-flash-lite-preview-09-2025";
+const MODEL = process.env.DASHBOARD_MODEL || "google/gemini-2.5-flash-lite";
 
 const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 10;

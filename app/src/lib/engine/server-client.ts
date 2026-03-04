@@ -16,6 +16,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, message }),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -29,7 +30,8 @@ class EngineClient {
     limit = 50
   ): Promise<{ sessionKey: string; messages: ChatMessage[] }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/history?session_key=${encodeURIComponent(sessionKey)}&limit=${limit}`
+      `${ENGINE_URL}/chat/history?session_key=${encodeURIComponent(sessionKey)}&limit=${limit}`,
+      { signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -47,6 +49,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, message, label }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -60,6 +63,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -73,6 +77,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -88,6 +93,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, message, deep_plan: deepPlan }),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -101,6 +107,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, plan_id: planId }),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -118,6 +125,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, plan_id: planId, feedback }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -130,7 +138,8 @@ class EngineClient {
     sessionKey: string
   ): Promise<{ active: boolean; plan?: PlanState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/plan/status?session_key=${encodeURIComponent(sessionKey)}`
+      `${ENGINE_URL}/chat/plan/status?session_key=${encodeURIComponent(sessionKey)}`,
+      { signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -146,6 +155,7 @@ class EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_key: sessionKey, query }),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -158,7 +168,8 @@ class EngineClient {
     sessionKey: string
   ): Promise<{ active: boolean; deep?: DeepState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/deep/status?session_key=${encodeURIComponent(sessionKey)}`
+      `${ENGINE_URL}/chat/deep/status?session_key=${encodeURIComponent(sessionKey)}`,
+      { signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);

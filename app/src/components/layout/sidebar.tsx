@@ -42,7 +42,7 @@ export function Sidebar({
 
   return (
     <nav
-      className="flex flex-col items-center w-12 shrink-0 bg-sidebar border-r border-sidebar-border py-3 gap-1"
+      className="hidden md:flex flex-col items-center w-12 shrink-0 bg-sidebar border-r border-sidebar-border py-3 gap-1"
       data-testid="sidebar"
     >
       {/* Brand bolt */}

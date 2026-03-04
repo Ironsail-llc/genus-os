@@ -77,6 +77,11 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
   useEventStream: () => ({ events: [] }),
 }));
 
+vi.mock("@/hooks/use-mobile", () => ({
+  useScreenSize: () => "desktop",
+  useIsMobile: () => false,
+}));
+
 import { AppShell } from "@/components/layout/app-shell";
 
 describe("AppShell", () => {

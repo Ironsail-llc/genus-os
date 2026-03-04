@@ -18,7 +18,8 @@ export async function ensureCanvasPromptInjected(): Promise<void> {
       "visual-canvas-init"
     );
     injected = true;
-  } catch {
+  } catch (err) {
+    console.warn("[session-state] Canvas prompt injection failed:", (err as Error).message);
     // Non-critical — will retry on next call
   }
 }
