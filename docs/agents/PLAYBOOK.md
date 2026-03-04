@@ -361,7 +361,7 @@ Policy changes do NOT auto-propagate. The AI decides which agents need updating.
 | Broken model tracking | Models returning 401/403/429 are removed from rotation for the rest of that run |
 | Max iterations (default) | 20 — override per-agent via `schedule.max_iterations` |
 | Max iterations (guideline) | 5 for simple checkers, 8-10 for processors, 15 for complex agents, 30 for interactive |
-| Output limit | <500 chars, emoji prefix. Workers write status file and stop silently. HEARTBEAT_OK is heartbeat-only. |
+| Output limit | <500 chars, emoji prefix. Workers write status file and stop silently. |
 | Credentials | NEVER hardcode. Env vars via SOPS → `/run/robothor/secrets.env`. |
 | Status files | MANDATORY every run. Heartbeat considers >35min = stale. |
 | Bootstrap budget | 12,000 chars per file, 30,000 chars total |
@@ -517,7 +517,6 @@ tools_allowed:
 |--------|---------|
 | **Every agent needs `exec`, `read_file`, `write_file`** | `build_for_agent()` strictly filters — if tools_allowed is set, ONLY those tools appear. Without `read_file`, agents can't read data files. Without `exec`, they can't run `gog` CLI. |
 | **`read_file` uses workspace-relative paths** | Workspace is `~/robothor/`. Brain files are at `~/clawd/` but accessible via symlink at `brain/`. Instruction files should reference `brain/memory/triage-inbox.json`. |
-| **HEARTBEAT_OK is heartbeat-only** | Workers write status files and stop silently. Cargo-culting HEARTBEAT_OK into worker instructions causes them to skip real work. |
 | **Event hooks are the primary trigger** | Crons are 6h safety nets. The fast path is: Python sync → Redis Stream → hook → agent (email: ~60s end-to-end). |
 | **Validate after every manifest change** | `python scripts/validate_agents.py --agent <id>` catches missing tools, broken file paths, invalid crons. |
 

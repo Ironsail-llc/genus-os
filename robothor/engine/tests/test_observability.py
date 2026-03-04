@@ -73,22 +73,26 @@ class TestDeliveryStatus:
         assert run.delivery_status == "no_output"
 
     @pytest.mark.asyncio
-    async def test_heartbeat_ok_suppressed(self):
-        """HEARTBEAT_OK messages get delivery_status='suppressed_heartbeat_ok'."""
+    async def test_trailing_heartbeat_ok_stripped(self, _setup_sender):
+        """Trailing HEARTBEAT_OK is stripped but report still delivered."""
         config = _make_config()
-        run = _make_run(output_text="HEARTBEAT_OK")
+        run = _make_run(output_text="All systems nominal.\n\nHEARTBEAT_OK")
         result = await deliver(config, run)
         assert result is True
-        assert run.delivery_status == "suppressed_heartbeat_ok"
+        assert run.delivery_status == "delivered"
+        # Verify the cleaned text was sent (without HEARTBEAT_OK)
+        sent_text = _setup_sender.call_args[0][1]
+        assert "HEARTBEAT_OK" not in sent_text
+        assert "All systems nominal." in sent_text
 
     @pytest.mark.asyncio
-    async def test_heartbeat_ok_with_whitespace(self):
-        """HEARTBEAT_OK with whitespace is still suppressed."""
+    async def test_bare_heartbeat_ok_treated_as_no_output(self):
+        """Bare HEARTBEAT_OK (alone) results in no_output."""
         config = _make_config()
         run = _make_run(output_text="  HEARTBEAT_OK  \n")
         result = await deliver(config, run)
         assert result is True
-        assert run.delivery_status == "suppressed_heartbeat_ok"
+        assert run.delivery_status == "no_output"
 
     @pytest.mark.asyncio
     async def test_none_mode_silent(self):

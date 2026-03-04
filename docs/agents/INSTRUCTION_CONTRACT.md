@@ -62,7 +62,6 @@ The instruction file MUST tell the agent to:
 - Do NOT reference specific Telegram chat IDs (use delivery config in manifest)
 - Do NOT hardcode file paths to other agents' status files (use task_protocol)
 - Do NOT assume specific agent names exist (use generic task routing)
-- Do NOT include `HEARTBEAT_OK` in worker agents (heartbeat-only pattern)
 - Do NOT reference `localhost` URLs (engine blocks loopback in web_fetch)
 
 ---
