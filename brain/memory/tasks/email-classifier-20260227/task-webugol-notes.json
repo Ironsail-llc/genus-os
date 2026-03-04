@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-008",
+  "title": "Review: Ironsail x Webugol Internal Marketing notes",
+  "assignedToAgent": "email-analyst",
+  "status": "TODO",
+  "priority": "low",
+  "tags": ["email", "analytical", "meeting-notes", "marketing"],
+  "body": "Thread ID: 19c9a6eb5404d6e1\nFrom: Gemini <gemini-notes@google.com>\nSubject: Notes: Ironsail x Webugol Internal Marketing Feb 26, 2026\nDate: 2026-02-26\n\nAction: Review meeting notes and file for records. Extract action items if any.",
+  "threadId": "19c9a6eb5404d6e1",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Robothor SMS Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+User=philip
+WorkingDirectory=/home/philip/clawd/sms-server
+Environment=PATH=/home/philip/clawd/voice-server-env/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/philip/clawd/voice-server-env/bin/python /home/philip/clawd/sms-server/server.py --port 8766
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

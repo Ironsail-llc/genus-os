@@ -1,0 +1,24 @@
+[Unit]
+Description=Robothor Transcript Watcher
+Documentation=https://github.com/moltbot/moltbot
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=philip
+Group=philip
+WorkingDirectory=/home/philip/clawd/memory_system
+ExecStart=/home/philip/clawd/memory_system/venv/bin/python /home/philip/clawd/memory_system/transcript_watcher.py
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robothor-transcript
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

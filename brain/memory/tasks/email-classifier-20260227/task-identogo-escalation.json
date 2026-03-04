@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-015",
+  "title": "ESCALATE: IdentoGO - Background Check",
+  "assignedToAgent": "supervisor",
+  "status": "TODO",
+  "priority": "urgent",
+  "tags": ["email", "escalation", "time-sensitive", "samantha", "bg-check"],
+  "body": "Thread ID: 19c9ec729c3ce2a8\nFrom: Samantha D'Agostino <samantha@ironsailpharma.com>\nSubject: IdentoGO\nDate: 2026-02-27 06:06\nMessage Count: 1\n\nAction: URGENT - Time-sensitive background check matter from Samantha. Review immediately and take action. May require immediate response or scheduling.",
+  "threadId": "19c9ec729c3ce2a8",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}

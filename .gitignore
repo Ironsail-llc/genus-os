@@ -1,12 +1,6 @@
 # Symlinked directories (tracked in their own repos)
-brain/
 /templates/
 /tunnel/
-
-# Sensitive docs (symlinked from ~/clawd/, tracked there)
-/CLAUDE.md
-SERVICES.md
-INFRASTRUCTURE.md
 
 # Backup logs
 scripts/backup.log
@@ -81,3 +75,43 @@ local/
 crm/cleanup_crm.py
 crm/cleanup_backup.json
 crm/migrate_contacts.py
+
+# Brain venvs (regenerable)
+brain/memory_system/venv/
+brain/voice-server-env/
+
+# Brain runtime artifacts
+brain/memory/snapshots/
+brain/memory/rlm-traces/
+brain/memory_system/logs/
+brain/memory_system/*.log
+brain/memory_system/*.pid
+brain/memory_system/backup_*.sql
+
+# Brain binary artifacts
+brain/memory_system/yolov8n.pt
+
+# Brain node_modules (already covered by global rule, but explicit)
+brain/robothor-status/node_modules/
+brain/robothor-status-dashboard/node_modules/
+brain/dashboard/node_modules/
+
+# Nested repos / experiments in brain
+brain/gap-analysis/
+brain/glm-test/
+
+# Brain runtime state files (volatile, not source)
+brain/memory/response-analysis*.json
+brain/memory/triage-inbox.json
+brain/memory/triage-prep-state.json
+brain/memory/response-queue.json
+brain/memory/response-inbox.json
+brain/memory/email-drafts.json
+brain/memory/email-log.json
+brain/memory/email-tracking.json
+brain/memory/sms-log.json
+brain/memory/maintenance-status.json
+brain/memory/evening-winddown-status.json
+brain/memory/contacts.json
+brain/memory/tasks.json
+brain/memory/overnight-pr-status.md

@@ -1,0 +1,171 @@
+{
+  "checkedAt": "2026-03-04T15:14:06.312295",
+  "totalChecks": 26,
+  "okCount": 26,
+  "criticalCount": 0,
+  "status": "ok",
+  "results": [
+    {
+      "name": "systemd:robothor-bridge",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.315159"
+    },
+    {
+      "name": "systemd:robothor-crm",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.318261"
+    },
+    {
+      "name": "systemd:robothor-dashboard",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.321093"
+    },
+    {
+      "name": "systemd:robothor-orchestrator",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.323213"
+    },
+    {
+      "name": "systemd:robothor-privacy",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.325202"
+    },
+    {
+      "name": "systemd:robothor-sms",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.327308"
+    },
+    {
+      "name": "systemd:robothor-status-dashboard",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.330174"
+    },
+    {
+      "name": "systemd:robothor-status",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.332969"
+    },
+    {
+      "name": "systemd:robothor-transcript",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.334868"
+    },
+    {
+      "name": "systemd:robothor-vision",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.337544"
+    },
+    {
+      "name": "systemd:robothor-voice",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.339410"
+    },
+    {
+      "name": "systemd:cloudflared",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.341578"
+    },
+    {
+      "name": "systemd:mediamtx-webcam",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.343713"
+    },
+    {
+      "name": "http:bridge",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.437488",
+      "response_time_ms": 93.8
+    },
+    {
+      "name": "http:orchestrator",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.498278",
+      "response_time_ms": 52.5
+    },
+    {
+      "name": "http:vision",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.507213",
+      "response_time_ms": 0.8
+    },
+    {
+      "name": "http:ollama",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.513677",
+      "response_time_ms": 0.9
+    },
+    {
+      "name": "http:status",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.662067",
+      "response_time_ms": 140.8
+    },
+    {
+      "name": "http:status-dashboard",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.670615",
+      "response_time_ms": 1.0
+    },
+    {
+      "name": "db:robothor_memory",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.722191"
+    },
+    {
+      "name": "db:vaultwarden",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.738462"
+    },
+    {
+      "name": "crm:native",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.791033"
+    },
+    {
+      "name": "redis",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:06.803242"
+    },
+    {
+      "name": "gmail:auth",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:07.697956"
+    },
+    {
+      "name": "email:data_quality",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:07.698979"
+    },
+    {
+      "name": "cron:email_sync",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-04T15:14:07.699652"
+    }
+  ]
+}

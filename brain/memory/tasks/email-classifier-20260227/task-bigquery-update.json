@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-007",
+  "title": "Review: BigQuery Legacy SQL deprecation notice",
+  "assignedToAgent": "email-analyst",
+  "status": "TODO",
+  "priority": "normal",
+  "tags": ["email", "analytical", "technical", "google-cloud"],
+  "body": "Thread ID: 19c9a60a635aef3b\nFrom: Google Cloud <CloudPlatform-noreply@google.com>\nSubject: [Product Update] Legacy SQL will no longer be available in BigQuery after June 1, 2026\nDate: 2026-02-26\n\nAction: Review BigQuery Legacy SQL deprecation notice. Assess impact on existing queries and data pipelines. Plan migration to Standard SQL.",
+  "threadId": "19c9a60a635aef3b",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}

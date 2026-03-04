@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Email Log",
+  "type": "object",
+  "required": ["entries"],
+  "properties": {
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id", "threadId", "from", "subject", "receivedAt", "processedAt"],
+        "properties": {
+          "id": {"type": "string", "description": "Gmail message ID"},
+          "threadId": {"type": "string", "description": "Gmail thread ID - REQUIRED for reply continuity"},
+          "from": {"type": "string", "description": "Sender email/name"},
+          "to": {"type": "string", "description": "Recipient(s)"},
+          "subject": {"type": "string"},
+          "receivedAt": {"type": "string", "format": "date-time"},
+          "processedAt": {"type": "string", "format": "date-time"},
+          "summary": {"type": "string", "description": "Brief summary of content"},
+          "urgency": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"]
+          },
+          "needsResponse": {"type": "boolean"},
+          "needsAction": {"type": "boolean"},
+          "actionOwner": {"type": "string", "description": "Who should act"},
+          "taskId": {"type": ["string", "null"], "description": "Linked task if created"},
+          "surfacedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When Heartbeat reported to Philip"
+          },
+          "reviewedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "respondedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When we sent a response"
+          },
+          "escalated": {"type": "boolean", "default": false},
+          "labels": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "lastProcessedAt": {"type": "string", "format": "date-time"}
+  }
+}

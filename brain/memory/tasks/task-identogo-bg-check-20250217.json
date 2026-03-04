@@ -1,0 +1,12 @@
+{
+  "id": "task-identogo-bg-check-20250217",
+  "title": "Call IdentoGO for background check status",
+  "description": "Call IdentoGO Customer Service at 855-845-7434 to check status of background check for mortgage requirements. UE ID: UZNY6J4ZVY. Enrollment received, fingerprints transmitted.",
+  "priority": "high",
+  "status": "todo",
+  "createdAt": "2026-02-17T13:55:00Z",
+  "dueAt": "2026-02-17T21:00:00Z",
+  "source": "email",
+  "sourceId": "19c66af8432d8ccc",
+  "tags": ["bank", "mortgage", "identogo", "background-check", "samantha"]
+}

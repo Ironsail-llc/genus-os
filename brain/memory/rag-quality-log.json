@@ -1,0 +1,2611 @@
+{
+  "runs": [
+    {
+      "timestamp": "2026-02-06T03:30:01.455152",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 6,
+          "ingested": 6,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 27,
+          "ingested": 27,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 50, 'decay_updated': 136}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 1,
+              "note": "SCORE: 1 - Irrelevant results, mostly unrelated to decision-making or recent events."
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 2,
+              "note": "SCORE: 2 - The results appear to be relevant to the query, but the second result seems to be a perso"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 1,
+              "note": "SCORE: 1 - Irrelevant results; the query is about the status of an e-commerce platform, but the resu"
+            }
+          ],
+          "average_score": 1.3333333333333333
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 669.133101
+    },
+    {
+      "timestamp": "2026-02-07T03:30:02.029083",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 23,
+          "ingested": 23,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 50, 'decay_updated': 159}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 1,
+              "note": "SCORE: 1 - Not relevant to the query, as the results appear to be unrelated to recent decisions."
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 3,
+              "note": "SCORE: 3 - Relevant contacts and a general description of the company, but the information is not sp"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 1,
+              "note": "SCORE: 1 - Irrelevant search results for the query about the status of the e-commerce platform. The "
+            }
+          ],
+          "average_score": 1.6666666666666667
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 518.703826
+    },
+    {
+      "timestamp": "2026-02-08T03:30:01.543553",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 20,
+          "ingested": 20,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 50, 'decay_updated': 174}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 2,
+              "note": "SCORE: 2 - The results are somewhat relevant, but primarily consist of automated system notification"
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 4,
+              "note": "SCORE: 4 - Relevant search results found, but some appear to be personal emails and not official con"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 1,
+              "note": "SCORE: 1 - Irrelevant search results, as the query asks about the status of an e-commerce platform, "
+            }
+          ],
+          "average_score": 2.3333333333333335
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 500.781812
+    },
+    {
+      "timestamp": "2026-02-09T03:30:01.705326",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 2,
+          "ingested": 2,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 10,
+          "ingested": 10,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 50, 'decay_updated': 181}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 2,
+              "note": "SCORE: 2 - Recent decisions made by entities are not clearly highlighted in the search results. Rele"
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 2,
+              "note": "SCORE: 2 - Relevant contacts and services are identified, but the results appear to be a mix of pers"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 2,
+              "note": "SCORE: 2 - Results seem to be unrelated to the e-commerce platform status. They appear to be contact"
+            }
+          ],
+          "average_score": 2.0
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 297.722924
+    },
+    {
+      "timestamp": "2026-02-10T03:30:01.918449",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 50, 'decay_updated': 181}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 2,
+              "note": "SCORE: 2 - Recent decisions are not explicitly mentioned in the search results. The results only pro"
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 3,
+              "note": "SCORE: 3 - Relevant contacts are listed, but no clear connection to DRx is established. The relevanc"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 1,
+              "note": "SCORE: 1 - The results seem to be unrelated to the status of the e-commerce platform, and instead ap"
+            }
+          ],
+          "average_score": 2.0
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 32.101961
+    },
+    {
+      "timestamp": "2026-02-11T03:30:01.154838",
+      "phases": {
+        "emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "tasks": {
+          "processed": 1,
+          "ingested": 1,
+          "errors": []
+        },
+        "contacts": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "maintenance": {
+          "success": true,
+          "details": "{'facts_scored': 6, 'decay_updated': 182}"
+        },
+        "quality": {
+          "tests": [
+            {
+              "query": "What decisions were made recently?",
+              "score": 1,
+              "note": "SCORE: 1 - The search results appear to be outdated or irrelevant to recent decisions, as they menti"
+            },
+            {
+              "query": "Who are the key contacts at DRx?",
+              "score": 3,
+              "note": "SCORE: 3 - Some relevant contacts, but mostly personal/organization info. Lack of clear key contacts"
+            },
+            {
+              "query": "What's the status of the e-commerce platform?",
+              "score": 2,
+              "note": "SCORE: 2 - Results are related to Twilio, but the primary search query was about the e-commerce plat"
+            }
+          ],
+          "average_score": 2.0
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 16.111434
+    },
+    {
+      "timestamp": "2026-02-12T03:30:01.422025",
+      "phases": {
+        "p1_emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "p2_tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "p3_contacts": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": [],
+          "source": "contacts_json"
+        },
+        "p4_chatwoot": {
+          "processed": 31,
+          "ingested": 31,
+          "errors": []
+        },
+        "p5_crm": {
+          "notes_ingested": 0,
+          "tasks_ingested": 0,
+          "errors": []
+        },
+        "p6_relationships": {
+          "contacts_analyzed": 28,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:philip@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:ddago4@aol.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:phil@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:greg@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jon@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:olesia@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:konrad@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:kwehrhahn@hubspot.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jasmine@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jennifer@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis:sandra@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:farhan@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:daniel@valhallams.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:samantha@ironsailpharma.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:caroline@skyfin.net:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:eugene@webugol.com:argument of type 'NoneType' is not iterable"
+          ]
+        },
+        "p7_engagement": {
+          "scored": 28,
+          "changed": 0,
+          "errors": []
+        },
+        "p8_meetings": {
+          "meetings_found": 0,
+          "briefs_generated": 0,
+          "errors": []
+        },
+        "p9_patterns": {
+          "patterns_found": 21,
+          "errors": []
+        },
+        "p10_blocks": {
+          "blocks_updated": 0,
+          "errors": [
+            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 54: * Nadjib Boumekhiet ()', updated_at = NOW(), write_count = w...\n                                  ^\n",
+            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 33: ... smooth transition and prioritization of tasks.', updated_at...\n                                                              ^\n",
+            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 28: ...everaged for efficient conversation resolution.', updated_at...\n                                                              ^\n"
+          ]
+        },
+        "p11_entities": {
+          "facts_processed": 0,
+          "entities_added": 0,
+          "relations_added": 0,
+          "errors": [
+            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
+          ]
+        },
+        "p12_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 322}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "SCORE: 1 - reason: The search results are highly specific and relate to a single individual (Robotho"
+              },
+              {
+                "query": "Who are the key contacts?",
+                "score": 5,
+                "note": "SCORE: 5 - reason: all results are highly relevant to the query \"Who are the key contacts?\" as they "
+              },
+              {
+                "query": "What's happening in the CRM?",
+                "score": 2,
+                "note": "SCORE: 2 - reason: While the search results appear to be relevant to the query, they are mostly abou"
+              }
+            ],
+            "average_score": 2.6666666666666665
+          }
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 736.450848
+    },
+    {
+      "timestamp": "2026-02-13T03:30:01.797878",
+      "phases": {
+        "p1_emails": {
+          "processed": 1,
+          "ingested": 1,
+          "skipped": 0,
+          "errors": []
+        },
+        "p2_tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "p3_contacts": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": [],
+          "source": "contacts_json"
+        },
+        "p4_chatwoot": {
+          "processed": 1,
+          "ingested": 1,
+          "errors": []
+        },
+        "p5_crm": {
+          "notes_ingested": 0,
+          "tasks_ingested": 0,
+          "errors": []
+        },
+        "p6_relationships": {
+          "contacts_analyzed": 29,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis:rochelle@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:philip@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:ddago4@aol.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:phil@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:greg@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jon@getdrx.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:olesia@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:konrad@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:kwehrhahn@hubspot.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jasmine@valhallavitality.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:jennifer@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis:sandra@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:farhan@ironsail.ai:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:daniel@valhallams.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:samantha@ironsailpharma.com:argument of type 'NoneType' is not iterable",
+            "contact_analysis:caroline@skyfin.net:argument of type 'NoneType' is not iterable",
+            "contact_analysis::argument of type 'NoneType' is not iterable",
+            "contact_analysis:eugene@webugol.com:argument of type 'NoneType' is not iterable"
+          ]
+        },
+        "p7_engagement": {
+          "scored": 29,
+          "changed": 0,
+          "errors": []
+        },
+        "p8_meetings": {
+          "meetings_found": 0,
+          "briefs_generated": 0,
+          "errors": []
+        },
+        "p9_patterns": {
+          "patterns_found": 14,
+          "errors": []
+        },
+        "p10_blocks": {
+          "blocks_updated": 0,
+          "errors": [
+            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 27: ...nifer (jennifer@ironsail.ai)** (low engagement)', updated_at...\n                                                              ^\n",
+            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 35: ...esign Document (ADD) for AI-Operable E-commerce', updated_at...\n                                                              ^\n",
+            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 32: ...onversations require attention to avoid neglect', updated_at...\n                                                              ^\n"
+          ]
+        },
+        "p11_entities": {
+          "facts_processed": 0,
+          "entities_added": 0,
+          "relations_added": 0,
+          "errors": [
+            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
+          ]
+        },
+        "p12_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 377}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "SCORE: 1 - reason: Results seem unrelated to the query about recent decisions, instead containing co"
+              },
+              {
+                "query": "Who are the key contacts?",
+                "score": 4,
+                "note": "SCORE: 4 - reason: The results are relevant because they provide specific information about key cont"
+              },
+              {
+                "query": "What's happening in the CRM?",
+                "score": 1,
+                "note": "SCORE: 1 - reason: The search results are about specific contacts (Robothor and Twilio Notifications"
+              }
+            ],
+            "average_score": 2.0
+          }
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 115.027514
+    },
+    {
+      "timestamp": "2026-02-14T03:30:01.528362",
+      "phases": {
+        "p1_emails": {
+          "processed": 0,
+          "ingested": 0,
+          "skipped": 0,
+          "errors": []
+        },
+        "p2_tasks": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": []
+        },
+        "p3_contacts": {
+          "processed": 0,
+          "ingested": 0,
+          "errors": [],
+          "source": "contacts_json"
+        },
+        "p4_chatwoot": {
+          "processed": 6,
+          "ingested": 6,
+          "errors": []
+        },
+        "p5_crm": {
+          "notes_ingested": 0,
+          "tasks_ingested": 0,
+          "errors": []
+        },
+        "p6_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p7_engagement": {
+          "scored": 35,
+          "changed": 0,
+          "errors": []
+        },
+        "p8_meetings": {
+          "meetings_found": 0,
+          "briefs_generated": 0,
+          "errors": []
+        },
+        "p9_patterns": {
+          "patterns_found": 19,
+          "errors": []
+        },
+        "p10_blocks": {
+          "blocks_updated": 0,
+          "errors": [
+            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 31: ...racts with Philip approximately every 1-2 weeks', updated_at...\n                                                              ^\n",
+            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 42: ...ize and tackle outstanding tasks and follow-ups', updated_at...\n                                                              ^\n",
+            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 42: ...arks may indicate potential dropped follow-ups.', updated_at...\n                                                              ^\n"
+          ]
+        },
+        "p11_entities": {
+          "facts_processed": 0,
+          "entities_added": 0,
+          "relations_added": 0,
+          "errors": [
+            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
+          ]
+        },
+        "p12_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 483}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "SCORE: 1 - reason: Results are outdated and not directly related to the query about recent decisions"
+              },
+              {
+                "query": "Who are the key contacts?",
+                "score": 4,
+                "note": "SCORE: 4 - reason: The results provide relevant information about key contacts related to the query,"
+              },
+              {
+                "query": "What's happening in the CRM?",
+                "score": 3,
+                "note": "SCORE: 3 - reason: The results seem to be relevant to the query, as they are contacts related to the"
+              }
+            ],
+            "average_score": 2.6666666666666665
+          }
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 920.771727
+    },
+    {
+      "timestamp": "2026-02-15T03:30:01.866769",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 37,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 729}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant, but they appear to be outdated or irrelev"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results seem to be relevant to the query, but the second and third resul"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"The search results are mostly relevant to the query, providing details about"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results seem to be relevant to the query, but the patterns detected acro"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are mostly irrelevant, containing task and contact inform"
+              }
+            ],
+            "average_score": 2.2
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 829.714593
+    },
+    {
+      "timestamp": "2026-02-16T03:30:01.102997",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 45,
+          "fields_updated": 8,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 43,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 1423}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"The results provide some relevant information about the user 'Robothor', inc"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"some contacts are relevant to the query, but the personal email is not\"}"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 5,
+                "note": "{\"score\": 5, \"reason\": \"The results are directly relevant to the query, providing information about "
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are related to the query, but only one of the results is relevan"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are mostly unrelated to meeting prep or relationship briefs, but"
+              }
+            ],
+            "average_score": 2.6
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 815.653592
+    },
+    {
+      "timestamp": "2026-02-17T03:30:02.011344",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 2,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 59,
+          "fields_updated": 10,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 0,
+          "errors": [
+            "phase4:Expecting property name enclosed in double quotes: line 436 column 3 (char 17332)"
+          ]
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 1899}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are mostly relevant to the query, but the first two results are "
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"The results are relevant to the query, but the third contact is unknown and "
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are mostly irrelevant to the query as they are mostly automated "
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results seem to be related to the query, but the patterns detected acros"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"the search results are mostly unrelated to meeting prep or relationship brie"
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 858.375228
+    },
+    {
+      "timestamp": "2026-02-18T03:30:01.357311",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 71,
+          "fields_updated": 7,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 2159}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant, as they provide information about the use"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"Most search results are relevant to the query, with two out of three contact"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are primarily notifications and automated system messages, which"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results appear to be relevant to the query, as they provide information "
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results include a few relevant contacts, but the majority of the results"
+              }
+            ],
+            "average_score": 2.2
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 841.58065
+    },
+    {
+      "timestamp": "2026-02-19T03:30:01.316217",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 82,
+          "fields_updated": 8,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 16,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 2854}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are mostly irrelevant to the query, as they are about a specific"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"Some of the results are clearly relevant to the query, but others (e.g. the "
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are related to notifications and automated systems, but there is"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results appear to be unrelated to patterns detected across email and CRM"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant, but the first two contacts are work-relat"
+              }
+            ],
+            "average_score": 1.6
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 897.090508
+    },
+    {
+      "timestamp": "2026-02-20T03:30:01.752737",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 89,
+          "fields_updated": 6,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 56,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 15,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 3158}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The search results include a contact for a person named Robothor, which may "
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results appear to be relevant to the query, as they provide contact info"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are related to the query, but the first two results are about no"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results only mention patterns related to email and CRM, but the actual p"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results appear to be relevant to meeting prep or relationship briefs, bu"
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 929.233307
+    },
+    {
+      "timestamp": "2026-02-21T03:30:01.548818",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 2,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 48,
+          "fields_updated": 6,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 48,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 0,
+          "errors": [
+            "phase4:Extra data: line 467 column 2 (char 18461)"
+          ]
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 3492}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant to the query, as they are related to a per"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two of the search results are relevant to the query, but one is an unknown c"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Some of the results are relevant to the query, but the relevance is limited "
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results appear to be a list of contacts and automated notificatio"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are relevant to the query, but only one result (the first one) i"
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 851.510114
+    },
+    {
+      "timestamp": "2026-02-22T03:30:01.139338",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 2,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 50,
+          "fields_updated": 1,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 0,
+          "errors": [
+            "phase4:Extra data: line 467 column 2 (char 18461)"
+          ]
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 3573}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant, but appear to be mostly outdated notifica"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are partially relevant to the query, providing information on co"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are related to tasks and notifications, but they don't directly "
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are related to Twilio and email automation, but the question ask"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"one relevant result (Robothor's Organization) and two unrelated results (Twi"
+              }
+            ],
+            "average_score": 2.0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 779.174446
+    },
+    {
+      "timestamp": "2026-02-23T03:30:01.100560",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 93,
+          "fields_updated": 5,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 19,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 3835}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant as they include recent decisions made by t"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"The search results are relevant to the query, providing specific contact inf"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results include relevant contacts related to the query, but the relevanc"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"Results appear to be email contact information rather than actual patterns o"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are mostly irrelevant to meeting prep or relationship bri"
+              }
+            ],
+            "average_score": 2.0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 813.875542
+    },
+    {
+      "timestamp": "2026-02-24T03:30:01.197120",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 108,
+          "fields_updated": 2,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 19,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 4225}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results appear to be unrelated to recent decisions, but rather to contac"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The search results are relevant to the query, providing specific contact inf"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"The results are somewhat relevant, but the top two results are contact infor"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results contain relevant information about Twilio services and automated"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are mostly irrelevant to the question about meeting prep "
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 1971.172797
+    },
+    {
+      "timestamp": "2026-02-25T03:30:01.795471",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 111,
+          "fields_updated": 1,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 20,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 4960}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results appear to be outdated or unrelated to recent decisions, a"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"Relevant contacts with clear roles and responsibilities, but one contact app"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"Only two of the search results are relevant to identifying active tasks and "
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are mostly irrelevant to the query about patterns detecte"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant to the query, but the second and third res"
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 846.708832
+    },
+    {
+      "timestamp": "2026-02-26T03:30:01.159454",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 112,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 19,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 5226}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant, but not directly answering the question a"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"some of the results appear to be relevant to the query, but others (e.g. the"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are mostly irrelevant as they contain generic contact inf"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results contain relevant contacts but the query seems to be asking for p"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"some results are relevant to meeting preparation or relationship briefs, but"
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 856.341237
+    },
+    {
+      "timestamp": "2026-02-27T03:30:01.642350",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 100,
+          "fields_updated": 4,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 5451}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are mostly unrelated to recent decisions made, and seem to be co"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"The results are relevant to the query as they provide information about key "
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"Results are related to active tasks and Jira tickets, but the relevance coul"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results include relevant contacts related to email and CRM, but the rele"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"two of the search results are related to a person named Philip, but the rele"
+              }
+            ],
+            "average_score": 2.4
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 1041.370454
+    },
+    {
+      "timestamp": "2026-02-28T03:30:01.436130",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 60,
+          "fields_updated": 2,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 22,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 5919}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results contain two relevant contacts and one relevant social media post"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 5,
+                "note": "{\"score\": 5, \"reason\": \"All results are relevant and directly answer the query about key contacts an"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 5,
+                "note": "{\"score\": 5, \"reason\": \"All search results are relevant to the query, providing active tasks and Jir"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are somewhat relevant to the query, as they are contacts associa"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two of the search results appear to be relevant to the query, as they are co"
+              }
+            ],
+            "average_score": 3.2
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 809.223411
+    },
+    {
+      "timestamp": "2026-03-01T03:30:01.168404",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 61,
+          "fields_updated": 1,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 13,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 6073}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"the results are mostly irrelevant to recent decisions, but one result is a n"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 5,
+                "note": "{\"score\": 5, \"reason\": \"All results are clearly relevant to the query, providing information about k"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 5,
+                "note": "{\"score\": 5, \"reason\": \"All results are relevant to the query, providing contact information for tas"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"The results mention a pattern of automated notifications from Twilio, but th"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"Results include a relevant contact for meeting preparation and a relevant au"
+              }
+            ],
+            "average_score": 3.4
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 817.939876
+    },
+    {
+      "timestamp": "2026-03-02T03:30:01.101249",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 71,
+          "fields_updated": 5,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 6296}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Some results are relevant to the query, but they are also quite old and not "
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results appear to be relevant to the query, but the third contact is unk"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The results are irrelevant to the query as they are mostly notifications fro"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results seem to be relevant to the query, but the patterns detected are "
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two of the results are relevant to meeting prep or relationship briefs, but "
+              }
+            ],
+            "average_score": 1.8
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 760.229679
+    },
+    {
+      "timestamp": "2026-03-03T03:30:01.775006",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 76,
+          "fields_updated": 5,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 10,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 6873}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two of the search results are relevant to recent decisions, but the third re"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"The results appear to be relevant as they provide contact information for in"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 4,
+                "note": "{\"score\": 4, \"reason\": \"The results are mostly relevant to the query, but some results seem to be du"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The search results provide information about contacts related to Twilio serv"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two of the search results are relevant to the query, but the third result ap"
+              }
+            ],
+            "average_score": 2.6
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 862.905447
+    },
+    {
+      "timestamp": "2026-03-04T03:30:01.280282",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 76,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 17,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 50, 'decay_updated': 7219}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 1,
+                "note": "{\"score\": 1, \"reason\": \"The search results are very old and outdated, with no indication of recent d"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results are relevant to the query, but the second contact is an automate"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 3,
+                "note": "{\"score\": 3, \"reason\": \"Some results are relevant to the query, but the majority are contact informa"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"The results mention specific contacts and their roles, but the query asks ab"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 2,
+                "note": "{\"score\": 2, \"reason\": \"Two relevant results exist, but one is a personal contact and not clearly re"
+              }
+            ],
+            "average_score": 2.0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "stats_after": {
+        "short_term_count": 504,
+        "long_term_count": 5,
+        "short_by_type": {
+          "contact": 10,
+          "email": 18,
+          "conversation_assistant": 1,
+          "conversation_user": 1,
+          "task": 3,
+          "transcript_assistant": 221,
+          "transcript_user": 250
+        }
+      },
+      "success": true,
+      "duration_seconds": 800.392665
+    }
+  ]
+}

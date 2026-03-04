@@ -1,0 +1,813 @@
+{
+  "lastSyncAt": "2026-03-04T15:30:01.401681",
+  "lastSyncStatus": "success",
+  "syncHistory": [
+    {
+      "timestamp": "2026-03-04T15:30:01.401681",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T15:00:01.567438",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T14:30:01.603892",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 2,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "status_change",
+          "ticket": "RD-30",
+          "from": "Backlog",
+          "to": "Testing"
+        },
+        {
+          "type": "status_change",
+          "ticket": "RD-29",
+          "from": "Backlog",
+          "to": "Testing"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T14:00:01.808655",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T13:30:01.413251",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 1,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "status_change",
+          "ticket": "RD-4",
+          "from": "In Progress",
+          "to": "Testing"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T13:00:01.105860",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T12:30:01.117717",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T12:00:01.772241",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T11:30:01.232983",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T11:00:02.073253",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T10:30:01.791059",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T10:00:01.479443",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T09:30:02.068135",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T09:00:01.178796",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T08:30:01.572695",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T08:00:01.380072",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T07:30:01.699536",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T07:00:01.329928",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T06:30:01.385304",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-04T06:00:01.697672",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T22:30:01.113081",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T22:00:01.164523",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T21:30:01.464079",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T21:00:01.306621",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T20:30:01.600649",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T20:00:01.889285",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T19:30:01.169839",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T19:00:01.576060",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T18:30:01.752717",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T18:00:01.385111",
+      "ticketsFetched": 14,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T17:30:01.772816",
+      "ticketsFetched": 14,
+      "added": 2,
+      "updated": 0,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "new",
+          "ticket": "RD-33",
+          "summary": "Create webhook for tracking",
+          "priority": "Medium"
+        },
+        {
+          "type": "new",
+          "ticket": "RD-32",
+          "summary": "Add Partell Sending Order API Integrations",
+          "priority": "Medium"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T17:00:01.142076",
+      "ticketsFetched": 12,
+      "added": 0,
+      "updated": 1,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "status_change",
+          "ticket": "RD-25",
+          "from": "In Progress",
+          "to": "Code Review"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T16:30:01.556042",
+      "ticketsFetched": 12,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T16:00:01.896856",
+      "ticketsFetched": 12,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T15:30:01.441118",
+      "ticketsFetched": 12,
+      "added": 1,
+      "updated": 0,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "new",
+          "ticket": "RD-25",
+          "summary": "Add Multiple Medications in a Single Prescription Order",
+          "priority": "Medium"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T15:00:01.523337",
+      "ticketsFetched": 11,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T14:30:01.231205",
+      "ticketsFetched": 11,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T14:00:01.368925",
+      "ticketsFetched": 11,
+      "added": 1,
+      "updated": 0,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "new",
+          "ticket": "RD-31",
+          "summary": "Add Rx Compounding API Integrations",
+          "priority": "Medium"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T13:30:01.073491",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T13:00:01.209496",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T12:30:01.320506",
+      "ticketsFetched": 10,
+      "added": 1,
+      "updated": 0,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "new",
+          "ticket": "RD-30",
+          "summary": "LifeFile Not Yet Available in Staging",
+          "priority": "Medium"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T12:00:01.297300",
+      "ticketsFetched": 9,
+      "added": 1,
+      "updated": 0,
+      "closed": 0,
+      "changes": [
+        {
+          "type": "new",
+          "ticket": "RD-29",
+          "summary": "Unable to Update Channel Settings for ScriptSure",
+          "priority": "Medium"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T11:30:01.632489",
+      "ticketsFetched": 8,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T11:00:01.607155",
+      "ticketsFetched": 8,
+      "added": 0,
+      "updated": 0,
+      "closed": 2,
+      "changes": [
+        {
+          "type": "completed",
+          "ticket": "RD-3",
+          "summary": "Validating Data Population in Prescription Form \u2013 Patient Section"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-16",
+          "summary": "Medication Search Popup for SKU Mapping"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T10:30:01.933968",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T10:00:01.955815",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T09:30:01.448703",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T09:00:01.545333",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T08:30:01.909599",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-03T08:00:01.707480",
+      "ticketsFetched": 10,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    }
+  ],
+  "activeTickets": {
+    "VV-1195": {
+      "id": "VV-1195",
+      "summary": "DRX Channel Config Missing Store Slug",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1195",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "dff744b0-0a34-45aa-9300-575dbb0713f7"
+    },
+    "VV-1202": {
+      "id": "VV-1202",
+      "summary": "Not able to Add User Profile",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1202",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "760a00de-8676-4b6e-863a-e883595ca00b"
+    },
+    "VV-1203": {
+      "id": "VV-1203",
+      "summary": "Address Line 1 and 2 is Not Saved When Creating a Clinic",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1203",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "e3047ca1-fd77-4111-950a-b93018ac0b01"
+    },
+    "VV-1204": {
+      "id": "VV-1204",
+      "summary": "ScriptSure Setting Reverts to Enabled After Saving",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1204",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "ce2d32b1-f477-43d3-83a1-5c5619f721ab"
+    },
+    "VV-1210": {
+      "id": "VV-1210",
+      "summary": "Licensed Number Not Saved When Creating New User",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1210",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "37f0007d-fc64-4384-966f-54d66a4753f5"
+    },
+    "VV-1212": {
+      "id": "VV-1212",
+      "summary": "Assigned Clinic Not Displayed",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1212",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "389d130a-5279-44b8-b61e-b6dd8c9e7f5b"
+    },
+    "VV-1240": {
+      "id": "VV-1240",
+      "summary": "Exported Files from Administration Module Display JSON Data Instead of Structured Columns",
+      "status": "To Do",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/VV-1240",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "VV",
+      "crmTaskId": "8fd3e9ef-93fe-4534-a3d3-e6ae2cc393c2"
+    },
+    "RD-4": {
+      "id": "RD-4",
+      "summary": "Validating Data Population in Prescription Form \u2013 Medication Details Section",
+      "status": "Testing",
+      "statusMapped": "in_progress",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-4",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "2c81d488-e0a8-4a88-a460-2fc32fd743fa"
+    },
+    "RD-29": {
+      "id": "RD-29",
+      "summary": "Unable to Update Channel Settings for ScriptSure",
+      "status": "Testing",
+      "statusMapped": "in_progress",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-29",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "e127035a-33bd-4b49-8c09-4745bc2a1f0f"
+    },
+    "RD-30": {
+      "id": "RD-30",
+      "summary": "LifeFile Not Yet Available in Staging",
+      "status": "Testing",
+      "statusMapped": "in_progress",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-30",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "a8826d52-1b1a-4611-aa43-912ab4c08dc5"
+    },
+    "RD-31": {
+      "id": "RD-31",
+      "summary": "Add Rx Compounding API Integrations",
+      "status": "Backlog",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-31",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "2bd9dbe2-eaef-4ad4-9a09-558d3a0f1dcb"
+    },
+    "RD-25": {
+      "id": "RD-25",
+      "summary": "Add Multiple Medications in a Single Prescription Order",
+      "status": "Code Review",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-25",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "dd2e1d7d-b1e4-44ae-bac4-b53abbe490cb"
+    },
+    "RD-33": {
+      "id": "RD-33",
+      "summary": "Create webhook for tracking",
+      "status": "Backlog",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-33",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "cc01a52a-cfdd-4c4c-9d05-edec1679cfa6"
+    },
+    "RD-32": {
+      "id": "RD-32",
+      "summary": "Add Partell Sending Order API Integrations",
+      "status": "Backlog",
+      "statusMapped": "pending",
+      "priority": "Medium",
+      "priorityMapped": "medium",
+      "dueDate": null,
+      "url": "https://ironsail.atlassian.net/browse/RD-32",
+      "lastSeen": "2026-03-04T15:30:01.401681",
+      "project": "RD",
+      "crmTaskId": "2b8f78a5-2f7c-4b55-a566-8d36a68757d8"
+    }
+  },
+  "pendingActions": [
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-29",
+      "summary": "Unable to Update Channel Settings for ScriptSure",
+      "addedAt": "2026-03-03T12:00:01.297300",
+      "surfacedAt": null
+    },
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-30",
+      "summary": "LifeFile Not Yet Available in Staging",
+      "addedAt": "2026-03-03T12:30:01.320506",
+      "surfacedAt": null
+    },
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-31",
+      "summary": "Add Rx Compounding API Integrations",
+      "addedAt": "2026-03-03T14:00:01.368925",
+      "surfacedAt": null
+    },
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-25",
+      "summary": "Add Multiple Medications in a Single Prescription Order",
+      "addedAt": "2026-03-03T15:30:01.441118",
+      "surfacedAt": null
+    },
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-33",
+      "summary": "Create webhook for tracking",
+      "addedAt": "2026-03-03T17:30:01.772816",
+      "surfacedAt": null
+    },
+    {
+      "action": "review_new_ticket",
+      "ticket": "RD-32",
+      "summary": "Add Partell Sending Order API Integrations",
+      "addedAt": "2026-03-03T17:30:01.772816",
+      "surfacedAt": null
+    }
+  ]
+}

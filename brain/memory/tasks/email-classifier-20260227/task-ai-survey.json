@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-010",
+  "title": "Process: AI Session Survey & Recording",
+  "assignedToAgent": "email-analyst",
+  "status": "TODO",
+  "priority": "normal",
+  "tags": ["email", "analytical", "survey", "sandra"],
+  "body": "Thread ID: 19c9b385d6b9d2ae\nFrom: Sandra Zelaya <sandra@ironsail.ai>\nSubject: AI Session Survey & Recording\nDate: 2026-02-26\n\nAction: Process AI Session survey responses and recording. Extract insights and store for future reference.",
+  "threadId": "19c9b385d6b9d2ae",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}

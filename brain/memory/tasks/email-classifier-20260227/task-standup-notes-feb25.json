@@ -1,0 +1,12 @@
+{
+  "taskId": "ec-20260227-004",
+  "title": "Review: Daily Standup Meeting notes Feb 25",
+  "assignedToAgent": "email-analyst",
+  "status": "TODO",
+  "priority": "low",
+  "tags": ["email", "analytical", "meeting-notes"],
+  "body": "Thread ID: 19c959d7ea7bf561\nFrom: Gemini <gemini-notes@google.com>\nSubject: Notes: Daily Standup Meeting Feb 25, 2026\nDate: 2026-02-25\n\nAction: Review meeting notes and file for records. Extract action items if any.",
+  "threadId": "19c959d7ea7bf561",
+  "createdAt": "2026-02-27T11:10:00Z",
+  "createdBy": "email-classifier"
+}
