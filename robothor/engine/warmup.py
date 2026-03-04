@@ -119,7 +119,7 @@ def _build_history_section(agent_id: str) -> str:
 
 
 def _build_memory_blocks_section(block_names: list[str]) -> str:
-    """Read memory blocks and format them."""
+    """Read memory blocks and format them, flagging stale ones."""
     if not block_names:
         return ""
 
@@ -137,10 +137,26 @@ def _build_memory_blocks_section(block_names: list[str]) -> str:
                 else ""
             )
             if content:
+                # Check staleness — flag blocks older than 24h
+                stale_tag = ""
+                last_written = result.get("last_written_at") if isinstance(result, dict) else None
+                if last_written:
+                    try:
+                        from datetime import datetime as _dt
+
+                        written_dt = _dt.fromisoformat(last_written)
+                        if written_dt.tzinfo is None:
+                            written_dt = written_dt.replace(tzinfo=UTC)
+                        age_hours = (datetime.now(UTC) - written_dt).total_seconds() / 3600
+                        if age_hours > 24:
+                            stale_tag = f" [STALE — {age_hours:.0f}h old]"
+                    except (ValueError, TypeError):
+                        pass
+
                 truncated = content[:MAX_BLOCK_CHARS]
                 if len(content) > MAX_BLOCK_CHARS:
                     truncated += "..."
-                lines.append(f"[{name}]\n{truncated}")
+                lines.append(f"[{name}]{stale_tag}\n{truncated}")
         except Exception as e:
             logger.debug("Failed to read memory block %s: %s", name, e)
 
@@ -167,6 +183,132 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
             lines.append(f"[{rel_path}]\n{truncated}")
         except Exception as e:
             logger.debug("Failed to read context file %s: %s", rel_path, e)
+
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def build_interactive_preamble(
+    agent_id: str,
+    user_message: str = "",
+    include_blocks: bool = True,
+) -> str:
+    """Build a lightweight warmup preamble for interactive (Telegram) sessions.
+
+    Injects core memory blocks (persona, user_profile, working_context) and
+    optionally pulls relevant facts based on entities mentioned in the user's message.
+
+    Args:
+        agent_id: The agent ID (for history lookup).
+        user_message: The user's message (for entity-aware context).
+        include_blocks: If True, inject core memory blocks (persona, user_profile,
+            working_context). Set to False for ongoing sessions where blocks are
+            already in conversation history.
+
+    Returns:
+        Warmup preamble string, or empty string if nothing to inject.
+    """
+    sections: list[str] = []
+
+    # Core memory blocks — only for new sessions (no prior history)
+    if include_blocks:
+        core_blocks = ["persona", "user_profile", "working_context"]
+        try:
+            blocks_section = _build_memory_blocks_section(core_blocks)
+            if blocks_section:
+                sections.append(blocks_section)
+        except Exception as e:
+            logger.debug("Interactive warmup blocks failed: %s", e)
+
+    # Entity-aware context — if user mentions a name, pull relevant facts
+    if user_message and len(user_message) > 5:
+        try:
+            context = _build_entity_context(user_message)
+            if context:
+                sections.append(context)
+        except Exception as e:
+            logger.debug("Interactive warmup entity context failed: %s", e)
+
+    if not sections:
+        return ""
+
+    preamble = "\n\n".join(sections)
+    if len(preamble) > MAX_WARMTH_CHARS:
+        preamble = preamble[:MAX_WARMTH_CHARS] + "\n[warmup truncated]"
+    return preamble
+
+
+MAX_ENTITY_CONTEXT_CHARS = 1000
+
+
+def _build_entity_context(user_message: str) -> str:
+    """Extract entities from user message and pull relevant facts.
+
+    Looks for capitalized proper nouns in the message and searches
+    memory facts for matching entity references.
+
+    Budget: max 1000 chars for this section.
+    """
+    import re
+
+    # Simple entity extraction: capitalized words that aren't sentence starters
+    words = user_message.split()
+    candidates = set()
+    for i, word in enumerate(words):
+        cleaned = re.sub(r"[^\w]", "", word)
+        if (
+            cleaned
+            and cleaned[0].isupper()
+            and len(cleaned) > 2
+            and (
+                i > 0
+                or cleaned.lower()
+                not in {
+                    "the",
+                    "what",
+                    "how",
+                    "when",
+                    "where",
+                    "why",
+                    "can",
+                    "does",
+                    "did",
+                    "hey",
+                    "hi",
+                }
+            )
+        ):
+            candidates.add(cleaned)
+
+    if not candidates:
+        return ""
+
+    from psycopg2.extras import RealDictCursor
+
+    from robothor.db import get_connection
+
+    lines = ["--- RELEVANT CONTEXT ---"]
+    chars_used = 0
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        for entity_name in list(candidates)[:3]:
+            cur.execute(
+                """
+                SELECT fact_text, category, importance_score
+                FROM memory_facts
+                WHERE is_active = TRUE AND %s = ANY(entities)
+                ORDER BY importance_score DESC, created_at DESC
+                LIMIT 3
+                """,
+                (entity_name,),
+            )
+            facts = cur.fetchall()
+            for f in facts:
+                line = f"- {f['fact_text']}"
+                if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+                    break
+                lines.append(line)
+                chars_used += len(line)
 
     return "\n".join(lines) if len(lines) > 1 else ""
 

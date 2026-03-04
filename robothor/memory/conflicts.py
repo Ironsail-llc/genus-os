@@ -55,7 +55,6 @@ async def find_similar_facts(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SET ivfflat.probes = 10")
         cur.execute(
             """
             SELECT
@@ -88,10 +87,17 @@ Existing fact: "{existing_fact}"
 New fact: "{new_fact}"
 
 Classify as one of:
-- "new": The facts are about different things, no relationship
-- "duplicate": The facts say the same thing (possibly worded differently)
-- "update": The new fact adds more detail or refines the existing fact
-- "contradiction": The facts directly contradict each other
+- "new": The facts describe DIFFERENT things, even if they mention the same entity. Default to this when unsure.
+- "duplicate": The facts say the EXACT same thing (possibly worded differently). Both would be redundant.
+- "update": The new fact REPLACES the old — the old fact would be FALSE if the new one is true. Only use this when the old fact is now outdated/wrong.
+- "contradiction": The facts make directly opposing claims about the same specific thing.
+
+Examples:
+- "Philip works at Ironsail" vs "Philip attended a meeting at Ironsail" → "new" (different claims about same entity)
+- "Meeting is at 3pm" vs "Meeting moved to 4pm" → "update" (old time is now wrong)
+- "Philip prefers dark mode" vs "Philip prefers dark mode for coding" → "duplicate" (same preference, minor rewording)
+
+IMPORTANT: When two facts mention the same entity but describe different events, actions, or attributes, classify as "new". Only classify as "update" when the old fact would be INCORRECT given the new information.
 
 Return JSON: {{"classification": "<type>", "reasoning": "<brief explanation>"}}
 Return ONLY the JSON object, no other text."""

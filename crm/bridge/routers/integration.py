@@ -393,9 +393,34 @@ class ImpetusMCPClient:
                 "params": {"name": name, "arguments": arguments or {}},
             }
         )
+        # Auto-recover from expired MCP sessions (1-hour TTL on Impetus side)
+        if self._is_session_error(result):
+            self.reset()
+            await self.ensure_initialized()
+            result = await self._send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._next_id(),
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments or {}},
+                }
+            )
         if "error" in result:
             err = result["error"]
             return {"error": err.get("message", str(err)) if isinstance(err, dict) else str(err)}
+        return self._extract_content(result)
+
+    @staticmethod
+    def _is_session_error(result: dict) -> bool:
+        """Check if the MCP response indicates an expired or invalid session."""
+        err = result.get("error", "")
+        if isinstance(err, dict):
+            err = err.get("message", "")
+        return isinstance(err, str) and "session" in err.lower()
+
+    @staticmethod
+    def _extract_content(result: dict) -> dict:
+        """Extract structured content from an MCP tool call response."""
         content = result.get("result", {}).get("content", [])
         if content and content[0].get("type") == "text":
             try:
