@@ -245,7 +245,7 @@ optional:
       default: []
       description: >
         Named policies: no_destructive_writes, no_external_http,
-        no_sensitive_data, rate_limit
+        no_sensitive_data, rate_limit, no_main_branch_push
     checkpoint_enabled:
       type: boolean
       default: false

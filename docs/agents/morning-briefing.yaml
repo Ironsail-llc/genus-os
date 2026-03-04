@@ -56,11 +56,12 @@ warmup:
   memory_blocks:
     - user_profile
     - shared_working_state
+    - nightwatch_log
   context_files:
     - brain/memory/garmin-health.md
     - brain/memory/cron-health-status.md
     - brain/memory/email-classifier-status.md
-
+    - brain/memory/overnight-pr-status.md
 instruction_file: brain/agents/morning-briefing.md
 bootstrap_files:
   - brain/AGENTS.md

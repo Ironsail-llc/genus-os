@@ -1,0 +1,39 @@
+id: nightwatch
+name: Nightwatch Pipeline
+description: Nightly self-improvement pipeline — analyze performance, identify improvements, create PRs
+version: "2026-03-04"
+
+triggers:
+  - type: cron
+    cron: "0 2 * * *"
+    timezone: America/New_York
+
+timeout_seconds: 1800
+
+steps:
+  - id: analyze
+    type: agent
+    agent_id: improvement-analyst
+    message: "Nightly analysis run. Check fleet health, compare against baselines, identify improvement opportunities, and create tasks for the overnight PR agent."
+    on_failure: abort
+
+  - id: check_tasks
+    type: condition
+    input: "{{ steps.analyze.output_text }}"
+    branches:
+      - when: "'tasks created: 0' in value.lower() or 'no improvements' in value.lower() or 'no tasks' in value.lower()"
+        goto: done
+      - otherwise: true
+        goto: create_prs
+
+  - id: create_prs
+    type: agent
+    agent_id: overnight-pr
+    message: "Improvement tasks are ready. Check CRM tasks tagged nightwatch+self-improve, implement changes, and create draft PRs."
+    on_failure: skip
+
+  - id: done
+    type: noop
+
+delivery:
+  mode: none

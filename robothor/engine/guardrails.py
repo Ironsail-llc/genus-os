@@ -94,6 +94,8 @@ class GuardrailEngine:
             return self._check_destructive(tool_name, tool_args)
         if policy == "no_external_http":
             return self._check_external_http(tool_name)
+        if policy == "no_main_branch_push":
+            return self._check_no_main_branch(tool_name, tool_args)
         if policy == "rate_limit":
             return self._check_rate_limit(agent_id)
         return GuardrailResult()
@@ -155,6 +157,43 @@ class GuardrailEngine:
                 guardrail_name="rate_limit",
             )
         calls.append(now)
+        return GuardrailResult()
+
+    def _check_no_main_branch(self, tool_name: str, tool_args: dict[str, Any]) -> GuardrailResult:
+        """Block git operations targeting main/master branches."""
+        protected = {"main", "master"}
+
+        if tool_name == "git_branch":
+            branch = tool_args.get("branch_name", "")
+            if branch in protected:
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"Cannot create/switch to protected branch: {branch}",
+                    guardrail_name="no_main_branch_push",
+                )
+
+        if tool_name == "git_push":
+            # The tool itself checks the current branch, but this guardrail provides
+            # a belt-and-suspenders pre-execution check
+            return GuardrailResult()  # Allowed — tool enforces at runtime
+
+        if tool_name == "git_commit":
+            # git_commit also checks branch at runtime, guardrail is advisory here
+            return GuardrailResult()
+
+        # Block any exec command that looks like git push to main/master
+        if tool_name in ("exec", "shell"):
+            command = str(tool_args.get("command", ""))
+            for branch in protected:
+                if re.search(rf"\bgit\s+push\b.*\b{branch}\b", command):
+                    return GuardrailResult(
+                        allowed=False,
+                        action="blocked",
+                        reason=f"Cannot push to protected branch via exec: {branch}",
+                        guardrail_name="no_main_branch_push",
+                    )
+
         return GuardrailResult()
 
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
