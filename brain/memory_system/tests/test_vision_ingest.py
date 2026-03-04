@@ -213,7 +213,7 @@ class TestMetadataStructures:
         metadata = {
             "detection_type": "motion",
             "motion_score": 0.218,
-            "snapshot_path": "/home/philip/clawd/memory/snapshots/20260214_091015.jpg",
+            "snapshot_path": "/home/philip/robothor/brain/memory/snapshots/20260214_091015.jpg",
             "camera_id": "living-room",
         }
         self._validate_common_fields(metadata)

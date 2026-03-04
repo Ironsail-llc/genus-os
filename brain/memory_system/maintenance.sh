@@ -5,7 +5,7 @@
 # Stats logged after maintenance completes.
 set -euo pipefail
 
-SCRIPT_DIR="/home/philip/clawd/memory_system"
+SCRIPT_DIR="/home/philip/robothor/brain/memory_system"
 LOG_FILE="$SCRIPT_DIR/maintenance.log"
 VENV="$SCRIPT_DIR/venv/bin/python3"
 STATUS_FILE="$SCRIPT_DIR/../memory/maintenance-status.json"

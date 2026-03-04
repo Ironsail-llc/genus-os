@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 import requests
 
 # Event bus for real-time event consumption
-sys.path.insert(0, os.path.expanduser("~/clawd"))
+sys.path.insert(0, os.path.expanduser("~/robothor/brain"))
 try:
     from memory_system import event_bus
 except ImportError:
@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = os.path.expanduser("~/clawd/memory")
+MEMORY_DIR = os.path.expanduser("~/robothor/brain/memory")
 HANDOFF_PATH = os.path.join(MEMORY_DIR, "worker-handoff.json")
 CALENDAR_PATH = os.path.join(MEMORY_DIR, "calendar-log.json")
 JIRA_LOG_PATH = os.path.join(MEMORY_DIR, "jira-log.json")

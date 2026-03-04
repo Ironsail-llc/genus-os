@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 import event_bus
 
 # Test stream name — avoids colliding with production

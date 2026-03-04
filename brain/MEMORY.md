@@ -96,7 +96,7 @@ See `scripts/schemas/log-schemas.md` for full field specifications.
 **RAG Orchestrator (port 9099):**
 - FastAPI service at `http://localhost:9099`
 - Endpoints: `/query`, `/v1/chat/completions`, `/health`, `/stats`, `/profiles`
-- Start script: `/home/philip/clawd/memory_system/start_rag.sh`
+- Start script: `/home/philip/robothor/brain/memory_system/start_rag.sh`
 
 ### Systemd Services (auto-start on boot)
 - `cloudflared` — Cloudflare tunnel
@@ -240,7 +240,7 @@ Successfully implemented real-time phone conversations:
 - **Phone:** +1 (413) 408-6025 (Twilio, my number)
 - **Voice:** Daniel (ElevenLabs)
 - **Brain:** Gemini primary, GPT-4o fallback
-- **Server:** `/home/philip/clawd/voice-server/server.py`
+- **Server:** `/home/philip/robothor/brain/voice-server/server.py`
 - **Public URL:** `https://voice.robothor.ai` (Cloudflare Tunnel)
 
 Can call Philip at +1 (347) 906-1511 for urgent matters or proactive check-ins.
@@ -292,13 +292,13 @@ Full local AI memory system: three-tier raw memory + structured fact store + ent
 
 **MCP Server:** stdio transport, 4 tools (search_memory, store_memory, get_stats, get_entity). Ready for `.claude.json` connection.
 
-**Location:** `/home/philip/clawd/memory_system/`
+**Location:** `/home/philip/robothor/brain/memory_system/`
 
 **Key files:** `rag.py`, `orchestrator.py`, `llm_client.py`, `fact_extraction.py`, `conflict_resolution.py`, `entity_graph.py`, `ingestion.py`, `lifecycle.py`, `mcp_server.py`, `reranker.py`, `web_search.py`
 
 **Usage:**
 ```bash
-cd /home/philip/clawd/memory_system && source venv/bin/activate
+cd /home/philip/robothor/brain/memory_system && source venv/bin/activate
 
 # Ingest content
 curl -X POST http://localhost:9099/ingest -H 'Content-Type: application/json' \
@@ -334,7 +334,7 @@ If services do not come online automatically after a reboot, run these commands 
 ### 1. RAG Orchestrator
 
 ```bash
-cd /home/philip/clawd/memory_system/
+cd /home/philip/robothor/brain/memory_system/
 ./start_rag.sh
 ```
 
@@ -364,13 +364,13 @@ This system runs locally on the ThinkStation PGX and handles the long-term memor
 ### System Crontab (Memory Processing)
 ```crontab
 # Mechanical maintenance - no LLM
-0 3 * * * /home/philip/clawd/memory_system/maintenance.sh
+0 3 * * * /home/philip/robothor/brain/memory_system/maintenance.sh
 
 # Intelligence pipeline - uses Llama 3.2 Vision 11B
-30 3 * * * cd /home/philip/clawd/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
+30 3 * * * cd /home/philip/robothor/brain/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
 
 # Calendar sync - no LLM
-*/10 8-22 * * * cd /home/philip/clawd/scripts && /home/philip/clawd/memory_system/venv/bin/python calendar_sync.py >> /home/philip/clawd/memory_system/logs/calendar-sync.log 2>&1
+*/10 8-22 * * * cd /home/philip/robothor/brain/scripts && /home/philip/robothor/brain/memory_system/venv/bin/python calendar_sync.py >> /home/philip/robothor/brain/memory_system/logs/calendar-sync.log 2>&1
 ```
 
 ### Why System Cron (not Moltbot)?

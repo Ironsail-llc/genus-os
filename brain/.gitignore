@@ -33,3 +33,4 @@ memory_system/yolov8n.pt
 
 # Voice server logs
 voice-server/server.log
+test-results/

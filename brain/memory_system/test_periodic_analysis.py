@@ -2,7 +2,7 @@
 Periodic Analysis (Tier 2) — Test Suite
 
 Run:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_periodic_analysis.py -v -m "not integration"
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_periodic_analysis.py -v -m "not integration"
 """
 
 import json

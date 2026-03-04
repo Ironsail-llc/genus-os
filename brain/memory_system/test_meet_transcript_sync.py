@@ -5,10 +5,10 @@ Unit tests (mocked gog CLI) for the sync script and parser.
 Integration test for ingest_google_meet dedup.
 
 Run unit tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_meet_transcript_sync.py -v -m "not integration"
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_meet_transcript_sync.py -v -m "not integration"
 
 Run integration tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_meet_transcript_sync.py -v -m integration
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_meet_transcript_sync.py -v -m integration
 """
 
 import json

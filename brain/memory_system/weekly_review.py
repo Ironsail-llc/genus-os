@@ -23,8 +23,8 @@ from psycopg2.extras import RealDictCursor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = Path("/home/philip/clawd/memory")
-MEMORY_SYSTEM_DIR = Path("/home/philip/clawd/memory_system")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
+MEMORY_SYSTEM_DIR = Path("/home/philip/robothor/brain/memory_system")
 LOGS_DIR = MEMORY_SYSTEM_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 

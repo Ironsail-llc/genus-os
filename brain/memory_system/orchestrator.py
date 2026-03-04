@@ -10,7 +10,7 @@ Architecture:
 Exposes an OpenAI-compatible /v1/chat/completions endpoint.
 
 Start:
-  cd /home/philip/clawd/memory_system
+  cd /home/philip/robothor/brain/memory_system
   source venv/bin/activate
   uvicorn orchestrator:app --host 0.0.0.0 --port 9099
 """
@@ -695,7 +695,7 @@ import base64
 import subprocess
 from pathlib import Path
 
-SNAPSHOT_DIR = Path("/home/philip/clawd/memory/snapshots")
+SNAPSHOT_DIR = Path("/home/philip/robothor/brain/memory/snapshots")
 RTSP_URL = "rtsp://localhost:8554/webcam"
 VISION_SERVICE_URL = "http://localhost:8600"
 

@@ -10,8 +10,8 @@ t() {
 
 # T4.1: robothor-memory MCP server starts and has all tools
 echo "=== Memory MCP Server ==="
-t "T4.1 Memory MCP tools" "timeout 5 /home/philip/clawd/memory_system/venv/bin/python -c \"
-import sys; sys.path.insert(0, '/home/philip/clawd/memory_system')
+t "T4.1 Memory MCP tools" "timeout 5 /home/philip/robothor/brain/memory_system/venv/bin/python -c \"
+import sys; sys.path.insert(0, '/home/philip/robothor/brain/memory_system')
 from mcp_server import get_tool_definitions
 tools = get_tool_definitions()
 names = [t['name'] for t in tools]
@@ -21,8 +21,8 @@ print('OK:', len(names), 'tools')
 \""
 
 # T4.2: memory_block_list handler works
-t "T4.2 memory_block_list handler" "timeout 5 /home/philip/clawd/memory_system/venv/bin/python -c \"
-import asyncio, sys, json; sys.path.insert(0, '/home/philip/clawd/memory_system')
+t "T4.2 memory_block_list handler" "timeout 5 /home/philip/robothor/brain/memory_system/venv/bin/python -c \"
+import asyncio, sys, json; sys.path.insert(0, '/home/philip/robothor/brain/memory_system')
 from mcp_server import handle_tool_call
 result = asyncio.run(handle_tool_call('memory_block_list', {}))
 assert 'blocks' in result, 'No blocks key'

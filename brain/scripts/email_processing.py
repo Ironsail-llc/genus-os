@@ -35,7 +35,7 @@ from cron_context import (
 )
 
 # === Paths ===
-MEMORY_DIR = Path("/home/philip/clawd/memory")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 EMAIL_LOG = MEMORY_DIR / "email-log.json"
 CONTACTS_FILE = MEMORY_DIR / "contacts.json"
 

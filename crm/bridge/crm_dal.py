@@ -22,7 +22,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # Audit logging — import from memory_system
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 import audit
 
 logger = logging.getLogger(__name__)

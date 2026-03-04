@@ -356,7 +356,7 @@ All `/api/*` endpoints support `X-Tenant-Id` header for multi-tenant scoping (de
 
 ### OpenClaw CRM Plugin — OpenClaw agent sessions only
 
-**Plugin:** `crm-tools` at `clawd/.openclaw/extensions/crm-tools/index.ts`
+**Plugin:** `crm-tools` at `brain/.openclaw/extensions/crm-tools/index.ts`
 **Config:** `openclaw.json` → `plugins.entries.crm-tools.enabled: true`
 
 OpenClaw agent sessions (cron jobs, Telegram, Google Chat) can't use MCP servers (stdio-only). Instead, the `crm-tools` plugin provides the same tools via HTTP calls to the Bridge proxy endpoints above.

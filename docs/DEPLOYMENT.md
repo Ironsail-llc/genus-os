@@ -160,7 +160,7 @@ The system passes all 6 fork criteria (verified by `scripts/verify-fork-readines
 
 | Path | Purpose |
 |------|---------|
-| `brain/` → `~/clawd/` | Core: memory system, scripts, voice, vision, dashboards |
+| `brain/` → `~/robothor/brain/` | Core: memory system, scripts, voice, vision, dashboards |
 | `robothor/engine/` | Python Agent Engine (agents, Telegram, cron scheduler, event hooks) |
 | `app/` | The Helm — Next.js 16 live dashboard |
 | `crm/` | CRM stack: Bridge service, migrations, Docker Compose |

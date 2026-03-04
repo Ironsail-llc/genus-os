@@ -25,8 +25,8 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 
-MEMORY_DIR = Path("/home/philip/clawd/memory")
-MEMORY_SYSTEM_DIR = Path("/home/philip/clawd/memory_system")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
+MEMORY_SYSTEM_DIR = Path("/home/philip/robothor/brain/memory_system")
 LOGS_DIR = MEMORY_SYSTEM_DIR / "logs"
 
 logging.basicConfig(

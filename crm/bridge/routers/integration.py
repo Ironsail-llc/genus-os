@@ -111,7 +111,7 @@ def _get_vault():
     if _vault_client is None:
         import sys
 
-        sys.path.insert(0, os.path.expanduser("~/clawd/scripts"))
+        sys.path.insert(0, os.path.expanduser("~/robothor/brain/scripts"))
         from vault_client import VaultClient
 
         _vault_client = VaultClient()

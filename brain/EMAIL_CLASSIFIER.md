@@ -19,7 +19,7 @@ At the START of your run:
 ## How It Works
 
 1. `list_my_tasks` — check for tasks assigned to you. Process any before continuing.
-2. Read `~/clawd/memory/triage-inbox.json` (via `read_file`)
+2. Read `~/robothor/brain/memory/triage-inbox.json` (via `read_file`)
 3. If `counts.emails` is 0: write the status file and stop immediately
 4. Process ONLY items where `source: "email"` — ignore calendar and jira items
 5. Check `activeEscalationIds` — do NOT re-escalate items already listed there
@@ -196,7 +196,7 @@ exec:
 python3 -c "
 import json, os
 from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/email-log.json')
+path = os.path.expanduser('~/robothor/brain/memory/email-log.json')
 with open(path) as f:
     data = json.load(f)
 now = datetime.now(timezone.utc).isoformat()
@@ -223,7 +223,7 @@ After processing (or finding nothing), write the status file via `exec`:
 exec:
 python3 -c "
 import os; from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/email-classifier-status.md')
+path = os.path.expanduser('~/robothor/brain/memory/email-classifier-status.md')
 with open(path, 'w') as f:
     f.write('# Email Classifier Status\n')
     f.write('Last run: ' + datetime.now(timezone.utc).isoformat() + '\n')

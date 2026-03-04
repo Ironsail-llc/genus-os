@@ -54,8 +54,8 @@ The Memory Intelligence Pipeline processes and maintains Robothor's long-term me
 crontab -l
 
 # Memory system entries:
-0 3 * * *   /home/philip/clawd/memory_system/maintenance.sh
-30 3 * * *  cd /home/philip/clawd/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
+0 3 * * *   /home/philip/robothor/brain/memory_system/maintenance.sh
+30 3 * * *  cd /home/philip/robothor/brain/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
 ```
 
 ## Model Selection (2026-02-05)
@@ -110,7 +110,7 @@ After benchmarking on GB10, we selected **Llama 3.2 Vision 11B**:
 
 ### Manual Run
 ```bash
-cd /home/philip/clawd/memory_system
+cd /home/philip/robothor/brain/memory_system
 source venv/bin/activate
 python intelligence_pipeline.py
 ```
@@ -118,13 +118,13 @@ python intelligence_pipeline.py
 ### Check Logs
 ```bash
 # Intelligence pipeline logs
-tail -100 /home/philip/clawd/memory_system/logs/intelligence.log
+tail -100 /home/philip/robothor/brain/memory_system/logs/intelligence.log
 
 # Maintenance logs
-tail -50 /home/philip/clawd/memory_system/maintenance.log
+tail -50 /home/philip/robothor/brain/memory_system/maintenance.log
 
 # Quality metrics
-cat /home/philip/clawd/memory/rag-quality-log.json | jq '.runs[-1]'
+cat /home/philip/robothor/brain/memory/rag-quality-log.json | jq '.runs[-1]'
 ```
 
 ## Key Files

@@ -23,12 +23,12 @@ from pathlib import Path
 
 import requests
 
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 import event_bus
 
-LOG_PATH = Path("/home/philip/clawd/memory/email-log.json")
+LOG_PATH = Path("/home/philip/robothor/brain/memory/email-log.json")
 REPLY_COOLDOWN_SECONDS = 300  # 5 minutes
-LOCK_PATH = Path("/home/philip/clawd/memory/.email-log.lock")
+LOCK_PATH = Path("/home/philip/robothor/brain/memory/.email-log.lock")
 GOG_PASSWORD = os.environ["GOG_KEYRING_PASSWORD"]
 ACCOUNT = "robothor@ironsail.ai"
 

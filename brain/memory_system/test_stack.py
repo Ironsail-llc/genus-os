@@ -174,7 +174,7 @@ async def test_phase3():
     if not available:
         print("  → SearXNG not running.")
         print(
-            "  → Start it: cd /home/philip/clawd/memory_system && docker compose -f docker-compose.searxng.yml up -d"
+            "  → Start it: cd /home/philip/robothor/brain/memory_system && docker compose -f docker-compose.searxng.yml up -d"
         )
         print("  → Skipping web search tests (pipeline will work without it).")
         return True  # Not a hard failure

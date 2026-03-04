@@ -23,7 +23,7 @@ If zero tasks (or all already resolved), write response-status.md with "Inbox em
      2. If search finds the thread, use that threadId
      3. If still can't find it → `resolve_task(id, resolution="Thread not found — invalid threadId in task body, skipping")`. Do NOT escalate — missing threads are not Philip's problem.
 5. **Look up the sender** in CRM: `list_people(search="<sender name>")`
-6. Check `~/clawd/memory/response-analysis.json` (via `read_file`) — if this threadId has an analysis entry, use it
+6. Check `~/robothor/brain/memory/response-analysis.json` (via `read_file`) — if this threadId has an analysis entry, use it
 7. Compose your reply based on the email content and classification (from task tags)
 8. Send the reply (see Sending below)
 9. `resolve_task(id=<task_id>, resolution="Sent reply: <brief summary>")`
@@ -93,7 +93,7 @@ Before outputting your summary, ALWAYS update the status file — even if inbox 
 exec:
 python3 -c "
 import os; from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/response-status.md')
+path = os.path.expanduser('~/robothor/brain/memory/response-status.md')
 with open(path, 'w') as f:
     f.write('Last run: ' + datetime.now(timezone.utc).isoformat() + '\n')
     f.write('<your summary here>\n')

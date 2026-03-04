@@ -231,7 +231,7 @@ CREATE TABLE memory_relations (
 ## File Locations
 
 ```
-/home/philip/clawd/memory_system/
+/home/philip/robothor/brain/memory_system/
 ├── rag.py                 # Core RAG (3-tier memory, vector search)
 ├── llm_client.py          # Provider abstraction: Qwen3-Next via Ollama
 ├── reranker.py            # Qwen3-Reranker cross-encoder (yes/no)
@@ -304,7 +304,7 @@ Three-tier architecture for automated intelligence, all running via system cront
 ## CLI Usage
 
 ```bash
-cd /home/philip/clawd/memory_system
+cd /home/philip/robothor/brain/memory_system
 source venv/bin/activate
 
 # Store a memory (raw, short-term)
@@ -392,8 +392,8 @@ The MCP server provides a standard interface for external models to access the m
 ```json
 "robothor-memory": {
   "type": "stdio",
-  "command": "/home/philip/clawd/memory_system/venv/bin/python",
-  "args": ["/home/philip/clawd/memory_system/mcp_server.py"]
+  "command": "/home/philip/robothor/brain/memory_system/venv/bin/python",
+  "args": ["/home/philip/robothor/brain/memory_system/mcp_server.py"]
 }
 ```
 

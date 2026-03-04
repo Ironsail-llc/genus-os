@@ -205,7 +205,7 @@ class TestCronHealthCheck:
         """Agent with successes and low failure rate is healthy."""
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import classify_agent
 
         agent = {
@@ -221,7 +221,7 @@ class TestCronHealthCheck:
         """Agent with >50% failure rate is error."""
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import classify_agent
 
         agent = {
@@ -237,7 +237,7 @@ class TestCronHealthCheck:
         """Agent with 0 runs is stale."""
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import classify_agent
 
         agent = {
@@ -253,7 +253,7 @@ class TestCronHealthCheck:
         """Agent with runs but no successes AND no failures is healthy (still running)."""
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import classify_agent
 
         agent = {
@@ -268,7 +268,7 @@ class TestCronHealthCheck:
     def test_format_duration(self):
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import format_duration
 
         assert format_duration(None) == "—"
@@ -279,7 +279,7 @@ class TestCronHealthCheck:
     def test_format_cost(self):
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import format_cost
 
         assert format_cost(None) == "$0"
@@ -291,7 +291,7 @@ class TestCronHealthCheck:
         """write_status creates a markdown file."""
         import sys
 
-        sys.path.insert(0, "/home/philip/clawd/scripts")
+        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
         from cron_health_check import write_status
 
         output = tmp_path / "status.md"

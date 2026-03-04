@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = os.path.expanduser("~/clawd/memory")
+MEMORY_DIR = os.path.expanduser("~/robothor/brain/memory")
 QUEUE_PATH = os.path.join(MEMORY_DIR, "response-queue.json")
 INBOX_PATH = os.path.join(MEMORY_DIR, "response-inbox.json")
 HANDOFF_PATH = os.path.join(MEMORY_DIR, "worker-handoff.json")

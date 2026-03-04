@@ -21,10 +21,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-LOG_PATH = Path("/home/philip/clawd/memory/meet-transcripts.json")
-STATE_PATH = Path("/home/philip/clawd/memory/meet-transcript-state.json")
-CALENDAR_PATH = Path("/home/philip/clawd/memory/calendar-log.json")
-LOCK_PATH = Path("/home/philip/clawd/memory/.meet-transcript.lock")
+LOG_PATH = Path("/home/philip/robothor/brain/memory/meet-transcripts.json")
+STATE_PATH = Path("/home/philip/robothor/brain/memory/meet-transcript-state.json")
+CALENDAR_PATH = Path("/home/philip/robothor/brain/memory/calendar-log.json")
+LOCK_PATH = Path("/home/philip/robothor/brain/memory/.meet-transcript.lock")
 GOG_PASSWORD = os.environ["GOG_KEYRING_PASSWORD"]
 ACCOUNT = "robothor@ironsail.ai"
 

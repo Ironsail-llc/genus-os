@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 # Add paths
-sys.path.insert(0, str(Path.home() / "clawd" / "memory_system"))
+sys.path.insert(0, str(Path.home() / "robothor" / "brain" / "memory_system"))
 
 CHECKS = []
 FAILURES = []
@@ -65,7 +65,7 @@ def check_1_service_registry():
 
 def check_2_agent_capabilities():
     """2. Agent permissions in capability manifest."""
-    manifest_path = Path.home() / "clawd" / "agent_capabilities.json"
+    manifest_path = Path.home() / "robothor" / "brain" / "agent_capabilities.json"
     if not manifest_path.exists():
         return False
 

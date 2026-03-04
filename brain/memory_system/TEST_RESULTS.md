@@ -107,7 +107,7 @@ Stored 5 memories across different types:
 ## Files Created
 
 ```
-/home/philip/clawd/memory_system/
+/home/philip/robothor/brain/memory_system/
 ├── rag.py           # Main RAG system (store, search, maintain)
 ├── venv/            # Python virtual environment
 └── TEST_RESULTS.md  # This file

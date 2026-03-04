@@ -13,10 +13,10 @@ This file covers:
 - Pipeline report structure
 
 Run unit tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_intelligence_pipeline.py -v -m "not integration and not llm"
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_intelligence_pipeline.py -v -m "not integration and not llm"
 
 Run integration tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_intelligence_pipeline.py -v -m integration
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_intelligence_pipeline.py -v -m integration
 """
 
 import json

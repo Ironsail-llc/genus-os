@@ -50,16 +50,8 @@ EXCLUDES=(
 
 # ── Project directories ─────────────────────────────────────────
 
-for dir in clawd; do
-    if [ -d "$HOME/$dir" ]; then
-        rsync -a --delete "${EXCLUDES[@]}" \
-            "$HOME/$dir/" "$BACKUP_ROOT/latest/$dir/" 2>> "$LOG"
-    fi
-done
-
-# robothor root (excluding symlinks to avoid duplicating clawd/etc)
+# robothor root (brain/ is now in-repo, no longer a separate directory)
 rsync -a --delete "${EXCLUDES[@]}" \
-    --exclude='brain' \
     --exclude='tunnel' \
     "$HOME/robothor/" "$BACKUP_ROOT/latest/robothor/" 2>> "$LOG"
 

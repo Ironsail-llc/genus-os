@@ -13,5 +13,5 @@ curl -X POST http://localhost:8766/sms \
 
 echo ""
 echo "Message logged. Check:"
-echo "  - Log file: /home/philip/clawd/memory/sms-log.json"
+echo "  - Log file: /home/philip/robothor/brain/memory/sms-log.json"
 echo "  - API: curl http://localhost:8766/messages"

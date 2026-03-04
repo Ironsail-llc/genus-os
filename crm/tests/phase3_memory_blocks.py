@@ -74,7 +74,7 @@ except psycopg2.errors.UniqueViolation:
     test("T3.6 UNIQUE constraint enforced", True)
 
 # T3.7: MCP tool definitions include memory block tools
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 try:
     from mcp_server import get_tool_definitions
 

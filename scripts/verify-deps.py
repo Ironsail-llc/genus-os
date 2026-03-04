@@ -85,7 +85,7 @@ def main():
 
     # Check Python venvs exist
     venvs = {
-        "memory_system": Path.home() / "clawd" / "memory_system" / "venv",
+        "memory_system": Path.home() / "robothor" / "brain" / "memory_system" / "venv",
         "bridge": Path.home() / "robothor" / "crm" / "bridge" / "venv",
     }
 

@@ -4,10 +4,10 @@ Continuous Ingest (Tier 1) — Test Suite
 Unit tests (mocked DB + LLM) and integration tests (real DB).
 
 Run unit tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_continuous_ingest.py -v -m "not integration"
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_continuous_ingest.py -v -m "not integration"
 
 Run integration tests:
-    cd ~/clawd/memory_system && ./venv/bin/python -m pytest test_continuous_ingest.py -v -m integration
+    cd ~/robothor/brain/memory_system && ./venv/bin/python -m pytest test_continuous_ingest.py -v -m integration
 """
 
 import json

@@ -14,7 +14,7 @@ import pytest
 # Paths
 OPENCLAW_JSON = os.path.expanduser("~/.openclaw/openclaw.json")
 JOBS_JSON = os.path.expanduser("~/.openclaw/cron/jobs.json")
-SKILLS_DIR = os.path.expanduser("~/clawd/.agents/skills")
+SKILLS_DIR = os.path.expanduser("~/robothor/brain/.agents/skills")
 
 # Expected agent IDs after step 8
 EXPECTED_AGENTS = {"main", "supervisor", "email", "calendar", "crm", "vision"}

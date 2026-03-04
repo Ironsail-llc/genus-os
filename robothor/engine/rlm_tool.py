@@ -56,7 +56,7 @@ class DeepReasonConfig:
     log_dir: str = field(
         default_factory=lambda: os.environ.get(
             "ROBOTHOR_RLM_LOG_DIR",
-            os.path.expanduser("~/clawd/memory/rlm-traces"),
+            os.path.expanduser("~/robothor/brain/memory/rlm-traces"),
         )
     )
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 # Add memory_system to path for service_registry import
 sys.path.insert(0, str(Path(__file__).parent.parent / "brain" / "memory_system"))
-sys.path.insert(0, str(Path.home() / "clawd" / "memory_system"))
+sys.path.insert(0, str(Path.home() / "robothor" / "brain" / "memory_system"))
 
 from service_registry import (
     get_health_url,

@@ -18,7 +18,7 @@ from pathlib import Path
 # Ensure the robothor package is importable
 sys.path.insert(0, os.path.expanduser("~/robothor"))
 
-OUTPUT_PATH = Path("/home/philip/clawd/memory/cron-health-status.md")
+OUTPUT_PATH = Path("/home/philip/robothor/brain/memory/cron-health-status.md")
 
 
 def _get_connection():

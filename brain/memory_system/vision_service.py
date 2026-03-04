@@ -50,9 +50,9 @@ RTSP_URL = os.getenv("RTSP_URL", "rtsp://localhost:8554/webcam")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://localhost:9099")
 HEALTH_PORT = int(os.getenv("VISION_HEALTH_PORT", "8600"))
-SNAPSHOT_DIR = Path(os.getenv("SNAPSHOT_DIR", "/home/philip/clawd/memory/snapshots"))
-FACE_DATA_DIR = Path(os.getenv("FACE_DATA_DIR", "/home/philip/clawd/memory/faces"))
-STATE_DIR = Path(os.getenv("STATE_DIR", "/home/philip/clawd/memory"))
+SNAPSHOT_DIR = Path(os.getenv("SNAPSHOT_DIR", "/home/philip/robothor/brain/memory/snapshots"))
+FACE_DATA_DIR = Path(os.getenv("FACE_DATA_DIR", "/home/philip/robothor/brain/memory/faces"))
+STATE_DIR = Path(os.getenv("STATE_DIR", "/home/philip/robothor/brain/memory"))
 
 # Telegram alerts
 PHILIP_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7636850023")

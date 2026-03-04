@@ -51,7 +51,7 @@ curl -s http://localhost:8766/health
 
 ## Log Format
 
-Messages are stored in `/home/philip/clawd/memory/sms-log.json`:
+Messages are stored in `/home/philip/robothor/brain/memory/sms-log.json`:
 ```json
 {
   "receivedAt": "2026-02-12T11:10:53.100741",
@@ -83,7 +83,7 @@ journalctl --user -u robothor-sms -f
 
 Or run manually:
 ```bash
-cd /home/philip/clawd/sms-server
+cd /home/philip/robothor/brain/sms-server
 python3 server.py --port 8766
 ```
 

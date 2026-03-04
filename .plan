@@ -1,0 +1,121 @@
+# Plan: Fix Morning/Evening Briefings + Plan Mode Issues
+
+## Analysis of What Went Wrong in the Robothor Conversation
+
+I found **3 categories of problems**: briefing agent config bugs, plan mode tooling gaps, and LLM behavioral failures.
+
+---
+
+### Category 1: Briefing Agent Configuration Bugs
+
+**Bug A — Instruction files exist but aren't linked**
+Both manifests have `instruction_file: null`:
+- `docs/agents/morning-briefing.yaml` line 66: `instruction_file: null`
+- `docs/agents/evening-winddown.yaml` line 66: `instruction_file: null`
+
+Yet the instruction files DO exist:
+- `brain/agents/morning-briefing.md` (32 lines, detailed data sources + output format)
+- `brain/agents/evening-winddown.md` (56 lines, detailed data sources + output format + status file)
+
+**Impact**: The agents run with ONLY generic bootstrap files (AGENTS.md + TOOLS.md). They have no specific instructions about what data to pull or how to format output. They're improvising every run.
+
+**Bug B — Instruction files reference tools not in tools_allowed**
+The instruction files call for `list_my_tasks`, `list_tasks`, `memory_block_read`, `list_notes`, `list_conversations`, `web_search` — but the manifests only allow 7 tools: `exec, read_file, write_file, search_memory, get_entity, store_memory, list_conversations`.
+
+Missing from tools_allowed that the instruction files need:
+- `list_tasks` / `list_my_tasks` / `get_task`
+- `memory_block_read` / `memory_block_list`
+- `list_notes` / `get_note`
+- `web_search` / `web_fetch`
+- `get_appointments`
+
+**Bug C — Model is Kimi K2.5**
+Both manifests use `openrouter/moonshotai/kimi-k2.5`. User wants `anthropic/claude-sonnet-4-6` for once-daily briefings where quality matters.
+
+---
+
+### Category 2: Plan Mode Tooling Gap
+
+**Bug D — No filesystem discovery in read-only mode**
+READONLY_TOOLS (tools.py:101-156) includes `read_file` but NOT `exec`. There is no `glob`, `find`, `list_directory`, or `search_files` tool. In plan mode, the agent can read a file IF it knows the exact path, but **cannot discover file paths** on the filesystem.
+
+This is why Robothor said "Can't find the files via read_file — the paths aren't resolving" and asked Philip to run `find` commands. It literally had no tool to search the filesystem.
+
+The plan mode preamble (runner.py:77) says:
+> "Read files, search memory, list tasks/people/companies, web search, web fetch — anything that READS."
+
+But "Read files" is misleading — it implies browsing/discovering files, when really it's just `read_file(path)` which requires an exact path.
+
+---
+
+### Category 3: LLM Behavioral Failures
+
+**Failure E — Asked Philip to do manual work**
+Violates the CLAUDE.md autonomy principle: "Robothor does everything itself. NEVER suggest Philip do something manually." Even without `exec`, the agent could have:
+1. Tried common paths (`brain/agents/morning-briefing.md`, `docs/agents/morning-briefing.yaml`)
+2. Used `search_memory` for file path info
+3. Read the manifest YAML (which it knew existed from run data) to find the instruction_file config
+
+**Failure F — Planned without reading source files**
+The 5-step plan was based on run log analysis, not actual file contents. A plan to "improve the prompt" that never reads the prompt is guesswork.
+
+**Failure G — Double approval request + incomplete plan**
+Asked "Approve this plan?" twice before having a complete plan. The [PLAN_READY] signal should only fire after research is done.
+
+**Failure H — Indirect workaround instead of direct action**
+After being told to run commands itself, it went to "memory and agent run details" instead of just trying `read_file("brain/agents/morning-briefing.md")` or reading the manifest YAML.
+
+---
+
+## Fix Plan
+
+### Step 1 — Fix both manifests: link instruction files + expand tools + upgrade model
+
+**Files**: `docs/agents/morning-briefing.yaml`, `docs/agents/evening-winddown.yaml`
+
+Changes for BOTH:
+1. `instruction_file: null` → `instruction_file: brain/agents/morning-briefing.md` (or evening-winddown.md)
+2. `model.primary` → `anthropic/claude-sonnet-4-6`
+3. Remove `payload_alias: kimi`
+4. Update `model.fallbacks` (keep gemini as fallback, drop minimax)
+5. Expand `tools_allowed` to include all tools referenced in instruction files:
+   - Add: `list_tasks`, `list_my_tasks`, `get_task`, `memory_block_read`, `memory_block_list`, `list_notes`, `get_note`, `web_search`, `web_fetch`, `get_appointments`
+
+### Step 2 — Improve instruction file content
+
+**Files**: `brain/agents/morning-briefing.md`, `brain/agents/evening-winddown.md`
+
+Changes:
+- Add `web_search` for weather + news to morning briefing data sources
+- Add explicit "pull live data, don't rely on memory for schedule" guidance
+- Remove `exec("cat ...")` from evening-winddown (line 14) — replace with `read_file`
+- Tighten output template to be consistent and scannable
+- Remove stale CRM note IDs from morning-briefing.md (line 32)
+
+### Step 3 — Add filesystem discovery to READONLY_TOOLS
+
+**File**: `robothor/engine/tools.py`
+
+Options (pick one):
+- **Option A**: Add `exec` to READONLY_TOOLS but with a guardrail that blocks write commands (risky, hard to filter)
+- **Option B**: Create a new `list_directory` or `glob_files` read-only tool that wraps `os.listdir()` / `pathlib.glob()` (cleaner, purpose-built)
+- **Option C**: Add a `search_files` tool that does `find`-like pattern matching (most useful)
+
+**Recommendation**: Option B — a simple `list_directory(path)` tool. Minimal surface area, solves the exact problem.
+
+### Step 4 — Improve plan mode preamble
+
+**File**: `robothor/engine/runner.py` (lines 61-84)
+
+Changes:
+- List actual tool names available (dynamically from the filtered list)
+- Emphasize "use read_file and search_memory to find information BEFORE proposing"
+- Add explicit: "If a file path doesn't work, try alternative paths or use search_memory to find it. NEVER ask Philip to look things up for you."
+- Reinforce autonomy principle in plan mode context
+
+### Step 5 — Validate + test
+
+- Run `python scripts/validate_agents.py --agent morning-briefing`
+- Run `python scripts/validate_agents.py --agent evening-winddown`
+- Run morning-briefing manually and compare output quality
+- Run engine tests: `cd robothor/engine && python -m pytest tests/ -v`

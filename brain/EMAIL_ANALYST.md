@@ -58,7 +58,7 @@ exec:
 python3 -c "
 import json, os
 from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/response-analysis.json')
+path = os.path.expanduser('~/robothor/brain/memory/response-analysis.json')
 try:
     with open(path) as f: data = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
@@ -108,7 +108,7 @@ RAG is your primary research tool for building context around analytical emails:
 exec:
 python3 -c "
 import os; from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/email-analyst-status.md')
+path = os.path.expanduser('~/robothor/brain/memory/email-analyst-status.md')
 with open(path, 'w') as f:
     f.write('Last run: ' + datetime.now(timezone.utc).isoformat() + '\n')
     f.write('<your summary here>\n')

@@ -635,7 +635,7 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 
 | Category | Contents |
 |----------|----------|
-| Project directories | `clawd/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
+| Project directories | `brain/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
 | Config directories | `.config/robothor/`, `.cloudflared/` |
 | Credentials | `.bashrc`, `crm/.env` |
 | Databases | 2x `pg_dump`: robothor\_memory, vaultwarden |
@@ -685,7 +685,7 @@ robothor/                                 Project root (git repo)
 │       ├── test_email_pipeline.sh
 │       └── test_regression.sh
 │
-├── brain/ → ~/clawd/                     Core workspace (symlink)
+├── brain/ → ~/robothor/brain/                     Core workspace (symlink)
 │   ├── SOUL.md                           Identity & personality
 │   ├── AGENTS.md                         Agent config & startup
 │   ├── ARCHITECTURE.md                   Three-layer architecture

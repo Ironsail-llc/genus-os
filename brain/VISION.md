@@ -298,7 +298,7 @@ set_vision_mode("disarmed") # don't want any monitoring
 ## Snapshot Storage
 
 ```
-/home/philip/clawd/memory/
+/home/philip/robothor/brain/memory/
 ├── snapshots/              # Date-organized detection snapshots
 │   ├── 2026-02-07/
 │   │   ├── 143201.jpg

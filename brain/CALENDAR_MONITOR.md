@@ -18,7 +18,7 @@ At the START of your run:
 
 ## How It Works
 
-1. Read `~/clawd/memory/triage-inbox.json` (via `read_file`)
+1. Read `~/robothor/brain/memory/triage-inbox.json` (via `read_file`)
 2. If `counts.calendar` is 0: write the status file and stop immediately
 3. Process ONLY items where `source: "calendar"` — ignore email and jira items
 4. Check `activeEscalationIds` — do NOT re-escalate items already listed there
@@ -122,7 +122,7 @@ Before outputting your summary, ALWAYS update the status file — even if inbox 
 exec:
 python3 -c "
 import os; from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/calendar-monitor-status.md')
+path = os.path.expanduser('~/robothor/brain/memory/calendar-monitor-status.md')
 with open(path, 'w') as f:
     f.write('Last run: ' + datetime.now(timezone.utc).isoformat() + '\n')
     f.write('<your summary here>\n')

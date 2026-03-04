@@ -15,11 +15,11 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, "/home/philip/clawd/memory_system")
-sys.path.insert(0, "/home/philip/clawd/scripts")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/scripts")
 import event_bus
 
-MEMORY_DIR = Path("/home/philip/clawd/memory")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 
 
 # ─── Characterization Tests: JSON File Structures ──────────────────────

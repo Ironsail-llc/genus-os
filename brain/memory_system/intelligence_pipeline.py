@@ -16,7 +16,7 @@ Phases (deep analysis only — ingestion moved to Tier 1):
     Phase 6: Cleanup — prune old ingested_items (>90 days)
 
 Usage:
-    cd /home/philip/clawd/memory_system
+    cd /home/philip/robothor/brain/memory_system
     source venv/bin/activate
     python intelligence_pipeline.py
 
@@ -41,8 +41,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Paths
-MEMORY_DIR = Path("/home/philip/clawd/memory")
-MEMORY_SYSTEM_DIR = Path("/home/philip/clawd/memory_system")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
+MEMORY_SYSTEM_DIR = Path("/home/philip/robothor/brain/memory_system")
 LOGS_DIR = MEMORY_SYSTEM_DIR / "logs"
 QUALITY_LOG = MEMORY_DIR / "rag-quality-log.json"
 NIGHTLY_LOCK = MEMORY_SYSTEM_DIR / "locks" / "nightly_pipeline.lock"

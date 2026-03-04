@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 # Paths
-MEMORY_DIR = Path("/home/philip/clawd/memory")
-MEMORY_SYSTEM_DIR = Path("/home/philip/clawd/memory_system")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
+MEMORY_SYSTEM_DIR = Path("/home/philip/robothor/brain/memory_system")
 LOGS_DIR = MEMORY_SYSTEM_DIR / "logs"
 LOCK_FILE = MEMORY_SYSTEM_DIR / "locks" / "continuous_ingest.lock"
 NIGHTLY_LOCK = MEMORY_SYSTEM_DIR / "locks" / "nightly_pipeline.lock"

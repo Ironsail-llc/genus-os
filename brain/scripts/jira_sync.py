@@ -30,8 +30,8 @@ JIRA_TOKEN = os.environ.get(
     "***REMOVED***",
 )
 
-JIRA_LOG = Path("/home/philip/clawd/memory/jira-log.json")
-TASKS_FILE = Path("/home/philip/clawd/memory/tasks.json")
+JIRA_LOG = Path("/home/philip/robothor/brain/memory/jira-log.json")
+TASKS_FILE = Path("/home/philip/robothor/brain/memory/tasks.json")
 
 # JQL: Only Philip's tickets
 JQL_PHILIP = "assignee = currentUser() AND status != Done ORDER BY priority DESC, updated DESC"

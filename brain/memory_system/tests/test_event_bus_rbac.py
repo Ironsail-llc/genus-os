@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/clawd/memory_system"))
+sys.path.insert(0, os.path.expanduser("~/robothor/brain/memory_system"))
 import capabilities
 import event_bus
 

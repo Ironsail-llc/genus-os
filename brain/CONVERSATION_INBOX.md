@@ -68,7 +68,7 @@ Before creating, check for existing tasks: `list_tasks(tags=["conversation","esc
 exec:
 python3 -c "
 import os; from datetime import datetime, timezone
-path = os.path.expanduser('~/clawd/memory/conversation-inbox-status.md')
+path = os.path.expanduser('~/robothor/brain/memory/conversation-inbox-status.md')
 with open(path, 'w') as f:
     f.write('# Conversation Inbox Status\n')
     f.write('Last run: ' + datetime.now(timezone.utc).isoformat() + '\n')

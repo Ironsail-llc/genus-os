@@ -27,7 +27,7 @@ CACHE_TTL = 30
 # Agent status markdown files
 STATUS_DIR = os.getenv(
     "AGENT_STATUS_DIR",
-    os.path.expanduser("~/clawd/memory"),
+    os.path.expanduser("~/robothor/brain/memory"),
 )
 
 # Manifest directory for display names

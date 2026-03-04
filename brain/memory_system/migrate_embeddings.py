@@ -11,7 +11,7 @@ Steps:
   5. Verify dimensions + test search
 
 Usage:
-  cd /home/philip/clawd/memory_system
+  cd /home/philip/robothor/brain/memory_system
   source venv/bin/activate
   python3 migrate_embeddings.py
 

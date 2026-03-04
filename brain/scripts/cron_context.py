@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 # === Paths ===
-MEMORY_DIR = Path("/home/philip/clawd/memory")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 EMAIL_LOG = MEMORY_DIR / "email-log.json"
 CALENDAR_LOG = MEMORY_DIR / "calendar-log.json"
 JIRA_LOG = MEMORY_DIR / "jira-log.json"

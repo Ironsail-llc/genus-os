@@ -67,7 +67,7 @@ def check():
         log("CHECK 8: WAITING — depends on check 6")
 
     # 2. Check triage_cleanup safety net (check 9)
-    rq_path = os.path.expanduser("~/clawd/memory/response-queue.json")
+    rq_path = os.path.expanduser("~/robothor/brain/memory/response-queue.json")
     if os.path.exists(rq_path):
         mtime = os.path.getmtime(rq_path)
         mtime_dt = datetime.fromtimestamp(mtime)
@@ -81,7 +81,7 @@ def check():
             log(f"  Error reading: {e}")
 
     # 3. Check worker-handoff.json not modified by agents (check 10)
-    wh_path = os.path.expanduser("~/clawd/memory/worker-handoff.json")
+    wh_path = os.path.expanduser("~/robothor/brain/memory/worker-handoff.json")
     if os.path.exists(wh_path):
         mtime = os.path.getmtime(wh_path)
         mtime_dt = datetime.fromtimestamp(mtime)
@@ -118,7 +118,7 @@ def check():
 
     # 4. Agent last run times
     log("--- Agent Status Files ---")
-    memory_dir = os.path.expanduser("~/clawd/memory")
+    memory_dir = os.path.expanduser("~/robothor/brain/memory")
     for fname in [
         "email-classifier-status.md",
         "calendar-monitor-status.md",

@@ -138,7 +138,7 @@ Run pairwise name similarity:
 exec:
 python3 -c "
 import sys
-sys.path.insert(0, '/home/philip/clawd/memory_system')
+sys.path.insert(0, '/home/philip/robothor/brain/memory_system')
 from contact_matching import name_similarity
 import json
 

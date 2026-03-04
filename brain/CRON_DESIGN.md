@@ -70,16 +70,16 @@
 
 ```crontab
 # Calendar Sync - every 5 min
-*/5 * * * * cd /home/philip/clawd && $W .../python scripts/calendar_sync.py
+*/5 * * * * cd /home/philip/robothor/brain && $W .../python scripts/calendar_sync.py
 
 # Email Sync - every 5 min
-*/5 * * * * cd /home/philip/clawd && $W .../python scripts/email_sync.py
+*/5 * * * * cd /home/philip/robothor/brain && $W .../python scripts/email_sync.py
 
 # Jira Sync - every 30 min during work hours (M-F)
-*/30 6-22 * * 1-5 cd /home/philip/clawd && $W .../python scripts/jira_sync.py
+*/30 6-22 * * 1-5 cd /home/philip/robothor/brain && $W .../python scripts/jira_sync.py
 
 # Memory maintenance (3 AM) - TTL expiry, archival
-0 3 * * * /home/philip/clawd/memory_system/maintenance.sh
+0 3 * * * /home/philip/robothor/brain/memory_system/maintenance.sh
 
 # Intelligence Pipeline — Three Tiers
 */10 * * * * .../python continuous_ingest.py     # Tier 1: every 10 min
@@ -100,7 +100,7 @@
 All cron jobs that need credentials are wrapped with `cron-wrapper.sh`:
 ```
 W=/home/philip/robothor/scripts/cron-wrapper.sh
-*/5 * * * * cd /home/philip/clawd && $W /home/philip/clawd/memory_system/venv/bin/python scripts/email_sync.py
+*/5 * * * * cd /home/philip/robothor/brain && $W /home/philip/robothor/brain/memory_system/venv/bin/python scripts/email_sync.py
 ```
 
 The wrapper sources `/run/robothor/secrets.env` (decrypted from SOPS at boot) before executing the command. This injects all environment variables (GOG_KEYRING_PASSWORD, TELEGRAM_BOT_TOKEN, PG_PASSWORD, etc.) without hardcoding them.

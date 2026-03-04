@@ -35,7 +35,7 @@ def _get_bridge_health_url():
 
 BRIDGE_URL = _get_bridge_health_url()
 FAILURE_THRESHOLD = 2
-MEMORY_DIR = Path("/home/philip/clawd/memory")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 DEFAULT_STATE_FILE = MEMORY_DIR / "bridge-watchdog-state.json"
 DEFAULT_HANDOFF_PATH = MEMORY_DIR / "worker-handoff.json"
 

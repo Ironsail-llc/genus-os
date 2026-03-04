@@ -13,10 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 import event_bus
 
-LOG_PATH = Path("/home/philip/clawd/memory/calendar-log.json")
+LOG_PATH = Path("/home/philip/robothor/brain/memory/calendar-log.json")
 GOG_PASSWORD = os.environ["GOG_KEYRING_PASSWORD"]
 ACCOUNT = "philip@ironsail.ai"
 

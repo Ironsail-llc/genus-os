@@ -9,7 +9,7 @@ import sys
 # Set capabilities manifest path BEFORE importing bridge_service (middleware loads at import time)
 os.environ.setdefault(
     "ROBOTHOR_CAPABILITIES_MANIFEST",
-    os.path.expanduser("~/clawd/agent_capabilities.json"),
+    os.path.expanduser("~/robothor/brain/agent_capabilities.json"),
 )
 
 from unittest.mock import patch
@@ -18,7 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, "/home/philip/clawd/memory_system")
+sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 
 from bridge_service import app
 

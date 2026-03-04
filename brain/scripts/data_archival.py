@@ -19,7 +19,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = Path("/home/philip/clawd/memory")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 ARCHIVE_DIR = MEMORY_DIR / "archive"
 
 

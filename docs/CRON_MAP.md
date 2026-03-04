@@ -76,7 +76,7 @@ Sunday 05:00   │ Weekly review (crontab) — brain/memory_system/weekly_review
 All cron jobs that need credentials are wrapped with `cron-wrapper.sh`:
 ```
 W=/home/philip/robothor/scripts/cron-wrapper.sh
-*/5 * * * * cd /home/philip/clawd && $W <python command>
+*/5 * * * * cd /home/philip/robothor/brain && $W <python command>
 ```
 The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before executing. Jobs that don't need credentials (find cleanup, backup) run without the wrapper.
 
@@ -84,63 +84,63 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ```crontab
 # Calendar Sync - every 5 min
-*/5 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/calendar_sync.py >> memory_system/logs/calendar-sync.log 2>&1
+*/5 * * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/calendar_sync.py >> memory_system/logs/calendar-sync.log 2>&1
 
 # Email Sync - every 5 min
-*/5 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/email_sync.py >> memory_system/logs/email-sync.log 2>&1
+*/5 * * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/email_sync.py >> memory_system/logs/email-sync.log 2>&1
 
 # Jira Sync - every 30 min during work hours (M-F)
-*/30 6-22 * * 1-5 cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/jira_sync.py >> memory_system/logs/jira-sync.log 2>&1
+*/30 6-22 * * 1-5 cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/jira_sync.py >> memory_system/logs/jira-sync.log 2>&1
 
 # Garmin health sync - every 15 min (PostgreSQL via robothor.health.sync)
-*/15 * * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.sync >> memory_system/logs/garmin-sync.log 2>&1
+*/15 * * * * cd /home/philip/robothor/brain && ROBOTHOR_DB_USER=philip /home/philip/robothor/brain/memory_system/venv/bin/python -m robothor.health.sync >> memory_system/logs/garmin-sync.log 2>&1
 
 # Health Summary — garmin-health.md for briefing agents (before 6:30 ET briefing + 21:00 ET winddown)
-15 5 * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
-45 19 * * * cd /home/philip/clawd && ROBOTHOR_DB_USER=philip /home/philip/clawd/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
+15 5 * * * cd /home/philip/robothor/brain && ROBOTHOR_DB_USER=philip /home/philip/robothor/brain/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
+45 19 * * * cd /home/philip/robothor/brain && ROBOTHOR_DB_USER=philip /home/philip/robothor/brain/memory_system/venv/bin/python -m robothor.health.summary >> memory_system/logs/health-summary.log 2>&1
 
 # Google Meet Transcript Sync - every 10 min
-*/10 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/meet_transcript_sync.py >> memory_system/logs/meet-transcript-sync.log 2>&1
+*/10 * * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/meet_transcript_sync.py >> memory_system/logs/meet-transcript-sync.log 2>&1
 
 # Intelligence Pipeline — Three Tiers
 # Tier 1: Continuous ingestion (every 10 min, deduped, ~10 min freshness)
-*/10 * * * * cd /home/philip/clawd/memory_system && ./venv/bin/python continuous_ingest.py >> logs/continuous-ingest.log 2>&1
+*/10 * * * * cd /home/philip/robothor/brain/memory_system && ./venv/bin/python continuous_ingest.py >> logs/continuous-ingest.log 2>&1
 
 # Tier 2: Periodic analysis (4x daily — meeting prep, blocks, entities, contact reconciliation)
-0 7,11,15,19 * * * cd /home/philip/clawd/memory_system && ./venv/bin/python periodic_analysis.py >> logs/periodic-analysis.log 2>&1
+0 7,11,15,19 * * * cd /home/philip/robothor/brain/memory_system && ./venv/bin/python periodic_analysis.py >> logs/periodic-analysis.log 2>&1
 
 # Tier 3: Deep analysis (daily 3:30 AM — relationships, enrichment, engagement, patterns, quality)
-30 3 * * * cd /home/philip/clawd/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
+30 3 * * * cd /home/philip/robothor/brain/memory_system && ./venv/bin/python intelligence_pipeline.py >> logs/intelligence.log 2>&1
 
 # Memory maintenance (3 AM) - TTL expiry, archival
-0 3 * * * /home/philip/clawd/memory_system/maintenance.sh
+0 3 * * * /home/philip/robothor/brain/memory_system/maintenance.sh
 
 # CRM Consistency Check - daily at 3:15 AM
-15 3 * * * cd /home/philip/clawd/memory_system && ./venv/bin/python /home/philip/clawd/scripts/crm_consistency.py >> logs/crm-consistency.log 2>&1
+15 3 * * * cd /home/philip/robothor/brain/memory_system && ./venv/bin/python /home/philip/robothor/brain/scripts/crm_consistency.py >> logs/crm-consistency.log 2>&1
 
 # Snapshot cleanup - delete vision snapshots > 30 days
-0 4 * * * find /home/philip/clawd/memory/snapshots -name '*.jpg' -mtime +30 -delete && find /home/philip/clawd/memory/snapshots -type d -empty -delete
+0 4 * * * find /home/philip/robothor/brain/memory/snapshots -name '*.jpg' -mtime +30 -delete && find /home/philip/robothor/brain/memory/snapshots -type d -empty -delete
 
 # Data Archival - Sunday at 4:00 AM
-0 4 * * 0 cd /home/philip/clawd/memory_system && ./venv/bin/python /home/philip/clawd/scripts/data_archival.py >> logs/data-archival.log 2>&1
+0 4 * * 0 cd /home/philip/robothor/brain/memory_system && ./venv/bin/python /home/philip/robothor/brain/scripts/data_archival.py >> logs/data-archival.log 2>&1
 
 # Daily SSD backup - 4:30 AM
 30 4 * * * /home/philip/robothor/scripts/backup-ssd.sh >> /home/philip/robothor/scripts/backup.log 2>&1
 
 # Weekly Deep Review - Sunday at 5:00 AM
-0 5 * * 0 cd /home/philip/clawd/memory_system && ./venv/bin/python weekly_review.py >> logs/weekly-review.log 2>&1
+0 5 * * 0 cd /home/philip/robothor/brain/memory_system && ./venv/bin/python weekly_review.py >> logs/weekly-review.log 2>&1
 
 # System Health Check - hourly
-0 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/system_health_check.py >> memory_system/logs/health-check.log 2>&1
+0 * * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/system_health_check.py >> memory_system/logs/health-check.log 2>&1
 
 # Cron Agent Health Check - every 30 min
-*/30 * * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/cron_health_check.py >> memory_system/logs/cron-health-check.log 2>&1
+*/30 * * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/cron_health_check.py >> memory_system/logs/cron-health-check.log 2>&1
 
 # Supervisor Relay - meeting alerts + stale/CRM checks (6-23 ET)
-*/10 6-23 * * * cd /home/philip/clawd && /home/philip/clawd/memory_system/venv/bin/python scripts/supervisor_relay.py >> memory_system/logs/supervisor-relay.log 2>&1
+*/10 6-23 * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/supervisor_relay.py >> memory_system/logs/supervisor-relay.log 2>&1
 
 # Email Analysis Cleanup - clear stale analysis before enrichment (hourly :20)
-20 * * * * /home/philip/clawd/memory_system/venv/bin/python3 -c "import json,os; p=os.path.expanduser('~/clawd/memory/response-analysis.json'); open(p,'w').write(json.dumps({'analyses':{}}))" 2>/dev/null
+20 * * * * /home/philip/robothor/brain/memory_system/venv/bin/python3 -c "import json,os; p=os.path.expanduser('~/robothor/brain/memory/response-analysis.json'); open(p,'w').write(json.dumps({'analyses':{}}))" 2>/dev/null
 ```
 
 ## Engine Agent Crons (APScheduler from `docs/agents/*.yaml`)
