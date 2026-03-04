@@ -29,7 +29,7 @@ def load_capabilities(path: str | None = None) -> dict:
     """Load the agent capabilities manifest.
 
     Args:
-        path: Optional path override (default: agent_capabilities.json next to clawd/)
+        path: Optional path override (default: agent_capabilities.json in workspace)
 
     Returns:
         Parsed manifest dict. Empty dict on load failure.

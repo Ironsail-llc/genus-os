@@ -4,7 +4,7 @@ const { execSync, exec: execCb } = require('child_process');
 const { brandVars, brandBase } = require('../shared/brand-styles');
 
 const PORT = 3001;
-const MEMORY_DIR = '/home/philip/clawd/memory';
+const MEMORY_DIR = '/home/philip/robothor/brain/memory';
 
 // ─── Health check definitions ───────────────────────────────────────────────
 

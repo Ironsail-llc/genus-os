@@ -78,7 +78,7 @@ Fetches a URL and returns its content as clean markdown text. Use to read articl
 Headless Chromium via Playwright. Profile: `openclaw` (isolated, managed). Use for anything that requires interaction: logins, forms, multi-step flows, JavaScript-heavy sites, screenshots, purchases, bookings.
 
 **Workflow:**
-1. `browser(action="start", profile="clawd")` — launch the browser
+1. `browser(action="start", profile="robothor")` — launch the browser
 2. `browser(action="navigate", targetUrl="https://site.com")` — go to URL
 3. `browser(action="snapshot")` — read page content (ARIA tree with element refs)
 4. `browser(action="act", request={kind: "click", ref: "e12"})` — click element by ref from snapshot

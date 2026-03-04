@@ -5,8 +5,8 @@ const { execSync, exec } = require('child_process');
 const { brandVars, brandBase } = require('../shared/brand-styles');
 
 const PORT = process.env.PORT || 3003;
-const MEMORY_DIR = '/home/philip/clawd/memory';
-const LOGS_DIR = '/home/philip/clawd/memory_system/logs';
+const MEMORY_DIR = '/home/philip/robothor/brain/memory';
+const LOGS_DIR = '/home/philip/robothor/brain/memory_system/logs';
 
 // ============ Data Loaders ============
 

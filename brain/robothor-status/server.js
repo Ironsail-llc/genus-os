@@ -68,7 +68,7 @@ function getStats() {
   const stats = { tasks: 0, emails: 0, contacts: 0, meetings: 0 };
   
   try {
-    const tasksPath = '/home/philip/clawd/memory/tasks.json';
+    const tasksPath = '/home/philip/robothor/brain/memory/tasks.json';
     if (fs.existsSync(tasksPath)) {
       const tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
       stats.tasks = tasks.tasks?.filter(t => t.status === 'pending' || t.status === 'in_progress').length || 0;
@@ -76,7 +76,7 @@ function getStats() {
   } catch {}
 
   try {
-    const emailPath = '/home/philip/clawd/memory/email-log.json';
+    const emailPath = '/home/philip/robothor/brain/memory/email-log.json';
     if (fs.existsSync(emailPath)) {
       const emailLog = JSON.parse(fs.readFileSync(emailPath, 'utf8'));
       stats.emails = Object.keys(emailLog.entries || {}).length || 0;
@@ -84,7 +84,7 @@ function getStats() {
   } catch {}
 
   try {
-    const contactsPath = '/home/philip/clawd/memory/contacts.json';
+    const contactsPath = '/home/philip/robothor/brain/memory/contacts.json';
     if (fs.existsSync(contactsPath)) {
       const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf8'));
       stats.contacts = contacts.contacts?.length || 0;
@@ -92,7 +92,7 @@ function getStats() {
   } catch {}
 
   try {
-    const calPath = '/home/philip/clawd/memory/calendar-log.json';
+    const calPath = '/home/philip/robothor/brain/memory/calendar-log.json';
     if (fs.existsSync(calPath)) {
       const cal = JSON.parse(fs.readFileSync(calPath, 'utf8'));
       const today = new Date().toISOString().slice(0, 10);
@@ -107,7 +107,7 @@ function getRecentActivity() {
   const activity = [];
   
   try {
-    const emailPath = '/home/philip/clawd/memory/email-log.json';
+    const emailPath = '/home/philip/robothor/brain/memory/email-log.json';
     if (fs.existsSync(emailPath)) {
       const emailLog = JSON.parse(fs.readFileSync(emailPath, 'utf8'));
       const entries = Object.values(emailLog.entries || {}).slice(-3);
@@ -118,7 +118,7 @@ function getRecentActivity() {
   } catch {}
 
   try {
-    const tasksPath = '/home/philip/clawd/memory/tasks.json';
+    const tasksPath = '/home/philip/robothor/brain/memory/tasks.json';
     if (fs.existsSync(tasksPath)) {
       const tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
       const recent = tasks.tasks?.slice(-2) || [];

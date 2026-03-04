@@ -23,11 +23,9 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 | `tunnel/` | `~/.cloudflared/` | Cloudflare tunnel config (robothor.ai routes) |
 | `crm/` | `robothor/crm/` | CRM stack: native PostgreSQL tables, Bridge, Docker Compose |
 
-Compat symlink: `~/clawd -> ~/robothor/brain` exists for legacy path compatibility. All new code should use `~/robothor/brain/` paths.
-
 ## Rules
 
-1. **Use canonical paths** — all services and crons use absolute paths to `~/robothor/brain/`. The compat symlink `~/clawd -> ~/robothor/brain` exists but should not be used in new code.
+1. **Use canonical paths** — all services and crons use absolute paths to `~/robothor/brain/`.
 2. **Never commit secrets** — all secrets live in SOPS-encrypted `/etc/robothor/secrets.enc.json`, decrypted to tmpfs at runtime. Use `os.getenv()` in Python, `$VAR` in shell. The gitleaks pre-commit hook blocks commits containing secrets. See `INFRASTRUCTURE.md` for SOPS workflow.
 3. **Agent engine is the execution layer, manifests are source of truth** — all agents run via `robothor/engine/`. YAML manifests in `docs/agents/` are canonical config. Edit the manifest FIRST, then run `python scripts/validate_agents.py --agent <id>` and restart the engine.
 4. **All services are system-level, use `sudo systemctl`** — every long-running process is a system-level systemd service in `/etc/systemd/system/`, enabled on boot. No user-level services. All use `Restart=always`, `RestartSec=5`, `KillMode=control-group`.

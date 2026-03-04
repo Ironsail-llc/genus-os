@@ -35,14 +35,26 @@ def _get_manifest_path() -> str:
 
     workspace = os.environ.get("ROBOTHOR_WORKSPACE")
     if workspace:
-        return os.path.join(workspace, "agent_capabilities.json")
+        path = os.path.join(workspace, "agent_capabilities.json")
+        if not os.path.exists(path):
+            path = os.path.join(workspace, "brain", "agent_capabilities.json")
+        return path
 
     try:
         from robothor.config import get_config
 
-        return str(get_config().workspace / "agent_capabilities.json")
+        ws = get_config().workspace
+        path = ws / "agent_capabilities.json"
+        if not path.exists():
+            path = ws / "brain" / "agent_capabilities.json"
+        return str(path)
     except Exception:
-        return os.path.join(os.path.expanduser("~"), "robothor", "agent_capabilities.json")
+        path = os.path.join(os.path.expanduser("~"), "robothor", "agent_capabilities.json")
+        if not os.path.exists(path):
+            path = os.path.join(
+                os.path.expanduser("~"), "robothor", "brain", "agent_capabilities.json"
+            )
+        return path
 
 
 def load_capabilities(path: str | None = None) -> dict:
