@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
-type HealthTier = "healthy" | "degraded" | "failed" | "unknown";
+type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
 export interface AgentInfo {
   name: string;
@@ -22,6 +22,7 @@ export interface AgentSummary {
   healthy: number;
   degraded: number;
   failed: number;
+  sleeping: number;
   total: number;
 }
 
@@ -30,7 +31,7 @@ const STALE_THRESHOLD_MS = 60_000; // 60s tab-backgrounded -> refetch
 
 export function useAgents() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [summary, setSummary] = useState<AgentSummary>({ healthy: 0, degraded: 0, failed: 0, total: 0 });
+  const [summary, setSummary] = useState<AgentSummary>({ healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const lastVisibleRef = useRef(Date.now());
   const fetchIdRef = useRef(0);
@@ -52,11 +53,12 @@ export function useAgents() {
       setAgents(agentList);
 
       // Compute summary
-      const s = { healthy: 0, degraded: 0, failed: 0, total: agentList.length };
+      const s = { healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: agentList.length };
       for (const a of agentList) {
         if (a.status === "healthy") s.healthy++;
         else if (a.status === "degraded") s.degraded++;
         else if (a.status === "failed") s.failed++;
+        else if (a.status === "sleeping") s.sleeping++;
       }
       setSummary(s);
     } finally {

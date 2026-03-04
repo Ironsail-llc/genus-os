@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
 
@@ -87,20 +89,79 @@ def _parse_interval_seconds(cron_expr: str) -> int:
     return 3600  # default hourly
 
 
+def _parse_active_hours(cron_expr: str) -> tuple[int, int] | None:
+    """Return (start_hour, end_hour) from a cron expression, or None if always active.
+
+    Examples:
+        "0 6-22/2 * * *" → (6, 22)
+        "0 8-20 * * *"   → (8, 20)
+        "0 8,14,20 * * *" → (8, 20)
+        "30 6 * * *"      → (6, 6)
+        "0 * * * *"       → None  (every hour)
+        "*/10 * * * *"    → None  (every 10 min)
+    """
+    parts = cron_expr.split()
+    if len(parts) < 5:
+        return None
+    hour_field = parts[1]
+
+    # "*" or "*/N" → always active
+    if hour_field == "*" or hour_field.startswith("*/"):
+        return None
+
+    # Range with optional step: "6-22" or "6-22/2"
+    range_match = re.match(r"^(\d+)-(\d+)(?:/\d+)?$", hour_field)
+    if range_match:
+        return int(range_match.group(1)), int(range_match.group(2))
+
+    # Comma-separated: "8,14,20"
+    if "," in hour_field:
+        hours = [int(h) for h in hour_field.split(",") if h.isdigit()]
+        if hours:
+            return min(hours), max(hours)
+
+    # Single hour: "6"
+    if hour_field.isdigit():
+        return int(hour_field), int(hour_field)
+
+    return None
+
+
+# Timezone for active-window checks (all agent crons use America/New_York)
+_AGENT_TZ = ZoneInfo(os.getenv("AGENT_TIMEZONE", "America/New_York"))
+
+
 def _compute_health_tier(
     last_run_ts: float | None,
     interval_s: int,
     consecutive_errors: int,
     enabled: bool,
     run_count: int,
+    cron_expr: str = "",
 ) -> str:
-    """Compute health tier: healthy, degraded, failed, unknown."""
+    """Compute health tier: healthy, degraded, failed, sleeping, unknown."""
     if not enabled:
         return "unknown"
     if run_count < 3:
         return "unknown"
     if consecutive_errors >= 2:
         return "failed"
+
+    # Check if agent is outside its active cron window → sleeping
+    active_hours = _parse_active_hours(cron_expr)
+    if active_hours is not None:
+        now_local = datetime.now(_AGENT_TZ)
+        current_hour = now_local.hour
+        start_h, end_h = active_hours
+
+        if current_hour < start_h or current_hour > end_h:
+            return "sleeping"
+
+        # Grace period: if window just opened (first hour), agent hasn't had
+        # time to run yet — don't penalize for the overnight gap.
+        hours_into_window = current_hour - start_h
+        if hours_into_window == 0:
+            return "healthy"
 
     if last_run_ts is None:
         return "unknown"
@@ -154,7 +215,7 @@ def _load_display_names() -> dict[str, str]:
 def _build_agent_status() -> dict:
     """Build agent status from the engine's agent_schedules table and status files."""
     agents: list[dict] = []
-    summary = {"healthy": 0, "degraded": 0, "failed": 0, "unknown": 0, "total": 0}
+    summary = {"healthy": 0, "degraded": 0, "failed": 0, "sleeping": 0, "unknown": 0, "total": 0}
 
     # Load display names from manifests
     display_names = _load_display_names()
@@ -215,7 +276,9 @@ def _build_agent_status() -> dict:
         consecutive_errors = schedule.get("consecutive_errors", 0) or 0
         run_count = run_counts.get(agent_id, 10)  # default high if not found
 
-        tier = _compute_health_tier(last_run_ts, interval_s, consecutive_errors, enabled, run_count)
+        tier = _compute_health_tier(
+            last_run_ts, interval_s, consecutive_errors, enabled, run_count, cron_expr
+        )
         summary[tier] = summary.get(tier, 0) + 1
         summary["total"] += 1
 
