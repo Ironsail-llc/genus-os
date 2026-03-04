@@ -15,22 +15,22 @@ One repo. One CLI. Your hardware.
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/tests-1%2C500%2B%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1%2C800%2B%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---
 
 ## Highlights
 
-**Platform** — Declarative YAML manifests for every agent. A workflow engine with conditional branching. 74 registered tools with per-agent allow/deny lists. Redis Streams event bus with consumer groups and RBAC.
+**Platform** — 16 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 78 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). 5 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC.
 
 **The Helm** — Not a dashboard, a control plane. Next.js 16 + Dockview with 20 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor service health. Fully extensible component registry.
 
-**Intelligence** — Three-tier memory (working, short-term with TTL, long-term with semantic search). Knowledge graph that grows autonomously. Local RAG stack with embeddings, reranking, and generation. Facts have confidence scores, categories, and lifecycle states — they decay, strengthen, supersede, and consolidate on their own.
+**Intelligence** — Two-tier memory: working context and long-term facts with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal Rank Fusion). Knowledge graph that grows autonomously. Local RAG stack with embeddings, reranking, and generation. Facts have confidence scores, categories, and lifecycle states — they decay, consolidate, and get pruned by quality gates. Interactive warmup with entity-aware context injection for conversational sessions.
 
-**Physical** — YOLOv8 nano + InsightFace ArcFace, loaded once at startup. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Pluggable alert targets. Scene analysis via vision LLM. All local, no cloud.
+**Physical** — YOLOv8 nano + InsightFace ArcFace, loaded once at startup. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Pluggable alert targets. Scene analysis via vision LLM. Telegram file handling — PDFs, images, and documents processed inline. All local, no cloud.
 
-**Operations** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. MCP server exposes 57 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel, self-healing watchdogs.
+**Operations** — Outbound voice calling (Twilio + Gemini Live). Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline (failure analysis &rarr; improvement proposals &rarr; draft PRs). MCP server exposes 65 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel, self-healing watchdogs.
 
 ## Quick Start
 
@@ -161,7 +161,33 @@ robothor engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
-The engine provides **74 tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, and more. Each agent sees only the tools in its `tools_allowed` list.
+The engine provides **78 tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, and more. Each agent sees only the tools in its `tools_allowed` list.
+
+### Agent Engine v2
+
+The engine's execution loop includes a full suite of runtime enhancements, all opt-in via the `v2:` manifest key:
+
+- **Planning phase** — Generates an execution plan before acting, with dynamic replanning on new information
+- **Working memory scratchpad** — Persistent scratch space across iterations for intermediate reasoning
+- **Token and cost budgets** — Hard enforcement with graceful shutdown when limits are reached
+- **Graduated escalation** — 3 consecutive errors → retry with feedback, 4 → checkpoint + replan, 5 → abort with diagnostics
+- **Mid-run checkpoints** — Save and resume from any iteration via `POST /api/runs/{id}/resume`
+- **Self-validation** — Post-execution verification step checks whether the agent's output satisfies the original goal
+- **Difficulty-aware routing** — Routes simple tasks to smaller models (capped iterations), complex tasks to capable models
+
+### Sub-Agents
+
+Agents can spawn focused sub-tasks mid-run and receive structured results synchronously. Enable in the manifest:
+
+```yaml
+v2:
+  can_spawn_agents: true
+  max_nesting_depth: 3
+  sub_agent_max_iterations: 10
+  sub_agent_timeout_seconds: 120
+```
+
+Child agents inherit the parent's remaining budget (never exceed it), delivery is forced to `none`, and dedup keys are namespaced under the parent run. The `spawn_agents` tool runs multiple sub-agents concurrently (up to 3).
 
 ## Workflows
 
@@ -219,6 +245,17 @@ robothor engine workflow list      # List loaded workflows
 robothor engine workflow run <id>  # Execute manually
 ```
 
+## Nightwatch
+
+A self-improving pipeline that runs overnight. Agents analyze failures, propose improvements, and open draft PRs — all without human intervention.
+
+1. **Failure Analyzer** (every 2h) — Queries recent failures, classifies each as transient, config, code, or unknown. Creates CRM tasks for actionable issues.
+2. **Improvement Analyst** (2 AM) — Reviews fleet analytics, identifies recurring patterns, and writes improvement proposals.
+3. **Overnight PR Agent** (3 AM, Sonnet 4.6) — Picks up proposals and creates draft PRs on feature branches. Protected by the `no_main_branch_push` guardrail, capped at $2/run, max 3 PRs per night.
+4. **Feedback loop** — Tracks merge/reject/modify outcomes. Auto-disables after 3 consecutive rejections. Scope expands based on merge rate: <50% config only, 50–70% +instructions, >70% +code.
+
+Workflow definition: [`docs/workflows/nightwatch.yaml`](docs/workflows/nightwatch.yaml)
+
 ## The Helm
 
 Not a dashboard — a control plane. Built with Next.js 16 and Dockview for a paneled, IDE-like layout.
@@ -247,15 +284,16 @@ How agents coordinate. Native PostgreSQL tables — no external CRM dependency.
 
 ## Memory
 
-Three tiers of persistent memory, all local:
+Two tiers of persistent memory, all local:
 
 | Tier | Storage | Lifetime | Purpose |
 |------|---------|----------|---------|
-| Working | Context window | Session | Current conversation state |
-| Short-term | PostgreSQL | 48h TTL, auto-decay | Recent facts and observations |
-| Long-term | PostgreSQL + pgvector | Permanent | Importance-scored, semantic search |
+| Working | Context window + memory blocks | Session | Current conversation state, persona, user profile |
+| Long-term | PostgreSQL + pgvector | Permanent | Importance-scored facts with hybrid search |
 
-Facts are extracted from every input — email, calendar, conversations, vision events. Each fact carries a confidence score, category, entities, and lifecycle state. A knowledge graph of entities and relationships grows autonomously as the system ingests data.
+**Hybrid search:** HNSW vector index (m=16, ef=200) for semantic similarity, BM25 keyword matching via tsvector for exact terms, fused by Reciprocal Rank Fusion (`1/(60+rank)`). Top results pass through a cross-encoder reranker before delivery.
+
+Facts are extracted from every input — email, calendar, conversations, vision events. Each fact carries a confidence score, category, entities, and lifecycle state. **Quality gates** reject vague or generic extractions. A knowledge graph of entities and relationships grows autonomously. **Lifecycle management** handles decay, consolidation (merging related facts), and forgetting (pruning low-quality facts that were never accessed).
 
 ```python
 from robothor.memory.facts import store_fact, search_facts
@@ -268,11 +306,11 @@ fact_id = await store_fact(
     source_type="email",
 )
 
-# Semantic search across all facts
+# Hybrid search (vector + BM25 + reranker)
 results = await search_facts("Acme contract status", limit=5)
 ```
 
-**RAG stack:** Qwen3-Embedding &rarr; pgvector &rarr; Qwen3-Reranker &rarr; LLM generation. Fully local.
+**RAG stack:** Qwen3-Embedding &rarr; pgvector (HNSW) + BM25 &rarr; RRF &rarr; Qwen3-Reranker &rarr; LLM generation. Fully local.
 
 ## Vision
 
@@ -296,19 +334,24 @@ Always-on camera monitoring with runtime mode switching:
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  Agent Engine                                            │
-│  YAML manifests · workflow pipelines · 74 tools         │
+│  YAML manifests · workflow pipelines · 78 tools         │
 │  APScheduler · Redis Stream hooks · Telegram delivery    │
+│  v2: guardrails · planning · checkpoints · telemetry    │
+│  sub-agents · analytics · Nightwatch                     │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  Intelligence Layer                                      │
 │                                                          │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
-│  │ Memory   │ │ CRM      │ │ Vision   │ │ Events     │ │
-│  │ Facts    │ │ Contacts │ │ YOLO     │ │ Redis      │ │
-│  │ Entities │ │ Tasks    │ │ Faces    │ │ Streams    │ │
-│  │ RAG      │ │ Identity │ │ VLM      │ │ RBAC       │ │
-│  └──────────┘ └──────────┘ └──────────┘ └────────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐│
+│  │ Memory   │ │ CRM      │ │ Vision   │ │ Events     ││
+│  │ Facts    │ │ Contacts │ │ YOLO     │ │ Redis      ││
+│  │ Entities │ │ Tasks    │ │ Faces    │ │ Streams    ││
+│  │ RAG      │ │ Identity │ │ VLM      │ │ RBAC       ││
+│  └──────────┘ └──────────┘ └──────────┘ └────────────┘│
+│  ┌────────────────────────────────────────────────────┐│
+│  │ Voice: Twilio inbound/outbound · Gemini Live · TTS ││
+│  └────────────────────────────────────────────────────┘│
 │                                                          │
 │  PostgreSQL 16 + pgvector  ·  Redis 7  ·  Ollama        │
 └──────────────────────────────────────────────────────────┘
@@ -319,13 +362,14 @@ Always-on camera monitoring with runtime mode switching:
 ```
 robothor/
 ├── robothor/               # Python package — the intelligence layer
-│   ├── engine/             # Agent Engine: runner, tools, scheduler, hooks, workflows
-│   ├── memory/             # Three-tier memory, facts, entities, lifecycle
+│   ├── engine/             # Agent Engine: runner, tools, scheduler, hooks, workflows,
+│   │                        #   analytics, guardrails, planner, telemetry, sub-agents
+│   ├── memory/             # Two-tier memory, facts, entities, lifecycle
 │   ├── rag/                # Semantic search, reranking, context assembly
 │   ├── crm/                # Models, validation, blocklists
 │   ├── vision/             # YOLO detection, InsightFace recognition, alerts
 │   ├── events/             # Redis Streams, RBAC, consumer workers
-│   ├── api/                # MCP server (57 tools), RAG orchestrator
+│   ├── api/                # MCP server (65 tools), RAG orchestrator
 │   ├── health/             # Garmin health data sync
 │   └── cli.py              # CLI entry point
 │
@@ -347,7 +391,7 @@ robothor/
 | `robothor serve` | Start orchestrator + engine |
 | `robothor status` | System health overview |
 | `robothor migrate` | Run database migrations |
-| `robothor mcp` | Start MCP server (57 tools, stdio) |
+| `robothor mcp` | Start MCP server (65 tools, stdio) |
 | `robothor tui` | Terminal monitoring dashboard |
 | `robothor agent scaffold <id>` | Scaffold a new agent (manifest + instruction file) |
 | `robothor engine start` | Start the engine daemon |
@@ -393,6 +437,7 @@ The system runs as systemd services behind a Cloudflare tunnel with encrypted se
 | RAG Orchestrator | Semantic search and retrieval API |
 | Bridge | CRM API, contact resolution, webhooks, multi-tenancy |
 | Vision | YOLO + InsightFace detection loop |
+| Voice Server | Twilio inbound/outbound calls + Gemini Live + Kokoro TTS |
 | The Helm | Live control plane dashboard |
 | Cloudflare Tunnel | All `*.robothor.ai` routes with Access policies |
 
@@ -415,7 +460,7 @@ cd app && pnpm test                             # Helm tests
 python scripts/validate_agents.py               # Agent manifest validation
 ```
 
-**1,500+ tests** across Python and TypeScript. See [TESTING.md](docs/TESTING.md) for the full strategy, markers, and coverage plan.
+**1,800+ tests** across Python and TypeScript. See [TESTING.md](docs/TESTING.md) for the full strategy, markers, and coverage plan.
 
 ## Contributing
 
