@@ -115,3 +115,9 @@ brain/memory/evening-winddown-status.json
 brain/memory/contacts.json
 brain/memory/tasks.json
 brain/memory/overnight-pr-status.md
+
+# Claude Code artifacts
+.claude/
+.plan
+robothor.db
+test-results/
