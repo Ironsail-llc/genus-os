@@ -40,10 +40,13 @@ function HeaderClock() {
 }
 
 export function AppShell() {
-  const [activeView, setActiveView] = useState<MobileViewId>("dashboard");
-  const [chatOpen, setChatOpen] = useState(true);
+  // Mobile defaults to chat — the primary interaction. Desktop defaults to dashboard.
   const screenSize = useScreenSize();
   const isMobile = screenSize === "mobile";
+  const [activeView, setActiveView] = useState<MobileViewId>(() =>
+    typeof window !== "undefined" && window.innerWidth < 768 ? "chat" : "dashboard"
+  );
+  const [chatOpen, setChatOpen] = useState(true);
 
   // Lift data fetching — single source for sidebar badges + views
   const { tasks, isLoading: tasksLoading, approveTask, rejectTask } = useTasks({ live: true });
@@ -56,6 +59,7 @@ export function AppShell() {
   // On mobile, "chat" is a view. On desktop, it's a side panel.
   const sidebarView = activeView === "chat" ? "dashboard" : activeView as ViewId;
   const showMainContent = isMobile ? activeView !== "chat" : true;
+  const mobileInChat = isMobile && activeView === "chat";
 
   return (
     <div className="flex flex-col md:flex-row h-full w-full" data-testid="app-shell">
@@ -71,9 +75,9 @@ export function AppShell() {
         />
       )}
 
-      {/* Main content area */}
+      {/* Main content area — hidden on mobile when chat is active */}
       {showMainContent && (
-        <div className="flex-1 min-w-0 h-full flex flex-col relative">
+        <div className={`flex-1 min-w-0 min-h-0 flex flex-col relative ${isMobile ? "pb-14" : ""}`}>
           {/* Header bar */}
           <header
             className="h-10 shrink-0 flex items-center px-4 border-b border-border bg-background/80 backdrop-blur-sm"
@@ -123,16 +127,14 @@ export function AppShell() {
         </div>
       )}
 
-      {/* Chat panel — full screen on mobile, collapsible side panel on desktop */}
-      {isMobile ? (
-        activeView === "chat" && (
-          <div className="flex-1 min-h-0" data-testid="chat-container">
-            <div className="h-full">
-              <ChatPanel />
-            </div>
+      {/* Chat panel — full screen on mobile (no duplicate header), side panel on desktop */}
+      {mobileInChat ? (
+        <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
+          <div className="h-full">
+            <ChatPanel mobile />
           </div>
-        )
-      ) : (
+        </div>
+      ) : !isMobile ? (
         <div
           className="shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
           style={{ width: chatOpen ? 400 : 0 }}
@@ -142,9 +144,9 @@ export function AppShell() {
             <ChatPanel />
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Mobile bottom tab bar */}
+      {/* Mobile bottom tab bar — fixed to bottom, always visible */}
       {isMobile && (
         <MobileTabBar
           activeView={activeView}

@@ -45,7 +45,12 @@ function stripResidualMarkers(text: string): string {
     .trim();
 }
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
+  mobile?: boolean;
+}
+
+export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -776,19 +781,24 @@ export function ChatPanel() {
     "What happened today?",
   ];
 
+  const aiName = process.env.NEXT_PUBLIC_AI_NAME || "Robothor";
+
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+      {/* Header — richer on mobile since there's no app header above */}
+      <div className={`px-4 border-b border-border flex items-center gap-2 ${mobile ? "py-3.5" : "py-3"}`}>
         <div className="relative">
           <div className="w-2 h-2 rounded-full bg-emerald-400" />
           <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-400 animate-ping opacity-40" />
         </div>
-        <span className="text-sm font-semibold">{process.env.NEXT_PUBLIC_AI_NAME || "Robothor"}</span>
+        <span className={`font-semibold ${mobile ? "text-base" : "text-sm"}`}>{aiName}</span>
+        {mobile && (
+          <span className="text-xs text-muted-foreground ml-auto">Online</span>
+        )}
         {planMode && !deepMode && (
           <Badge
             variant="outline"
-            className="border-amber-500/50 text-amber-400 text-[10px] px-1.5 py-0"
+            className={`border-amber-500/50 text-amber-400 text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
             data-testid="plan-mode-badge"
           >
             Plan Mode
@@ -797,7 +807,7 @@ export function ChatPanel() {
         {deepMode && (
           <Badge
             variant="outline"
-            className="border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0"
+            className={`border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
             data-testid="deep-mode-badge"
           >
             <Brain className="w-3 h-3 mr-1 inline" />
@@ -807,7 +817,7 @@ export function ChatPanel() {
         {isDeepReasoning && (
           <Badge
             variant="outline"
-            className="border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 animate-pulse"
+            className={`border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 animate-pulse ${mobile ? "ml-auto" : ""}`}
             data-testid="deep-reasoning-badge"
           >
             <Brain className="w-3 h-3 mr-1 inline" />
@@ -977,62 +987,115 @@ export function ChatPanel() {
       </div>
 
       {/* Input area */}
-      <div className="p-3 border-t border-border">
-        <div className="flex items-end gap-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    setPlanMode((prev) => !prev);
-                    setDeepMode(false);
+      <div className="p-3 border-t border-border space-y-2">
+        {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
+        {mobile ? (
+          <div className="flex gap-2" data-testid="mobile-mode-toggles">
+            <button
+              onClick={() => {
+                setPlanMode((prev) => !prev);
+                setDeepMode(false);
+                setDeepPlan(false);
+                inputRef.current?.focus();
+              }}
+              disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                planMode && !deepMode
+                  ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                  : "bg-muted/50 text-muted-foreground border border-transparent"
+              } disabled:opacity-50`}
+              data-testid="plan-toggle"
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              Plan
+            </button>
+            <button
+              onClick={() => {
+                setDeepMode((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    setPlanMode(true);
+                    setDeepPlan(true);
+                  } else {
+                    setPlanMode(false);
                     setDeepPlan(false);
-                    inputRef.current?.focus();
-                  }}
-                  className={planMode && !deepMode ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : planMode && deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
-                  disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
-                  data-testid="plan-toggle"
-                >
-                  <ClipboardList className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>Plan mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+P)</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    setDeepMode((prev) => {
-                      const next = !prev;
-                      if (next) {
-                        setPlanMode(true);
-                        setDeepPlan(true);
-                      } else {
-                        setPlanMode(false);
-                        setDeepPlan(false);
-                      }
-                      return next;
-                    });
-                    inputRef.current?.focus();
-                  }}
-                  className={deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
-                  disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
-                  data-testid="deep-toggle"
-                >
-                  <Brain className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>Deep mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+D)</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                  }
+                  return next;
+                });
+                inputRef.current?.focus();
+              }}
+              disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                deepMode
+                  ? "bg-violet-500/15 text-violet-400 border border-violet-500/30"
+                  : "bg-muted/50 text-muted-foreground border border-transparent"
+              } disabled:opacity-50`}
+              data-testid="deep-toggle"
+            >
+              <Brain className="w-3.5 h-3.5" />
+              Deep
+            </button>
+          </div>
+        ) : null}
+
+        <div className="flex items-end gap-2">
+          {/* Desktop: icon buttons with tooltips */}
+          {!mobile && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      setPlanMode((prev) => !prev);
+                      setDeepMode(false);
+                      setDeepPlan(false);
+                      inputRef.current?.focus();
+                    }}
+                    className={planMode && !deepMode ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : planMode && deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                    disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    data-testid="plan-toggle"
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>Plan mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+P)</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      setDeepMode((prev) => {
+                        const next = !prev;
+                        if (next) {
+                          setPlanMode(true);
+                          setDeepPlan(true);
+                        } else {
+                          setPlanMode(false);
+                          setDeepPlan(false);
+                        }
+                        return next;
+                      });
+                      inputRef.current?.focus();
+                    }}
+                    className={deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                    disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    data-testid="deep-toggle"
+                  >
+                    <Brain className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>Deep mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+D)</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -1049,6 +1112,7 @@ export function ChatPanel() {
               size="icon"
               variant="ghost"
               onClick={handleAbort}
+              className="shrink-0"
               data-testid="abort-button"
             >
               <Square className="w-4 h-4" />
@@ -1058,6 +1122,7 @@ export function ChatPanel() {
               size="icon"
               onClick={sendMessage}
               disabled={!input.trim() || isPlanExecuting}
+              className="shrink-0"
               data-testid="send-button"
             >
               <Send className="w-4 h-4" />

@@ -115,7 +115,7 @@ export function DefaultDashboard() {
       </div>
 
       {/* Metric summary row */}
-      <div className="grid grid-cols-3 gap-3" data-testid="metric-summary">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3" data-testid="metric-summary">
         <div className="glass-panel p-4">
           <p className="text-xs text-muted-foreground mb-1">Active Tasks</p>
           <p className="text-2xl font-bold text-primary">{activeTasks}</p>
