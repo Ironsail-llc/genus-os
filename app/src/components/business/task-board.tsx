@@ -93,7 +93,7 @@ export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
   };
 
   return (
-    <div className="grid grid-cols-4 gap-4" data-testid="task-board">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="task-board">
       {statusColumns.map((status) => {
         const columnTasks = tasks.filter((t) => t.status === status);
         return (
@@ -148,7 +148,7 @@ export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
                       <Button
                         size="sm"
                         variant="default"
-                        className="h-6 text-xs px-2 bg-emerald-600 hover:bg-emerald-700"
+                        className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700"
                         disabled={actionPending === task.id}
                         onClick={() => handleApprove(task.id)}
                         data-testid="approve-button"
@@ -158,7 +158,7 @@ export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
                       <Button
                         size="sm"
                         variant="destructive"
-                        className="h-6 text-xs px-2"
+                        className="h-8 text-xs px-3"
                         disabled={actionPending === task.id}
                         onClick={() => handleReject(task.id)}
                         data-testid="reject-button"

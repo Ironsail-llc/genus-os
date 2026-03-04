@@ -60,7 +60,7 @@ export function AgentStatus({ agents, summary }: AgentStatusProps) {
   return (
     <div data-testid="agent-status">
       {summary && (
-        <div className="flex gap-3 mb-4" data-testid="agent-summary">
+        <div className="flex flex-wrap gap-3 mb-4" data-testid="agent-summary">
           <Badge className={tierConfig.healthy.bg + " " + tierConfig.healthy.color}>
             {summary.healthy} healthy
           </Badge>
@@ -75,7 +75,7 @@ export function AgentStatus({ agents, summary }: AgentStatusProps) {
           </Badge>
         </div>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {agents.map((agent) => {
           const tier = tierConfig[agent.status];
           return (
