@@ -28,7 +28,14 @@ delivery:
   channel: telegram
   to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
 
-tools_allowed: []
+tools_allowed:
+  - read_file
+  - exec
+  - search_memory
+  - get_entity
+  - memory_block_read
+  - list_tasks
+  - list_agent_tasks
 tools_denied:
   - create_message
   - make_call
