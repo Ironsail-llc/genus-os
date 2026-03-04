@@ -207,7 +207,16 @@ def run_init(args) -> int:
     if wrote:
         print(f"  Saving config to {env_path} ... done")
 
-    # 12. Agent template setup (if templates exist)
+    # 12. Resolve template variables in CLAUDE.md files
+    for fname in ("CLAUDE.md", "AGENT_BUILDER.md"):
+        md_path = workspace / fname
+        if md_path.exists():
+            content = md_path.read_text()
+            content = content.replace("{{ai_name}}", ai_name)
+            content = content.replace("{{owner_name}}", owner_name)
+            md_path.write_text(content)
+
+    # 13. Agent template setup (if templates exist)
     if not yes:
         _offer_agent_setup(workspace)
 
@@ -391,6 +400,13 @@ def create_workspace(path: Path) -> None:
         for name in ("agent-manifest.yaml", "agent-instructions.md"):
             src = template_dir / name
             dst = docs / "agents" / name
+            if src.exists() and not dst.exists():
+                dst.write_text(src.read_text())
+
+        # Copy CLAUDE.md files to workspace root
+        for fname in ("CLAUDE.md", "AGENT_BUILDER.md", "ONBOARDING.md"):
+            src = template_dir / fname
+            dst = path / fname
             if src.exists() and not dst.exists():
                 dst.write_text(src.read_text())
 

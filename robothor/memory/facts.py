@@ -56,7 +56,20 @@ FACT_EXTRACTION_SCHEMA = {
 
 def build_extraction_prompt(content: str) -> str:
     """Build the LLM prompt for fact extraction."""
-    return f"""Extract discrete facts from the following content. Each fact should be a single, atomic statement. Include named entities (people, organizations, technologies, places). Skip trivial filler.
+    return f"""Extract specific, memorable facts from the following content.
+
+Rules:
+- Each fact MUST be a complete sentence with a subject and predicate
+- Each fact MUST reference at least one specific named entity (person, organization, place, project, technology)
+- Each fact MUST be specific to this content — NOT generic knowledge anyone would know
+- Include temporal context when present (dates, "yesterday", "next week", etc.)
+- Categorize each fact: decision (someone decided X), preference (someone prefers X), event (X happened), contact (relationship info), project (work/technical), personal (personal life), technical (system/code)
+
+Skip:
+- Greetings, filler, partial sentences
+- Generic statements ("X is a company", "X is available", "meetings are important")
+- Single words or numbers without context
+- Facts that don't mention any specific person, organization, or project by name
 
 Content:
 {content}"""
@@ -139,7 +152,52 @@ def parse_extraction_response(raw: str) -> list[dict]:
             }
         )
 
-    return valid_facts
+    # Hard quality filters — reject garbage before it enters the database
+    filtered = []
+    for fact in valid_facts:
+        text = fact["fact_text"]
+
+        # Too short to be meaningful
+        if len(text) < 15:
+            logger.debug("Rejected (too short): %s", text[:50])
+            continue
+
+        # No entities — can't be a specific fact
+        if not fact["entities"]:
+            logger.debug("Rejected (no entities): %s", text[:50])
+            continue
+
+        # Too low confidence
+        if fact["confidence"] < 0.3:
+            logger.debug("Rejected (low confidence %.2f): %s", fact["confidence"], text[:50])
+            continue
+
+        # Single word/number
+        if re.match(r"^\s*\w+\s*$", text):
+            logger.debug("Rejected (single word): %s", text[:50])
+            continue
+
+        # Generic patterns that add no value
+        generic_patterns = [
+            r"^.{1,30}\s+is\s+a\s+(company|person|tool|platform|service|technology)\b",
+            r"^.{1,30}\s+is\s+available\b",
+            r"^(Hello|Hi|Hey|Thanks|Thank you|Bye|Goodbye)\b",
+        ]
+        is_generic = False
+        for pattern in generic_patterns:
+            if re.match(pattern, text, re.IGNORECASE):
+                logger.debug("Rejected (generic pattern): %s", text[:50])
+                is_generic = True
+                break
+        if is_generic:
+            continue
+
+        filtered.append(fact)
+
+    if len(filtered) < len(valid_facts):
+        logger.info("Quality filter: %d/%d facts passed", len(filtered), len(valid_facts))
+
+    return filtered
 
 
 async def extract_facts(content: str, max_retries: int = 3) -> list[dict]:
@@ -230,7 +288,12 @@ async def search_facts(
     limit: int = 10,
     active_only: bool = True,
 ) -> list[dict]:
-    """Search facts by semantic similarity.
+    """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
+
+    Pipeline:
+        1. Vector search: top 30 by cosine similarity (semantic)
+        2. BM25 search: top 30 by ts_rank (keyword)
+        3. Reciprocal Rank Fusion: score = 1/(60+rank_vector) + 1/(60+rank_bm25)
 
     Args:
         query: Search query text.
@@ -238,34 +301,72 @@ async def search_facts(
         active_only: If True, only return active (non-superseded) facts.
 
     Returns:
-        List of matching fact dictionaries sorted by similarity.
+        List of matching fact dictionaries sorted by relevance.
     """
     embedding = await llm_client.get_embedding_async(query)
 
     active_clause = "AND is_active = TRUE" if active_only else ""
+    fetch_limit = max(30, limit * 3)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Vector search
         cur.execute(
             f"""
-            SELECT
-                id,
-                fact_text,
-                category,
-                entities,
-                confidence,
-                source_type,
-                metadata,
-                created_at,
-                1 - (embedding <=> %s::vector) as similarity
+            SELECT id, fact_text, category, entities, confidence, source_type,
+                   metadata, created_at,
+                   1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
-            WHERE embedding IS NOT NULL
-              {active_clause}
+            WHERE embedding IS NOT NULL {active_clause}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (embedding, embedding, limit),
+            (embedding, embedding, fetch_limit),
         )
-        results = [dict(r) for r in cur.fetchall()]
+        vector_results = [dict(r) for r in cur.fetchall()]
+
+        # BM25 keyword search
+        cur.execute(
+            f"""
+            SELECT id, fact_text, category, entities, confidence, source_type,
+                   metadata, created_at,
+                   ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
+            FROM memory_facts
+            WHERE tsv @@ plainto_tsquery('english', %s)
+              {active_clause}
+            ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
+            LIMIT %s
+            """,
+            (query, query, query, fetch_limit),
+        )
+        bm25_results = [dict(r) for r in cur.fetchall()]
+
+    # Reciprocal Rank Fusion
+    vector_ranks = {r["id"]: rank for rank, r in enumerate(vector_results)}
+    bm25_ranks = {r["id"]: rank for rank, r in enumerate(bm25_results)}
+
+    all_ids = set(vector_ranks.keys()) | set(bm25_ranks.keys())
+    all_results_by_id: dict[int, dict] = {}
+    for r in vector_results + bm25_results:
+        if r["id"] not in all_results_by_id:
+            all_results_by_id[r["id"]] = r
+
+    k = 60  # RRF constant
+    rrf_scores: dict[int, float] = {}
+    for fact_id in all_ids:
+        score = 0.0
+        if fact_id in vector_ranks:
+            score += 1.0 / (k + vector_ranks[fact_id])
+        if fact_id in bm25_ranks:
+            score += 1.0 / (k + bm25_ranks[fact_id])
+        rrf_scores[fact_id] = score
+
+    sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
+    results = []
+    for fact_id in sorted_ids[:limit]:
+        r = all_results_by_id[fact_id]
+        r["rrf_score"] = round(rrf_scores[fact_id], 6)
+        results.append(r)
 
     return results

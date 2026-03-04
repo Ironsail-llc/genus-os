@@ -268,10 +268,9 @@ class AgentRunner:
         if execution_mode and not readonly_mode:
             system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
 
-        # Warmup: prepend context for scheduled/event/workflow triggers
-        # Interactive (TELEGRAM) and SUB_AGENT runs skip warmup — they have
-        # conversation context already.
+        # Warmup: prepend context for agent runs
         if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
+            # Full warmup for scheduled/event/workflow triggers
             has_warmup = (
                 agent_config.warmup_memory_blocks
                 or agent_config.warmup_context_files
@@ -288,6 +287,19 @@ class AgentRunner:
                         message = f"{preamble}\n\n{message}"
                 except Exception as e:
                     logger.debug("Warmup preamble failed for %s: %s", agent_id, e)
+        elif trigger_type == TriggerType.TELEGRAM:
+            # For new sessions: full warmup (blocks + entity context)
+            # For ongoing sessions: entity context only (blocks already in history)
+            try:
+                from robothor.engine.warmup import build_interactive_preamble
+
+                preamble = build_interactive_preamble(
+                    agent_id, message, include_blocks=not conversation_history
+                )
+                if preamble:
+                    message = f"{preamble}\n\n{message}"
+            except Exception as e:
+                logger.debug("Interactive warmup failed for %s: %s", agent_id, e)
 
         # Start session
         session.start(

@@ -77,22 +77,9 @@ async def memory_stats():
 async def list_memory_blocks():
     """List all memory blocks."""
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT block_name, length(content) as size, last_written_at "
-                "FROM agent_memory_blocks ORDER BY block_name",
-            )
-            return {
-                "blocks": [
-                    {
-                        "name": r[0],
-                        "size": r[1],
-                        "last_written_at": r[2].isoformat() if r[2] else None,
-                    }
-                    for r in cur.fetchall()
-                ],
-            }
+        from robothor.memory.blocks import list_blocks
+
+        return list_blocks()
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -101,22 +88,12 @@ async def list_memory_blocks():
 async def get_memory_block(block_name: str):
     """Read a named memory block."""
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT content, last_written_at, metadata "
-                "FROM agent_memory_blocks WHERE block_name = %s",
-                (block_name,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return JSONResponse({"error": "Block not found"}, status_code=404)
-            return {
-                "block_name": block_name,
-                "content": row[0],
-                "last_written_at": row[1].isoformat() if row[1] else None,
-                "metadata": row[2],
-            }
+        from robothor.memory.blocks import read_block
+
+        result = read_block(block_name)
+        if "error" in result:
+            return JSONResponse({"error": result["error"]}, status_code=404)
+        return result
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -125,24 +102,16 @@ async def get_memory_block(block_name: str):
 async def put_memory_block(block_name: str, body: MemoryBlockWriteRequest):
     """Write/update a named memory block."""
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO agent_memory_blocks (block_name, content, last_written_at, write_count) "
-                "VALUES (%s, %s, NOW(), 1) "
-                "ON CONFLICT (block_name) DO UPDATE "
-                "SET content = EXCLUDED.content, last_written_at = NOW(), "
-                "    write_count = agent_memory_blocks.write_count + 1 "
-                "RETURNING id",
-                (block_name, body.content),
-            )
-            conn.commit()
+        from robothor.memory.blocks import write_block
+
+        result = write_block(block_name, body.content)
+        if result.get("success"):
             log_event(
                 "crm.update",
                 f"Memory block '{block_name}' updated",
                 details={"block_name": block_name, "size": len(body.content)},
             )
-            return {"success": True, "block_name": block_name}
+        return result
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
