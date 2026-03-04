@@ -768,6 +768,16 @@ class AgentRunner:
                             error_message=gr_error_msg,
                         )
                         iteration_errors.append((tool_name, gr_error_msg, None))
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.tracking import log_tool_event
+
+                            log_tool_event(
+                                run_id=session.run.id,
+                                tool_name=tool_name,
+                                duration_ms=0,
+                                success=False,
+                                error_type="guardrail_blocked",
+                            )
                         if scratchpad:
                             scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                         if escalation:
@@ -856,6 +866,20 @@ class AgentRunner:
                     from robothor.engine.error_recovery import classify_error
 
                     error_type = classify_error(tool_name, error_msg)
+
+                # ── [TOOL EVENTS] Log tool invocation for observability ──
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_tool_event
+
+                    log_tool_event(
+                        run_id=session.run.id,
+                        tool_name=tool_name,
+                        duration_ms=tool_elapsed,
+                        success=error_msg is None,
+                        error_type=error_type.value
+                        if error_type and hasattr(error_type, "value")
+                        else (str(error_type) if error_type else None),
+                    )
 
                 # ── [SCRATCHPAD] Record tool call ──
                 if scratchpad:

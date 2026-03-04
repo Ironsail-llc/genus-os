@@ -39,22 +39,26 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     # Sub-agent output should never reach Telegram (belt-and-suspenders)
     if run.parent_run_id is not None:
         logger.debug("Suppressing delivery for sub-agent run %s", run.id)
+        run.delivery_status = "suppressed_sub_agent"
         return True
 
     if not run.output_text:
         logger.debug("No output to deliver for %s", config.id)
+        run.delivery_status = "no_output"
         return True
 
     # Suppress HEARTBEAT_OK messages
     text = run.output_text.strip()
     if text == "HEARTBEAT_OK":
         logger.debug("Suppressing HEARTBEAT_OK for %s", config.id)
+        run.delivery_status = "suppressed_heartbeat_ok"
         return True
 
     mode = config.delivery_mode
 
     if mode == DeliveryMode.NONE:
         logger.debug("Delivery mode=none for %s, skipping", config.id)
+        run.delivery_status = "silent"
         return True
 
     if mode == DeliveryMode.ANNOUNCE:
@@ -64,6 +68,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         return await _deliver_event_bus(config, text, run)
 
     logger.warning("Unknown delivery mode %s for %s", mode, config.id)
+    run.delivery_status = f"unknown_mode:{mode}"
     return False
 
 

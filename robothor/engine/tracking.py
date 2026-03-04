@@ -439,6 +439,53 @@ def delete_stale_schedules(
         return deleted
 
 
+def log_tool_event(
+    run_id: str,
+    tool_name: str,
+    duration_ms: int,
+    success: bool,
+    step_id: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    """Log a tool invocation event for observability."""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO agent_tool_events (run_id, step_id, tool_name, duration_ms, success, error_type)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (run_id, step_id, tool_name, duration_ms, success, error_type),
+            )
+    except Exception as e:
+        logger.debug("Failed to log tool event: %s", e)
+
+
+def get_tool_stats(hours: int = 24) -> list[dict]:
+    """Get aggregated tool stats over the last N hours."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT
+                tool_name,
+                COUNT(*) as total_calls,
+                COUNT(*) FILTER (WHERE success) as successes,
+                COUNT(*) FILTER (WHERE NOT success) as failures,
+                AVG(duration_ms) as avg_duration_ms,
+                MAX(duration_ms) as max_duration_ms,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms
+            FROM agent_tool_events
+            WHERE created_at > NOW() - INTERVAL '%s hours'
+            GROUP BY tool_name
+            ORDER BY total_calls DESC
+            """,
+            (hours,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def get_agent_stats(
     agent_id: str,
     hours: int = 24,
