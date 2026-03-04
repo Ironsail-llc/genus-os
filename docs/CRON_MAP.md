@@ -22,12 +22,12 @@ Every 30 min   │ Jira sync (crontab, 6-22h M-F) — brain/scripts/jira_sync.py
 
 Hourly         │ Email Classifier (Engine, 2h safety net 6-22, silent, primary: hook email.new + triage.refreshed) — classify emails, route or escalate
                │ Calendar Monitor (Engine, 6h safety net 6-22, silent, primary: hook calendar.*) — detect conflicts, cancellations, changes
-               │ Main Heartbeat (Engine, every 4h 6-22, → Telegram) — reads all status files, surfaces decisions
+               │ Main Heartbeat (Engine, hourly 6-22, → Telegram) — reads all status files, surfaces decisions (HEARTBEAT_OK on quiet cycles)
                │ Vision Monitor (Engine, 6h safety net 6-22, silent, primary: hook vision.person_unknown) — check motion events, write status file
                │ Conversation Inbox Monitor (Engine, hourly 6-22, silent) — check urgent messages, write status file
                │ System health check (crontab) — brain/scripts/system_health_check.py
-:10            │ Triage cleanup (crontab) — brain/scripts/triage_cleanup.py
-               │   Mark processed items in logs, update heartbeat
+:10            │ Triage cleanup (crontab) — brain/scripts/triage_cleanup.py [DISABLED — classifier now self-manages categorizedAt]
+               │   (commented out in crontab since Feb 22 — classifier writes categorizedAt directly)
 :20            │ Email analysis cleanup (crontab) — clear stale response-analysis.json
 :25            │ Email response prep (crontab) — brain/scripts/email_response_prep.py
                │   Enrich queued emails with thread + contact + topic RAG + calendar + CRM history + depth tag
@@ -164,13 +164,16 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | calendar-monitor | `0 6-22/6 * * *` | Kimi K2.5 | none (silent) | hook: calendar.* |
 | email-analyst | `30 8-20/6 * * *` | Kimi K2.5 | none (silent) | downstream from classifier |
 | email-responder | `0 8-20/2 * * *` | Sonnet 4.6 | none (silent) | downstream from classifier |
-| main:heartbeat | `0 6-22/4 * * *` | Sonnet 4.6 | announce → Telegram | cron |
+| main:heartbeat | `0 6-22 * * *` | Sonnet 4.6 | announce → Telegram | cron |
 | vision-monitor | `0 6-22/6 * * *` | Kimi K2.5 | none (silent) | hook: vision.person_unknown |
 | conversation-inbox | `0 6-22 * * *` | Kimi K2.5 | none (silent) | cron |
 | conversation-resolver | `0 8,14,20 * * *` | Kimi K2.5 | none (silent) | cron |
 | crm-steward | `0 10 * * *` | Kimi K2.5 | none (silent) | cron |
 | morning-briefing | `30 6 * * *` | Kimi K2.5 | announce → Telegram | cron |
 | evening-winddown | `0 21 * * *` | Kimi K2.5 | announce → Telegram | cron |
+| failure-analyzer | `0 */2 * * *` | Kimi K2.5 | none (silent) | cron |
+| improvement-analyst | `0 2 * * *` | Kimi K2.5 | none (silent) | cron (via nightwatch workflow) |
+| overnight-pr | `0 3 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
 
 ## Engine Workflow Crons (APScheduler from `docs/workflows/*.yaml`)
 
@@ -178,6 +181,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 |-------------|----------|-------|----------------|
 | email-pipeline | `0 6-22/6 * * *` | classify → condition → analyze/respond | hook: email.new |
 | calendar-pipeline | `0 6-22/6 * * *` | monitor → done | hook: calendar.* |
+| nightwatch | `0 2 * * *` | analyst → condition → overnight-pr | cron (nightly) |
 
 `vision-pipeline` is hook-only (no cron).
 
@@ -185,12 +189,13 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 - All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical).
 - Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
-- Main heartbeat runs every 4 hours and reads all worker status files. Biased toward silence — only speaks when the owner needs to make a decision.
+- Main heartbeat runs hourly and reads all worker status files. Always sends a report — never silent.
 - Workers write status files and stop silently. HEARTBEAT_OK is heartbeat-only.
 - Main session has `activeHours: 06:00-22:00 ET` — no wakeups during quiet hours (10 PM - 6 AM).
 - **Event-driven hooks are the primary trigger** for email, calendar, and vision agents. Crons are 6h safety nets.
 - **Declarative workflow engine** (`robothor/engine/workflow.py`) provides multi-step agent pipelines with conditional routing. Workflows are defined in `docs/workflows/*.yaml`.
-- Hourly email timeline: :10 cleanup → :20 analysis reset → :25 enrichment → :30 Analyst → :55 triage prep
+- Hourly email timeline: :10 cleanup (deprecated) → :20 analysis reset → :25 enrichment → :30 Analyst → :55 triage prep
+- Email classifier now self-manages `categorizedAt` in email-log.json — `triage_cleanup.py` is deprecated (cron entry remains but is redundant)
 - Duplicate prevention: filter_already_replied() in response prep, actionCompletedAt guard in cleanup, 5-min cooldown in sync
 - Supervisor Relay is Python (not LLM) — handles meeting alerts and stale/CRM checks
 - CRM Steward spawns research sub-agents for contact enrichment (max 3 per run)
@@ -198,4 +203,4 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ---
 
-**Updated:** 2026-03-01
+**Updated:** 2026-03-04

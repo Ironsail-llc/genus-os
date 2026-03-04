@@ -1,0 +1,94 @@
+id: overnight-pr
+name: Overnight PR Agent
+description: Picks up improvement tasks, writes code/config changes, creates draft PRs for morning review
+version: "2026-03-04"
+department: operations
+
+reports_to: main
+creates_tasks_for: []
+receives_tasks_from: [failure-analyzer, improvement-analyst]
+escalates_to: main
+
+tags_produced: [nightwatch]
+tags_consumed: [nightwatch, self-improve]
+
+model:
+  primary: openrouter/anthropic/claude-sonnet-4.6
+  fallbacks:
+    - openrouter/moonshotai/kimi-k2.5
+    - gemini/gemini-2.5-pro
+  payload_alias: sonnet
+
+schedule:
+  cron: "0 3 * * *"
+  timezone: America/New_York
+  timeout_seconds: 900
+  max_iterations: 30
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - list_directory
+  - write_file
+  - search_memory
+  - get_entity
+  - store_memory
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - create_task
+  - list_tasks
+  - list_my_tasks
+  - resolve_task
+  - update_task
+  - list_agent_runs
+  - get_agent_run
+  - get_agent_stats
+  # Git tools
+  - git_status
+  - git_diff
+  - git_branch
+  - git_commit
+  - git_push
+  - create_pull_request
+tools_denied: []
+
+streams:
+  read: [agent, system]
+  write: [agent]
+
+task_protocol: true
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/overnight-pr-status.md
+shared_working_state: false
+
+warmup:
+  context_files:
+    - brain/memory/overnight-pr-status.md
+    - brain/memory/improvement-analyst-status.md
+  memory_blocks:
+    - nightwatch_log
+    - performance_baselines
+
+instruction_file: brain/agents/OVERNIGHT_PR.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  verification_enabled: true
+  cost_budget_usd: 2.0
+  guardrails:
+    - no_main_branch_push
+    - no_destructive_writes
+
+changelog:
+  - date: "2026-03-04"
+    change: "Initial creation — Nightwatch Tier 2 overnight PR system"

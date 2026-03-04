@@ -1,0 +1,79 @@
+id: failure-analyzer
+name: Failure Analyzer
+description: Detects agent failures, classifies root causes, creates improvement tasks for overnight PR agent
+version: "2026-03-04"
+department: operations
+
+reports_to: main
+creates_tasks_for: [overnight-pr]
+receives_tasks_from: []
+escalates_to: main
+
+tags_produced: [self-improve, escalation, needs-philip]
+tags_consumed: []
+
+model:
+  primary: openrouter/moonshotai/kimi-k2.5
+  fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
+    - gemini/gemini-2.5-pro
+  payload_alias: kimi
+
+schedule:
+  cron: "0 */2 * * *"
+  timezone: America/New_York
+  timeout_seconds: 300
+  max_iterations: 15
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - search_memory
+  - get_entity
+  - store_memory
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - create_task
+  - list_tasks
+  - list_my_tasks
+  - resolve_task
+  - update_task
+  - list_agent_runs
+  - get_agent_run
+  - get_agent_stats
+  - list_agent_schedules
+tools_denied: []
+
+streams:
+  read: [agent, system]
+  write: [agent]
+
+task_protocol: true
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/failure-analyzer-status.md
+shared_working_state: false
+
+warmup:
+  context_files:
+    - brain/memory/failure-analyzer-status.md
+
+instruction_file: brain/agents/FAILURE_ANALYZER.md
+bootstrap_files:
+  - brain/AGENTS.md
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  guardrails:
+    - no_destructive_writes
+
+changelog:
+  - date: "2026-03-04"
+    change: "Initial creation — Nightwatch Tier 1 self-healing component"

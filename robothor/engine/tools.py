@@ -95,6 +95,15 @@ def _get_spawn_semaphore() -> asyncio.Semaphore:
 
 SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
 
+# ── Git tools (Nightwatch system) ────────────────────────────────────
+
+GIT_TOOLS = frozenset(
+    {"git_status", "git_diff", "git_branch", "git_commit", "git_push", "create_pull_request"}
+)
+
+# Branches that agents are NEVER allowed to push to or commit on
+PROTECTED_BRANCHES = frozenset({"main", "master"})
+
 # ─── Read-only tools for plan mode ────────────────────────────────────
 # Tools with no side effects — safe to run during exploration phase.
 
@@ -153,6 +162,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "list_actable_providers",
         # Reasoning
         "deep_reason",
+        # Git (read-only)
+        "git_status",
+        "git_diff",
     }
 )
 
@@ -647,6 +659,152 @@ class ToolRegistry:
                 },
             },
         }
+
+        # ── Git tools (Nightwatch system) ──
+
+        self._schemas["git_status"] = {
+            "type": "function",
+            "function": {
+                "name": "git_status",
+                "description": "Show the working tree status (staged, unstaged, untracked files).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                    },
+                },
+            },
+        }
+        self._schemas["git_diff"] = {
+            "type": "function",
+            "function": {
+                "name": "git_diff",
+                "description": "Show staged and unstaged changes. Use staged=true for staged-only diff.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                        "staged": {
+                            "type": "boolean",
+                            "description": "Show only staged changes (default false)",
+                            "default": False,
+                        },
+                    },
+                },
+            },
+        }
+        self._schemas["git_branch"] = {
+            "type": "function",
+            "function": {
+                "name": "git_branch",
+                "description": "Create and switch to a new branch. Cannot target main/master.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "branch_name": {
+                            "type": "string",
+                            "description": "Name of the branch to create (e.g. 'nightwatch/2026-03-04/fix-classifier')",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                    },
+                    "required": ["branch_name"],
+                },
+            },
+        }
+        self._schemas["git_commit"] = {
+            "type": "function",
+            "function": {
+                "name": "git_commit",
+                "description": "Stage specified files (or all changes) and commit with a message. Cannot commit on main/master.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "Commit message",
+                        },
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files to stage (empty = stage all changes)",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                    },
+                    "required": ["message"],
+                },
+            },
+        }
+        self._schemas["git_push"] = {
+            "type": "function",
+            "function": {
+                "name": "git_push",
+                "description": "Push current branch to origin. Cannot push to main/master.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                        "set_upstream": {
+                            "type": "boolean",
+                            "description": "Set upstream tracking (-u flag, default true for new branches)",
+                            "default": True,
+                        },
+                    },
+                },
+            },
+        }
+        self._schemas["create_pull_request"] = {
+            "type": "function",
+            "function": {
+                "name": "create_pull_request",
+                "description": "Create a draft pull request on GitHub using gh CLI. Always creates as draft, auto-labels 'nightwatch'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "PR title (keep under 70 chars)",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "PR body in markdown",
+                        },
+                        "base": {
+                            "type": "string",
+                            "description": "Base branch (default 'main')",
+                            "default": "main",
+                        },
+                        "labels": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Additional labels (nightwatch is always added)",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Repository path (defaults to workspace root)",
+                        },
+                    },
+                    "required": ["title", "body"],
+                },
+            },
+        }
+
+        # ── Git tool names set ──
+        # (used by READONLY_TOOLS and guardrails)
 
         # ── Sub-agent spawning tools ──
 
@@ -1799,6 +1957,210 @@ def _handle_sync_tool(
             return {"success": True, "path": str(path)}
         except Exception as e:
             return {"error": f"Failed to write file: {e}"}
+
+    # ── Git tools (Nightwatch system) ──
+
+    if name == "git_status":
+        repo_path = args.get("path") or workspace or None
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain", "-b"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
+            )
+            return {"status": proc.stdout.strip(), "exit_code": proc.returncode}
+        except Exception as e:
+            return {"error": f"git status failed: {e}"}
+
+    if name == "git_diff":
+        repo_path = args.get("path") or workspace or None
+        staged = args.get("staged", False)
+        cmd = ["git", "diff"]
+        if staged:
+            cmd.append("--cached")
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
+            )
+            return {"diff": proc.stdout[:20000], "exit_code": proc.returncode}
+        except Exception as e:
+            return {"error": f"git diff failed: {e}"}
+
+    if name == "git_branch":
+        repo_path = args.get("path") or workspace or None
+        branch_name = args.get("branch_name", "")
+        if not branch_name:
+            return {"error": "branch_name is required"}
+        if branch_name in PROTECTED_BRANCHES:
+            return {"error": f"Cannot create/switch to protected branch: {branch_name}"}
+        try:
+            proc = subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
+            )
+            if proc.returncode != 0:
+                return {"error": f"git checkout -b failed: {proc.stderr.strip()}"}
+            return {"branch": branch_name, "created": True}
+        except Exception as e:
+            return {"error": f"git branch failed: {e}"}
+
+    if name == "git_commit":
+        repo_path = args.get("path") or workspace or None
+        message = args.get("message", "")
+        files = args.get("files", [])
+        if not message:
+            return {"error": "commit message is required"}
+
+        # Check current branch — reject commits on protected branches
+        try:
+            branch_proc = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=repo_path,
+            )
+            current_branch = branch_proc.stdout.strip()
+            if current_branch in PROTECTED_BRANCHES:
+                return {"error": f"Cannot commit on protected branch: {current_branch}"}
+        except Exception:
+            pass  # proceed — branch check is best-effort
+
+        try:
+            # Stage files
+            if files:
+                stage_proc = subprocess.run(
+                    ["git", "add"] + files,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=repo_path,
+                )
+            else:
+                stage_proc = subprocess.run(
+                    ["git", "add", "-A"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=repo_path,
+                )
+            if stage_proc.returncode != 0:
+                return {"error": f"git add failed: {stage_proc.stderr.strip()}"}
+
+            # Commit
+            commit_proc = subprocess.run(
+                ["git", "commit", "-m", message],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                cwd=repo_path,
+            )
+            if commit_proc.returncode != 0:
+                return {"error": f"git commit failed: {commit_proc.stderr.strip()}"}
+
+            # Get commit hash
+            hash_proc = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=repo_path,
+            )
+            return {
+                "committed": True,
+                "message": message,
+                "sha": hash_proc.stdout.strip()[:12],
+                "output": commit_proc.stdout.strip()[:1000],
+            }
+        except Exception as e:
+            return {"error": f"git commit failed: {e}"}
+
+    if name == "git_push":
+        repo_path = args.get("path") or workspace or None
+        set_upstream = args.get("set_upstream", True)
+
+        # Check current branch — reject push on protected branches
+        try:
+            branch_proc = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=repo_path,
+            )
+            current_branch = branch_proc.stdout.strip()
+            if current_branch in PROTECTED_BRANCHES:
+                return {"error": f"Cannot push to protected branch: {current_branch}"}
+        except Exception as e:
+            return {"error": f"Failed to determine current branch: {e}"}
+
+        try:
+            cmd = ["git", "push"]
+            if set_upstream:
+                cmd.extend(["-u", "origin", current_branch])
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=repo_path,
+            )
+            if proc.returncode != 0:
+                return {"error": f"git push failed: {proc.stderr.strip()}"}
+            return {"pushed": True, "branch": current_branch, "output": proc.stdout.strip()[:1000]}
+        except Exception as e:
+            return {"error": f"git push failed: {e}"}
+
+    if name == "create_pull_request":
+        repo_path = args.get("path") or workspace or None
+        title = args.get("title", "")
+        body = args.get("body", "")
+        base = args.get("base", "main")
+        labels = args.get("labels", [])
+        if not title:
+            return {"error": "PR title is required"}
+
+        # Always add 'nightwatch' label
+        all_labels = list(set(["nightwatch"] + labels))
+        label_arg = ",".join(all_labels)
+
+        try:
+            cmd = [
+                "gh",
+                "pr",
+                "create",
+                "--draft",
+                "--title",
+                title,
+                "--body",
+                body,
+                "--base",
+                base,
+                "--label",
+                label_arg,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=repo_path,
+            )
+            if proc.returncode != 0:
+                return {"error": f"gh pr create failed: {proc.stderr.strip()}"}
+            pr_url = proc.stdout.strip()
+            return {"created": True, "url": pr_url, "title": title, "draft": True}
+        except Exception as e:
+            return {"error": f"create_pull_request failed: {e}"}
 
     # ── Deep reasoning (RLM) ──
 
