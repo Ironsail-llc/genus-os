@@ -1,7 +1,16 @@
 id: nightwatch
 name: Nightwatch Pipeline
-description: Nightly self-improvement pipeline — analyze performance, identify improvements, create PRs
-version: "2026-03-04"
+description: >
+  Self-healing and self-improving system. Three workflows:
+  1. Heal (nightly 3 AM) — fixes tracked failures via Claude Code in worktrees
+  2. Research (Sunday 1 AM) — competitive analysis of agent frameworks
+  3. Build (Monday 3 AM) — implements features from research via Claude Code in worktrees
+
+  The engine workflow below handles the analysis phase (improvement-analyst).
+  The actual code changes are done by external scripts (nightwatch-heal.py,
+  nightwatch-research.py, nightwatch-build.py) which invoke Claude Code CLI
+  in isolated git worktrees, producing draft PRs for review.
+version: "2026-03-05"
 
 triggers:
   - type: cron
@@ -14,26 +23,15 @@ steps:
   - id: analyze
     type: agent
     agent_id: improvement-analyst
-    message: "Nightly analysis run. Check fleet health, compare against baselines, identify improvement opportunities, and create tasks for the overnight PR agent."
+    message: "Nightly analysis run. Check fleet health, compare against baselines, identify improvement opportunities, and create tasks tagged nightwatch+self-improve."
     on_failure: abort
-
-  - id: check_tasks
-    type: condition
-    input: "{{ steps.analyze.output_text }}"
-    branches:
-      - when: "'tasks created: 0' in value.lower() or 'no improvements' in value.lower() or 'no tasks' in value.lower()"
-        goto: done
-      - otherwise: true
-        goto: create_prs
-
-  - id: create_prs
-    type: agent
-    agent_id: overnight-pr
-    message: "Improvement tasks are ready. Check CRM tasks tagged nightwatch+self-improve, implement changes, and create draft PRs."
-    on_failure: skip
 
   - id: done
     type: noop
+    note: >
+      The overnight-pr engine agent step has been replaced by external scripts
+      that use Claude Code CLI in worktrees. See brain/scripts/nightwatch-heal.py
+      (3 AM cron) and brain/scripts/nightwatch-build.py (Monday 3 AM cron).
 
 delivery:
   mode: none

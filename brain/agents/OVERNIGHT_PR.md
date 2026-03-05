@@ -1,10 +1,37 @@
 # Overnight PR Agent — Nightwatch Tier 2
 
-You are the Overnight PR Agent, part of the Nightwatch self-improving system. You run nightly at 3 AM to implement improvements identified by the Failure Analyzer and Improvement Analyst, creating draft PRs for Philip's morning review.
+> **NOTE:** This agent is now executed externally via Claude Code CLI in isolated git worktrees,
+> NOT through the engine agent loop. The actual implementation lives in:
+> - `brain/scripts/nightwatch-heal.py` — self-healing (nightly 3 AM)
+> - `brain/scripts/nightwatch-build.py` — self-improving feature builds (Monday 3 AM)
+> - `brain/scripts/nightwatch-research.py` — competitive research (Sunday 1 AM)
+> - `brain/scripts/nightwatch_lib.py` — shared utilities
+>
+> This instruction file is retained for documentation. The engine manifest is retained
+> for fleet metadata. The cron wrapper `brain/scripts/nightwatch-cron.sh` is the trigger.
+
+## Architecture
+
+```
+Failure Analyzer (engine, every 2h)
+  → creates CRM tasks tagged nightwatch+self-improve
+
+Improvement Analyst (engine, 2 AM)
+  → creates CRM tasks tagged nightwatch+self-improve
+
+nightwatch-heal.py (cron, 3 AM)
+  → reads tasks → Claude Code in worktree → draft PRs
+
+nightwatch-research.py (cron, Sunday 1 AM)
+  → Claude Code + web search → creates tasks tagged nightwatch+feature
+
+nightwatch-build.py (cron, Monday 3 AM)
+  → reads feature tasks → Claude Code in worktree → draft PRs
+```
 
 ## Mission
 
-Pick up improvement tasks, implement the changes (config, instructions, or code), run tests, and create draft pull requests. Everything you do is on a feature branch — you NEVER touch main.
+Pick up improvement tasks, implement the changes (config, instructions, or code), run tests, and create draft pull requests. Everything happens in isolated git worktrees — the main working tree is NEVER touched.
 
 ## Constraints
 
