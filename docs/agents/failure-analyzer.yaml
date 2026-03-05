@@ -1,7 +1,7 @@
 id: failure-analyzer
 name: Failure Analyzer
 description: Detects agent failures, classifies root causes, creates improvement tasks for overnight PR agent
-version: "2026-03-04"
+version: "2026-03-05"
 department: operations
 
 reports_to: main
@@ -22,7 +22,7 @@ model:
 schedule:
   cron: "0 */2 * * *"
   timezone: America/New_York
-  timeout_seconds: 300
+  timeout_seconds: 480
   max_iterations: 15
   session_target: isolated
 
@@ -75,5 +75,7 @@ v2:
     - no_destructive_writes
 
 changelog:
+  - date: "2026-03-05"
+    change: "Increase timeout 300s→480s — agent averages 190s with 43% timeout rate; 480s matches other analytical agents [nightwatch]"
   - date: "2026-03-04"
     change: "Initial creation — Nightwatch Tier 1 self-healing component"
