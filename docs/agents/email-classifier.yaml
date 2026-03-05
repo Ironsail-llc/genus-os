@@ -103,9 +103,11 @@ v2:
   exec_allowlist:
     - "^gog gmail thread (get|modify)"
     - "^gog gmail search"
+    - "^python3"
   write_path_allowlist:
     - "brain/memory/email-classifier-status.md"
     - "brain/memory/triage-*"
+    - "brain/memory/email-log.json"
 
 changelog:
   - date: "2026-03-01"

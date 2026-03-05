@@ -101,8 +101,10 @@ v2:
     - write_path_restrict
   exec_allowlist:
     - "^gog calendar"
+    - "^python3"
   write_path_allowlist:
     - "brain/memory/calendar-monitor-status.md"
+    - "brain/memory/calendar-log.json"
 
 changelog:
   - date: "2026-02-28"
