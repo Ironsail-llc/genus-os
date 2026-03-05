@@ -19,7 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 from robothor.engine.config import load_all_manifests, manifest_to_agent_config
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
-from robothor.engine.models import AgentConfig, TriggerType
+from robothor.engine.models import AgentConfig, AgentRun, TriggerType
 from robothor.engine.tracking import delete_stale_schedules, update_schedule_state, upsert_schedule
 
 # Circuit breaker: skip agent after this many consecutive errors
@@ -214,7 +214,12 @@ class CronScheduler:
             await asyncio.sleep(60)
 
     async def _run_agent(self, agent_id: str) -> None:
-        """Execute an agent as a scheduled cron job."""
+        """Execute an agent as a scheduled cron job.
+
+        Wraps the entire execution in a safety timeout (agent timeout + 120s)
+        to guarantee APScheduler's job function always returns, preventing
+        zombie jobs that block future cron triggers via max_instances=1.
+        """
         from robothor.engine.config import load_agent_config
 
         # Cross-trigger dedup
@@ -261,73 +266,116 @@ class CronScheduler:
             except Exception:
                 pass  # Don't block execution if circuit breaker check fails
 
-            # Build the cron payload message
-            payload = self._build_payload(agent_config)
+            # Safety timeout: agent timeout + 120s buffer.
+            # This guarantees the scheduler function returns even if
+            # runner.execute() hangs beyond its own timeout (e.g. stuck LLM call).
+            safety_timeout = agent_config.timeout_seconds + 120
 
-            run = await self.runner.execute(
-                agent_id=agent_id,
-                message=payload,
-                trigger_type=TriggerType.CRON,
-                trigger_detail=agent_config.cron_expr,
-                agent_config=agent_config,
-            )
-
-            # Deliver output
-            await deliver(agent_config, run)
-
-            # Persist delivery status back to DB
-            if run.delivery_status or run.delivered_at:
-                try:
-                    from robothor.engine.tracking import update_run
-
-                    update_run(
-                        run.id,
-                        delivery_status=run.delivery_status,
-                        delivered_at=run.delivered_at,
-                        delivery_channel=run.delivery_channel,
-                    )
-                except Exception as e:
-                    logger.warning("Failed to persist delivery status for %s: %s", agent_id, e)
-
-            # Update schedule state
             try:
-                consecutive_errors = 0
-                if run.status.value in ("failed", "timeout"):
+                async with asyncio.timeout(safety_timeout):
+                    await self._execute_and_deliver(agent_id, agent_config)
+            except TimeoutError:
+                logger.error(
+                    "Scheduler safety timeout (%ds) hit for %s — "
+                    "runner.execute() hung beyond agent timeout (%ds)",
+                    safety_timeout,
+                    agent_id,
+                    agent_config.timeout_seconds,
+                )
+                # Record timeout in schedule state so circuit breaker can track it
+                try:
                     prev_schedule = None
                     with contextlib.suppress(Exception):
                         prev_schedule = get_schedule(agent_id)
                     consecutive_errors = (
                         (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
                     )
-
-                update_schedule_state(
-                    agent_id=agent_id,
-                    last_run_at=run.started_at,
-                    last_run_id=run.id,
-                    last_status=run.status.value,
-                    last_duration_ms=run.duration_ms,
-                    consecutive_errors=consecutive_errors,
-                )
-            except Exception as e:
-                logger.warning("Failed to update schedule state for %s: %s", agent_id, e)
-
-            logger.info(
-                "Cron complete: %s status=%s duration=%dms tokens=%d/%d",
-                agent_id,
-                run.status.value,
-                run.duration_ms or 0,
-                run.input_tokens,
-                run.output_tokens,
-            )
-
-            # Downstream agent triggers (fire-and-forget on success)
-            if run.status.value == "completed" and agent_config.downstream_agents:
-                for downstream_id in agent_config.downstream_agents:
-                    logger.info("Triggering downstream agent: %s", downstream_id)
-                    asyncio.create_task(self._run_agent(downstream_id))
+                    update_schedule_state(
+                        agent_id=agent_id,
+                        last_run_at=datetime.now(UTC),
+                        last_status="timeout",
+                        consecutive_errors=consecutive_errors,
+                    )
+                except Exception:
+                    pass
+                return
 
         finally:
             release(agent_id)
+
+    async def _execute_and_deliver(self, agent_id: str, agent_config: AgentConfig) -> AgentRun:
+        """Run the agent and handle delivery + schedule tracking.
+
+        Extracted from _run_agent so the safety timeout wrapper is clean.
+        """
+        from robothor.engine.tracking import get_schedule
+
+        # Build the cron payload message
+        payload = self._build_payload(agent_config)
+
+        run = await self.runner.execute(
+            agent_id=agent_id,
+            message=payload,
+            trigger_type=TriggerType.CRON,
+            trigger_detail=agent_config.cron_expr,
+            agent_config=agent_config,
+        )
+
+        # Deliver output
+        await deliver(agent_config, run)
+
+        # Persist delivery status back to DB
+        if run.delivery_status or run.delivered_at:
+            try:
+                from robothor.engine.tracking import update_run
+
+                update_run(
+                    run.id,
+                    delivery_status=run.delivery_status,
+                    delivered_at=run.delivered_at,
+                    delivery_channel=run.delivery_channel,
+                )
+            except Exception as e:
+                logger.warning("Failed to persist delivery status for %s: %s", agent_id, e)
+
+        # Update schedule state
+        try:
+            consecutive_errors = 0
+            if run.status.value in ("failed", "timeout"):
+                prev_schedule = None
+                with contextlib.suppress(Exception):
+                    prev_schedule = get_schedule(agent_id)
+                consecutive_errors = (
+                    (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
+                )
+
+            update_schedule_state(
+                agent_id=agent_id,
+                last_run_at=run.started_at,
+                last_run_id=run.id,
+                last_status=run.status.value,
+                last_duration_ms=run.duration_ms,
+                consecutive_errors=consecutive_errors,
+            )
+        except Exception as e:
+            logger.warning("Failed to update schedule state for %s: %s", agent_id, e)
+
+        logger.info(
+            "Cron complete: %s status=%s duration=%dms tokens=%d/%d",
+            agent_id,
+            run.status.value,
+            run.duration_ms or 0,
+            run.input_tokens,
+            run.output_tokens,
+        )
+
+        # Downstream agent triggers (fire-and-forget on success)
+        if run.status.value == "completed" and agent_config.downstream_agents:
+            for downstream_id in agent_config.downstream_agents:
+                logger.info("Triggering downstream agent: %s", downstream_id)
+                asyncio.create_task(self._run_agent(downstream_id))
+
+        return run
 
     async def _run_heartbeat(self, agent_id: str) -> None:
         """Execute a heartbeat run for an agent.
@@ -335,6 +383,8 @@ class CronScheduler:
         Uses the heartbeat config overrides (instruction file, delivery,
         warmup, budget) while inheriting model + tools from the parent agent.
         Dedup key is {agent_id}:heartbeat so it doesn't block interactive runs.
+
+        Wrapped in a safety timeout to prevent APScheduler zombie jobs.
         """
         from robothor.engine.config import load_agent_config
 
@@ -418,75 +468,119 @@ class CronScheduler:
                 error_feedback=agent_config.error_feedback,
             )
 
-            # Build the payload
-            payload = self._build_payload(override_config)
+            # Safety timeout: heartbeat timeout + 120s buffer
+            safety_timeout = hb.timeout_seconds + 120
 
-            run = await self.runner.execute(
-                agent_id=agent_id,
-                message=payload,
-                trigger_type=TriggerType.CRON,
-                trigger_detail=f"heartbeat:{hb.cron_expr}",
-                agent_config=override_config,
-            )
-
-            # Deliver with heartbeat's announce mode
-            await deliver(override_config, run)
-
-            # Persist delivery status back to DB
-            if run.delivery_status or run.delivered_at:
-                try:
-                    from robothor.engine.tracking import update_run
-
-                    update_run(
-                        run.id,
-                        delivery_status=run.delivery_status,
-                        delivered_at=run.delivered_at,
-                        delivery_channel=run.delivery_channel,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to persist heartbeat delivery status for %s: %s",
-                        agent_id,
-                        e,
-                    )
-
-            # Update schedule state under heartbeat key
             try:
-                consecutive_errors = 0
-                if run.status.value in ("failed", "timeout"):
+                async with asyncio.timeout(safety_timeout):
+                    await self._execute_heartbeat(agent_id, dedup_key, override_config, hb)
+            except TimeoutError:
+                logger.error(
+                    "Scheduler safety timeout (%ds) hit for %s heartbeat — "
+                    "runner.execute() hung beyond heartbeat timeout (%ds)",
+                    safety_timeout,
+                    agent_id,
+                    hb.timeout_seconds,
+                )
+                try:
                     prev_schedule = None
                     with contextlib.suppress(Exception):
+                        from robothor.engine.tracking import get_schedule
+
                         prev_schedule = get_schedule(dedup_key)
                     consecutive_errors = (
                         (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
                     )
+                    update_schedule_state(
+                        agent_id=dedup_key,
+                        last_run_at=datetime.now(UTC),
+                        last_status="timeout",
+                        consecutive_errors=consecutive_errors,
+                    )
+                except Exception:
+                    pass
 
-                update_schedule_state(
-                    agent_id=dedup_key,
-                    last_run_at=run.started_at,
-                    last_run_id=run.id,
-                    last_status=run.status.value,
-                    last_duration_ms=run.duration_ms,
-                    consecutive_errors=consecutive_errors,
+        finally:
+            release(dedup_key)
+
+    async def _execute_heartbeat(
+        self,
+        agent_id: str,
+        dedup_key: str,
+        override_config: AgentConfig,
+        hb,
+    ) -> None:
+        """Run the heartbeat agent and handle delivery + tracking.
+
+        Extracted from _run_heartbeat so the safety timeout wrapper is clean.
+        """
+        from robothor.engine.tracking import get_schedule
+
+        payload = self._build_payload(override_config)
+
+        run = await self.runner.execute(
+            agent_id=agent_id,
+            message=payload,
+            trigger_type=TriggerType.CRON,
+            trigger_detail=f"heartbeat:{hb.cron_expr}",
+            agent_config=override_config,
+        )
+
+        # Deliver with heartbeat's announce mode
+        await deliver(override_config, run)
+
+        # Persist delivery status back to DB
+        if run.delivery_status or run.delivered_at:
+            try:
+                from robothor.engine.tracking import update_run
+
+                update_run(
+                    run.id,
+                    delivery_status=run.delivery_status,
+                    delivered_at=run.delivered_at,
+                    delivery_channel=run.delivery_channel,
                 )
             except Exception as e:
                 logger.warning(
-                    "Failed to update heartbeat schedule state for %s: %s",
+                    "Failed to persist heartbeat delivery status for %s: %s",
                     agent_id,
                     e,
                 )
 
-            logger.info(
-                "Heartbeat complete: %s status=%s duration=%dms tokens=%d/%d",
+        # Update schedule state under heartbeat key
+        try:
+            consecutive_errors = 0
+            if run.status.value in ("failed", "timeout"):
+                prev_schedule = None
+                with contextlib.suppress(Exception):
+                    prev_schedule = get_schedule(dedup_key)
+                consecutive_errors = (
+                    (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
+                )
+
+            update_schedule_state(
+                agent_id=dedup_key,
+                last_run_at=run.started_at,
+                last_run_id=run.id,
+                last_status=run.status.value,
+                last_duration_ms=run.duration_ms,
+                consecutive_errors=consecutive_errors,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to update heartbeat schedule state for %s: %s",
                 agent_id,
-                run.status.value,
-                run.duration_ms or 0,
-                run.input_tokens,
-                run.output_tokens,
+                e,
             )
 
-        finally:
-            release(dedup_key)
+        logger.info(
+            "Heartbeat complete: %s status=%s duration=%dms tokens=%d/%d",
+            agent_id,
+            run.status.value,
+            run.duration_ms or 0,
+            run.input_tokens,
+            run.output_tokens,
+        )
 
     async def _run_workflow(self, workflow_id: str) -> None:
         """Execute a workflow as a scheduled cron job."""
