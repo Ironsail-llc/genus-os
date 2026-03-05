@@ -136,7 +136,7 @@ class InstanceConfig:
         default_model: str = "openrouter/moonshotai/kimi-k2.5",
         quality_model: str = "openrouter/anthropic/claude-sonnet-4.6",
         owner_name: str = "",
-        hub_org: str = "programmatic-resources",
+        hub_org: str = "programmaticresources",
     ) -> dict:
         """Initialize a fresh config.yaml with defaults."""
         config = {

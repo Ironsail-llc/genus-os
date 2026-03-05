@@ -88,6 +88,7 @@ v2:
     - write_path_restrict
   write_path_allowlist:
     - "brain/memory/email-analyst-status.md"
+    - "brain/memory/response-analysis.json"
 
 changelog:
   - date: "2026-02-28"

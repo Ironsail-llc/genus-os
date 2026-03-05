@@ -156,6 +156,13 @@ def main(argv: list[str] | None = None) -> int:
 
     agent_sub.add_parser("setup", help="Interactive onboarding wizard")
 
+    search_parser = agent_sub.add_parser("search", help="Search the hub for agents")
+    search_parser.add_argument("query", nargs="?", default="", help="Search query")
+    search_parser.add_argument("--department", "-d", default=None, help="Filter by department")
+
+    publish_parser = agent_sub.add_parser("publish", help="Publish template to hub")
+    publish_parser.add_argument("repo_url", help="GitHub repo URL to publish")
+
     # engine
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
@@ -694,9 +701,13 @@ def _cmd_agent(args: argparse.Namespace) -> int:
         return _cmd_agent_import(args)
     elif sub == "setup":
         return _cmd_agent_setup()
+    elif sub == "search":
+        return _cmd_agent_search(args)
+    elif sub == "publish":
+        return _cmd_agent_publish(args)
     else:
         print(
-            "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup}"
+            "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish}"
         )
         return 0
 
@@ -910,9 +921,22 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
         if template_path:
             source_path = template_path
         else:
-            print(f"Template not found: {source}")
-            print("Provide a path to a template bundle or a known agent ID.")
-            return 1
+            try:
+                from robothor.templates.hub_client import HubClient
+
+                print(f"Template '{source}' not found locally. Searching hub...")
+                with HubClient() as hub:
+                    bundle = hub.get_bundle(source)
+                    if bundle:
+                        print(f"Found on hub: {bundle.get('name', source)}")
+                        extracted = hub.download_bundle(source)
+                        source_path = extracted
+                    else:
+                        print(f"Template not found: {source}")
+                        return 1
+            except Exception as e:
+                print(f"Template not found locally, hub lookup failed: {e}")
+                return 1
 
     try:
         result = install(str(source_path), overrides=cli_overrides, auto_yes=auto_yes)
@@ -1155,6 +1179,62 @@ def _cmd_agent_setup() -> int:
         print("\nNext steps:")
         print("  python scripts/validate_agents.py")
         print("  sudo systemctl restart robothor-engine")
+    return 0
+
+
+def _cmd_agent_search(args: argparse.Namespace) -> int:
+    """Search the hub for agent templates."""
+    from robothor.templates.hub_client import HubClient, HubError
+
+    query = args.query
+    department = getattr(args, "department", None)
+
+    try:
+        with HubClient() as hub:
+            results = hub.search(query, department=department)
+    except HubError as e:
+        print(f"Hub error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error connecting to hub: {e}")
+        return 1
+
+    if not results:
+        print("No agents found.")
+        return 0
+
+    print(f"\n{'Name':<30} {'Dept':<15} {'Version':<12} {'Downloads':<10}")
+    print("-" * 67)
+    for b in results:
+        name = b.get("name", b.get("slug", "?"))[:29]
+        dept = (b.get("department") or "-")[:14]
+        ver = (b.get("version") or "-")[:11]
+        dl = str(b.get("downloadCount", 0))
+        premium = " $" if b.get("isPremium") else ""
+        print(f"{name:<30} {dept:<15} {ver:<12} {dl:<10}{premium}")
+
+    print(f"\n{len(results)} result(s). Install with: robothor agent install <slug>")
+    return 0
+
+
+def _cmd_agent_publish(args: argparse.Namespace) -> int:
+    """Publish a template bundle to the hub."""
+    from robothor.templates.hub_client import HubClient, HubError
+
+    repo_url = args.repo_url
+
+    try:
+        with HubClient() as hub:
+            bundle = hub.submit(repo_url)
+    except HubError as e:
+        print(f"Publish error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(f"Published: {bundle.get('name', '?')} ({bundle.get('slug', '?')})")
+    print(f"View at: https://programmaticresources.com/bundle/{bundle.get('slug', '')}")
     return 0
 
 

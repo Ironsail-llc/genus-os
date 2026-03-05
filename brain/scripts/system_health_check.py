@@ -40,6 +40,7 @@ LOG_DIR = Path("/home/philip/robothor/brain/memory_system/logs")
 HEALTH_STATUS_PATH = MEMORY_DIR / "health-status.json"
 HANDOFF_PATH = MEMORY_DIR / "worker-handoff.json"
 EMAIL_LOG_PATH = MEMORY_DIR / "email-log.json"
+TRIAGE_INBOX_PATH = MEMORY_DIR / "triage-inbox.json"
 
 # === Services ===
 SYSTEMD_SERVICES = [
@@ -377,6 +378,111 @@ def check_cron_freshness() -> list[dict]:
     return results
 
 
+def check_triage_inbox_freshness() -> list[dict]:
+    """Check that triage-inbox.json is fresh (updated within 15 min)."""
+    try:
+        with open(TRIAGE_INBOX_PATH) as f:
+            data = json.load(f)
+        prepared = data.get("preparedAt", "")
+        if not prepared:
+            return [check_result("pipeline:triage_inbox", False, "No preparedAt")]
+        prepared_dt = datetime.fromisoformat(prepared)
+        # Handle timezone-aware timestamps
+        now = datetime.now()
+        if prepared_dt.tzinfo is not None:
+            from datetime import timezone as tz
+
+            now = datetime.now(tz.utc)
+        age_min = (now - prepared_dt).total_seconds() / 60
+        ok = age_min < 15
+        return [
+            check_result(
+                "pipeline:triage_inbox",
+                ok,
+                f"{age_min:.0f}min stale" if not ok else "",
+            )
+        ]
+    except FileNotFoundError:
+        return [check_result("pipeline:triage_inbox", False, "triage-inbox.json missing")]
+    except Exception as e:
+        return [check_result("pipeline:triage_inbox", False, str(e)[:100])]
+
+
+def check_triage_inbox_consistency() -> list[dict]:
+    """Check that triage inbox reflects uncategorized emails in email-log."""
+    try:
+        with open(EMAIL_LOG_PATH) as f:
+            email_log = json.load(f)
+        with open(TRIAGE_INBOX_PATH) as f:
+            triage = json.load(f)
+    except Exception as e:
+        return [check_result("pipeline:triage_consistency", False, str(e)[:100])]
+
+    # Count uncategorized emails with real metadata
+    uncategorized = sum(
+        1
+        for entry in email_log.get("entries", {}).values()
+        if isinstance(entry, dict) and not entry.get("categorizedAt") and entry.get("from")
+    )
+    triage_emails = triage.get("counts", {}).get("emails", 0)
+
+    # If we have uncategorized emails but triage shows 0, something is broken
+    if uncategorized > 0 and triage_emails == 0:
+        return [
+            check_result(
+                "pipeline:triage_consistency",
+                False,
+                f"{uncategorized} uncategorized emails but triage shows 0",
+            )
+        ]
+    return [check_result("pipeline:triage_consistency", True)]
+
+
+def check_agent_pipeline_health() -> list[dict]:
+    """Check agent run outcomes via agent_runs table."""
+    results = []
+    now = datetime.now()
+    cutoff_24h = (now - timedelta(hours=24)).isoformat()
+
+    # Check each critical agent had at least one successful run in 24h
+    critical_agents = ["email-classifier", "calendar-monitor", "morning-briefing"]
+    try:
+        for agent_id in critical_agents:
+            out = subprocess.run(
+                [
+                    "psql",
+                    "-d",
+                    "robothor_memory",
+                    "-t",
+                    "-A",
+                    "-c",
+                    f"SELECT count(*) FROM agent_runs WHERE agent_id = '{agent_id}' "
+                    f"AND status = 'completed' AND started_at > '{cutoff_24h}'",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if out.returncode == 0 and out.stdout.strip().isdigit():
+                count = int(out.stdout.strip())
+                ok = count > 0
+                results.append(
+                    check_result(
+                        f"pipeline:agent:{agent_id}",
+                        ok,
+                        f"0 successful runs in 24h" if not ok else "",
+                    )
+                )
+            else:
+                results.append(
+                    check_result(f"pipeline:agent:{agent_id}", False, "query failed")
+                )
+    except Exception as e:
+        results.append(check_result("pipeline:agent_runs", False, str(e)[:100]))
+
+    return results
+
+
 def resolve_health_escalations():
     """Resolve any open infrastructure escalations when all checks pass.
 
@@ -471,6 +577,9 @@ def main():
     all_results.extend(check_gmail_auth())
     all_results.extend(check_email_data_quality())
     all_results.extend(check_cron_freshness())
+    all_results.extend(check_triage_inbox_freshness())
+    all_results.extend(check_triage_inbox_consistency())
+    all_results.extend(check_agent_pipeline_health())
 
     critical = [r for r in all_results if r["status"] == "CRITICAL"]
     ok_count = len(all_results) - len(critical)
