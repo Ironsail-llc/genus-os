@@ -124,6 +124,17 @@ The analyst will analyze the email and create a follow-up task for the responder
 
 ---
 
+## `requiresHuman` Flag
+
+When creating tasks, set `requiresHuman: true` if ANY of these apply:
+- Tags include `needs-philip`
+- Priority is `high` or `urgent`
+- The email requires Philip's personal decision (contracts, hiring, legal, personal)
+
+This flag prevents automated cleanup from silently closing tasks that need Philip's input.
+
+---
+
 ## Classifications
 
 - **info_received** — Someone sent info, documents, confirmations
@@ -157,6 +168,7 @@ create_task(
     assignedToAgent="main",
     tags=["email", "escalation", "needs-philip"],
     priority="high",
+    requiresHuman=true,
     body="threadId: <gmail thread id>\nreason: <brief reason>\nurgency: <low|medium|high|critical>"
 )
 ```

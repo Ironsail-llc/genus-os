@@ -1479,6 +1479,7 @@ def _handle_sync_tool(
             priority=args.get("priority", "normal"),
             tags=args.get("tags"),
             parent_task_id=args.get("parentTaskId"),
+            requires_human=args.get("requiresHuman", False),
             tenant_id=tenant_id,
         )
         return (
@@ -1503,6 +1504,7 @@ def _handle_sync_tool(
             priority=args.get("priority"),
             tags=args.get("tags"),
             exclude_resolved=args.get("excludeResolved", False),
+            requires_human=args.get("requiresHuman"),
             limit=args.get("limit", 50),
             tenant_id=tenant_id,
         )
@@ -1523,6 +1525,7 @@ def _handle_sync_tool(
             "priority": "priority",
             "tags": "tags",
             "resolution": "resolution",
+            "requiresHuman": "requires_human",
         }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
         return {"success": update_task(tid, tenant_id=tenant_id, **kwargs), "id": tid}

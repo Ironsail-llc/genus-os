@@ -54,6 +54,7 @@ create_task(
     assignedToAgent="main",
     tags=["conversation", "escalation"],
     priority="high",
+    requiresHuman=true,
     body="conversationId: <id>\ncontact: <name>\nmessage: <brief preview>\nage: <minutes since message>"
 )
 ```

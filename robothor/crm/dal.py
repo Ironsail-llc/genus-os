@@ -889,6 +889,7 @@ def create_task(
     priority: str = "normal",
     tags: list[str] | None = None,
     parent_task_id: str | None = None,
+    requires_human: bool = False,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
     """Create a task. Returns task UUID."""
@@ -902,8 +903,9 @@ def create_task(
                 """
                 INSERT INTO crm_tasks (id, title, body, status, due_at, person_id, company_id,
                                        created_by_agent, assigned_to_agent, priority, tags,
-                                       parent_task_id, sla_deadline_at, started_at, tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       parent_task_id, sla_deadline_at, started_at, requires_human,
+                                       tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
                 (
                     task_id,
@@ -920,6 +922,7 @@ def create_task(
                     parent_task_id,
                     sla_deadline,
                     started,
+                    requires_human,
                     tenant_id,
                 ),
             )
@@ -973,6 +976,7 @@ def list_tasks(
     priority: str | None = None,
     parent_task_id: str | None = None,
     exclude_resolved: bool = False,
+    requires_human: bool | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> list[dict]:
     """List tasks with optional filters."""
@@ -1003,6 +1007,9 @@ def list_tasks(
             params.append(parent_task_id)
         if exclude_resolved:
             conditions.append("resolved_at IS NULL")
+        if requires_human is not None:
+            conditions.append("requires_human = %s")
+            params.append(requires_human)
         params.append(limit)
         cur.execute(
             f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)} "
@@ -1019,7 +1026,7 @@ def update_task(
 
     Accepted: title, body, status, due_at, person_id, company_id,
               created_by_agent, assigned_to_agent, priority, tags,
-              parent_task_id, resolved_at, resolution.
+              parent_task_id, resolved_at, resolution, requires_human.
 
     When a status transition is requested:
     - Validates against VALID_TRANSITIONS
@@ -1044,6 +1051,7 @@ def update_task(
         "parent_task_id": "parent_task_id",
         "resolved_at": "resolved_at",
         "resolution": "resolution",
+        "requires_human": "requires_human",
     }
     sets: list[str] = []
     vals: list[Any] = []
@@ -1183,17 +1191,28 @@ def resolve_task(
     resolution: str,
     agent_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> bool:
-    """Mark a task as DONE with a resolution summary."""
+) -> bool | dict:
+    """Mark a task as DONE with a resolution summary.
+
+    Returns dict with error if the task has requires_human=True and the caller
+    is not ``"philip"`` or ``"helm-user"``.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
             cur.execute(
-                "SELECT status FROM crm_tasks WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s",
+                "SELECT status, requires_human FROM crm_tasks WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s",
                 (task_id, tenant_id),
             )
             row = cur.fetchone()
             from_status = row["status"] if row else None
+
+            # Guard: requires_human tasks can only be resolved by Philip
+            if row and row.get("requires_human") and agent_id not in ("philip", "helm-user"):
+                return {
+                    "error": "Task requires human resolution — only Philip can resolve it",
+                    "id": task_id,
+                }
 
             cur.execute(
                 """UPDATE crm_tasks
