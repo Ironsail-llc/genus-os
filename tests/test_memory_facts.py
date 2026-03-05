@@ -20,11 +20,18 @@ class TestBuildExtractionPrompt:
 
 
 class TestParseExtractionResponse:
+    """Tests for parse_extraction_response.
+
+    The parser has hard quality filters: fact_text must be >=15 chars,
+    entities must be non-empty, confidence must be >=0.3, and generic
+    patterns are rejected. Test data reflects these constraints.
+    """
+
     def test_valid_json_array(self):
         raw = json.dumps(
             [
                 {
-                    "fact_text": "John is a developer",
+                    "fact_text": "John is a senior developer at Acme Corp",
                     "category": "personal",
                     "entities": ["John"],
                     "confidence": 0.9,
@@ -33,20 +40,25 @@ class TestParseExtractionResponse:
         )
         facts = parse_extraction_response(raw)
         assert len(facts) == 1
-        assert facts[0]["fact_text"] == "John is a developer"
+        assert facts[0]["fact_text"] == "John is a senior developer at Acme Corp"
         assert facts[0]["category"] == "personal"
         assert facts[0]["entities"] == ["John"]
         assert facts[0]["confidence"] == 0.9
 
     def test_single_object_wrapped(self):
         raw = json.dumps(
-            {"fact_text": "Test fact", "category": "technical", "entities": [], "confidence": 0.8}
+            {
+                "fact_text": "Alice reviewed the quarterly report yesterday",
+                "category": "technical",
+                "entities": ["Alice"],
+                "confidence": 0.8,
+            }
         )
         facts = parse_extraction_response(raw)
         assert len(facts) == 1
 
     def test_markdown_fences_stripped(self):
-        raw = '```json\n[{"fact_text": "Test", "category": "personal", "entities": [], "confidence": 0.9}]\n```'
+        raw = '```json\n[{"fact_text": "Philip deployed the new memory system", "category": "personal", "entities": ["Philip"], "confidence": 0.9}]\n```'
         facts = parse_extraction_response(raw)
         assert len(facts) == 1
 
@@ -60,22 +72,29 @@ class TestParseExtractionResponse:
     def test_missing_fact_text_skipped(self):
         raw = json.dumps(
             [
-                {"fact_text": "", "category": "personal", "entities": [], "confidence": 0.9},
+                {"fact_text": "", "category": "personal", "entities": ["X"], "confidence": 0.9},
                 {
-                    "fact_text": "Valid fact",
+                    "fact_text": "Philip completed the migration successfully",
                     "category": "personal",
-                    "entities": [],
+                    "entities": ["Philip"],
                     "confidence": 0.8,
                 },
             ]
         )
         facts = parse_extraction_response(raw)
         assert len(facts) == 1
-        assert facts[0]["fact_text"] == "Valid fact"
+        assert facts[0]["fact_text"] == "Philip completed the migration successfully"
 
     def test_invalid_category_defaults(self):
         raw = json.dumps(
-            [{"fact_text": "Test", "category": "invalid_cat", "entities": [], "confidence": 0.8}]
+            [
+                {
+                    "fact_text": "Robothor uses PostgreSQL for storage",
+                    "category": "invalid_cat",
+                    "entities": ["Robothor"],
+                    "confidence": 0.8,
+                }
+            ]
         )
         facts = parse_extraction_response(raw)
         assert facts[0]["category"] == "personal"
@@ -83,17 +102,35 @@ class TestParseExtractionResponse:
     def test_confidence_clamped(self):
         raw = json.dumps(
             [
-                {"fact_text": "High", "category": "personal", "entities": [], "confidence": 1.5},
-                {"fact_text": "Low", "category": "personal", "entities": [], "confidence": -0.5},
+                {
+                    "fact_text": "Alice presented the project roadmap last Friday",
+                    "category": "personal",
+                    "entities": ["Alice"],
+                    "confidence": 1.5,
+                },
+                {
+                    "fact_text": "Bob reviewed the architecture document in detail",
+                    "category": "personal",
+                    "entities": ["Bob"],
+                    "confidence": -0.5,
+                },
             ]
         )
         facts = parse_extraction_response(raw)
+        # -0.5 clamps to 0.0 which is < 0.3 quality threshold, so only 1 passes
+        assert len(facts) == 1
         assert facts[0]["confidence"] == 1.0
-        assert facts[1]["confidence"] == 0.0
 
     def test_invalid_confidence_defaults(self):
         raw = json.dumps(
-            [{"fact_text": "Test", "category": "personal", "entities": [], "confidence": "invalid"}]
+            [
+                {
+                    "fact_text": "Philip configured the SOPS encryption workflow",
+                    "category": "personal",
+                    "entities": ["Philip"],
+                    "confidence": "invalid",
+                }
+            ]
         )
         facts = parse_extraction_response(raw)
         assert facts[0]["confidence"] == 0.8
@@ -102,7 +139,7 @@ class TestParseExtractionResponse:
         raw = json.dumps(
             [
                 {
-                    "fact_text": "Test",
+                    "fact_text": "John discussed the deployment plan with team members",
                     "category": "personal",
                     "entities": ["John", 42, None],
                     "confidence": 0.8,
@@ -116,18 +153,23 @@ class TestParseExtractionResponse:
         raw = json.dumps(
             [
                 {
-                    "fact_text": "Fact 1",
+                    "fact_text": "Alice completed the frontend redesign project",
                     "category": "personal",
-                    "entities": ["A"],
+                    "entities": ["Alice"],
                     "confidence": 0.9,
                 },
                 {
-                    "fact_text": "Fact 2",
+                    "fact_text": "Bob migrated the database to PostgreSQL 16",
                     "category": "project",
-                    "entities": ["B"],
+                    "entities": ["Bob"],
                     "confidence": 0.7,
                 },
-                {"fact_text": "Fact 3", "category": "technical", "entities": [], "confidence": 0.6},
+                {
+                    "fact_text": "Carol deployed the monitoring stack on Friday",
+                    "category": "technical",
+                    "entities": ["Carol"],
+                    "confidence": 0.6,
+                },
             ]
         )
         facts = parse_extraction_response(raw)

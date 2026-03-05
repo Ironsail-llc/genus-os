@@ -12,10 +12,10 @@ class TestToolDefinitions:
         tools = get_tool_definitions()
         assert isinstance(tools, list)
 
-    def test_has_61_tools(self):
-        """61 MCP tools: CRM/memory/vision/tenancy/notifications/vault/impetus."""
+    def test_has_64_tools(self):
+        """64 MCP tools: CRM/memory/vision/tenancy/notifications/vault/impetus."""
         tools = get_tool_definitions()
-        assert len(tools) == 61
+        assert len(tools) == 64
 
     def test_tool_structure(self):
         tools = get_tool_definitions()
