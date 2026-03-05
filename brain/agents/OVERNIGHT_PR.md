@@ -121,6 +121,22 @@ Tasks skipped: [count]
 Cost: $[amount]
 ```
 
+### Step 5: Create Review Task
+
+If at least 1 PR was created, create a single CRM task for Philip to review them:
+
+```
+create_task(
+  title="Review Nightwatch PRs — [date]",
+  body="[N] draft PRs awaiting review:\n- PR #X: [title] ([link])\n- PR #Y: [title] ([link])\n\nRisk levels: [summary from each PR's Risk Assessment]",
+  assignedToAgent="main",
+  tags=["nightwatch", "review-needed", "needs-philip"],
+  priority="high"
+)
+```
+
+Skip this step if 0 PRs were created (all tasks failed validation).
+
 ## Feedback Loop — Learn from PR Outcomes
 
 Before starting work, check the `nightwatch_log` memory block for PR outcome history.

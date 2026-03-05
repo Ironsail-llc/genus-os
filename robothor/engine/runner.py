@@ -1493,6 +1493,7 @@ class AgentRunner:
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
+                    "timeout": 120,
                 }
                 if tools:
                     kwargs["tools"] = tools
@@ -1557,6 +1558,7 @@ class AgentRunner:
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
                     "stream": True,
+                    "timeout": 120,
                 }
                 if tools:
                     kwargs["tools"] = tools
