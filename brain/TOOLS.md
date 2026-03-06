@@ -43,9 +43,13 @@ gog calendar create philip@ironsail.ai --account robothor@ironsail.ai --json \
 gog calendar delete philip@ironsail.ai <eventId> --account robothor@ironsail.ai --force
 ```
 
-Key flags: `--summary`, `--from`/`--to` (RFC3339 with timezone offset — **always derive dynamically via `date +%:z`**, never hardcode), `--all-day`, `--attendees` (comma-separated), `--with-meet`, `--rrule`, `--reminder`, `--json`
+Key flags: `--summary`, `--from`/`--to` (RFC3339 with timezone offset — **always derive dynamically via `date +%:z`**, never hardcode), `--all-day`, `--attendees` (comma-separated), **`--with-meet` (REQUIRED — always include on every event)**, `--rrule`, `--reminder`, `--json`
 
 > **Philip is in America/New_York.** EST = `-05:00` (Nov–Mar), EDT = `-04:00` (Mar–Nov). Use `date +%:z` to get the current offset — do NOT hardcode it.
+
+> **Every event MUST include `--with-meet`.** All meetings get a Google Meet link, no exceptions.
+
+> **Scheduling link:** When someone needs to book time with Philip, share: `https://calendar.app.google/TLqVaiyMTtcdLY7E6`
 
 ---
 
