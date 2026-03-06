@@ -212,3 +212,35 @@ def validate_post_install(
         if r.status in ("FAIL", "WARN"):
             messages.append(f"[{r.check_id}] {r.name}: {r.status} -- {r.message}")
     return messages
+
+
+def validate_chain_post_install(
+    manifest_path: Path,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Run chain validation (checks M-R) on a generated manifest.
+
+    Returns list of failure/warning messages.
+    """
+    from robothor.templates.chain_validator import validate_chain
+
+    manifest = yaml.safe_load(manifest_path.read_text()) or {}
+
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+
+    # Load all manifests for cross-reference checks
+    manifest_dir = repo_root / "docs" / "agents"
+    all_manifests = {}
+    for f in sorted(manifest_dir.glob("*.yaml")):
+        with open(f) as fh:
+            data = yaml.safe_load(fh)
+        if data and isinstance(data, dict) and "id" in data:
+            all_manifests[data["id"]] = data
+
+    results = validate_chain(manifest, all_manifests, repo_root=repo_root)
+    messages = []
+    for r in results:
+        if r.status in ("FAIL", "WARN"):
+            messages.append(f"[{r.check_id}] {r.name}: {r.status} -- {r.message}")
+    return messages

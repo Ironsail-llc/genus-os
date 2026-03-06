@@ -7,6 +7,7 @@ files, then writes them to the locations the engine expects.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 from pathlib import Path
 from typing import Any
@@ -132,11 +133,15 @@ def install(
 
     # Run post-install validation
     validation_messages = []
+    chain_validation_messages = []
     if "manifest" in output_files:
-        from robothor.templates.validators import validate_post_install
+        from robothor.templates.validators import validate_chain_post_install, validate_post_install
 
         manifest_dest = output_files["manifest"][0]
         validation_messages = validate_post_install(manifest_dest, repo_root)
+
+        with contextlib.suppress(Exception):
+            chain_validation_messages = validate_chain_post_install(manifest_dest, repo_root)
 
     # Record installation
     instance.record_install(
@@ -154,6 +159,7 @@ def install(
         "version": version,
         "files": {k: str(v[0]) for k, v in output_files.items()},
         "validation": validation_messages,
+        "chain_validation": chain_validation_messages,
         "context": context,
     }
 
@@ -452,8 +458,20 @@ def import_agent(
         yaml.dump(setup, default_flow_style=False, sort_keys=False)
     )
 
-    # Generate SKILL.md
-    skill_content = f"""---
+    # Generate SKILL.md using description optimizer
+    instr_content = ""
+    if instr_file:
+        instr_path = repo_root / instr_file
+        if instr_path.exists():
+            instr_content = instr_path.read_text()
+
+    try:
+        from robothor.templates.description_optimizer import generate_skill_md
+
+        skill_content = generate_skill_md(manifest, instr_content)
+    except Exception:
+        # Fallback to basic SKILL.md
+        skill_content = f"""---
 name: {manifest.get("name", agent_id)}
 version: {manifest.get("version", "0.0.0")}
 description: {manifest.get("description", "")}
@@ -464,13 +482,7 @@ department: {department}
 # {manifest.get("name", agent_id)}
 
 {manifest.get("description", "")}
-
-## Variables
-
 """
-    for var_name, var_def in variables.items():
-        if isinstance(var_def, dict):
-            skill_content += f"- **{var_name}**: {var_def.get('description', '')} (default: `{var_def.get('default', '')}`)\n"
 
     (out_path / "SKILL.md").write_text(skill_content)
 
@@ -502,6 +514,16 @@ department: {department}
         instruction_path=str(repo_root / instr_file) if instr_file else "",
     )
 
+    # Score hub readiness
+    hub_readiness_score = 0
+    try:
+        from robothor.templates.description_optimizer import score_hub_readiness
+
+        report = score_hub_readiness(out_path)
+        hub_readiness_score = report.score
+    except Exception:
+        pass
+
     return {
         "agent_id": agent_id,
         "output_dir": str(out_path),
@@ -513,4 +535,5 @@ department: {department}
             str(out_path / "programmatic.json"),
         ],
         "variables": variables,
+        "hub_readiness_score": hub_readiness_score,
     }

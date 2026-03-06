@@ -16,6 +16,7 @@ Loads docs/agents/schema.yaml as the source of truth and enforces:
   J. Warmup file existence (context_files)
   K. Basic I/O tools
   L. Hooks validity (stream, event_type, message required per entry)
+  M. SecretRef keys present in environment
 
 Usage:
     python scripts/validate_agents.py                   # Check all agents
@@ -87,6 +88,11 @@ def main():
         action="store_true",
         help="CI mode: skip checks requiring local symlinks (C, J)",
     )
+    parser.add_argument(
+        "--chain",
+        action="store_true",
+        help="Run chain validation checks M-R in addition to A-L",
+    )
     args = parser.parse_args()
 
     load_schema, validate_agent = _import_checks()
@@ -120,6 +126,16 @@ def main():
     else:
         target = all_manifests
 
+    # Optionally import chain validator
+    chain_validate = None
+    if args.chain:
+        try:
+            from robothor.templates.chain_validator import validate_chain
+
+            chain_validate = validate_chain
+        except ImportError as e:
+            print(f"WARNING: Cannot import chain_validator: {e}", file=sys.stderr)
+
     # Run validation
     all_results = {}
     total_pass = 0
@@ -135,6 +151,12 @@ def main():
             repo_root=REPO_ROOT,
             ci=args.ci,
         )
+
+        # Append chain checks M-R if requested
+        if chain_validate:
+            chain_results = chain_validate(manifest, all_manifests, repo_root=REPO_ROOT)
+            results.extend(chain_results)
+
         all_results[agent_id] = results
 
         total_pass += sum(1 for r in results if r.status == "PASS")
