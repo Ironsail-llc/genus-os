@@ -362,3 +362,76 @@ class TestReconcileSchedules:
 
         wf_job.remove.assert_not_called()
         assert "workflow:daily-report" not in pruned
+
+
+class TestMisfireGraceTime:
+    """Skip-if-stale is handled by APScheduler's misfire_grace_time."""
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_skip_if_stale_sets_grace_time(self, tmp_path):
+        """Agents with catch_up=skip_if_stale should set misfire_grace_time."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        manifest_dir = tmp_path / "docs" / "agents"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "stale-agent.yaml").write_text(
+            """id: stale-agent
+name: Stale Agent
+model:
+  primary: openrouter/test/model
+schedule:
+  cron: "0 * * * *"
+  timezone: UTC
+  catch_up: skip_if_stale
+  stale_after_minutes: 30
+delivery:
+  mode: none
+tools_allowed: [exec]
+instruction_file: ""
+"""
+        )
+
+        config = EngineConfig(
+            manifest_dir=manifest_dir,
+            workspace=tmp_path,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        with patch.object(scheduler.scheduler, "start"):
+            import asyncio
+
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+                with pytest.raises(asyncio.CancelledError):
+                    await scheduler.start()
+
+        job = scheduler.scheduler.get_job("stale-agent")
+        assert job is not None
+        assert job.misfire_grace_time == 30 * 60  # stale_after_minutes * 60
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_coalesce_sets_no_grace_time(self, no_heartbeat_manifest):
+        """Agents with catch_up=coalesce (default) should have grace_time=None."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(
+            manifest_dir=no_heartbeat_manifest,
+            workspace=no_heartbeat_manifest.parent.parent,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        with patch.object(scheduler.scheduler, "start"):
+            import asyncio
+
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+                with pytest.raises(asyncio.CancelledError):
+                    await scheduler.start()
+
+        job = scheduler.scheduler.get_job("worker")
+        assert job is not None
+        assert job.misfire_grace_time is None

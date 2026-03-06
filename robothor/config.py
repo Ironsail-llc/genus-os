@@ -216,3 +216,115 @@ def reset_config() -> None:
     """Reset the singleton config (for testing)."""
     global _config
     _config = None
+
+
+def validate() -> list[tuple[str, bool, str]]:
+    """Validate system configuration and connectivity.
+
+    Returns list of (check_name, passed, detail) tuples.
+    """
+    import socket
+
+    cfg = get_config()
+    results: list[tuple[str, bool, str]] = []
+
+    # 1. Required env vars
+    required_env = {
+        "OPENROUTER_API_KEY": "LLM API access",
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN": "Telegram bot",
+        "ROBOTHOR_TELEGRAM_CHAT_ID": "Telegram delivery",
+    }
+    for var, purpose in required_env.items():
+        val = os.environ.get(var, "")
+        if val:
+            results.append((f"env:{var}", True, purpose))
+        else:
+            results.append((f"env:{var}", False, f"{purpose} — not set"))
+
+    # 2. Port checks — "in use" means service is running (good), "available" means not running (warning)
+    for name, port in [
+        ("bridge", cfg.bridge_port),
+        ("orchestrator", cfg.orchestrator_port),
+        ("engine", cfg.engine_port),
+        ("vision", cfg.vision_port),
+    ]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            s.bind(("127.0.0.1", port))
+            s.close()
+            results.append((f"port:{name}({port})", False, "not running (port available)"))
+        except OSError:
+            # Port in use — service is running
+            results.append((f"port:{name}({port})", True, "running"))
+
+    # 3. Database connectivity
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(**cfg.db.dict, connect_timeout=3)
+        conn.close()
+        results.append(
+            ("database", True, f"{cfg.db.name} on {cfg.db.host or 'socket'}:{cfg.db.port}")
+        )
+    except ImportError:
+        results.append(("database", False, "psycopg2 not installed"))
+    except Exception as e:
+        results.append(("database", False, str(e)))
+
+    # 4. Redis connectivity
+    try:
+        import redis as redis_lib
+
+        r = redis_lib.Redis(
+            host=cfg.redis.host,
+            port=cfg.redis.port,
+            db=cfg.redis.db,
+            password=cfg.redis.password or None,
+            socket_timeout=3,
+        )
+        r.ping()
+        r.close()
+        results.append(("redis", True, f"{cfg.redis.host}:{cfg.redis.port}"))
+    except ImportError:
+        results.append(("redis", False, "redis package not installed"))
+    except Exception as e:
+        results.append(("redis", False, str(e)))
+
+    # 5. Ollama reachability
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{cfg.ollama.base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            results.append(("ollama", True, cfg.ollama.base_url))
+    except Exception as e:
+        results.append(("ollama", False, str(e)))
+
+    # 6. Service health
+    import urllib.request
+
+    for name, url in [
+        ("bridge", cfg.bridge_url),
+        ("orchestrator", cfg.orchestrator_url),
+        ("vision", cfg.vision_url),
+    ]:
+        try:
+            req = urllib.request.Request(f"{url}/health", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                results.append((f"service:{name}", True, f"{url}/health → {resp.status}"))
+        except Exception as e:
+            results.append((f"service:{name}", False, str(e)))
+
+    # 7. File paths
+    for label, path in [
+        ("workspace", cfg.workspace),
+        ("memory_dir", cfg.memory_dir),
+    ]:
+        p = Path(path)
+        if p.exists():
+            results.append((f"path:{label}", True, str(p)))
+        else:
+            results.append((f"path:{label}", False, f"{p} does not exist"))
+
+    return results

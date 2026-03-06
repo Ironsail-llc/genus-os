@@ -8,6 +8,7 @@ and provides stats for the /context command.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,11 +16,29 @@ logger = logging.getLogger(__name__)
 # Compression threshold (80K estimated tokens)
 COMPRESS_THRESHOLD = 80_000
 
+# Drain threshold — compress down to this level to prevent thrashing
+DRAIN_THRESHOLD = 60_000
+
 # Number of recent messages to always keep verbatim
 KEEP_RECENT = 20
 
 # Model for compression summaries (cheap, fast)
 COMPRESS_MODEL = "gemini/gemini-2.5-flash"
+
+# ── Compression hooks ──────────────────────────────────────────────
+
+_pre_compress_hooks: list[Callable] = []
+_post_compress_hooks: list[Callable] = []
+
+
+def register_pre_compress_hook(fn: Callable) -> None:
+    """Register a hook called before compression with (messages,)."""
+    _pre_compress_hooks.append(fn)
+
+
+def register_post_compress_hook(fn: Callable) -> None:
+    """Register a hook called after compression with (old_messages, compressed, summary)."""
+    _post_compress_hooks.append(fn)
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
@@ -40,6 +59,22 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
                 total_chars += len(fn.get("name", ""))
 
     return (total_chars // 4) + (tool_call_count * 400)
+
+
+def _clear_old_tool_results(
+    messages: list[dict[str, Any]], keep_last: int = 10
+) -> list[dict[str, Any]]:
+    """Replace old tool results with placeholders to save tokens."""
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    for idx in tool_indices[:-keep_last]:
+        content = messages[idx].get("content", "")
+        char_count = len(content) if isinstance(content, str) else len(str(content))
+        if char_count > 200:
+            messages[idx] = {
+                **messages[idx],
+                "content": f"[tool result: {char_count} chars, cleared]",
+            }
+    return messages
 
 
 async def maybe_compress(
@@ -76,6 +111,24 @@ async def maybe_compress(
         est,
     )
 
+    # Pre-compression hooks (extract [REMEMBER] content, etc.)
+    for hook in _pre_compress_hooks:
+        try:
+            hook(messages)
+        except Exception as e:
+            logger.debug("Pre-compress hook failed: %s", e)
+
+    # First pass: clear old tool results to save tokens without losing structure
+    messages = _clear_old_tool_results(list(messages), keep_last=KEEP_RECENT)
+    cleared_est = estimate_tokens(messages)
+    if cleared_est < DRAIN_THRESHOLD:
+        logger.info(
+            "Tool result clearing sufficient: ~%d → ~%d tokens",
+            est,
+            cleared_est,
+        )
+        return messages
+
     system_msg = messages[0]
     old_messages = messages[1:-KEEP_RECENT]
     recent_messages = messages[-KEEP_RECENT:]
@@ -101,6 +154,13 @@ async def maybe_compress(
         est,
         new_est,
     )
+
+    # Post-compression hooks (log stats, persist summaries, etc.)
+    for hook in _post_compress_hooks:
+        try:
+            hook(messages, compressed, summary)
+        except Exception as e:
+            logger.debug("Post-compress hook failed: %s", e)
 
     return compressed
 
@@ -182,3 +242,70 @@ def get_context_stats(messages: list[dict[str, Any]]) -> dict[str, Any]:
         "usage_pct": round((token_est / COMPRESS_THRESHOLD) * 100, 1),
         "would_compress": token_est >= COMPRESS_THRESHOLD,
     }
+
+
+# ── Default hooks (always active) ─────────────────────────────────
+
+
+def _default_pre_compress_hook(messages: list[dict[str, Any]]) -> None:
+    """Extract [REMEMBER] tagged content from messages before compression.
+
+    Writes extracted content to the agent's working_context memory block
+    so important information survives compression.
+    """
+    remember_items: list[str] = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if not content or not isinstance(content, str):
+            continue
+        # Find [REMEMBER] tagged lines
+        for line in content.split("\n"):
+            if "[REMEMBER]" in line:
+                clean = line.replace("[REMEMBER]", "").strip()
+                if clean:
+                    remember_items.append(clean)
+
+    if not remember_items:
+        return
+
+    try:
+        from robothor.memory.blocks import write_block
+
+        # Append to working_context block
+        content = "\n".join(f"- {item}" for item in remember_items)
+        write_block(
+            "working_context",
+            content,
+            mode="append",
+            agent_id="system",
+        )
+        logger.info("Pre-compress hook: saved %d [REMEMBER] items", len(remember_items))
+    except Exception as e:
+        logger.debug("Failed to save [REMEMBER] items: %s", e)
+
+
+def _default_post_compress_hook(
+    old_messages: list[dict[str, Any]],
+    compressed: list[dict[str, Any]],
+    summary: str,
+) -> None:
+    """Log compression statistics to tracking."""
+    try:
+        # Just log the compression event — no DB write needed for internal tracking
+        old_est = estimate_tokens(old_messages)
+        new_est = estimate_tokens(compressed)
+        logger.info(
+            "Compaction: %d→%d messages, ~%dk→~%dk tokens, summary=%d chars",
+            len(old_messages),
+            len(compressed),
+            old_est // 1000,
+            new_est // 1000,
+            len(summary),
+        )
+    except Exception as e:
+        logger.debug("Post-compress hook logging failed: %s", e)
+
+
+# Register default hooks on import
+register_pre_compress_hook(_default_pre_compress_hook)
+register_post_compress_hook(_default_post_compress_hook)

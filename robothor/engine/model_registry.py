@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# Default thinking budget for models that support extended thinking
+THINKING_BUDGET_TOKENS = 10_000
+
 
 @dataclass(frozen=True)
 class ModelLimits:
@@ -21,6 +24,7 @@ class ModelLimits:
     default_output_tokens: int  # what we request by default
     input_cost_per_token: float
     output_cost_per_token: float
+    supports_thinking: bool = False
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -33,6 +37,16 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=16_384,
         input_cost_per_token=0.000_003,  # $3/M
         output_cost_per_token=0.000_015,  # $15/M
+        supports_thinking=True,
+    ),
+    # Claude Sonnet 4.6 direct (for thinking-enabled calls)
+    "anthropic/claude-sonnet-4-6": ModelLimits(
+        max_input_tokens=200_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_003,  # $3/M
+        output_cost_per_token=0.000_015,  # $15/M
+        supports_thinking=True,
     ),
     # Kimi K2.5 via OpenRouter
     "openrouter/moonshotai/kimi-k2.5": ModelLimits(

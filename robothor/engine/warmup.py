@@ -13,8 +13,10 @@ Every section wrapped in try/except — never crashes, silently degrades.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from robothor.engine.models import AgentConfig
 
@@ -23,6 +25,39 @@ logger = logging.getLogger(__name__)
 MAX_WARMTH_CHARS = 4000
 MAX_BLOCK_CHARS = 800
 MAX_FILE_CHARS = 600
+
+# ── Dynamic context hooks ─────────────────────────────────────────
+# Callables that return optional context strings. Called during warmup
+# preamble construction. Each hook has a 100ms timeout.
+
+_CONTEXT_HOOKS: list[Callable[[], str | None]] = []
+
+
+def register_context_hook(fn: Callable[[], str | None]) -> None:
+    """Register a dynamic context hook for warmup preambles."""
+    _CONTEXT_HOOKS.append(fn)
+
+
+def _run_context_hooks() -> str:
+    """Run all context hooks, collecting results within 100ms timeout each."""
+    import time
+
+    results: list[str] = []
+    for hook in _CONTEXT_HOOKS:
+        try:
+            start = time.monotonic()
+            result = hook()
+            elapsed = time.monotonic() - start
+            if elapsed > 0.1:
+                logger.debug("Context hook %s took %.0fms (>100ms)", hook.__name__, elapsed * 1000)
+            if result:
+                results.append(result)
+        except Exception as e:
+            logger.debug("Context hook %s failed: %s", hook.__name__, e)
+
+    if not results:
+        return ""
+    return "--- SITUATIONAL CONTEXT ---\n" + "\n".join(results)
 
 
 def build_warmth_preamble(
@@ -68,6 +103,14 @@ def build_warmth_preamble(
             sections.append(peers)
     except Exception as e:
         logger.debug("Warmup peer status failed for %s: %s", config.id, e)
+
+    # 5. Dynamic context hooks (date, travel, weather, etc.)
+    try:
+        situational = _run_context_hooks()
+        if situational:
+            sections.append(situational)
+    except Exception as e:
+        logger.debug("Warmup context hooks failed for %s: %s", config.id, e)
 
     if not sections:
         return ""
@@ -228,6 +271,14 @@ def build_interactive_preamble(
         except Exception as e:
             logger.debug("Interactive warmup entity context failed: %s", e)
 
+    # Dynamic context hooks (date, travel, weather, etc.)
+    try:
+        situational = _run_context_hooks()
+        if situational:
+            sections.append(situational)
+    except Exception as e:
+        logger.debug("Interactive warmup context hooks failed: %s", e)
+
     if not sections:
         return ""
 
@@ -352,3 +403,84 @@ def _build_peer_section(peer_agent_ids: list[str]) -> str:
             logger.debug("Failed to get peer schedule for %s: %s", peer_id, e)
 
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+# ── Built-in context hooks (always active) ────────────────────────
+
+
+_holidays_cache: dict[int, Any] = {}
+
+
+def _get_us_holidays(year: int):
+    """Get cached US holidays object for a given year."""
+    if year not in _holidays_cache:
+        import holidays
+
+        _holidays_cache[year] = holidays.US(years=year)
+    return _holidays_cache[year]
+
+
+def _date_context() -> str | None:
+    """Current date, day of week, and upcoming US holidays."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    day_name = today.strftime("%A")
+    date_str = today.strftime("%Y-%m-%d")
+    result = f"Today: {day_name}, {date_str}"
+
+    # Check for upcoming US holidays (next 7 days)
+    try:
+        us_holidays = _get_us_holidays(today.year)
+        upcoming = []
+        for delta in range(8):
+            check = today + timedelta(days=delta)
+            if check in us_holidays:
+                name = us_holidays[check]
+                if delta == 0:
+                    upcoming.append(f"Today is {name}")
+                elif delta == 1:
+                    upcoming.append(f"Tomorrow is {name}")
+                else:
+                    upcoming.append(f"{name} in {delta} days ({check.strftime('%a %b %d')})")
+        if upcoming:
+            result += "\n" + "; ".join(upcoming)
+    except ImportError:
+        pass  # holidays package not installed — skip
+
+    return result
+
+
+def _travel_status() -> str | None:
+    """Read travel_status memory block if non-empty."""
+    try:
+        from robothor.memory.blocks import read_block
+
+        result = read_block("travel_status")
+        content = (
+            result.get("content", "") if isinstance(result, dict) else str(result) if result else ""
+        )
+        if content and content.strip():
+            return f"Travel: {content.strip()[:200]}"
+    except Exception:
+        pass
+    return None
+
+
+def _weather_context() -> str | None:
+    """Read weather status file if present."""
+    try:
+        weather_file = Path.home() / "robothor" / "brain" / "memory" / "weather-status.md"
+        if weather_file.exists():
+            content = weather_file.read_text().strip()
+            if content:
+                return f"Weather: {content[:200]}"
+    except Exception:
+        pass
+    return None
+
+
+# Register built-in hooks on import
+register_context_hook(_date_context)
+register_context_hook(_travel_status)
+register_context_hook(_weather_context)

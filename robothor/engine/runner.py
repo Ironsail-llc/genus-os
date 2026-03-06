@@ -1151,10 +1151,17 @@ class AgentRunner:
         assistant_msg = choice.message
         model_used = response.model or models[0]
 
-        # Build assistant message dict
+        # Build assistant message dict — filter thinking blocks from output text
         msg_dict: dict[str, Any] = {"role": "assistant"}
-        if assistant_msg.content:
-            msg_dict["content"] = assistant_msg.content
+        raw_content = assistant_msg.content
+        if isinstance(raw_content, list):
+            # Response contains content blocks (e.g. thinking + text)
+            # Keep full blocks in message for conversation continuity;
+            # get_final_text() filters thinking blocks when extracting output
+            msg_dict["content"] = raw_content
+        else:
+            if raw_content:
+                msg_dict["content"] = raw_content
         if assistant_msg.tool_calls:
             msg_dict["tool_calls"] = [
                 {
@@ -1538,11 +1545,7 @@ class AgentRunner:
                 # Check if thinking is requested and model supports it
                 limits = get_model_limits(model)
                 actual_model = model
-                if (
-                    limits.supports_thinking
-                    and limits.default_thinking_budget > 0
-                    and model.startswith("openrouter/anthropic/")
-                ):
+                if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
                     # Route to direct Anthropic API for thinking-enabled calls
                     actual_model = model.replace("openrouter/", "", 1)
 
@@ -1558,10 +1561,13 @@ class AgentRunner:
                     kwargs["tool_choice"] = "auto"
 
                 # Add thinking if model supports it
-                if limits.supports_thinking and limits.default_thinking_budget > 0:
+                if limits.supports_thinking:
+                    from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
+
+                    kwargs["temperature"] = 1.0  # Required by Anthropic API
                     kwargs["thinking"] = {
                         "type": "enabled",
-                        "budget_tokens": limits.default_thinking_budget,
+                        "budget_tokens": THINKING_BUDGET_TOKENS,
                     }
 
                 response = await litellm.acompletion(**kwargs)
@@ -1620,11 +1626,7 @@ class AgentRunner:
                 # Check if thinking is requested and model supports it
                 limits = get_model_limits(model)
                 actual_model = model
-                if (
-                    limits.supports_thinking
-                    and limits.default_thinking_budget > 0
-                    and model.startswith("openrouter/anthropic/")
-                ):
+                if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
                     actual_model = model.replace("openrouter/", "", 1)
 
                 kwargs: dict[str, Any] = {
@@ -1640,10 +1642,13 @@ class AgentRunner:
                     kwargs["tool_choice"] = "auto"
 
                 # Add thinking if model supports it
-                if limits.supports_thinking and limits.default_thinking_budget > 0:
+                if limits.supports_thinking:
+                    from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
+
+                    kwargs["temperature"] = 1.0  # Required by Anthropic API
                     kwargs["thinking"] = {
                         "type": "enabled",
-                        "budget_tokens": limits.default_thinking_budget,
+                        "budget_tokens": THINKING_BUDGET_TOKENS,
                     }
 
                 stream = await litellm.acompletion(**kwargs)

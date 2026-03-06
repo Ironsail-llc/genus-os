@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="Check if required tables exist"
     )
 
+    # config
+    config_parser = subparsers.add_parser("config", help="Configuration management")
+    config_sub = config_parser.add_subparsers(dest="config_command")
+    config_sub.add_parser("validate", help="Validate system configuration and connectivity")
+
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start the API server")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
@@ -111,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     vault_import_p = vault_sub.add_parser("import-env", help="Import secrets from .env file")
     vault_import_p.add_argument("file", help="Path to .env file")
     vault_sub.add_parser("export-env", help="Export all secrets as KEY=VALUE")
+    vault_sub.add_parser("audit", help="Audit secret usage across the codebase")
 
     # agent
     agent_parser = subparsers.add_parser("agent", help="Agent management")
@@ -162,6 +168,15 @@ def main(argv: list[str] | None = None) -> int:
 
     publish_parser = agent_sub.add_parser("publish", help="Publish template to hub")
     publish_parser.add_argument("repo_url", help="GitHub repo URL to publish")
+
+    bind_parser = agent_sub.add_parser("bind", help="Bind agent to channel/cron schedule")
+    bind_parser.add_argument("agent_id", help="Agent ID to bind")
+    bind_parser.add_argument("--channel", help="Delivery channel (e.g. telegram)")
+    bind_parser.add_argument("--cron", help="Cron expression (e.g. '0 * * * *')")
+    bind_parser.add_argument("--to", help="Delivery target (e.g. chat ID)")
+
+    unbind_parser = agent_sub.add_parser("unbind", help="Clear cron and set delivery to none")
+    unbind_parser.add_argument("agent_id", help="Agent ID to unbind")
 
     # engine
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
@@ -221,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_agent(args)
     elif args.command == "engine":
         return _cmd_engine(args)
+    elif args.command == "config":
+        return _cmd_config(args)
     elif args.command == "tui":
         return _cmd_tui(args)
     elif args.command is None:
@@ -495,6 +512,31 @@ def _check_optional_service(name: str, port: int, health_path: str | None) -> No
             print(f"  {name + ':':<13} port {port:<10} — Not running")
 
 
+def _cmd_config(args: argparse.Namespace) -> int:
+    if args.config_command == "validate":
+        return _cmd_config_validate()
+    print("Usage: robothor config validate")
+    return 0
+
+
+def _cmd_config_validate() -> int:
+    """Run configuration validation checks."""
+    from robothor.config import validate
+
+    print("Running configuration validation...\n")
+    results = validate()
+
+    pass_count = sum(1 for _, ok, _ in results if ok)
+    fail_count = sum(1 for _, ok, _ in results if not ok)
+
+    for name, ok, detail in results:
+        icon = "\033[32m✓\033[0m" if ok else "\033[31m✗\033[0m"
+        print(f"  {icon} {name}: {detail}")
+
+    print(f"\n{pass_count} passed, {fail_count} failed")
+    return 0 if fail_count == 0 else 1
+
+
 def _cmd_pipeline(args: argparse.Namespace) -> int:
     print(f"Pipeline tier {args.tier} not yet implemented. Coming in v0.2.")
     return 0
@@ -677,7 +719,130 @@ def _cmd_vault(args: argparse.Namespace) -> int:
             print(f"{k}={v}")
         return 0
 
-    print("Usage: robothor vault {init|set|get|list|delete|import-env|export-env}")
+    if sub == "audit":
+        return _cmd_vault_audit()
+
+    print("Usage: robothor vault {init|set|get|list|delete|import-env|export-env|audit}")
+    return 0
+
+
+def _cmd_vault_audit() -> int:
+    """Audit secret usage: find used, unused, and missing keys."""
+    import re
+    from pathlib import Path
+
+    secrets_file = Path("/run/robothor/secrets.env")
+    repo_root = Path(__file__).resolve().parent.parent
+
+    # 1. Load keys from secrets.env
+    available_keys: set[str] = set()
+    if secrets_file.exists():
+        for line in secrets_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key = line.split("=", 1)[0]
+                available_keys.add(key)
+        print(f"Secrets file: {len(available_keys)} keys loaded from {secrets_file}")
+    else:
+        print(f"WARNING: {secrets_file} not found. Run decrypt-secrets.sh first.")
+        print("Checking codebase references only.\n")
+
+    # 2. Grep codebase for secret references
+    patterns = [
+        r'os\.getenv\(["\'](\w+)["\']\)',
+        r'os\.environ\.get\(["\'](\w+)["\']\)',
+        r'os\.environ\[["\'](\w+)["\']\]',
+        r"\$\{(\w+)\}",
+        r"\$(\w+)",
+    ]
+
+    referenced_keys: set[str] = set()
+    shell_builtins = {
+        "PATH",
+        "HOME",
+        "USER",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "PWD",
+        "OLDPWD",
+        "HOSTNAME",
+        "EDITOR",
+        "PAGER",
+        "DISPLAY",
+        "LOGNAME",
+        "MAIL",
+        "TMPDIR",
+    }
+    # Only scan Python and shell files in the project
+    scan_dirs = [
+        repo_root / "robothor",
+        repo_root / "scripts",
+        repo_root / "crm",
+        repo_root / "brain",
+    ]
+
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            continue
+        for ext in ("*.py", "*.sh"):
+            for filepath in scan_dir.rglob(ext):
+                try:
+                    content = filepath.read_text(errors="ignore")
+                    for pattern in patterns:
+                        for match in re.finditer(pattern, content):
+                            key = match.group(1)
+                            # Filter to likely secret keys (all uppercase, 3+ chars)
+                            if (
+                                key.isupper()
+                                and len(key) >= 3
+                                and "_" in key
+                                and key not in shell_builtins
+                            ):
+                                referenced_keys.add(key)
+                except Exception:
+                    continue
+
+    # 3. Report
+    used = available_keys & referenced_keys
+    unused = available_keys - referenced_keys
+    missing = referenced_keys - available_keys
+
+    # Filter missing to only plausible secret names
+    secret_prefixes = {
+        "OPENROUTER",
+        "ROBOTHOR",
+        "ANTHROPIC",
+        "PERPLEXITY",
+        "SOPS",
+        "AGE",
+        "CLOUDFLARE",
+    }
+    missing = {k for k in missing if any(k.startswith(p) for p in secret_prefixes)}
+
+    print(f"\n{'=' * 50}")
+    print("SECRET AUDIT REPORT")
+    print(f"{'=' * 50}")
+
+    print(f"\n  Used keys ({len(used)}):")
+    for k in sorted(used):
+        print(f"    + {k}")
+
+    if unused:
+        print(f"\n  Unused keys ({len(unused)}) — removal candidates:")
+        for k in sorted(unused):
+            print(f"    ? {k}")
+
+    if missing:
+        print(f"\n  Referenced but missing ({len(missing)}):")
+        for k in sorted(missing):
+            print(f"    ! {k}")
+
+    print()
+    if missing:
+        print(f"RESULT: {len(missing)} referenced key(s) not in secrets file")
+        return 1
+    print("RESULT: All referenced keys are available")
     return 0
 
 
@@ -705,9 +870,13 @@ def _cmd_agent(args: argparse.Namespace) -> int:
         return _cmd_agent_search(args)
     elif sub == "publish":
         return _cmd_agent_publish(args)
+    elif sub == "bind":
+        return _cmd_agent_bind(args)
+    elif sub == "unbind":
+        return _cmd_agent_unbind(args)
     else:
         print(
-            "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish}"
+            "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish|bind|unbind}"
         )
         return 0
 
@@ -1235,6 +1404,105 @@ def _cmd_agent_publish(args: argparse.Namespace) -> int:
 
     print(f"Published: {bundle.get('name', '?')} ({bundle.get('slug', '?')})")
     print(f"View at: https://programmaticresources.com/bundle/{bundle.get('slug', '')}")
+    return 0
+
+
+def _load_manifest(path):
+    """Load a YAML manifest, preferring ruamel.yaml for comment preservation."""
+    try:
+        from ruamel.yaml import YAML
+
+        yaml_handler = YAML()
+        yaml_handler.preserve_quotes = True
+        with open(path) as f:
+            data = yaml_handler.load(f)
+        return data, yaml_handler
+    except ImportError:
+        import yaml
+
+        print("Note: ruamel.yaml not installed — comments may not be preserved")
+        with open(path) as f:
+            return yaml.safe_load(f), None
+
+
+def _save_manifest(path, data, yaml_handler=None):
+    """Save a YAML manifest using the same handler that loaded it."""
+    if yaml_handler is not None:
+        with open(path, "w") as f:
+            yaml_handler.dump(data, f)
+    else:
+        import yaml
+
+        with open(path, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+def _cmd_agent_bind(args: argparse.Namespace) -> int:
+    """Bind an agent to a channel/cron schedule by updating its manifest YAML."""
+    from pathlib import Path
+
+    manifest_dir = Path.home() / "robothor" / "docs" / "agents"
+    manifest_path = manifest_dir / f"{args.agent_id}.yaml"
+
+    if not manifest_path.exists():
+        print(f"Error: No manifest found at {manifest_path}")
+        return 1
+
+    data, yaml_handler = _load_manifest(manifest_path)
+
+    if args.cron:
+        if "schedule" not in data:
+            data["schedule"] = {}
+        data["schedule"]["cron"] = args.cron
+
+    if args.channel or args.to:
+        if "delivery" not in data:
+            data["delivery"] = {}
+        if args.channel:
+            data["delivery"]["channel"] = args.channel
+            data["delivery"]["mode"] = "announce"
+        if args.to:
+            data["delivery"]["to"] = args.to
+
+    _save_manifest(manifest_path, data, yaml_handler)
+
+    changes = []
+    if args.cron:
+        changes.append(f"cron={args.cron}")
+    if args.channel:
+        changes.append(f"channel={args.channel}")
+    if args.to:
+        changes.append(f"to={args.to}")
+
+    print(f"Updated {args.agent_id}: {', '.join(changes)}")
+    print(f"Manifest: {manifest_path}")
+    print("Restart the engine to apply: sudo systemctl restart robothor-engine")
+    return 0
+
+
+def _cmd_agent_unbind(args: argparse.Namespace) -> int:
+    """Clear cron and set delivery to none for an agent."""
+    from pathlib import Path
+
+    manifest_dir = Path.home() / "robothor" / "docs" / "agents"
+    manifest_path = manifest_dir / f"{args.agent_id}.yaml"
+
+    if not manifest_path.exists():
+        print(f"Error: No manifest found at {manifest_path}")
+        return 1
+
+    data, yaml_handler = _load_manifest(manifest_path)
+
+    if "schedule" in data and "cron" in data["schedule"]:
+        del data["schedule"]["cron"]
+    if "delivery" in data:
+        data["delivery"]["mode"] = "none"
+
+    _save_manifest(manifest_path, data, yaml_handler)
+
+    print(f"Unbound {args.agent_id}: cron cleared, delivery=none")
+    print(f"Manifest: {manifest_path}")
+    print("Restart the engine to apply: sudo systemctl restart robothor-engine")
     return 0
 
 
