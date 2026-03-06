@@ -1520,7 +1520,25 @@ def _handle_sync_tool(
     # ── CRM Tasks (direct DAL) ──
 
     if name == "create_task":
-        from robothor.crm.dal import create_task
+        import re as _re
+
+        from robothor.crm.dal import create_task, find_task_by_thread_id
+
+        # Server-side dedup: check for existing task with same threadId
+        body_text = args.get("body") or ""
+        thread_match = _re.search(r"threadId:\s*([a-zA-Z0-9]+)", body_text)
+        if thread_match:
+            existing = find_task_by_thread_id(
+                thread_match.group(1),
+                include_recently_resolved=True,
+                tenant_id=tenant_id,
+            )
+            if existing:
+                return {
+                    "id": existing["id"],
+                    "title": existing["title"],
+                    "deduplicated": True,
+                }
 
         task_id = create_task(
             title=args.get("title", ""),

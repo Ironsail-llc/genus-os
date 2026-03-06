@@ -859,3 +859,76 @@ class TestTaskResolutionFixes:
         ):
             result = resolve_task(task_id="task-1", resolution="Done", agent_id="main")
         assert result is True
+
+
+class TestCreateTaskDedup:
+    """Dedup prevents duplicate tasks for the same email thread."""
+
+    @pytest.mark.asyncio
+    async def test_dedup_returns_existing_task(self):
+        """create_task returns existing task when threadId matches."""
+        existing = {"id": "task-existing", "title": "Twilio alert", "status": "TODO"}
+        with (
+            patch("robothor.crm.dal.find_task_by_thread_id", return_value=existing),
+            patch("robothor.crm.dal.create_task") as mock_create,
+        ):
+            result = await _execute_tool(
+                "create_task",
+                {"title": "Twilio alert", "body": "threadId: abc123\nSecurity issue"},
+                agent_id="email-classifier",
+                tenant_id="test-tenant",
+            )
+        assert result["deduplicated"] is True
+        assert result["id"] == "task-existing"
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dedup_includes_recently_resolved(self):
+        """Dedup check uses include_recently_resolved=True."""
+        existing = {"id": "task-done", "title": "Resolved alert", "status": "DONE"}
+        with (
+            patch("robothor.crm.dal.find_task_by_thread_id", return_value=existing) as mock_find,
+            patch("robothor.crm.dal.create_task") as mock_create,
+        ):
+            await _execute_tool(
+                "create_task",
+                {"title": "Same alert", "body": "threadId: xyz789"},
+                agent_id="email-classifier",
+                tenant_id="test-tenant",
+            )
+        mock_find.assert_called_once_with(
+            "xyz789", include_recently_resolved=True, tenant_id="test-tenant"
+        )
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_dedup_without_thread_id(self):
+        """Tasks without threadId skip dedup and create normally."""
+        with (
+            patch("robothor.crm.dal.find_task_by_thread_id") as mock_find,
+            patch("robothor.crm.dal.create_task", return_value="new-task-id"),
+        ):
+            result = await _execute_tool(
+                "create_task",
+                {"title": "Manual task", "body": "No thread reference"},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        mock_find.assert_not_called()
+        assert result["id"] == "new-task-id"
+
+    @pytest.mark.asyncio
+    async def test_dedup_miss_creates_task(self):
+        """When no existing task matches threadId, create normally."""
+        with (
+            patch("robothor.crm.dal.find_task_by_thread_id", return_value=None),
+            patch("robothor.crm.dal.create_task", return_value="new-task-id"),
+        ):
+            result = await _execute_tool(
+                "create_task",
+                {"title": "New alert", "body": "threadId: newthread123"},
+                agent_id="email-classifier",
+                tenant_id="test-tenant",
+            )
+        assert result["id"] == "new-task-id"
+        assert "deduplicated" not in result
