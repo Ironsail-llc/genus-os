@@ -178,6 +178,9 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             async def on_tool(event: dict) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
+            async def on_status(event: dict) -> None:
+                await queue.put({"event": event["event"], "data": event})
+
             # Determine agent ID from session key or default
             agent_id = _config.default_chat_agent if _config else "main"
             parts = session_key.split(":")
@@ -191,6 +194,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 trigger_detail=f"webchat:{session_key}",
                 on_content=on_content,
                 on_tool=on_tool,
+                on_status=on_status,
                 model_override=session.model_override,
                 conversation_history=list(session.history),
             )
@@ -477,6 +481,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             async def on_tool(event: dict) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
+            async def on_status(event: dict) -> None:
+                await queue.put({"event": event["event"], "data": event})
+
             agent_id = _config.default_chat_agent if _config else "main"
             parts = session_key.split(":")
             if len(parts) >= 2:
@@ -489,6 +496,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 trigger_detail=f"plan:{session_key}",
                 on_content=on_content,
                 on_tool=on_tool,
+                on_status=on_status,
                 model_override=session.model_override,
                 conversation_history=list(session.history),
                 readonly_mode=True,
@@ -752,6 +760,9 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 async def on_tool(event: dict) -> None:
                     await queue.put({"event": event["event"], "data": event})
 
+                async def on_status(event: dict) -> None:
+                    await queue.put({"event": event["event"], "data": event})
+
                 agent_id = _config.default_chat_agent if _config else "main"
                 parts = session_key.split(":")
                 if len(parts) >= 2:
@@ -773,6 +784,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     trigger_detail=f"plan-exec:{session_key}",
                     on_content=on_content,
                     on_tool=on_tool,
+                    on_status=on_status,
                     model_override=session.model_override,
                     conversation_history=None,  # CLEAN CONTEXT
                     execution_mode=True,
@@ -958,6 +970,9 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             async def on_tool(event: dict) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
+            async def on_status(event: dict) -> None:
+                await queue.put({"event": event["event"], "data": event})
+
             agent_id = _config.default_chat_agent if _config else "main"
             parts = session_key.split(":")
             if len(parts) >= 2:
@@ -981,6 +996,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 trigger_detail=f"plan-revise:{session_key}",
                 on_content=on_content,
                 on_tool=on_tool,
+                on_status=on_status,
                 model_override=session.model_override,
                 conversation_history=list(session.history),
                 readonly_mode=True,

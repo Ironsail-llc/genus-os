@@ -358,3 +358,149 @@ class TestDeepCommand:
         # Exception handler calls self.send_message (the wrapper), which calls bot.send_message
         # Verify send_message was called at least twice (initial progress + error)
         assert bot.bot.send_message.call_count >= 2
+
+
+class TestStreamingToolVisibility:
+    """Tests for tool and status visibility during Telegram streaming."""
+
+    def test_friendly_tool_name_mapping(self):
+        """_friendly_tool_name maps known tools to human-readable labels."""
+        from robothor.engine.telegram import _friendly_tool_name
+
+        assert _friendly_tool_name("search_memory") == "Searching memory"
+        assert _friendly_tool_name("web_fetch") == "Fetching page"
+        assert _friendly_tool_name("read_file") == "Reading file"
+        assert _friendly_tool_name("some_custom_thing") == "Some Custom Thing"
+
+    @pytest.mark.asyncio
+    async def test_tool_start_edits_message_with_tool_name(self, bot):
+        """When on_tool receives tool_start, Telegram message is edited to show tool activity."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 42
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+        bot.bot.edit_message_text = AsyncMock()
+        bot.bot.send_chat_action = AsyncMock()
+
+        async def fake_execute(**kwargs):
+            on_tool = kwargs.get("on_tool")
+            on_content = kwargs.get("on_content")
+            if on_tool:
+                await on_tool(
+                    {
+                        "event": "tool_start",
+                        "tool": "search_memory",
+                        "args": {},
+                        "call_id": "c1",
+                    }
+                )
+            if on_content:
+                await on_content("Result here")
+            return AgentRun(
+                status=RunStatus.COMPLETED,
+                output_text="Result here",
+                trigger_type=TriggerType.TELEGRAM,
+            )
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        await bot._run_interactive("12345", session_key, session, "test")
+
+        # Wait for the background task to complete
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        # Check that edit_message_text was called with "Searching memory" at some point
+        edit_calls = bot.bot.edit_message_text.call_args_list
+        tool_shown = any("Searching memory" in str(call) for call in edit_calls)
+        assert tool_shown, f"Expected 'Searching memory' in edit calls: {edit_calls}"
+
+    @pytest.mark.asyncio
+    async def test_tools_done_shows_thinking(self, bot):
+        """When on_status receives tools_done, message shows thinking indicator."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 42
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+        bot.bot.edit_message_text = AsyncMock()
+        bot.bot.send_chat_action = AsyncMock()
+
+        async def fake_execute(**kwargs):
+            on_status = kwargs.get("on_status")
+            if on_status:
+                await on_status({"event": "tools_done", "iteration": 1})
+            return AgentRun(
+                status=RunStatus.COMPLETED,
+                output_text="Done",
+                trigger_type=TriggerType.TELEGRAM,
+            )
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        await bot._run_interactive("12345", session_key, session, "test")
+
+        # Wait for the background task to complete
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        # Check that edit_message_text was called with "Thinking" at some point
+        edit_calls = bot.bot.edit_message_text.call_args_list
+        thinking_shown = any("Thinking" in str(call) for call in edit_calls)
+        assert thinking_shown, f"Expected 'Thinking' in edit calls: {edit_calls}"
+
+    @pytest.mark.asyncio
+    async def test_tool_indicator_cleared_by_content(self, bot):
+        """When on_content fires after tool execution, tool indicator is replaced."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 42
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+        bot.bot.edit_message_text = AsyncMock()
+        bot.bot.send_chat_action = AsyncMock()
+
+        async def fake_execute(**kwargs):
+            on_tool = kwargs.get("on_tool")
+            on_content = kwargs.get("on_content")
+            if on_tool:
+                await on_tool(
+                    {
+                        "event": "tool_start",
+                        "tool": "search_memory",
+                        "args": {},
+                        "call_id": "c1",
+                    }
+                )
+            if on_content:
+                await on_content("Here are your results")
+            return AgentRun(
+                status=RunStatus.COMPLETED,
+                output_text="Here are your results",
+                trigger_type=TriggerType.TELEGRAM,
+            )
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        await bot._run_interactive("12345", session_key, session, "test")
+
+        # Wait for the background task to complete
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        # The last edit before the final _edit_final should have content, not tool indicator
+        edit_calls = bot.bot.edit_message_text.call_args_list
+        # The final edit should contain actual content, not "Searching memory"
+        if edit_calls:
+            last_text = str(edit_calls[-1])
+            assert "Searching memory" not in last_text or "Here are your results" in last_text

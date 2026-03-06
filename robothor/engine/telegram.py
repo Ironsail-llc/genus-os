@@ -69,6 +69,26 @@ THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
+# Friendly tool names for streaming indicators
+_TOOL_LABELS = {
+    "search_memory": "Searching memory",
+    "read_file": "Reading file",
+    "write_file": "Writing file",
+    "web_search": "Searching the web",
+    "web_fetch": "Fetching page",
+    "exec": "Running command",
+    "list_tasks": "Checking tasks",
+    "create_task": "Creating task",
+    "store_memory": "Saving to memory",
+    "get_entity": "Looking up contact",
+    "search_records": "Searching records",
+}
+
+
+def _friendly_tool_name(tool: str) -> str:
+    """Map tool name to a human-readable label for streaming indicators."""
+    return _TOOL_LABELS.get(tool, tool.replace("_", " ").title())
+
 
 def _plan_state_to_dict(plan: PlanState) -> dict:
     """Serialize PlanState to dict for DB persistence."""
@@ -183,6 +203,8 @@ class TelegramBot:
         # Per-chat state (in-memory, resets on restart)
         self._model_override: dict[str, str] = {}  # chat_id → model_id
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}  # chat_id → running task
+        self._last_message_at: dict[str, float] = {}  # chat_id → monotonic timestamp
+        self._idle_timeout: float = 7200.0  # 2 hours in seconds
 
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
@@ -649,6 +671,28 @@ class TelegramBot:
         Shared by handle_text and handle_file — the single execution path for
         interactive Telegram messages.
         """
+        # ── Idle timeout: compress stale sessions ──
+        now = time.monotonic()
+        last = self._last_message_at.get(chat_id, 0.0)
+        if last > 0 and (now - last) > self._idle_timeout:
+            try:
+                from robothor.engine.context import maybe_compress
+
+                if session.history and len(session.history) > 5:
+                    original_count = len(session.history)
+                    compressed = await maybe_compress(session.history, threshold=20_000)
+                    if len(compressed) < original_count:
+                        session.history[:] = compressed
+                        logger.info(
+                            "Idle timeout compression for chat %s (%d→%d messages)",
+                            chat_id,
+                            original_count,
+                            len(compressed),
+                        )
+            except Exception as e:
+                logger.debug("Idle compression failed: %s", e)
+        self._last_message_at[chat_id] = now
+
         # ── Typing indicator ──
         typing_active = True
 
@@ -676,11 +720,34 @@ class TelegramBot:
         last_edit_len: int = 0
         first_content = True
         stream_edit_interval: float = STREAM_EDIT_INTERVAL
+        current_text: str = ""
+
+        async def _edit_status(suffix: str) -> None:
+            """Edit streaming message to show status indicator below current text."""
+            nonlocal stream_msg_id, last_edit_time, stream_edit_interval
+            now = time.monotonic()
+            if (now - last_edit_time) < stream_edit_interval:
+                return  # Rate-limited
+            display = (current_text + suffix)[: MAX_MESSAGE_LENGTH - 5]
+            try:
+                if stream_msg_id is not None:
+                    await self.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=stream_msg_id,
+                        text=display,
+                        parse_mode=None,
+                    )
+                    last_edit_time = now
+            except TelegramRetryAfter as e:
+                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
+            except Exception:
+                pass
 
         async def on_content(accumulated_text: str) -> None:
             nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-            nonlocal stream_edit_interval
+            nonlocal stream_edit_interval, current_text
 
+            current_text = accumulated_text
             now = time.monotonic()
             text_len = len(accumulated_text)
 
@@ -717,6 +784,15 @@ class TelegramBot:
             last_edit_time = now
             last_edit_len = text_len
 
+        async def on_tool(event: dict) -> None:
+            if event.get("event") == "tool_start":
+                label = _friendly_tool_name(event.get("tool", ""))
+                await _edit_status(f"\n\n\U0001f527 {label}...")
+
+        async def on_status(event: dict) -> None:
+            if event.get("event") == "tools_done":
+                await _edit_status("\n\n\U0001f4ad Thinking...")
+
         # ── Execute agent ──
         model = self._model_override.get(chat_id)
 
@@ -730,6 +806,8 @@ class TelegramBot:
                     trigger_type=TriggerType.TELEGRAM,
                     trigger_detail=f"chat:{chat_id}",
                     on_content=on_content,
+                    on_tool=on_tool,
+                    on_status=on_status,
                     model_override=model,
                     conversation_history=history or None,
                 )

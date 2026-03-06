@@ -426,6 +426,124 @@ class TestConcurrentExecution:
         assert res2.status_code == 200
 
 
+class TestSSEStatusEvents:
+    """Tests for on_status lifecycle events forwarded via SSE."""
+
+    @pytest.mark.asyncio
+    async def test_sse_emits_iteration_start(self, client, mock_runner):
+        """POST /chat/send SSE stream includes iteration_start events."""
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Done",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            on_status = kwargs.get("on_status")
+            on_content = kwargs.get("on_content")
+            if on_status:
+                await on_status({"event": "iteration_start", "iteration": 1, "max_iterations": 5})
+            if on_content:
+                await on_content("Done")
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/send",
+            json={"session_key": "status:main:test", "message": "hi"},
+        )
+        assert res.status_code == 200
+
+        events = _parse_sse(res.text)
+        iter_events = [e for e in events if e["event"] == "iteration_start"]
+        assert len(iter_events) == 1
+        assert iter_events[0]["data"]["iteration"] == 1
+        assert iter_events[0]["data"]["max_iterations"] == 5
+
+    @pytest.mark.asyncio
+    async def test_sse_emits_tools_lifecycle(self, client, mock_runner):
+        """POST /chat/send SSE stream includes tools_start and tools_done events."""
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Found it",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            on_status = kwargs.get("on_status")
+            on_content = kwargs.get("on_content")
+            if on_status:
+                await on_status(
+                    {
+                        "event": "tools_start",
+                        "tools": ["search_memory"],
+                        "count": 1,
+                        "iteration": 1,
+                    }
+                )
+                await on_status({"event": "tools_done", "iteration": 1})
+            if on_content:
+                await on_content("Found it")
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/send",
+            json={"session_key": "tools:main:test", "message": "search"},
+        )
+        events = _parse_sse(res.text)
+
+        tools_start = [e for e in events if e["event"] == "tools_start"]
+        tools_done = [e for e in events if e["event"] == "tools_done"]
+        assert len(tools_start) == 1
+        assert len(tools_done) == 1
+        assert tools_start[0]["data"]["tools"] == ["search_memory"]
+
+    @pytest.mark.asyncio
+    async def test_sse_tool_events_unchanged(self, client, mock_runner):
+        """Adding on_status doesn't break existing on_tool event forwarding."""
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Done",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            on_tool = kwargs.get("on_tool")
+            on_status = kwargs.get("on_status")
+            if on_tool:
+                await on_tool({"event": "tool_start", "tool": "read_file", "call_id": "c1"})
+                await on_tool(
+                    {
+                        "event": "tool_end",
+                        "tool": "read_file",
+                        "call_id": "c1",
+                        "duration_ms": 50,
+                    }
+                )
+            if on_status:
+                await on_status({"event": "iteration_start", "iteration": 1, "max_iterations": 5})
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/send",
+            json={"session_key": "coexist:main:test", "message": "read"},
+        )
+        events = _parse_sse(res.text)
+
+        tool_starts = [e for e in events if e["event"] == "tool_start"]
+        tool_ends = [e for e in events if e["event"] == "tool_end"]
+        iter_starts = [e for e in events if e["event"] == "iteration_start"]
+
+        assert len(tool_starts) == 1
+        assert len(tool_ends) == 1
+        assert len(iter_starts) == 1
+
+
 def _parse_sse(body: str) -> list[dict]:
     """Parse SSE text into a list of {event, data} dicts."""
     events = []

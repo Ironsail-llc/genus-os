@@ -204,6 +204,7 @@ class AgentRunner:
         agent_config: AgentConfig | None = None,
         on_content: Callable[[str], Awaitable[None]] | None = None,
         on_tool: Callable[[dict], Awaitable[None]] | None = None,
+        on_status: Callable[[dict], Awaitable[None]] | None = None,
         model_override: str | None = None,
         conversation_history: list[dict] | None = None,
         resume_from_run_id: str | None = None,
@@ -391,6 +392,7 @@ class AgentRunner:
                     resumed_scratchpad=resumed_scratchpad,
                     spawn_context=spawn_context,
                     readonly_mode=readonly_mode,
+                    on_status=on_status,
                 )
         except TimeoutError:
             logger.warning("Agent %s timed out after %ds", agent_id, timeout)
@@ -417,6 +419,7 @@ class AgentRunner:
                 route=route,
                 plan_result=plan_result,
                 trace=trace,
+                on_status=on_status,
             )
 
         # ── [TELEMETRY] Publish run metrics ──
@@ -611,6 +614,7 @@ class AgentRunner:
         resumed_scratchpad: Any = None,
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
+        on_status: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
         # Track models that hit permanent errors (401/403/429) across iterations
@@ -673,6 +677,17 @@ class AgentRunner:
             plan_steps = plan_result.estimated_steps
 
         for _iteration in range(max_iterations):
+            # ── [STATUS] Emit iteration_start lifecycle event ──
+            if on_status:
+                with contextlib.suppress(Exception):
+                    await on_status(
+                        {
+                            "event": "iteration_start",
+                            "iteration": _iteration + 1,
+                            "max_iterations": max_iterations,
+                        }
+                    )
+
             # ── [BUDGET] Check token/cost budget ──
             budget_status = session.check_budget(session.run.token_budget)
             if budget_status == "exhausted":
@@ -757,6 +772,19 @@ class AgentRunner:
 
             # ── Execute tool calls ──
             iteration_errors: list[tuple[str, str, Any]] = []
+
+            # ── [STATUS] Emit tools_start lifecycle event ──
+            if on_status:
+                with contextlib.suppress(Exception):
+                    tool_names_list = [tc.function.name for tc in assistant_msg.tool_calls]
+                    await on_status(
+                        {
+                            "event": "tools_start",
+                            "tools": tool_names_list,
+                            "count": len(tool_names_list),
+                            "iteration": _iteration + 1,
+                        }
+                    )
 
             for tc in assistant_msg.tool_calls:
                 tool_name = tc.function.name
@@ -913,6 +941,16 @@ class AgentRunner:
                 # Track errors for this iteration
                 if error_msg:
                     iteration_errors.append((tool_name, error_msg, error_type))
+
+            # ── [STATUS] Emit tools_done lifecycle event ──
+            if on_status:
+                with contextlib.suppress(Exception):
+                    await on_status(
+                        {
+                            "event": "tools_done",
+                            "iteration": _iteration + 1,
+                        }
+                    )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
             recovery_applied = False
@@ -1497,8 +1535,19 @@ class AgentRunner:
                 continue
 
             try:
+                # Check if thinking is requested and model supports it
+                limits = get_model_limits(model)
+                actual_model = model
+                if (
+                    limits.supports_thinking
+                    and limits.default_thinking_budget > 0
+                    and model.startswith("openrouter/anthropic/")
+                ):
+                    # Route to direct Anthropic API for thinking-enabled calls
+                    actual_model = model.replace("openrouter/", "", 1)
+
                 kwargs: dict[str, Any] = {
-                    "model": model,
+                    "model": actual_model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
@@ -1507,6 +1556,13 @@ class AgentRunner:
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
+
+                # Add thinking if model supports it
+                if limits.supports_thinking and limits.default_thinking_budget > 0:
+                    kwargs["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": limits.default_thinking_budget,
+                    }
 
                 response = await litellm.acompletion(**kwargs)
                 return response
@@ -1561,8 +1617,18 @@ class AgentRunner:
                 continue
 
             try:
+                # Check if thinking is requested and model supports it
+                limits = get_model_limits(model)
+                actual_model = model
+                if (
+                    limits.supports_thinking
+                    and limits.default_thinking_budget > 0
+                    and model.startswith("openrouter/anthropic/")
+                ):
+                    actual_model = model.replace("openrouter/", "", 1)
+
                 kwargs: dict[str, Any] = {
-                    "model": model,
+                    "model": actual_model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
@@ -1572,6 +1638,13 @@ class AgentRunner:
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
+
+                # Add thinking if model supports it
+                if limits.supports_thinking and limits.default_thinking_budget > 0:
+                    kwargs["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": limits.default_thinking_budget,
+                    }
 
                 stream = await litellm.acompletion(**kwargs)
 

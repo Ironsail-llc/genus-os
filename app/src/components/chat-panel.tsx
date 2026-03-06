@@ -62,6 +62,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [planFeedback, setPlanFeedback] = useState("");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  const [currentIteration, setCurrentIteration] = useState(0);
+  const [maxIterations, setMaxIterations] = useState(0);
   const [deepMode, setDeepMode] = useState(false);
   const [deepPlan, setDeepPlan] = useState(false);
   const [isDeepReasoning, setIsDeepReasoning] = useState(false);
@@ -481,6 +483,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
         setStreamingText("");
+        setActiveToolName(null);
+        setCurrentIteration(0);
+        setMaxIterations(0);
         return;
       }
 
@@ -516,6 +521,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               status: parsed.status,
               deep_plan: parsed.deep_plan || false,
             });
+          } else if (eventType === "tool_start") {
+            setActiveToolName(parsed.tool || null);
+          } else if (eventType === "tool_end") {
+            setActiveToolName(null);
+          } else if (eventType === "iteration_start") {
+            setCurrentIteration(parsed.iteration || 0);
+            setMaxIterations(parsed.max_iterations || 0);
           } else if (eventType === "done") {
             fullResponse = parsed.text || fullResponse;
           }
@@ -572,6 +584,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       // Clear streaming state BEFORE adding the message to avoid duplicate display
       setIsStreaming(false);
       setStreamingText("");
+      setActiveToolName(null);
+      setCurrentIteration(0);
+      setMaxIterations(0);
 
       // Finalize the message
       const assistantMsg: ChatMessage = {
@@ -966,17 +981,35 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       </div>
                     )}
                   </div>
-                ) : throttledStreamingText ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {throttledStreamingText}
-                    </ReactMarkdown>
-                  </div>
                 ) : (
-                  <div className="flex items-center gap-1.5 py-1">
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
+                  <div className="space-y-1">
+                    {currentIteration > 0 && maxIterations > 1 && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="step-progress">
+                        <span>Step {currentIteration}/{maxIterations}</span>
+                        <div className="flex-1 h-1 bg-background rounded-full overflow-hidden max-w-[100px]">
+                          <div className="h-full bg-primary/50 rounded-full transition-all"
+                               style={{ width: `${(currentIteration / maxIterations) * 100}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {throttledStreamingText ? (
+                      <div className="prose prose-sm prose-invert max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {throttledStreamingText}
+                        </ReactMarkdown>
+                      </div>
+                    ) : activeToolName ? (
+                      <div className="flex items-center gap-2 text-xs text-blue-400" data-testid="tool-indicator">
+                        <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+                        <span>{activeToolName.replace(/_/g, " ")}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 py-1">
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
