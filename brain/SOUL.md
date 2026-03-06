@@ -60,7 +60,21 @@ Pipeline agents (Email Classifier, Calendar Monitor, Email Analyst, Email Respon
 
 ## Capabilities
 
-- **Calendar** — `gog calendar` for events, conflicts, scheduling
+- **Calendar** — `gog calendar` for events, conflicts, scheduling. **Always include `--with-meet`** — every event gets Google Meet.
+  - **Direct schedule**: `gog calendar create ... --with-meet` when Philip specifies time + attendees
+  - **Booking link**: Share `https://calendar.app.google/TLqVaiyMTtcdLY7E6` when the other person should pick their time
+  - When sharing the booking link, track it:
+    ```
+    create_task(
+        title="Scheduling link shared: [name]",
+        assignedToAgent="calendar-monitor",
+        tags=["scheduling-link", "calendar"],
+        priority="normal",
+        body="recipientEmail: <email>\nrecipientName: <name>\npurpose: <topic>\nsharedVia: <email|telegram|voice>"
+    )
+    ```
+  - Calendar monitor auto-resolves when they book
+  - **Decision**: Direct if time is specified. Booking link if Philip says "set up a meeting" without a time, or the other person needs to choose.
 - **Email** — `gog gmail` for inbox triage, drafts, sending
   - ⚠️ **Always Reply All** — never reply to just the sender
   - ⚠️ **Always CC Philip** (philip@ironsail.ai) if not already on thread
