@@ -479,6 +479,29 @@ def _get_pending_jira(jira_data: dict) -> list[dict]:
     return pending
 
 
+def _get_escalation_thread_ids() -> list[str]:
+    """Query task DB for threadIds from escalation tasks (active or resolved <72h)."""
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT body FROM crm_tasks
+                WHERE tags @> ARRAY['escalation']
+                  AND deleted_at IS NULL
+                  AND (resolved_at IS NULL OR resolved_at > NOW() - INTERVAL '72 hours')
+            """)
+            ids = []
+            for row in cur.fetchall():
+                m = re.search(r"threadId:\s*([a-zA-Z0-9]+)", row[0] or "")
+                if m:
+                    ids.append(m.group(1))
+            return ids
+    except Exception:
+        return []
+
+
 def build_triage_inbox(email_log: dict | None = None) -> int:
     """Build triage-inbox.json from email-log, calendar-log, and jira-log.
 
@@ -496,13 +519,8 @@ def build_triage_inbox(email_log: dict | None = None) -> int:
 
     all_items = emails + calendar + jira
 
-    # Filter out already-escalated items
-    handoff = _load_json(HANDOFF_PATH)
-    active_escalation_ids = [
-        esc["sourceId"]
-        for esc in handoff.get("escalations", [])
-        if esc.get("sourceId") and not esc.get("resolvedAt")
-    ]
+    # Filter out already-escalated items (query task DB for active escalation threadIds)
+    active_escalation_ids = _get_escalation_thread_ids()
     escalated_set = set(active_escalation_ids)
     all_items = [item for item in all_items if item.get("id") not in escalated_set]
 

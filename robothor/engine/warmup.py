@@ -13,6 +13,7 @@ Every section wrapped in try/except — never crashes, silently degrades.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -223,7 +224,9 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
             truncated = content[:MAX_FILE_CHARS]
             if len(content) > MAX_FILE_CHARS:
                 truncated += "..."
-            lines.append(f"[{rel_path}]\n{truncated}")
+            age_hours = (time.time() - full_path.stat().st_mtime) / 3600
+            age_label = f" (stale — {age_hours:.0f}h ago)" if age_hours > 4 else ""
+            lines.append(f"[{rel_path}]{age_label}\n{truncated}")
         except Exception as e:
             logger.debug("Failed to read context file %s: %s", rel_path, e)
 

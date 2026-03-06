@@ -850,18 +850,25 @@ def _check_subtask_completion(cur: Any, task_id: str) -> str | None:
 def find_task_by_thread_id(
     thread_id: str,
     assigned_to_agent: str | None = None,
+    include_recently_resolved: bool = False,
     tenant_id: str = DEFAULT_TENANT,
 ) -> dict | None:
-    """Find an unresolved task containing a threadId in its body.
+    """Find a task containing a threadId in its body.
 
     Used for server-side dedup — prevents duplicate tasks for the same email thread.
+    When include_recently_resolved=True, also matches tasks resolved within the last
+    72 hours (prevents re-creation of tasks Philip already resolved).
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        query = """
+        if include_recently_resolved:
+            resolved_clause = "(resolved_at IS NULL OR resolved_at > NOW() - INTERVAL '72 hours')"
+        else:
+            resolved_clause = "resolved_at IS NULL"
+        query = f"""
             SELECT id, title, status FROM crm_tasks
             WHERE body LIKE %s
-              AND resolved_at IS NULL
+              AND {resolved_clause}
               AND deleted_at IS NULL
               AND tenant_id = %s
         """
