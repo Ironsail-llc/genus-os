@@ -185,6 +185,7 @@ async def api_list_agent_tasks(
     agent_id: str,
     status: str | None = Query(None),
     includeUnassigned: bool = Query(False),
+    excludeResolved: bool = Query(False),
     limit: int = Query(50),
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -193,6 +194,7 @@ async def api_list_agent_tasks(
             agent_id=agent_id,
             include_unassigned=includeUnassigned,
             status=status,
+            exclude_resolved=excludeResolved,
             limit=limit,
             tenant_id=tenant_id,
         )

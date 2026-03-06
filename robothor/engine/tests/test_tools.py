@@ -648,6 +648,7 @@ class TestMergeAndAliasTools:
             agent_id="email-classifier",
             include_unassigned=False,
             status="TODO",
+            exclude_resolved=True,
             limit=10,
             tenant_id="test",
         )
@@ -769,3 +770,92 @@ class TestAnalyzePdfSecurity:
             )
         assert "error" in result
         assert "50MB" in result["error"]
+
+
+class TestTaskResolutionFixes:
+    """Tests for task filtering and resolution bug fixes."""
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_excludes_done_by_default(self):
+        """list_tasks passes exclude_resolved=True by default."""
+        with patch("robothor.crm.dal.list_tasks") as mock_list:
+            mock_list.return_value = []
+            await _execute_tool(
+                "list_tasks",
+                {},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_list.call_args[1]["exclude_resolved"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_includes_done_when_requested(self):
+        """list_tasks passes exclude_resolved=False when explicitly set."""
+        with patch("robothor.crm.dal.list_tasks") as mock_list:
+            mock_list.return_value = []
+            await _execute_tool(
+                "list_tasks",
+                {"excludeResolved": False},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_list.call_args[1]["exclude_resolved"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_my_tasks_excludes_done_by_default(self):
+        """list_my_tasks passes exclude_resolved=True by default."""
+        with patch("robothor.crm.dal.list_agent_tasks") as mock_lat:
+            mock_lat.return_value = []
+            await _execute_tool(
+                "list_my_tasks",
+                {},
+                agent_id="email-classifier",
+                tenant_id="test-tenant",
+            )
+        assert mock_lat.call_args[1]["exclude_resolved"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_agent_tasks_excludes_done_by_default(self):
+        """list_agent_tasks passes exclude_resolved=True by default."""
+        with patch("robothor.crm.dal.list_agent_tasks") as mock_lat:
+            mock_lat.return_value = []
+            await _execute_tool(
+                "list_agent_tasks",
+                {"agentId": "failure-analyzer"},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_lat.call_args[1]["exclude_resolved"] is True
+
+    @pytest.mark.asyncio
+    async def test_resolve_task_passes_agent_id(self):
+        """resolve_task forwards agent_id to DAL."""
+        with patch("robothor.crm.dal.resolve_task") as mock_resolve:
+            mock_resolve.return_value = True
+            await _execute_tool(
+                "resolve_task",
+                {"id": "task-123", "resolution": "Done"},
+                agent_id="main",
+                tenant_id="test-tenant",
+            )
+        assert mock_resolve.call_args[1]["agent_id"] == "main"
+
+    def test_resolve_task_main_agent_passes_requires_human_guard(self):
+        """DAL-level: main agent can resolve requires_human tasks."""
+        from robothor.crm.dal import resolve_task
+
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = {"status": "TODO", "requires_human": True}
+        mock_cur.rowcount = 1
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("robothor.crm.dal.get_connection", return_value=mock_conn),
+            patch("robothor.crm.dal._safe_audit"),
+        ):
+            result = resolve_task(task_id="task-1", resolution="Done", agent_id="main")
+        assert result is True

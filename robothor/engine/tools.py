@@ -557,6 +557,11 @@ class ToolRegistry:
                             "description": "Max results (default 50)",
                             "default": 50,
                         },
+                        "excludeResolved": {
+                            "type": "boolean",
+                            "description": "Exclude DONE tasks (default true)",
+                            "default": True,
+                        },
                     },
                 },
             },
@@ -1553,7 +1558,7 @@ def _handle_sync_tool(
             created_by_agent=args.get("createdByAgent"),
             priority=args.get("priority"),
             tags=args.get("tags"),
-            exclude_resolved=args.get("excludeResolved", False),
+            exclude_resolved=args.get("excludeResolved", True),
             requires_human=args.get("requiresHuman"),
             limit=args.get("limit", 50),
             tenant_id=tenant_id,
@@ -1589,7 +1594,10 @@ def _handle_sync_tool(
         from robothor.crm.dal import resolve_task
 
         ok = resolve_task(
-            task_id=args["id"], resolution=args.get("resolution", ""), tenant_id=tenant_id
+            task_id=args["id"],
+            resolution=args.get("resolution", ""),
+            agent_id=agent_id,
+            tenant_id=tenant_id,
         )
         return {"success": ok, "id": args["id"]}
 
@@ -1600,6 +1608,7 @@ def _handle_sync_tool(
             agent_id=args.get("agentId", agent_id),
             include_unassigned=args.get("includeUnassigned", False),
             status=args.get("status"),
+            exclude_resolved=args.get("excludeResolved", True),
             limit=args.get("limit", 50),
             tenant_id=tenant_id,
         )
@@ -1613,6 +1622,7 @@ def _handle_sync_tool(
             agent_id=agent_id,
             include_unassigned=False,
             status=args.get("status"),
+            exclude_resolved=args.get("excludeResolved", True),
             limit=args.get("limit", 50),
             tenant_id=tenant_id,
         )

@@ -203,5 +203,33 @@ export function useTasks(options: UseTasksOptions = {}) {
     [tasks]
   );
 
-  return { tasks, isLoading, refetch: fetchTasks, updateTaskStatus, approveTask, rejectTask };
+  // Resolve any non-DONE task with a resolution note
+  const resolveTask = useCallback(
+    async (taskId: string, resolution: string) => {
+      const previousTasks = tasks;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId ? { ...t, status: "DONE" as Task["status"] } : t
+        )
+      );
+      try {
+        const res = await fetch("/api/actions/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tool: "resolve_task",
+            params: { id: taskId, resolution },
+          }),
+        });
+        if (!res.ok) {
+          setTasks(previousTasks);
+        }
+      } catch {
+        setTasks(previousTasks);
+      }
+    },
+    [tasks]
+  );
+
+  return { tasks, isLoading, refetch: fetchTasks, updateTaskStatus, approveTask, rejectTask, resolveTask };
 }
