@@ -5,8 +5,12 @@ All times in America/New_York (ET).
 ## Timeline
 
 ```
+Every 2 min    │ Engine watchdog (systemd timer) — brain/scripts/engine_watchdog.py
+               │   HTTP health check → direct Telegram alert + restart on 2 failures
+
 Every 5 min    │ Calendar sync (crontab) — brain/scripts/calendar_sync.py
                │ Email sync (crontab) — brain/scripts/email_sync.py
+               │ Bridge watchdog (systemd timer) — brain/scripts/bridge_watchdog.py
 
 Every 10 min   │ Continuous ingestion (crontab, Tier 1) — brain/memory_system/continuous_ingest.py
                │ Meet transcript sync (crontab) — brain/scripts/meet_transcript_sync.py
