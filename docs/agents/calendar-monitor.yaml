@@ -5,7 +5,7 @@ version: "2026-02-24"
 department: calendar
 
 reports_to: main
-creates_tasks_for: []
+creates_tasks_for: [main]
 receives_tasks_from: []
 escalates_to: main
 
@@ -33,6 +33,7 @@ tools_allowed:
   - search_memory
   - log_interaction
   - create_task
+  - list_tasks
   - list_my_tasks
   - resolve_task
   - append_to_block
@@ -52,6 +53,7 @@ bridge_endpoints:
   - "GET /health"
   - "POST /log-interaction"
   - "POST /api/tasks"
+  - "GET /api/tasks"
   - "GET /api/tasks/agent/*"
   - "POST /api/tasks/*/resolve"
   - "POST /api/memory/blocks/*/append"
@@ -91,8 +93,8 @@ hooks:
     event_type: calendar.modified
     message: "Calendar event modified. Check for conflicts, cancellations, and changes."
 
-tags_produced: [calendar, conflict, cancellation]
-tags_consumed: []
+tags_produced: [calendar, conflict, cancellation, scheduling-booked]
+tags_consumed: [scheduling-link]
 
 v2:
   error_feedback: true
@@ -107,6 +109,8 @@ v2:
     - "brain/memory/calendar-log.json"
 
 changelog:
+  - date: "2026-03-06"
+    change: "Add scheduling-link resolution: list_tasks tool, GET /api/tasks endpoint, creates scheduling-booked tasks for main, consumes scheduling-link tag"
   - date: "2026-02-28"
     change: "CRITICAL FIX: Add exec, read_file, write_file, search_memory — agent couldn't read calendar data. Delivery→none."
   - date: "2026-02-27"

@@ -29,7 +29,7 @@ Agents coordinate via CRM tasks (`crm_tasks` table). Every run:
 **Routing patterns:**
 - Email Classifier → `create_task(assignedToAgent="email-responder")` + writes `categorizedAt` to email-log.json after processing
 - Escalation → `create_task(assignedToAgent="main", tags=["needs-philip"])`
-- Tags: `email`, `reply-needed`, `analytical`, `escalation`, `needs-philip`, `calendar`, `conflict`, `cancellation`, `vision`, `unknown-person`, `crm-hygiene`, `dedup`, `enrichment`, `conversation`, `nightwatch`, `self-improve`
+- Tags: `email`, `reply-needed`, `analytical`, `escalation`, `needs-philip`, `calendar`, `conflict`, `cancellation`, `scheduling-link`, `scheduling-booked`, `vision`, `unknown-person`, `crm-hygiene`, `dedup`, `enrichment`, `conversation`, `nightwatch`, `self-improve`
 - Nightwatch: Failure Analyzer → `create_task(assignedToAgent="overnight-pr", tags=["nightwatch", "self-improve"])`. Improvement Analyst does the same. Overnight PR picks up tasks and creates draft PRs.
 - Priority: `low`, `normal`, `high`, `urgent`
 
@@ -49,6 +49,8 @@ Agents coordinate via CRM tasks (`crm_tasks` table). Every run:
 | `nightwatch_log` | 5000 | PR outcomes, merge rates, rejection reasons (Nightwatch) |
 
 Tools: `memory_block_read`, `memory_block_write`, `memory_block_list`, `append_to_block`
+
+**Philip's booking page:** `https://calendar.app.google/TLqVaiyMTtcdLY7E6`
 
 ---
 

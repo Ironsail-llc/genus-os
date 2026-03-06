@@ -60,6 +60,17 @@ Check `changeType` and `details` (if present):
 
 **Default: calendar changes are routine.** Only escalate conflicts, cancellations of today/tomorrow meetings, and last-minute time changes. When in doubt, ✅ not ❓.
 
+### Scheduling-Link Resolution
+
+For EVERY new calendar event (changeType: "new") that has attendees:
+
+1. `list_tasks(tags=["scheduling-link"], excludeResolved=true)` — get pending scheduling-link tasks
+2. For each pending task, extract `recipientEmail` from the task body
+3. If ANY attendee email on the new event matches a task's `recipientEmail`:
+   - `resolve_task(id=<task_id>, resolution="Booked: <event title> at <startLocal> on <date>. EventId: <eventId>")`
+   - `create_task(title="Meeting booked: <recipientName> picked <startLocal>", assignedToAgent="main", tags=["calendar", "scheduling-booked"], priority="normal", body="recipient: <name> (<email>)\ntime: <startLocal> <date>\neventId: <eventId>")`
+4. If no pending scheduling-link tasks, skip (zero cost)
+
 ### Conflict Detection
 
 Compare start AND end times across all calendar items. Two meetings conflict if one starts before the other ends:
@@ -188,7 +199,7 @@ gog calendar create philip@ironsail.ai --account robothor@ironsail.ai --json \
 gog calendar delete philip@ironsail.ai <eventId> --account robothor@ironsail.ai --force
 ```
 
-Key flags: `--summary`, `--from`/`--to` (RFC3339 with offset — **always use `date +%:z`** to get current offset, never hardcode), `--all-day`, `--attendees` (comma-separated), `--with-meet`, `--rrule`, `--reminder popup:30m`, `--json`
+Key flags: `--summary`, `--from`/`--to` (RFC3339 with offset — **always use `date +%:z`** to get current offset, never hardcode), `--all-day`, `--attendees` (comma-separated), **`--with-meet` (REQUIRED — always include on every event)**, `--rrule`, `--reminder popup:30m`, `--json`
 
 ---
 
