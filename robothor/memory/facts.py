@@ -424,7 +424,7 @@ async def search_facts(
             score += 1.0 / (k + bm25_ranks[fact_id])
         rrf_scores[fact_id] = score
 
-    sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
+    sorted_ids = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
     candidates = []
     for fact_id in sorted_ids:
         r = all_results_by_id[fact_id]

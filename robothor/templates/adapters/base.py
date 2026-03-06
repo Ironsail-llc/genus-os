@@ -20,7 +20,7 @@ class FormatAdapter:
 
     def can_install(self, skill_md: dict) -> bool:
         """Check if this adapter can handle the given SKILL.md frontmatter."""
-        return skill_md.get("format", "").startswith(self.format_id)
+        return str(skill_md.get("format", "")).startswith(self.format_id)
 
     def generate_files(self, bundle_path: Path, variables: dict[str, Any]) -> dict[str, str]:
         """Generate runtime files from a template bundle.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,26 +13,26 @@ from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode, RunStatu
 # ─── Helpers ────────────────────────────────────────────────────────
 
 
-def _make_run(**kwargs) -> AgentRun:
-    defaults = {
+def _make_run(**kwargs: object) -> AgentRun:
+    defaults: dict[str, object] = {
         "id": "run-1",
         "agent_id": "test",
         "status": RunStatus.COMPLETED,
         "output_text": "Hello",
     }
     defaults.update(kwargs)
-    return AgentRun(**defaults)
+    return AgentRun(**defaults)  # type: ignore[arg-type]
 
 
-def _make_config(**kwargs) -> AgentConfig:
-    defaults = {
+def _make_config(**kwargs: object) -> AgentConfig:
+    defaults: dict[str, object] = {
         "id": "test",
         "name": "Test",
         "delivery_mode": DeliveryMode.ANNOUNCE,
         "delivery_to": "12345",
     }
     defaults.update(kwargs)
-    return AgentConfig(**defaults)
+    return AgentConfig(**defaults)  # type: ignore[arg-type]
 
 
 # ─── delivery_status Tests ──────────────────────────────────────────
@@ -199,15 +200,30 @@ class TestGetToolStats:
 
 # ─── Cron Health Check Tests ───────────────────────────────────────
 
+# Resolve brain/scripts path relative to repo root (works in CI and locally)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_BRAIN_SCRIPTS = str(_REPO_ROOT / "brain" / "scripts")
+
+
+def _import_cron_health_check():
+    """Import cron_health_check from brain/scripts using importlib."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "cron_health_check", Path(_BRAIN_SCRIPTS) / "cron_health_check.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 
 class TestCronHealthCheck:
+    @pytest.fixture(autouse=True)
+    def _load_module(self):
+        self.chc = _import_cron_health_check()
+
     def test_classify_agent_healthy(self):
         """Agent with successes and low failure rate is healthy."""
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import classify_agent
-
         agent = {
             "total_runs": 10,
             "completed": 9,
@@ -215,15 +231,10 @@ class TestCronHealthCheck:
             "timeouts": 0,
             "last_success_at": "2026-03-04",
         }
-        assert classify_agent(agent) == "healthy"
+        assert self.chc.classify_agent(agent) == "healthy"
 
     def test_classify_agent_error_high_fail_rate(self):
         """Agent with >50% failure rate is error."""
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import classify_agent
-
         agent = {
             "total_runs": 4,
             "completed": 1,
@@ -231,15 +242,10 @@ class TestCronHealthCheck:
             "timeouts": 0,
             "last_success_at": "2026-03-04",
         }
-        assert classify_agent(agent) == "error"
+        assert self.chc.classify_agent(agent) == "error"
 
     def test_classify_agent_stale_no_runs(self):
         """Agent with 0 runs is stale."""
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import classify_agent
-
         agent = {
             "total_runs": 0,
             "completed": 0,
@@ -247,15 +253,10 @@ class TestCronHealthCheck:
             "timeouts": 0,
             "last_success_at": None,
         }
-        assert classify_agent(agent) == "stale"
+        assert self.chc.classify_agent(agent) == "stale"
 
     def test_classify_agent_no_success_but_no_failures(self):
         """Agent with runs but no successes AND no failures is healthy (still running)."""
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import classify_agent
-
         agent = {
             "total_runs": 2,
             "completed": 0,
@@ -263,37 +264,22 @@ class TestCronHealthCheck:
             "timeouts": 0,
             "last_success_at": None,
         }
-        assert classify_agent(agent) == "healthy"
+        assert self.chc.classify_agent(agent) == "healthy"
 
     def test_format_duration(self):
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import format_duration
-
-        assert format_duration(None) == "—"
-        assert format_duration(0) == "—"
-        assert format_duration(500) == "500ms"
-        assert format_duration(5000) == "5s"
+        assert self.chc.format_duration(None) == "—"
+        assert self.chc.format_duration(0) == "—"
+        assert self.chc.format_duration(500) == "500ms"
+        assert self.chc.format_duration(5000) == "5s"
 
     def test_format_cost(self):
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import format_cost
-
-        assert format_cost(None) == "$0"
-        assert format_cost(0) == "$0"
-        assert format_cost(0.005) == "$0.0050"
-        assert format_cost(1.23) == "$1.23"
+        assert self.chc.format_cost(None) == "$0"
+        assert self.chc.format_cost(0) == "$0"
+        assert self.chc.format_cost(0.005) == "$0.0050"
+        assert self.chc.format_cost(1.23) == "$1.23"
 
     def test_write_status_creates_file(self, tmp_path):
         """write_status creates a markdown file."""
-        import sys
-
-        sys.path.insert(0, "/home/philip/robothor/brain/scripts")
-        from cron_health_check import write_status
-
         output = tmp_path / "status.md"
         agents = [
             {
@@ -317,7 +303,7 @@ class TestCronHealthCheck:
             "avg_duration_ms": 150,
         }
         tools = {"slowest": [], "failing": []}
-        write_status(agents, fleet, tools, output_path=output)
+        self.chc.write_status(agents, fleet, tools, output_path=output)
         content = output.read_text()
         assert "# Cron Health Status" in content
         assert "test-agent" in content

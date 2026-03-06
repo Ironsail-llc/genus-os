@@ -245,7 +245,24 @@ optional:
       default: []
       description: >
         Named policies: no_destructive_writes, no_external_http,
-        no_sensitive_data, rate_limit, no_main_branch_push
+        no_sensitive_data, rate_limit, no_main_branch_push,
+        exec_allowlist, write_path_restrict
+    exec_allowlist:
+      type: list[string]
+      default: []
+      description: >
+        Regex patterns for allowed exec/shell commands. Requires
+        exec_allowlist in guardrails list. If empty, no restriction
+        (backward compat). Commands not matching any pattern are blocked.
+      example: ["^gog gmail thread (get|list)", "^gog gmail send --reply"]
+    write_path_allowlist:
+      type: list[string]
+      default: []
+      description: >
+        Glob patterns for allowed write_file paths (workspace-relative).
+        Requires write_path_restrict in guardrails list. If empty, no
+        restriction. Writes not matching any pattern are blocked.
+      example: ["brain/memory/email-classifier-status.md", "brain/memory/triage-*"]
     checkpoint_enabled:
       type: boolean
       default: false

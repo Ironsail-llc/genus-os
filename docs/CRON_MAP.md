@@ -5,8 +5,12 @@ All times in America/New_York (ET).
 ## Timeline
 
 ```
+Every 2 min    │ Engine watchdog (systemd timer) — brain/scripts/engine_watchdog.py
+               │   HTTP health check → direct Telegram alert + restart on 2 failures
+
 Every 5 min    │ Calendar sync (crontab) — brain/scripts/calendar_sync.py
                │ Email sync (crontab) — brain/scripts/email_sync.py
+               │ Bridge watchdog (systemd timer) — brain/scripts/bridge_watchdog.py
 
 Every 10 min   │ Continuous ingestion (crontab, Tier 1) — brain/memory_system/continuous_ingest.py
                │ Meet transcript sync (crontab) — brain/scripts/meet_transcript_sync.py
@@ -31,6 +35,9 @@ Hourly         │ Email Classifier (Engine, 2h safety net 6-22, silent, primary
 
 03:00 AM       │ Memory maintenance (crontab) — brain/memory_system/maintenance.sh
                │   TTL expiry, archival, stats
+03:00 AM       │ Nightwatch Heal (crontab) — brain/scripts/nightwatch-heal.py
+               │   Fixes tracked failures via Claude Code in git worktrees
+               │   Creates draft PRs for review (max 3/night)
 
 03:15 AM       │ CRM consistency (crontab) — brain/scripts/crm_consistency.py
                │   Cross-system contact/entity checks
@@ -61,6 +68,14 @@ Every 2h 8-20  │ Email Responder (Engine, silent) — compose and send replies
 10:00          │ CRM Steward (Engine, daily) — data hygiene + contact enrichment via sub-agents
 
 21:00          │ Evening Wind-Down (Engine) — tomorrow preview, open items → Telegram
+
+Sunday 01:00   │ Nightwatch Research (crontab) — brain/scripts/nightwatch-research.py
+               │   Competitive analysis of agent frameworks via Claude Code + web search
+               │   Creates feature tasks tagged nightwatch+feature
+
+Monday 03:00   │ Nightwatch Build (crontab) — brain/scripts/nightwatch-build.py
+               │   Implements features from research via Claude Code in git worktrees
+               │   Creates draft PRs for review
 
 Sunday 04:00   │ Data archival (crontab) — brain/scripts/data_archival.py
 
@@ -139,6 +154,15 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 # Supervisor Relay - meeting alerts + stale/CRM checks (6-23 ET)
 */10 6-23 * * * cd /home/philip/robothor/brain && /home/philip/robothor/brain/memory_system/venv/bin/python scripts/supervisor_relay.py >> memory_system/logs/supervisor-relay.log 2>&1
 
+# Nightwatch Self-Healing - fix bugs nightly at 3 AM
+0 3 * * * /home/philip/robothor/brain/scripts/nightwatch-cron.sh nightwatch-heal.py
+
+# Nightwatch Research - competitive analysis weekly (Sunday 1 AM)
+0 1 * * 0 /home/philip/robothor/brain/scripts/nightwatch-cron.sh nightwatch-research.py
+
+# Nightwatch Build - implement features weekly (Monday 3 AM)
+0 3 * * 1 /home/philip/robothor/brain/scripts/nightwatch-cron.sh nightwatch-build.py
+
 # Email Analysis Cleanup - clear stale analysis before enrichment (hourly :20)
 20 * * * * /home/philip/robothor/brain/memory_system/venv/bin/python3 -c "import json,os; p=os.path.expanduser('~/robothor/brain/memory/response-analysis.json'); open(p,'w').write(json.dumps({'analyses':{}}))" 2>/dev/null
 ```
@@ -158,8 +182,8 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | crm-steward | `0 10 * * *` | Kimi K2.5 | none (silent) | cron |
 | morning-briefing | `30 6 * * *` | Kimi K2.5 | announce → Telegram | cron |
 | evening-winddown | `0 21 * * *` | Kimi K2.5 | announce → Telegram | cron |
-| failure-analyzer | `0 */2 * * *` | Kimi K2.5 | none (silent) | cron |
-| improvement-analyst | `0 2 * * *` | Kimi K2.5 | none (silent) | cron (via nightwatch workflow) |
+| failure-analyzer | `0 */2 * * *` | Sonnet 4.6 | none (silent) | cron |
+| improvement-analyst | `0 2 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
 | overnight-pr | `0 3 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
 
 ## Engine Workflow Crons (APScheduler from `docs/workflows/*.yaml`)
@@ -174,7 +198,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ## Notes
 
-- All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical).
+- All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical) and all Nightwatch agents (**Sonnet 4.6**).
 - Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
 - Main heartbeat runs hourly and reads all worker status files. Always sends a report — never silent.
 - Workers write status files and stop silently.
@@ -190,4 +214,4 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ---
 
-**Updated:** 2026-03-04
+**Updated:** 2026-03-05

@@ -526,9 +526,9 @@ describe("Mobile UX — ServiceHealth", () => {
     render(
       <ServiceHealth
         services={[
-          { name: "Engine", status: "healthy", responseTime: 45 },
-          { name: "Bridge", status: "healthy", responseTime: 120 },
-          { name: "Vision", status: "unhealthy" },
+          { name: "Engine", url: "http://localhost:18800/health", status: "healthy", responseTime: 45 },
+          { name: "Bridge", url: "http://localhost:9100/health", status: "healthy", responseTime: 120 },
+          { name: "Vision", url: "http://localhost:8600/health", status: "unhealthy" },
         ]}
         overallStatus="ok"
       />

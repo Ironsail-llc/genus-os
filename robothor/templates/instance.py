@@ -64,7 +64,7 @@ class InstanceConfig:
         """Load installed.yaml agents section."""
         if self.installed_path.exists():
             data = yaml.safe_load(self.installed_path.read_text()) or {}
-            return data.get("agents", {})
+            return dict(data.get("agents", {}))
         return {}
 
     def _save_installed(self, agents: dict) -> None:
@@ -99,10 +99,10 @@ class InstanceConfig:
         }
         self._save_installed(agents)
 
-    def record_remove(self, agent_id: str) -> dict | None:
+    def record_remove(self, agent_id: str) -> dict | None:  # type: ignore[type-arg]
         """Remove an agent from installed.yaml. Returns the removed record or None."""
         agents = self.installed_agents
-        record = agents.pop(agent_id, None)
+        record: dict | None = agents.pop(agent_id, None)  # type: ignore[type-arg]
         if record is not None:
             self._save_installed(agents)
         return record
@@ -136,7 +136,7 @@ class InstanceConfig:
         default_model: str = "openrouter/moonshotai/kimi-k2.5",
         quality_model: str = "openrouter/anthropic/claude-sonnet-4.6",
         owner_name: str = "",
-        hub_org: str = "programmatic-resources",
+        hub_org: str = "programmaticresources",
     ) -> dict:
         """Initialize a fresh config.yaml with defaults."""
         config = {

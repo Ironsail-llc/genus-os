@@ -112,6 +112,26 @@ Agents with `v2.can_spawn_agents: true` can delegate focused sub-tasks using `sp
 
 ---
 
+## Nightwatch — Self-Healing + Self-Improving
+
+Nightwatch uses Claude Code CLI in isolated git worktrees for code changes. Three scripts, all in `brain/scripts/`:
+
+| Script | Schedule | What it does |
+|--------|----------|--------------|
+| `nightwatch-heal.py` | Daily 3 AM | Picks up failure tasks (tagged `nightwatch`+`self-improve`), fixes them via Claude Code, creates draft PRs |
+| `nightwatch-research.py` | Sunday 1 AM | Researches competitor frameworks via Claude Code + web search, creates feature tasks |
+| `nightwatch-build.py` | Monday 3 AM | Implements feature tasks (tagged `nightwatch`+`feature`) via Claude Code, creates draft PRs |
+
+**Shared lib:** `nightwatch_lib.py` — worktree management, Claude Code invocation, CRM/memory helpers.
+**Cron wrapper:** `nightwatch-cron.sh` — sources secrets, runs scripts.
+**Model:** All nightwatch Claude Code invocations use Sonnet 4.6.
+
+**Safety:** All work in `/tmp/nightwatch-*/` worktrees (main tree untouched). Budget caps per task ($0.75 heal, $1.00 research, $1.50 feature). Always draft PRs. Auto-pause after 3 consecutive rejections. Scope gated on merge rate.
+
+**Flow:** Failure Analyzer + Improvement Analyst (engine agents, Sonnet 4.6) create tasks → nightwatch scripts pick them up → Claude Code in worktrees → draft PRs → Philip reviews.
+
+---
+
 ## When NOT to Escalate
 
 Before creating any escalation task (assignedToAgent="main", tags=["needs-philip"]), check these rules. If ANY match, do NOT escalate:

@@ -1,7 +1,7 @@
 id: crm-steward
 name: CRM Steward
 description: CRM data hygiene, duplicate merge, and contact enrichment
-version: "2026-02-24"
+version: "2026-03-06"
 department: crm
 
 reports_to: main
@@ -19,8 +19,8 @@ model:
 schedule:
   cron: "0 10 * * *"
   timezone: America/New_York
-  timeout_seconds: 600
-  max_iterations: 10
+  timeout_seconds: 480
+  max_iterations: 8
   session_target: isolated
 
 delivery:
@@ -96,8 +96,14 @@ tags_consumed: [crm-hygiene]
 
 v2:
   error_feedback: true
+  guardrails:
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/crm-steward-status.md"
 
 changelog:
+  - date: "2026-03-06"
+    change: "Reduce timeout 600s→480s, reduce max_iterations 10→8 — 33% timeout rate (2/6 runs), 3x fleet avg duration. Nightwatch self-heal."
   - date: "2026-02-28"
     change: "CRITICAL FIX: Add exec, read_file, write_file, search_memory, get_entity — agent couldn't read/write files. Delivery→none."
   - date: "2026-02-24"

@@ -4,9 +4,8 @@
 title = "Robothor gitleaks config"
 
 [allowlist]
-  # Allow paths that are not code (daily notes, SQL backups, etc.)
+  # Allow paths that are not code (SQL backups, example env files)
   paths = [
-    '''memory/\d{4}-\d{2}-\d{2}\.md''',
     '''backup_\d+\.sql''',
     '''\.env\.example$''',
   ]

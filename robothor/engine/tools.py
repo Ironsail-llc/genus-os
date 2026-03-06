@@ -1182,11 +1182,15 @@ async def _handle_async_tool(
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
+                # Strip HTML comments (potential injection vector)
+                import re as _re
+
+                cleaned = _re.sub(r"<!--.*?-->", "", resp.text, flags=_re.DOTALL)
                 h = html2text.HTML2Text()
                 h.ignore_links = False
                 h.body_width = 0
-                text = h.handle(resp.text)
-                return {"content": text[:20000], "url": str(resp.url), "status": resp.status_code}
+                text = h.handle(cleaned)
+                return {"content": text[:8000], "url": str(resp.url), "status": resp.status_code}
         except ImportError:
             return {"error": "html2text not installed"}
         except Exception as e:
@@ -1475,6 +1479,7 @@ def _handle_sync_tool(
             priority=args.get("priority", "normal"),
             tags=args.get("tags"),
             parent_task_id=args.get("parentTaskId"),
+            requires_human=args.get("requiresHuman", False),
             tenant_id=tenant_id,
         )
         return (
@@ -1499,6 +1504,7 @@ def _handle_sync_tool(
             priority=args.get("priority"),
             tags=args.get("tags"),
             exclude_resolved=args.get("excludeResolved", False),
+            requires_human=args.get("requiresHuman"),
             limit=args.get("limit", 50),
             tenant_id=tenant_id,
         )
@@ -1519,6 +1525,7 @@ def _handle_sync_tool(
             "priority": "priority",
             "tags": "tags",
             "resolution": "resolution",
+            "requiresHuman": "requires_human",
         }
         kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
         return {"success": update_task(tid, tenant_id=tenant_id, **kwargs), "id": tid}

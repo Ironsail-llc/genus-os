@@ -333,7 +333,8 @@ def load_plan_state(
         )
         row = cur.fetchone()
         if row and row["plan_state"]:
-            return row["plan_state"]
+            result: dict[str, Any] = row["plan_state"]
+            return result
         return None
 
 

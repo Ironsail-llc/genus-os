@@ -151,6 +151,7 @@ heartbeat:
     - brain/memory/calendar-monitor-status.md
     - brain/memory/vision-monitor-status.md
     - brain/memory/crm-steward-status.md
+    - brain/memory/conversation-inbox-status.md
     - brain/memory/garmin-health.md
   peer_agents: [email-classifier, email-responder, calendar-monitor]
   bootstrap_files: [brain/AGENTS.md, brain/TOOLS.md]

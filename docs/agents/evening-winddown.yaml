@@ -79,6 +79,10 @@ tags_consumed: []
 
 v2:
   error_feedback: true
+  guardrails:
+    - exec_allowlist
+  exec_allowlist:
+    - "^gog calendar events"
 
 changelog:
   - date: "2026-03-03"

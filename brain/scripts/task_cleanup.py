@@ -127,6 +127,7 @@ def reset_stuck_in_progress(conn) -> int:
           AND tenant_id = %s
           AND status = 'IN_PROGRESS'
           AND updated_at < %s
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff),
     )
@@ -152,6 +153,7 @@ def resolve_orphan_todos(conn) -> int:
           AND status = 'TODO'
           AND assigned_to_agent IS NULL
           AND created_at < %s
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff),
     )
@@ -189,6 +191,7 @@ def resolve_stale_escalations(conn) -> int:
           AND status IN ('TODO', 'IN_PROGRESS')
           AND 'needs-philip' = ANY(tags)
           AND created_at < %s
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff_72h),
     )
@@ -211,6 +214,7 @@ def resolve_stale_escalations(conn) -> int:
           AND status IN ('TODO', 'IN_PROGRESS')
           AND title LIKE '[ESCALATION]%%'
           AND created_at < %s
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff_48h),
     )
@@ -233,6 +237,7 @@ def resolve_stale_escalations(conn) -> int:
           AND status IN ('TODO', 'IN_PROGRESS')
           AND ('vision' = ANY(tags) OR 'unknown-person' = ANY(tags))
           AND created_at < %s
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff_6h),
     )
@@ -259,6 +264,7 @@ def resolve_stale_escalations(conn) -> int:
             OR title ILIKE '%%cannot read%%'
             OR title ILIKE '%%agent: missing%%'
           )
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID,),
     )
@@ -316,6 +322,7 @@ def resolve_stale_responder_tasks(conn) -> int:
             OR title ILIKE '%%noreply%%'
             OR title ILIKE '%%do not reply%%'
           )
+          AND (requires_human IS NOT TRUE)
         """,
         (TENANT_ID, cutoff),
     )

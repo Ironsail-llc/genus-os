@@ -55,6 +55,8 @@ class GuardrailEngine:
     """Runs pre/post execution checks based on enabled policies."""
 
     enabled_policies: list[str] = field(default_factory=list)
+    _exec_allowlists: dict[str, list[re.Pattern]] = field(default_factory=dict)  # type: ignore[type-arg]
+    _write_allowlists: dict[str, list[str]] = field(default_factory=dict)
     _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
 
     def check_pre_execution(
@@ -98,6 +100,10 @@ class GuardrailEngine:
             return self._check_no_main_branch(tool_name, tool_args)
         if policy == "rate_limit":
             return self._check_rate_limit(agent_id)
+        if policy == "exec_allowlist":
+            return self._check_exec_allowlist(tool_name, tool_args, agent_id)
+        if policy == "write_path_restrict":
+            return self._check_write_path(tool_name, tool_args, agent_id)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -195,6 +201,48 @@ class GuardrailEngine:
                     )
 
         return GuardrailResult()
+
+    def _check_exec_allowlist(
+        self, tool_name: str, tool_args: dict[str, Any], agent_id: str
+    ) -> GuardrailResult:
+        """Block exec/shell commands not matching the agent's allowlist patterns."""
+        if tool_name not in ("exec", "shell"):
+            return GuardrailResult()
+        patterns = self._exec_allowlists.get(agent_id, [])
+        if not patterns:  # No allowlist configured = no restriction (backward compat)
+            return GuardrailResult()
+        command = str(tool_args.get("command", ""))
+        for pattern in patterns:
+            if pattern.search(command):
+                return GuardrailResult()
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=f"exec command not in allowlist: {command[:100]}",
+            guardrail_name="exec_allowlist",
+        )
+
+    def _check_write_path(
+        self, tool_name: str, tool_args: dict[str, Any], agent_id: str
+    ) -> GuardrailResult:
+        """Block write_file to paths not matching the agent's allowlist globs."""
+        if tool_name != "write_file":
+            return GuardrailResult()
+        patterns = self._write_allowlists.get(agent_id, [])
+        if not patterns:  # No allowlist = no restriction
+            return GuardrailResult()
+        path = str(tool_args.get("path", ""))
+        from fnmatch import fnmatch
+
+        for pattern in patterns:
+            if fnmatch(path, pattern):
+                return GuardrailResult()
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=f"write_file path not allowed: {path}",
+            guardrail_name="write_path_restrict",
+        )
 
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
         """Warn if tool output contains sensitive data patterns."""

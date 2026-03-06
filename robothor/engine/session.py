@@ -20,6 +20,19 @@ from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, Trigg
 logger = logging.getLogger(__name__)
 
 
+# Tools whose output contains untrusted external content — tagged for defense in depth
+EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
+    {
+        "web_fetch",
+        "web_search",
+        "search_memory",
+        "get_entity",
+        "get_conversation",
+        "list_messages",
+    }
+)
+
+
 class AgentSession:
     """Per-run state manager for an agent execution."""
 
@@ -141,11 +154,17 @@ class AgentSession:
         # Append tool result to conversation
         import json
 
+        content = json.dumps(tool_output, default=str)
+
+        # Wrap untrusted external data with tags so the LLM sees a boundary
+        if tool_name in EXTERNAL_DATA_TOOLS:
+            content = f'<untrusted_content source="{tool_name}">\n{content}\n</untrusted_content>'
+
         self.messages.append(
             {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
-                "content": json.dumps(tool_output, default=str),
+                "content": content,
             }
         )
 

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
 import sys
 
 from robothor.engine.config import EngineConfig
@@ -25,6 +27,29 @@ from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _sd_notify(state: str) -> None:
+    """Send a notification to systemd via $NOTIFY_SOCKET (sd_notify protocol).
+
+    No-ops silently if NOTIFY_SOCKET is not set or the socket is unreachable.
+    Uses stdlib only — no external dependencies.
+    """
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    try:
+        # Abstract socket (starts with @) or filesystem path
+        if addr.startswith("@"):
+            addr = "\0" + addr[1:]
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.sendto(state.encode(), addr)
+        finally:
+            sock.close()
+    except Exception:
+        # Best-effort — never crash the daemon for a notification failure
+        pass
 
 
 def _cleanup_stale_runs() -> int:
@@ -112,6 +137,7 @@ async def main() -> None:
     ]
 
     logger.info("All subsystems started")
+    _sd_notify("READY=1")
 
     # Startup announcement (best-effort)
     try:
@@ -174,14 +200,15 @@ async def main() -> None:
 
 
 async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
-    """Subsystem watchdog — pings PostgreSQL and Redis every 60s, cleans stale chat sessions daily."""
+    """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
 
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         tick_count += 1
+        _sd_notify("WATCHDOG=1")
 
         # Ping PostgreSQL
         try:
@@ -215,8 +242,8 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
 
-        # Schedule reconciliation (every 5 ticks = 5 minutes)
-        if tick_count % 5 == 0:
+        # Schedule reconciliation (every 10 ticks = 5 minutes)
+        if tick_count % 10 == 0:
             try:
                 loop = asyncio.get_running_loop()
                 pruned = await loop.run_in_executor(None, scheduler.reconcile_schedules)
@@ -225,8 +252,8 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.warning("Watchdog: schedule reconciliation failed: %s", e)
 
-        # Zombie run reaper (every 20 ticks = 20 minutes)
-        if tick_count % 20 == 0:
+        # Zombie run reaper (every 40 ticks = 20 minutes)
+        if tick_count % 40 == 0:
             try:
                 loop = asyncio.get_running_loop()
                 reaped = await loop.run_in_executor(None, _cleanup_stale_runs)
@@ -235,8 +262,8 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.warning("Watchdog: zombie reaper failed: %s", e)
 
-        # Daily chat session TTL cleanup (every 1440 ticks = 24h)
-        if tick_count % 1440 == 0:
+        # Daily chat session TTL cleanup (every 2880 ticks = 24h)
+        if tick_count % 2880 == 0:
             try:
                 from robothor.engine.chat_store import cleanup_stale_sessions
 

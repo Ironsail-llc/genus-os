@@ -13,11 +13,11 @@ tags_produced: [nightwatch, self-improve]
 tags_consumed: []
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: openrouter/anthropic/claude-sonnet-4.6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/moonshotai/kimi-k2.5
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: sonnet
 
 schedule:
   cron: "0 2 * * *"
@@ -78,7 +78,12 @@ v2:
   cost_budget_usd: 0.50
   guardrails:
     - no_destructive_writes
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/improvement-analyst-status.md"
 
 changelog:
+  - date: "2026-03-05"
+    change: "Switched model to Sonnet 4.6 — all Nightwatch agents use Sonnet"
   - date: "2026-03-04"
     change: "Initial creation — Nightwatch Tier 2 improvement analysis"

@@ -496,6 +496,11 @@ def get_tool_definitions() -> list[dict]:
                         "type": "string",
                         "description": "Parent task UUID for subtask chains",
                     },
+                    "requiresHuman": {
+                        "type": "boolean",
+                        "description": "If true, no automated process can resolve this task — only Philip/Helm can",
+                        "default": False,
+                    },
                 },
                 "required": ["title"],
             },
@@ -529,6 +534,10 @@ def get_tool_definitions() -> list[dict]:
                         "description": "Filter by tags (containment)",
                     },
                     "excludeResolved": {"type": "boolean", "description": "Exclude resolved tasks"},
+                    "requiresHuman": {
+                        "type": "boolean",
+                        "description": "Filter by requires_human flag (true/false)",
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 50)",
@@ -558,6 +567,10 @@ def get_tool_definitions() -> list[dict]:
                         "description": "New tags",
                     },
                     "resolution": {"type": "string", "description": "Resolution summary"},
+                    "requiresHuman": {
+                        "type": "boolean",
+                        "description": "If true, no automated process can resolve this task",
+                    },
                 },
                 "required": ["id"],
             },
@@ -1461,6 +1474,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             priority=arguments.get("priority", "normal"),
             tags=arguments.get("tags"),
             parent_task_id=arguments.get("parentTaskId"),
+            requires_human=arguments.get("requiresHuman", False),
         )
         return (
             {"id": task_id, "title": arguments.get("title", "")}
@@ -1484,6 +1498,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             priority=arguments.get("priority"),
             tags=arguments.get("tags"),
             exclude_resolved=arguments.get("excludeResolved", False),
+            requires_human=arguments.get("requiresHuman"),
             limit=arguments.get("limit", 50),
         )
         return {"tasks": results, "count": len(results)}
@@ -1503,6 +1518,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             "priority": "priority",
             "tags": "tags",
             "resolution": "resolution",
+            "requiresHuman": "requires_human",
         }
         kwargs = {
             dal_key: arguments[arg_key]

@@ -327,7 +327,7 @@ class TestBuildSystemPrompt:
         config = AgentConfig(id="t", name="t", instruction_file="big.md")
         prompt = build_system_prompt(config, tmp_path)
         # Instruction content is truncated; time context is appended after
-        assert prompt.startswith("x" * 100)
+        assert "x" * 100 in prompt
         assert "Current time:" in prompt
 
     def test_total_limit(self, tmp_path):

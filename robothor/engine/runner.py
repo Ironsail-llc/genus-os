@@ -1368,9 +1368,18 @@ class AgentRunner:
         if not agent_config.guardrails:
             return None
         try:
+            import re as _re
+
             from robothor.engine.guardrails import GuardrailEngine
 
-            return GuardrailEngine(enabled_policies=agent_config.guardrails)
+            engine = GuardrailEngine(enabled_policies=agent_config.guardrails)
+            if agent_config.exec_allowlist:
+                engine._exec_allowlists[agent_config.id] = [
+                    _re.compile(p) for p in agent_config.exec_allowlist
+                ]
+            if agent_config.write_path_allowlist:
+                engine._write_allowlists[agent_config.id] = agent_config.write_path_allowlist
+            return engine
         except Exception:
             return None
 
@@ -1493,6 +1502,7 @@ class AgentRunner:
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
+                    "timeout": 120,
                 }
                 if tools:
                     kwargs["tools"] = tools
@@ -1557,6 +1567,7 @@ class AgentRunner:
                     "temperature": temperature,
                     "max_tokens": get_output_tokens(model, input_est),
                     "stream": True,
+                    "timeout": 120,
                 }
                 if tools:
                     kwargs["tools"] = tools

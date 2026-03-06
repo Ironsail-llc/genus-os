@@ -28,7 +28,7 @@ vi.mock("@/hooks/use-tasks", () => ({
 vi.mock("@/hooks/use-agents", () => ({
   useAgents: () => ({
     agents: [],
-    summary: { healthy: 0, degraded: 0, failed: 0, total: 0 },
+    summary: { healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 },
     isLoading: false,
     refetch: vi.fn(),
   }),

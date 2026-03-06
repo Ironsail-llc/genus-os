@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 ENV_VAR_RE = re.compile(r"\$\{[A-Z_][A-Z0-9_]*\}")
 
 # Built-in filters
-FILTERS: dict[str, callable] = {
+FILTERS: dict[str, Callable[..., str]] = {
     "upper": lambda v: str(v).upper(),
     "lower": lambda v: str(v).lower(),
     "title_case": lambda v: str(v).replace("-", " ").title(),

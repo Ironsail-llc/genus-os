@@ -81,6 +81,10 @@ tags_consumed: []
 
 v2:
   error_feedback: true
+  guardrails:
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/conversation-inbox-status.md"
 
 changelog:
   - date: "2026-02-24"

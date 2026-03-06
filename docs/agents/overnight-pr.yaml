@@ -5,7 +5,7 @@ version: "2026-03-04"
 department: operations
 
 reports_to: main
-creates_tasks_for: []
+creates_tasks_for: [main]
 receives_tasks_from: [failure-analyzer, improvement-analyst]
 escalates_to: main
 
@@ -88,7 +88,29 @@ v2:
   guardrails:
     - no_main_branch_push
     - no_destructive_writes
+    - exec_allowlist
+    - write_path_restrict
+  exec_allowlist:
+    - "^git "
+    - "^python -m pytest"
+    - "^python scripts/validate"
+  write_path_allowlist:
+    - "docs/agents/*"
+    - "brain/agents/*"
+    - "robothor/*"
+    - "brain/memory/overnight-pr-status.md"
+
+execution:
+  mode: external
+  runner: brain/scripts/nightwatch-heal.py
+  note: >
+    Overnight PR is now executed via Claude Code CLI in isolated git worktrees
+    instead of through the engine agent loop. The engine manifest is retained
+    for scheduling metadata and fleet documentation. The cron entry
+    (brain/scripts/nightwatch-cron.sh nightwatch-heal.py) is the actual trigger.
 
 changelog:
+  - date: "2026-03-05"
+    change: "Migrated to Claude Code CLI in worktrees — external execution via nightwatch-heal.py"
   - date: "2026-03-04"
     change: "Initial creation — Nightwatch Tier 2 overnight PR system"

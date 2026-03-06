@@ -313,7 +313,7 @@ def import_agent(
     manifest = yaml.safe_load(manifest_path.read_text()) or {}
 
     # Load defaults for comparison
-    defaults = {}
+    defaults: dict[str, Any] = {}
     if defaults_path is None:
         defaults_path = _find_defaults_path(repo_root)
     if defaults_path:
@@ -323,11 +323,12 @@ def import_agent(
 
     # Determine output directory
     department = manifest.get("department", "custom")
+    out_path: Path
     if output_dir is None:
-        output_dir = repo_root / "templates" / "agents" / department / agent_id
+        out_path = repo_root / "templates" / "agents" / department / agent_id
     else:
-        output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
 
     # Identify instance-specific variables (deviations from defaults)
     variables = {}
@@ -431,14 +432,14 @@ def import_agent(
         )
 
     # Write manifest.template.yaml
-    (output_dir / "manifest.template.yaml").write_text(template_content)
+    (out_path / "manifest.template.yaml").write_text(template_content)
 
     # Copy instruction file as template
     instr_file = manifest.get("instruction_file")
     if instr_file:
         instr_path = repo_root / instr_file
         if instr_path.exists():
-            (output_dir / "instructions.template.md").write_text(instr_path.read_text())
+            (out_path / "instructions.template.md").write_text(instr_path.read_text())
 
     # Generate setup.yaml
     setup = {
@@ -447,7 +448,7 @@ def import_agent(
         "instruction_file_path": instr_file or "",
         "variables": variables,
     }
-    (output_dir / "setup.yaml").write_text(
+    (out_path / "setup.yaml").write_text(
         yaml.dump(setup, default_flow_style=False, sort_keys=False)
     )
 
@@ -471,7 +472,7 @@ department: {department}
         if isinstance(var_def, dict):
             skill_content += f"- **{var_name}**: {var_def.get('description', '')} (default: `{var_def.get('default', '')}`)\n"
 
-    (output_dir / "SKILL.md").write_text(skill_content)
+    (out_path / "SKILL.md").write_text(skill_content)
 
     # Generate programmatic.json
     import json
@@ -485,14 +486,14 @@ department: {department}
         "description": manifest.get("description", ""),
         "tags": manifest.get("tags_produced", []),
     }
-    (output_dir / "programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
+    (out_path / "programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
 
     # Register in installed.yaml
     instance = InstanceConfig.load()
     instance.record_install(
         agent_id=agent_id,
         source="local",
-        source_path=str(output_dir),
+        source_path=str(out_path),
         version=manifest.get("version", "0.0.0"),
         variables={
             k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
@@ -503,13 +504,13 @@ department: {department}
 
     return {
         "agent_id": agent_id,
-        "output_dir": str(output_dir),
+        "output_dir": str(out_path),
         "files": [
-            str(output_dir / "manifest.template.yaml"),
-            str(output_dir / "instructions.template.md"),
-            str(output_dir / "setup.yaml"),
-            str(output_dir / "SKILL.md"),
-            str(output_dir / "programmatic.json"),
+            str(out_path / "manifest.template.yaml"),
+            str(out_path / "instructions.template.md"),
+            str(out_path / "setup.yaml"),
+            str(out_path / "SKILL.md"),
+            str(out_path / "programmatic.json"),
         ],
         "variables": variables,
     }

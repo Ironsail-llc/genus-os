@@ -44,10 +44,10 @@ def _get_manifest_path() -> str:
         from robothor.config import get_config
 
         ws = get_config().workspace
-        path = ws / "agent_capabilities.json"
-        if not path.exists():
-            path = ws / "brain" / "agent_capabilities.json"
-        return str(path)
+        p = ws / "agent_capabilities.json"
+        if not p.exists():
+            p = ws / "brain" / "agent_capabilities.json"
+        return str(p)
     except Exception:
         path = os.path.join(os.path.expanduser("~"), "robothor", "agent_capabilities.json")
         if not os.path.exists(path):

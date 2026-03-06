@@ -29,7 +29,7 @@ const mockAgents = [
   },
 ];
 
-const mockSummary = { healthy: 1, degraded: 1, failed: 1, total: 3 };
+const mockSummary = { healthy: 1, degraded: 1, failed: 1, sleeping: 0, total: 3 };
 
 describe("AgentStatus", () => {
   it("renders agent cards", () => {

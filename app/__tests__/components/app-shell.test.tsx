@@ -102,7 +102,7 @@ describe("AppShell", () => {
         { name: "classifier", status: "healthy", schedule: "0 * * * *" },
         { name: "vision", status: "failed", schedule: "*/10 * * * *" },
       ],
-      summary: { healthy: 1, degraded: 0, failed: 1, total: 2 },
+      summary: { healthy: 1, degraded: 0, failed: 1, sleeping: 0, total: 2 },
       isLoading: false,
       refetch: vi.fn(),
     });

@@ -59,7 +59,7 @@ class TestListDirectoryHandler:
     def _call(self, args: dict, workspace: str | None = None) -> dict:
         from robothor.engine.tools import _handle_sync_tool
 
-        return _handle_sync_tool("list_directory", args, workspace=workspace)
+        return _handle_sync_tool("list_directory", args, workspace=workspace or "")
 
     def test_basic_listing(self, tmp_path: Path):
         (tmp_path / "file1.txt").write_text("hello")

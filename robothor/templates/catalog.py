@@ -8,6 +8,7 @@ browsing, filtering, and preset resolution.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -55,12 +56,12 @@ class Catalog:
         return self._defaults
 
     @property
-    def departments(self) -> dict:
-        return self.catalog.get("departments", {})
+    def departments(self) -> dict[str, Any]:
+        return dict(self.catalog.get("departments", {}))
 
     @property
-    def presets(self) -> dict:
-        return self.catalog.get("presets", {})
+    def presets(self) -> dict[str, Any]:
+        return dict(self.catalog.get("presets", {}))
 
     def list_departments(self) -> list[dict]:
         """List all departments with their agents."""
@@ -105,14 +106,14 @@ class Catalog:
             agents = []
             for dept in self.departments.values():
                 agents.extend(dept.get("agents", []))
-        return agents
+        return list(agents)
 
     def get_department_agents(self, department_id: str) -> list[str]:
         """Get agent IDs for a department."""
         dept = self.departments.get(department_id)
         if not dept:
             return []
-        return dept.get("agents", [])
+        return list(dept.get("agents", []))
 
     def find_template(self, agent_id: str) -> Path | None:
         """Find a template bundle by agent ID.

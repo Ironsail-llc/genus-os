@@ -364,7 +364,7 @@ async def get_embeddings_batch_async(
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(f"{url}/api/embed", json=payload)
             resp.raise_for_status()
-            embeddings = resp.json()["embeddings"]
+            embeddings: list[list[float]] = resp.json()["embeddings"]
             if len(embeddings) == len(texts):
                 logger.info("batch embed: %d texts in one call", len(texts))
                 return embeddings

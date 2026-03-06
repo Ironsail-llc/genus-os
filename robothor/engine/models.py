@@ -190,6 +190,12 @@ class AgentConfig:
     planning_model: str = ""  # separate cheap model for planning
     scratchpad_enabled: bool = False
     guardrails: list[str] = field(default_factory=list)
+    exec_allowlist: list[str] = field(
+        default_factory=list
+    )  # regex patterns for allowed exec commands
+    write_path_allowlist: list[str] = field(
+        default_factory=list
+    )  # glob patterns for allowed write paths
     checkpoint_enabled: bool = False
     verification_enabled: bool = False
     verification_prompt: str = ""

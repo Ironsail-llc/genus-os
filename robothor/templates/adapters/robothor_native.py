@@ -23,7 +23,7 @@ class RobothorNativeAdapter(FormatAdapter):
     format_id = "robothor-native"
 
     def can_install(self, skill_md: dict) -> bool:
-        fmt = skill_md.get("format", "")
+        fmt = str(skill_md.get("format", ""))
         return fmt.startswith("robothor-native") or fmt == ""
 
     def generate_files(self, bundle_path: Path, variables: dict[str, Any]) -> dict[str, str]:

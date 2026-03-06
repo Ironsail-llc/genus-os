@@ -1,7 +1,7 @@
 id: email-classifier
 name: Email Classifier
 description: Classifies incoming emails, creates tasks, routes to analyst or responder
-version: "2026-02-24"
+version: "2026-03-05"
 department: email
 
 reports_to: main
@@ -20,7 +20,7 @@ schedule:
   cron: "0 6-22/2 * * *"
   timezone: America/New_York
   timeout_seconds: 600
-  max_iterations: 10
+  max_iterations: 7
   session_target: isolated
 
 delivery:
@@ -97,8 +97,21 @@ tags_consumed: []
 
 v2:
   error_feedback: true
+  guardrails:
+    - exec_allowlist
+    - write_path_restrict
+  exec_allowlist:
+    - "^gog gmail thread (get|modify)"
+    - "^gog gmail search"
+    - "^python3"
+  write_path_allowlist:
+    - "brain/memory/email-classifier-status.md"
+    - "brain/memory/triage-*"
+    - "brain/memory/email-log.json"
 
 changelog:
+  - date: "2026-03-05"
+    change: "Reduce max_iterations 10→7 — agent averages 214s (2× fleet avg) with 236 runs/week; tighter loop targets ~150s avg and saves ~$0.80/week [nightwatch]"
   - date: "2026-03-01"
     change: "Add triage.refreshed hook — classifier now fires on triage prep (not just email.new). Cron is 2h safety net."
   - date: "2026-02-28"

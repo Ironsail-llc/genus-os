@@ -103,6 +103,7 @@ def task_to_dict(row: dict) -> dict:
         "tenantId": row.get("tenant_id") or "robothor-primary",
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+        "requiresHuman": bool(row.get("requires_human", False)),
     }
 
 

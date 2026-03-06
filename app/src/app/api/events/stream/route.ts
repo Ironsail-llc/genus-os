@@ -13,7 +13,6 @@ import {
   readSince,
   isValidStream,
   type StreamName,
-  type EventEnvelope,
 } from "@/lib/event-bus/redis-client";
 
 export const runtime = "nodejs";
@@ -90,7 +89,7 @@ export async function GET(request: NextRequest) {
                 encoder.encode(`event: heartbeat\ndata: {"ts":"${new Date().toISOString()}"}\n\n`)
               );
             }
-          } catch (error) {
+          } catch {
             // Redis connection error — send error and close
             controller.enqueue(
               encoder.encode(

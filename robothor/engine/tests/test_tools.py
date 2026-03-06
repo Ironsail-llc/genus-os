@@ -227,6 +227,59 @@ class TestToolExecution:
         call_kwargs = mock_create.call_args
         assert call_kwargs[1]["created_by_agent"] == "email-classifier"
 
+    @pytest.mark.asyncio
+    async def test_create_task_passes_requires_human(self):
+        """create_task forwards requiresHuman to DAL."""
+        with patch("robothor.crm.dal.create_task") as mock_create:
+            mock_create.return_value = "task-uuid-456"
+            result = await _execute_tool(
+                "create_task",
+                {"title": "Needs Philip", "requiresHuman": True},
+                agent_id="email-classifier",
+                tenant_id="test-tenant",
+            )
+        assert result["id"] == "task-uuid-456"
+        assert mock_create.call_args[1]["requires_human"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_task_requires_human_defaults_false(self):
+        """create_task defaults requiresHuman to False."""
+        with patch("robothor.crm.dal.create_task") as mock_create:
+            mock_create.return_value = "task-uuid-789"
+            await _execute_tool(
+                "create_task",
+                {"title": "Normal task"},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_create.call_args[1]["requires_human"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_passes_requires_human_filter(self):
+        """list_tasks forwards requiresHuman filter to DAL."""
+        with patch("robothor.crm.dal.list_tasks") as mock_list:
+            mock_list.return_value = []
+            await _execute_tool(
+                "list_tasks",
+                {"requiresHuman": True},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_list.call_args[1]["requires_human"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_task_passes_requires_human(self):
+        """update_task forwards requiresHuman to DAL."""
+        with patch("robothor.crm.dal.update_task") as mock_update:
+            mock_update.return_value = True
+            await _execute_tool(
+                "update_task",
+                {"id": "task-123", "requiresHuman": True},
+                agent_id="test-agent",
+                tenant_id="test-tenant",
+            )
+        assert mock_update.call_args[1]["requires_human"] is True
+
 
 class TestObservabilityTools:
     @pytest.mark.asyncio

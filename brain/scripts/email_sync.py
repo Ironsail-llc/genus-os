@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import requests
@@ -26,9 +26,14 @@ import requests
 sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 import event_bus
 
-LOG_PATH = Path("/home/philip/robothor/brain/memory/email-log.json")
+MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
+LOG_PATH = MEMORY_DIR / "email-log.json"
+CALENDAR_LOG_PATH = MEMORY_DIR / "calendar-log.json"
+JIRA_LOG_PATH = MEMORY_DIR / "jira-log.json"
+TRIAGE_INBOX_PATH = MEMORY_DIR / "triage-inbox.json"
+HANDOFF_PATH = MEMORY_DIR / "worker-handoff.json"
 REPLY_COOLDOWN_SECONDS = 300  # 5 minutes
-LOCK_PATH = Path("/home/philip/robothor/brain/memory/.email-log.lock")
+LOCK_PATH = MEMORY_DIR / ".email-log.lock"
 GOG_PASSWORD = os.environ["GOG_KEYRING_PASSWORD"]
 ACCOUNT = "robothor@ironsail.ai"
 
@@ -355,6 +360,180 @@ def log_email_to_crm(entry: dict) -> bool:
         return False
 
 
+def _load_json(path: Path) -> dict:
+    """Load JSON file, returning empty dict on any error."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _get_pending_emails(email_log: dict) -> list[dict]:
+    """Extract uncategorized or follow-up-due emails from the email log."""
+    entries = email_log.get("entries", {})
+    now = datetime.now(timezone.utc).isoformat()
+    pending = []
+    for eid, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("from"):
+            continue
+        if not entry.get("categorizedAt"):
+            pending.append({
+                "source": "email",
+                "type": "new",
+                "id": eid,
+                "from": entry.get("from"),
+                "subject": entry.get("subject"),
+                "date": entry.get("date"),
+                "labels": entry.get("labels", []),
+                "snippet": entry.get("snippet"),
+                "messageCount": entry.get("messageCount", 1),
+            })
+        elif entry.get("pendingReviewAt") and not entry.get("reviewedAt"):
+            try:
+                if entry["pendingReviewAt"] <= now:
+                    pending.append({
+                        "source": "email",
+                        "type": "follow-up",
+                        "id": eid,
+                        "from": entry.get("from"),
+                        "subject": entry.get("subject"),
+                        "date": entry.get("date"),
+                        "pendingReviewAt": entry["pendingReviewAt"],
+                    })
+            except (TypeError, ValueError):
+                pass
+    return pending
+
+
+def _get_pending_calendar(calendar_data: dict) -> list[dict]:
+    """Extract calendar items needing review."""
+    from datetime import timedelta
+
+    pending = []
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=24)).isoformat()
+
+    for meeting in calendar_data.get("meetings", []):
+        if not meeting.get("categorizedAt"):
+            synced = meeting.get("fetchedAt", meeting.get("start", ""))
+            if synced and synced < cutoff:
+                continue
+            pending.append({
+                "source": "calendar",
+                "type": "meeting",
+                "id": meeting.get("id"),
+                "title": meeting.get("title"),
+                "start": meeting.get("start"),
+                "startLocal": meeting.get("startLocal"),
+                "end": meeting.get("end"),
+                "endLocal": meeting.get("endLocal"),
+                "attendees": meeting.get("attendees", []),
+            })
+
+    for change in calendar_data.get("changes", []):
+        if not change.get("reviewedAt"):
+            detected = change.get("timestamp", "")
+            if detected and detected < cutoff:
+                continue
+            if not change.get("start"):
+                continue
+            pending.append({
+                "source": "calendar",
+                "type": "change",
+                "id": change.get("eventId"),
+                "title": change.get("title"),
+                "changeType": change.get("type"),
+                "details": change.get("details"),
+                "start": change.get("start"),
+                "end": change.get("end"),
+                "detectedAt": change.get("timestamp"),
+            })
+            for meeting in calendar_data.get("meetings", []):
+                if meeting.get("id") == change.get("eventId"):
+                    pending[-1]["startLocal"] = meeting.get("startLocal")
+                    pending[-1]["endLocal"] = meeting.get("endLocal")
+                    pending[-1]["attendees"] = meeting.get("attendees", [])
+                    break
+
+    change_ids = {item["id"] for item in pending if item["type"] == "change"}
+    return [item for item in pending if not (item["type"] == "meeting" and item["id"] in change_ids)]
+
+
+def _get_pending_jira(jira_data: dict) -> list[dict]:
+    """Extract pending Jira actions."""
+    pending = []
+    for action in jira_data.get("pendingActions", []):
+        if not action.get("completedAt"):
+            pending.append({
+                "source": "jira",
+                "type": "pending-action",
+                "ticket": action.get("ticket"),
+                "action": action.get("action"),
+                "summary": action.get("summary"),
+            })
+    return pending
+
+
+def build_triage_inbox(email_log: dict | None = None) -> int:
+    """Build triage-inbox.json from email-log, calendar-log, and jira-log.
+
+    Called at the end of every email sync. Returns total item count.
+    """
+    if email_log is None:
+        email_log = load_log()
+
+    calendar_data = _load_json(CALENDAR_LOG_PATH)
+    jira_data = _load_json(JIRA_LOG_PATH)
+
+    emails = _get_pending_emails(email_log)
+    calendar = _get_pending_calendar(calendar_data)
+    jira = _get_pending_jira(jira_data)
+
+    all_items = emails + calendar + jira
+
+    # Filter out already-escalated items
+    handoff = _load_json(HANDOFF_PATH)
+    active_escalation_ids = [
+        esc["sourceId"]
+        for esc in handoff.get("escalations", [])
+        if esc.get("sourceId") and not esc.get("resolvedAt")
+    ]
+    escalated_set = set(active_escalation_ids)
+    all_items = [item for item in all_items if item.get("id") not in escalated_set]
+
+    filtered_emails = [i for i in all_items if i.get("source") == "email"]
+    filtered_calendar = [i for i in all_items if i.get("source") == "calendar"]
+    filtered_jira = [i for i in all_items if i.get("source") == "jira"]
+
+    inbox = {
+        "preparedAt": datetime.now(timezone.utc).isoformat(),
+        "counts": {
+            "emails": len(filtered_emails),
+            "calendar": len(filtered_calendar),
+            "jira": len(filtered_jira),
+            "total": len(all_items),
+        },
+        "items": all_items,
+        "activeEscalationIds": active_escalation_ids,
+    }
+
+    save_log(inbox, TRIAGE_INBOX_PATH)
+
+    # Publish event so email-classifier hook fires
+    if all_items:
+        event_bus.publish(
+            "email",
+            "triage.refreshed",
+            {"total": len(all_items), "emails": len(filtered_emails)},
+            source="email_sync",
+        )
+
+    return len(all_items)
+
+
 def main():
     print(f"[{datetime.now().isoformat()}] Email sync starting...")
 
@@ -465,6 +644,11 @@ def _run_sync():
     if validation_resets > 0:
         parts.append(f"{validation_resets} validation resets")
     print(f"[{datetime.now().isoformat()}] Done. {', '.join(parts)}.")
+
+    # Rebuild triage-inbox.json after every sync
+    triage_count = build_triage_inbox(log)
+    if triage_count > 0:
+        print(f"  Triage inbox: {triage_count} items")
 
 
 if __name__ == "__main__":
