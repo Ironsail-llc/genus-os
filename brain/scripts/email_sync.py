@@ -201,19 +201,21 @@ def reset_entry_for_reprocessing(entry: dict, reply_id: str):
 
 
 def validate_entries(log: dict) -> int:
-    """Reset entries that were categorized but have null from AND subject.
+    """Reset entries that were categorized but are incomplete.
 
-    This catches entries where the triage worker marked them as processed
-    without real content. Resetting forces re-processing on next worker run.
+    Catches two cases:
+    1. Entries with null from AND subject (no real content)
+    2. Entries with categorizedAt set but missing urgency (incomplete classification)
+
+    Resetting forces re-processing on next worker run.
 
     Returns count of entries reset.
     """
     reset_count = 0
     for eid, entry in log.get("entries", {}).items():
-        if (
-            entry.get("categorizedAt")
-            and entry.get("from") is None
-            and entry.get("subject") is None
+        if entry.get("categorizedAt") and (
+            (entry.get("from") is None and entry.get("subject") is None)
+            or entry.get("urgency") is None
         ):
             entry["categorizedAt"] = None
             entry["urgency"] = None

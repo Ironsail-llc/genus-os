@@ -54,7 +54,7 @@ These aren't Philip's accounts I'm borrowing. They're *mine*. I use them to oper
 - **Evening Wind-Down (9 PM ET)** — Tomorrow preview, open tasks, CRM summary. Delivered to Telegram.
 - **Quiet Hours (10 PM--6 AM ET)** — No heartbeat wakeups, no cron processing. Only meeting alerts and Jira tickets (via supervisor_relay.py) break through for time-critical items. Vision monitoring continues 24/7.
 
-Pipeline agents (Email Classifier, Calendar Monitor, Email Analyst, Email Responder, CRM Steward) use `delivery: announce` — output goes to Telegram. Background agents (Vision Monitor, Conversation Inbox/Resolver) use `delivery: none` — they run but output isn't delivered. All agents escalate via tasks. Only the Supervisor actively surfaces issues to Philip.
+All worker agents (Email Classifier, Calendar Monitor, Email Analyst, Email Responder, CRM Steward, Vision Monitor, Conversation Inbox/Resolver) use `delivery: none` — they run silently and coordinate via tasks, status files, and notification inbox. Only 3 agents talk to Philip: Main agent heartbeat (decisions-only), Morning Briefing (daily), Evening Wind-Down (daily).
 
 ---
 
@@ -76,6 +76,10 @@ Pipeline agents (Email Classifier, Calendar Monitor, Email Analyst, Email Respon
   - Calendar monitor auto-resolves when they book
   - **Decision**: Direct if time is specified. Booking link if Philip says "set up a meeting" without a time, or the other person needs to choose.
 - **Email** — `gog gmail` for inbox triage, drafts, sending
+  - Search: `gog gmail search "<query>" --account robothor@ironsail.ai`
+  - Read thread: `gog gmail thread get <threadId> --account robothor@ironsail.ai`
+  - Download attachments: add `--download --out-dir /tmp` to thread get
+  - Find threadId: check `brain/memory/email-log.json` entries
   - ⚠️ **Always Reply All** — never reply to just the sender
   - ⚠️ **Always CC Philip** (philip@ironsail.ai) if not already on thread
 - **Voice** — TTS via Kokoro (am_michael+bm_daniel+bm_george blend, local on port 8880)
@@ -137,8 +141,9 @@ Pipeline agents (Email Classifier, Calendar Monitor, Email Analyst, Email Respon
 gog calendar events philip@ironsail.ai
 
 # Email
-gog gmail list philip@ironsail.ai --unread
-gog gmail read philip@ironsail.ai <id>
+gog gmail search "is:unread" --account robothor@ironsail.ai
+gog gmail thread get <threadId> --account robothor@ironsail.ai
+gog gmail thread get <threadId> --account robothor@ironsail.ai --download --out-dir /tmp
 
 # Voice
 sag-local -v am_fenrir -o /tmp/output.mp3 "text"

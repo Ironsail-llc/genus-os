@@ -201,7 +201,21 @@ One line. No per-item breakdown, no reasoning, no narration. The status file has
 
 ## Mark Emails as Categorized — REQUIRED after processing
 
-After processing each batch of emails, mark them as categorized in `email-log.json` so they are NOT re-processed on the next run. Use `exec` with this pattern:
+After processing each batch of emails, mark them as categorized in `email-log.json` so they are NOT re-processed on the next run.
+
+**Build a classifications dict** as you triage each email, mapping each entry ID to its urgency and category:
+
+```python
+# Example — build this as you process each email:
+classifications = {
+    '19c6879e9126c65e': {'urgency': 'low', 'category': 'informational'},
+    '19c75b3efd71d6ed': {'urgency': 'high', 'category': 'escalation'},
+}
+# urgency: low | medium | high | critical
+# category: operational | informational | escalation | noise
+```
+
+Then use `exec` with this pattern to write ALL fields back:
 
 ```bash
 exec:
@@ -212,16 +226,19 @@ path = os.path.expanduser('~/robothor/brain/memory/email-log.json')
 with open(path) as f:
     data = json.load(f)
 now = datetime.now(timezone.utc).isoformat()
-for eid in [<comma-separated list of processed email IDs>]:
+classifications = {<dict mapping each processed eid to {'urgency': '...', 'category': '...'}>}
+for eid, cls in classifications.items():
     if eid in data.get('entries', {}):
         data['entries'][eid]['categorizedAt'] = now
+        data['entries'][eid]['urgency'] = cls['urgency']
+        data['entries'][eid]['category'] = cls['category']
 with open(path, 'w') as f:
     json.dump(data, f, indent=2)
-print(f'Marked {len([<same list>])} emails as categorized')
+print(f'Marked {len(classifications)} emails as categorized')
 "
 ```
 
-Replace `[<comma-separated list>]` with the actual IDs you processed (e.g., `'19c6879e9126c65e', '19c75b3efd71d6ed'`).
+Replace the `classifications` dict with the actual IDs and classifications from your triage.
 
 **Do NOT skip this step.** If you don't mark emails as categorized, they loop back into your inbox forever.
 
