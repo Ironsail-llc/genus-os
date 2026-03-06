@@ -1,58 +1,68 @@
 # Failure Analyzer Status
 
-Last run: 2026-03-04 02:00 PM EST
-Failures analyzed: 11
+Last run: 2026-03-06 08:00 AM EST (13:00 UTC)
+Failures analyzed: 22 (4 failed runs + 20 timeout runs reviewed)
 Tasks created: 1
-Errors encountered: 1 (handled - non-critical)
+Classifications: transient: 18, config: 0, code: 1, unknown: 0
 
-## Classifications
-- **Transient:** 10 (infrastructure - mass timeouts at 12:00 PM, model API unresponsive)
-- **Config:** 0
-- **Code:** 0
-- **Unknown:** 0
+## New Task Created This Run
 
-## Execution Error Logged
-- **Tool:** memory_block_read
-- **Block:** nightwatch_log
-- **Status:** Block not found (expected - may not be initialized yet)
-- **Impact:** None - continued analysis without this block
-- **Action:** Non-critical, handled gracefully
+### ce4671ce — email-analyst: exec call hangs indefinitely on hook trigger
+- **Agent:** email-analyst
+- **Run ID:** 03b5e435-2a9b-4c7e-bf0f-3c10f8f08a08
+- **Classification:** CODE
+- **Root cause:** exec tool call at step 6 blocks indefinitely (>480s) on hook trigger downstream:email:triage.refreshed
+- **Pattern:** Both email-analyst timeouts in 24h are on hook triggers; step 5 exec is fast (17ms), step 6 hangs
+- **Assigned to:** overnight-pr
+- **Priority:** normal
 
-## Details
+## Transient Failures (No Action Required)
 
-### INFRASTRUCTURE Issues (10) - Task Created
-**Mass timeout event at 2026-03-04 12:00:00 PM EST**
+### Infrastructure / Model Hangs (18 runs)
+All zero-token, zero-step silent hangs — agents never reached LLM. Same pattern as the 18:00 EST mass event already tracked in task b4dca430.
 
-10 agents timed out simultaneously with 0 steps executed:
-- calendar-monitor (2 workflow runs)
-- email-classifier (2 runs: cron + workflow)
-- vision-monitor (1 run)
-- main (1 run)
-- failure-analyzer (1 run)
-- email-responder (1 run)
-- conversation-inbox (1 run)
+| Agent | Runs | Pattern |
+|-------|------|---------|
+| main | 7 | 0-token zombie hangs, multiple triggers |
+| email-classifier | 5 | 0-token hangs on hook + workflow triggers |
+| calendar-monitor | 5 | 0-token hangs on cron + workflow triggers |
+| email-analyst | 1 | 0-token zombie (43a3017f, 05:45 EST today) |
 
-**Root Cause:** Model API infrastructure issue (OpenRouter or upstream provider)
-- All affected runs: model_used=null, input_tokens=0, steps=[]
-- Duration ~40 minutes suggests API unavailability
-- Agents recovered by 2:00 PM (self-healing via scheduler retry)
+### Failed Runs (4 — all from 2026-02-27, outside 2h window)
+- supervisor (2x): "All models failed to respond" + "list index out of range" — Feb 27, stale
+- email-classifier (1): "All models failed to respond" — Feb 27, stale
+- conversation-inbox (1): "All models failed to respond" — Feb 27, stale
 
-**Task:** 177908fd-650a-424e-b74e-df8d984a382e (assigned to overnight-pr, high priority)
+## Existing Open Tasks (No Duplicates Created)
 
-### Historical Context
-- Similar mass timeout at 8:00 AM on same day (failure-analyzer)
-- Previous supervisor code issue (f81d1c03-8496-4be0-859b-21b6bbf947d7) still in TODO
-- Overall fleet health: 91% completion rate over last 48h
+| Task ID | Title | Status |
+|---------|-------|--------|
+| d8a53d2b | calendar-monitor: Fix triage-inbox.json path | TODO |
+| b4dca430 | Infrastructure: Mass timeout at 18:00 EST | TODO |
+| a8191811 | conversation-inbox: 76.5% success rate | TODO |
+| 4119a621 | Reduce email-classifier timeout 600s→360s | TODO |
+| 927d5066 | calendar-monitor: Add max_iterations cap | TODO |
+| bacf7570 | Increase failure-analyzer timeout 300s→480s | TODO |
+| bd52e6c9 | improvement-analyst: Missing memory blocks | TODO |
+| 1f78c6e4 | main:heartbeat 0 runs — broken schedule | TODO |
+| 9246269a | Reduce conversation-resolver timeout | TODO |
 
-## Agent Stats (48h)
-| Agent | Runs | Completed | Timeouts | Avg Duration |
-|-------|------|-----------|----------|--------------|
-| email-classifier | 117 | 107 | 9 | 257s |
-| calendar-monitor | 49 | 45 | 3 | 146s |
-| main | 129 | 123 | 5 | 95s |
-| email-responder | 96 | 92 | 3 | 97s |
-| conversation-inbox | 34 | 33 | 1 | 42s |
-| vision-monitor | 6 | 5 | 1 | 100s |
+## Fleet Health Snapshot (24h as of 08:00 EST)
 
-## Summary
-Analysis completed successfully. All 11 failures classified as transient infrastructure issues. Task created for resilience improvements. Execution error (missing memory block) was non-critical and handled gracefully.
+| Agent | Runs | Success% | Timeouts | Avg Duration |
+|-------|------|----------|----------|--------------|
+| email-responder | 162 | 99.4% | 1 | 76s |
+| email-classifier | 181 | 96.7% | 5 | 53s |
+| email-analyst | 160 | 98.8% | 2 | 83s |
+| main | 50 | 84.0% | 7 | 87s |
+| calendar-monitor | 59 | 91.5% | 5 | 157s |
+| conversation-inbox | 17 | 94.1% | 1 | 71s |
+| vision-monitor | 3 | 66.7% | 1 | 66s |
+| failure-analyzer | 10 | 90.0% | 0 | 190s |
+| supervisor | 0 | — | — | — |
+
+## Notes
+- supervisor has 0 runs in 24h — all failures are from 2026-02-27 (stale, outside window)
+- main's 14% timeout rate is inflated by the 18:00 EST infrastructure event (already tracked)
+- failure-analyzer itself is healthy this run: 9/10 completed, 0 timeouts, avg 190s
+- The bacf7570 timeout-increase task may no longer be needed given current 90% success rate

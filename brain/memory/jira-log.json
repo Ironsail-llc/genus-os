@@ -1,7 +1,108 @@
 {
-  "lastSyncAt": "2026-03-04T15:30:01.401681",
+  "lastSyncAt": "2026-03-06T09:00:01.301407",
   "lastSyncStatus": "success",
   "syncHistory": [
+    {
+      "timestamp": "2026-03-06T09:00:01.301407",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-06T08:30:01.905321",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-06T08:00:01.775355",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 14,
+      "changes": [
+        {
+          "type": "completed",
+          "ticket": "VV-1195",
+          "summary": "DRX Channel Config Missing Store Slug"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1202",
+          "summary": "Not able to Add User Profile"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1203",
+          "summary": "Address Line 1 and 2 is Not Saved When Creating a Clinic"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1204",
+          "summary": "ScriptSure Setting Reverts to Enabled After Saving"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1210",
+          "summary": "Licensed Number Not Saved When Creating New User"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1212",
+          "summary": "Assigned Clinic Not Displayed"
+        },
+        {
+          "type": "completed",
+          "ticket": "VV-1240",
+          "summary": "Exported Files from Administration Module Display JSON Data Instead of Structured Columns"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-4",
+          "summary": "Validating Data Population in Prescription Form \u2013 Medication Details Section"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-29",
+          "summary": "Unable to Update Channel Settings for ScriptSure"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-30",
+          "summary": "LifeFile Not Yet Available in Staging"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-31",
+          "summary": "Add Rx Compounding API Integrations"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-25",
+          "summary": "Add Multiple Medications in a Single Prescription Order"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-33",
+          "summary": "Create webhook for tracking"
+        },
+        {
+          "type": "completed",
+          "ticket": "RD-32",
+          "summary": "Add Partell Sending Order API Integrations"
+        }
+      ],
+      "errors": [],
+      "status": "success"
+    },
     {
       "timestamp": "2026-03-04T15:30:01.401681",
       "ticketsFetched": 14,
@@ -550,222 +651,9 @@
       "changes": [],
       "errors": [],
       "status": "success"
-    },
-    {
-      "timestamp": "2026-03-03T09:00:01.545333",
-      "ticketsFetched": 10,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-03T08:30:01.909599",
-      "ticketsFetched": 10,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-03T08:00:01.707480",
-      "ticketsFetched": 10,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
     }
   ],
-  "activeTickets": {
-    "VV-1195": {
-      "id": "VV-1195",
-      "summary": "DRX Channel Config Missing Store Slug",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1195",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "dff744b0-0a34-45aa-9300-575dbb0713f7"
-    },
-    "VV-1202": {
-      "id": "VV-1202",
-      "summary": "Not able to Add User Profile",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1202",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "760a00de-8676-4b6e-863a-e883595ca00b"
-    },
-    "VV-1203": {
-      "id": "VV-1203",
-      "summary": "Address Line 1 and 2 is Not Saved When Creating a Clinic",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1203",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "e3047ca1-fd77-4111-950a-b93018ac0b01"
-    },
-    "VV-1204": {
-      "id": "VV-1204",
-      "summary": "ScriptSure Setting Reverts to Enabled After Saving",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1204",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "ce2d32b1-f477-43d3-83a1-5c5619f721ab"
-    },
-    "VV-1210": {
-      "id": "VV-1210",
-      "summary": "Licensed Number Not Saved When Creating New User",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1210",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "37f0007d-fc64-4384-966f-54d66a4753f5"
-    },
-    "VV-1212": {
-      "id": "VV-1212",
-      "summary": "Assigned Clinic Not Displayed",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1212",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "389d130a-5279-44b8-b61e-b6dd8c9e7f5b"
-    },
-    "VV-1240": {
-      "id": "VV-1240",
-      "summary": "Exported Files from Administration Module Display JSON Data Instead of Structured Columns",
-      "status": "To Do",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/VV-1240",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "VV",
-      "crmTaskId": "8fd3e9ef-93fe-4534-a3d3-e6ae2cc393c2"
-    },
-    "RD-4": {
-      "id": "RD-4",
-      "summary": "Validating Data Population in Prescription Form \u2013 Medication Details Section",
-      "status": "Testing",
-      "statusMapped": "in_progress",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-4",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "2c81d488-e0a8-4a88-a460-2fc32fd743fa"
-    },
-    "RD-29": {
-      "id": "RD-29",
-      "summary": "Unable to Update Channel Settings for ScriptSure",
-      "status": "Testing",
-      "statusMapped": "in_progress",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-29",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "e127035a-33bd-4b49-8c09-4745bc2a1f0f"
-    },
-    "RD-30": {
-      "id": "RD-30",
-      "summary": "LifeFile Not Yet Available in Staging",
-      "status": "Testing",
-      "statusMapped": "in_progress",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-30",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "a8826d52-1b1a-4611-aa43-912ab4c08dc5"
-    },
-    "RD-31": {
-      "id": "RD-31",
-      "summary": "Add Rx Compounding API Integrations",
-      "status": "Backlog",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-31",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "2bd9dbe2-eaef-4ad4-9a09-558d3a0f1dcb"
-    },
-    "RD-25": {
-      "id": "RD-25",
-      "summary": "Add Multiple Medications in a Single Prescription Order",
-      "status": "Code Review",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-25",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "dd2e1d7d-b1e4-44ae-bac4-b53abbe490cb"
-    },
-    "RD-33": {
-      "id": "RD-33",
-      "summary": "Create webhook for tracking",
-      "status": "Backlog",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-33",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "cc01a52a-cfdd-4c4c-9d05-edec1679cfa6"
-    },
-    "RD-32": {
-      "id": "RD-32",
-      "summary": "Add Partell Sending Order API Integrations",
-      "status": "Backlog",
-      "statusMapped": "pending",
-      "priority": "Medium",
-      "priorityMapped": "medium",
-      "dueDate": null,
-      "url": "https://ironsail.atlassian.net/browse/RD-32",
-      "lastSeen": "2026-03-04T15:30:01.401681",
-      "project": "RD",
-      "crmTaskId": "2b8f78a5-2f7c-4b55-a566-8d36a68757d8"
-    }
-  },
+  "activeTickets": {},
   "pendingActions": [
     {
       "action": "review_new_ticket",

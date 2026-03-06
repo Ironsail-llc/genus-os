@@ -129,6 +129,8 @@ class AgentConfig:
     timezone: str = "America/New_York"
     timeout_seconds: int = 600
     session_target: str = "isolated"
+    catch_up: str = "coalesce"  # coalesce | skip_if_stale
+    stale_after_minutes: int = 120
 
     # Delivery
     delivery_mode: DeliveryMode = DeliveryMode.NONE

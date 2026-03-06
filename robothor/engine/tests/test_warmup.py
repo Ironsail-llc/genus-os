@@ -10,6 +10,7 @@ import pytest
 
 from robothor.engine.models import AgentConfig
 from robothor.engine.warmup import (
+    _CONTEXT_HOOKS,
     MAX_WARMTH_CHARS,
     build_warmth_preamble,
 )
@@ -40,9 +41,14 @@ class TestBuildWarmthPreamble:
     """Tests for the main build_warmth_preamble function."""
 
     def test_empty_config_returns_empty(self, empty_config: AgentConfig, tmp_path: Path) -> None:
-        with patch(TRACKING_PATCH, return_value=None):
-            result = build_warmth_preamble(empty_config, tmp_path)
-        assert result == ""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(TRACKING_PATCH, return_value=None):
+                result = build_warmth_preamble(empty_config, tmp_path)
+            assert result == ""
+        finally:
+            _CONTEXT_HOOKS.extend(saved)
 
     def test_history_with_consecutive_errors(self, tmp_path: Path) -> None:
         config = AgentConfig(
@@ -67,9 +73,14 @@ class TestBuildWarmthPreamble:
             name="Test",
             warmup_context_files=["nonexistent.md"],
         )
-        with patch(TRACKING_PATCH, return_value=None):
-            result = build_warmth_preamble(config, tmp_path)
-        assert result == ""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(TRACKING_PATCH, return_value=None):
+                result = build_warmth_preamble(config, tmp_path)
+            assert result == ""
+        finally:
+            _CONTEXT_HOOKS.extend(saved)
 
     def test_memory_block_injection(self, tmp_path: Path) -> None:
         config = AgentConfig(
@@ -92,12 +103,17 @@ class TestBuildWarmthPreamble:
             name="Test",
             warmup_memory_blocks=["nonexistent_block"],
         )
-        with (
-            patch(TRACKING_PATCH, return_value=None),
-            patch(BLOCK_PATCH, return_value={"content": ""}),
-        ):
-            result = build_warmth_preamble(config, tmp_path)
-        assert result == ""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(TRACKING_PATCH, return_value=None),
+                patch(BLOCK_PATCH, return_value={"content": ""}),
+            ):
+                result = build_warmth_preamble(config, tmp_path)
+            assert result == ""
+        finally:
+            _CONTEXT_HOOKS.extend(saved)
 
     def test_context_file_injection(self, tmp_path: Path) -> None:
         config = AgentConfig(
@@ -120,9 +136,14 @@ class TestBuildWarmthPreamble:
             name="Test",
             warmup_context_files=["does-not-exist.md"],
         )
-        with patch(TRACKING_PATCH, return_value=None):
-            result = build_warmth_preamble(config, tmp_path)
-        assert result == ""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(TRACKING_PATCH, return_value=None):
+                result = build_warmth_preamble(config, tmp_path)
+            assert result == ""
+        finally:
+            _CONTEXT_HOOKS.extend(saved)
 
     def test_peer_section(self, tmp_path: Path) -> None:
         config = AgentConfig(

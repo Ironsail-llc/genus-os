@@ -16,6 +16,7 @@ export interface Task {
   slaDeadlineAt?: string;
   parentTaskId?: string;
   resolution?: string;
+  requiresHuman?: boolean;
   escalationCount?: number;
   startedAt?: string;
   updatedAt?: string;

@@ -31,3 +31,26 @@ for k, v in data.items():
 " > "$OUTPUT_FILE"
 
 chmod 600 "$OUTPUT_FILE"
+
+# ── Validate required keys ──────────────────────────────────────────
+REQUIRED_KEYS=(
+    "OPENROUTER_API_KEY"
+    "ROBOTHOR_TELEGRAM_BOT_TOKEN"
+    "ROBOTHOR_TELEGRAM_CHAT_ID"
+)
+
+missing=()
+for key in "${REQUIRED_KEYS[@]}"; do
+    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+        missing+=("$key")
+    fi
+done
+
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "ERROR: Required secrets missing from $SOPS_FILE:" >&2
+    for key in "${missing[@]}"; do
+        echo "  - $key" >&2
+    done
+    echo "Add missing keys with: sops $SOPS_FILE" >&2
+    exit 1
+fi

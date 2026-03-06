@@ -202,6 +202,8 @@ def manifest_to_agent_config(manifest: dict) -> AgentConfig:
         max_iterations=schedule.get("max_iterations", 20),
         temperature=float(model.get("temperature", 0.3)),
         session_target=schedule.get("session_target", "isolated"),
+        catch_up=schedule.get("catch_up", "coalesce"),
+        stale_after_minutes=int(schedule.get("stale_after_minutes", 120)),
         delivery_mode=delivery_mode,
         delivery_channel=delivery.get("channel", ""),
         delivery_to=delivery.get("to", "")

@@ -43,6 +43,38 @@ async def health():
     return JSONResponse({"status": status, "services": services}, status_code=status_code)
 
 
+@router.get("/liveness")
+async def liveness():
+    """Liveness probe — always 200 if process is running."""
+    from robothor.health_contract import liveness_response
+
+    return liveness_response("bridge", "0.1.0")
+
+
+@router.get("/ready")
+async def readiness():
+    """Readiness probe — checks all dependencies."""
+    from fastapi.responses import JSONResponse
+
+    from robothor.health_contract import readiness_response
+
+    async def check_crm():
+        from robothor.crm.dal import check_health
+
+        h = check_health()
+        return "ok" if h["status"] == "ok" else f"error:{h.get('error', 'unknown')}"
+
+    async def check_memory():
+        from bridge_service import _bridge_config, http_client
+
+        r = await http_client.get(f"{_bridge_config['memory_url']}/health")
+        return "ok" if r.status_code == 200 else f"error:{r.status_code}"
+
+    checks = {"crm": check_crm, "memory": check_memory}
+    body, status = await readiness_response("bridge", "0.1.0", checks)
+    return JSONResponse(body, status_code=status)
+
+
 # ─── Audit Endpoints ─────────────────────────────────────────────────────
 
 

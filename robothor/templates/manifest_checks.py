@@ -1,7 +1,7 @@
 """
-Agent manifest validation checks A-L — extracted from scripts/validate_agents.py.
+Agent manifest validation checks A-M — extracted from scripts/validate_agents.py.
 
-These are the 12 checks that validate an agent manifest against the schema contract.
+These are the 13 checks that validate an agent manifest against the schema contract.
 Both the standalone script and the template installer call these checks.
 
 Usage:
@@ -317,6 +317,27 @@ def check_hooks(manifest: dict) -> CheckResult:
     return result
 
 
+def check_secret_refs(manifest: dict) -> CheckResult:
+    """M. SecretRef keys are present in the environment."""
+    result = CheckResult("M", "Secret references")
+    secret_refs = manifest.get("secret_refs", [])
+    if not secret_refs:
+        return result.skip("No secret_refs declared")
+
+    if not isinstance(secret_refs, list):
+        return result.fail("secret_refs must be a list")
+
+    import os
+
+    missing = [key for key in secret_refs if not os.environ.get(key)]
+    if missing:
+        return result.warn(
+            f"Secret keys not in environment: {missing}",
+            ["Keys may be loaded at runtime via EnvironmentFile — check secrets.env"],
+        )
+    return result
+
+
 def validate_agent(
     manifest: dict,
     all_manifests: dict,
@@ -324,7 +345,7 @@ def validate_agent(
     repo_root: Path | None = None,
     ci: bool = False,
 ) -> list[CheckResult]:
-    """Run all 12 checks (A-L) for a single agent.
+    """Run all 13 checks (A-M) for a single agent.
 
     Args:
         manifest: The agent manifest dict.
@@ -374,6 +395,7 @@ def validate_agent(
         [
             check_basic_io_tools(manifest),
             check_hooks(manifest),
+            check_secret_refs(manifest),
         ]
     )
 

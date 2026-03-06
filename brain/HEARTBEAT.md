@@ -42,7 +42,7 @@ Handle each notification silently. `ack_notification(notificationId=<id>)` after
 - Duplicates: resolve the newer one
 - `scheduling-link` tasks >72h old and still TODO: resolve as stale, surface in report ("Waiting: [person] hasn't booked yet")
 - `scheduling-booked` tasks assigned to you: move to report's Active section ("Meeting with [person] booked for [time]"), then resolve
-- **NEVER resolve `requiresHuman=true` tasks** — those persist until Philip acts
+- **Do NOT auto-resolve `requiresHuman=true` tasks during heartbeat** — surface them in "Need You" and let Philip confirm resolution in an interactive session
 
 ### 3. Check worker-handoff.json
 

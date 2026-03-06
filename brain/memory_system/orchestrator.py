@@ -539,6 +539,37 @@ async def health():
     }
 
 
+@app.get("/liveness")
+async def liveness():
+    """Liveness probe — always 200 if process is running."""
+    from robothor.health_contract import liveness_response
+    return liveness_response("orchestrator", "0.1.0")
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness probe — checks all dependencies."""
+    from robothor.health_contract import readiness_response
+    from fastapi.responses import JSONResponse
+
+    async def check_model():
+        return "ok" if await check_model_available() else "error:model_unavailable"
+
+    async def check_reranker():
+        return "ok" if await check_reranker_available() else "error:reranker_unavailable"
+
+    async def check_search():
+        return "ok" if await check_searxng_available() else "error:searxng_unavailable"
+
+    checks = {
+        "generation_model": check_model,
+        "reranker": check_reranker,
+        "web_search": check_search,
+    }
+    body, status = await readiness_response("orchestrator", "0.1.0", checks)
+    return JSONResponse(body, status_code=status)
+
+
 @app.post("/query")
 async def query_endpoint(req: QueryRequest):
     """Simple RAG query endpoint.

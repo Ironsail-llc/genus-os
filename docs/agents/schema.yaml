@@ -52,6 +52,20 @@ recommended:
       type: string
       enum: [isolated, persistent]
       default: isolated
+    catch_up:
+      type: string
+      enum: [coalesce, skip_if_stale]
+      default: coalesce
+      description: >
+        How to handle missed cron fires. coalesce: merge missed into one run
+        (APScheduler default). skip_if_stale: skip if fire time is older than
+        stale_after_minutes.
+    stale_after_minutes:
+      type: integer
+      default: 120
+      description: >
+        Minutes after scheduled fire time before a job is considered stale.
+        Only used when catch_up=skip_if_stale.
   delivery:
     mode:
       type: string
@@ -139,6 +153,12 @@ optional:
     type: list[string]
   tags_consumed:
     type: list[string]
+  secret_refs:
+    type: list[string]
+    description: >
+      Declarative list of secret keys this agent depends on. Validated by
+      validate_agents.py (check M) and cross-referenced by vault audit.
+    example: ["OPENROUTER_API_KEY", "ROBOTHOR_TELEGRAM_BOT_TOKEN"]
   # ── Heartbeat (periodic health-check runs with overrides) ────────
   # Attach to an interactive agent to add periodic cron runs with
   # different instruction file, delivery mode, warmup, and budget.

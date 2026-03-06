@@ -17,6 +17,7 @@ interface Task {
   tags?: string[];
   slaDeadlineAt?: string;
   parentTaskId?: string;
+  requiresHuman?: boolean;
 }
 
 interface TaskBoardProps {
@@ -137,6 +138,11 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                     {task.priority && task.priority !== "normal" && (
                       <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
                         {task.priority}
+                      </Badge>
+                    )}
+                    {task.requiresHuman && (
+                      <Badge className="text-[10px] px-1 py-0 bg-red-500/20 text-red-400" data-testid="requires-human-badge">
+                        needs you
                       </Badge>
                     )}
                     <CardTitle className="text-sm flex-1">{task.title}</CardTitle>
