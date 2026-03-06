@@ -29,9 +29,9 @@ steps:
   - id: done
     type: noop
     note: >
-      The overnight-pr engine agent step has been replaced by external scripts
-      that use Claude Code CLI in worktrees. See brain/scripts/nightwatch-heal.py
-      (3 AM cron) and brain/scripts/nightwatch-build.py (Monday 3 AM cron).
+      The overnight-pr agent runs separately on its own 3 AM cron schedule,
+      picking up tasks created by the improvement-analyst. CI + branch protection
+      gate all PRs before merge.
 
 delivery:
   mode: none
