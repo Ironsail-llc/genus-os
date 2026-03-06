@@ -330,7 +330,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
 
     # 1. SKILL.md exists with valid frontmatter (20 pts)
     skill_path = bundle / "SKILL.md"
-    skill_score = 0
+    skill_score: float = 0
     if skill_path.exists():
         content = skill_path.read_text()
         frontmatter_match = re.match(r"^---\n(.+?)\n---", content, re.DOTALL)
@@ -353,7 +353,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
 
     # 2. programmatic.json complete (20 pts)
     prog_path = bundle / "programmatic.json"
-    prog_score = 0
+    prog_score: float = 0
     if prog_path.exists():
         try:
             prog = json.loads(prog_path.read_text())

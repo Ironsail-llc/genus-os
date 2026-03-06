@@ -42,7 +42,7 @@ def _resolve_instruction_path(manifest: dict) -> Path | None:
     instr = manifest.get("instruction_file")
     if not instr:
         return None
-    p = PROJECT_ROOT / instr
+    p = PROJECT_ROOT / str(instr)
     if p.exists():
         return p
     return None

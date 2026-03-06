@@ -45,7 +45,8 @@ class HubClient:
             import yaml
 
             config = yaml.safe_load(config_path.read_text()) or {}
-            return config.get("instance", {}).get("api_key")
+            result: str | None = config.get("instance", {}).get("api_key")
+            return result
         except Exception:
             return None
 
@@ -84,7 +85,8 @@ class HubClient:
             params["department"] = department
         resp = self.client.get("/api/bundles", params=params)
         resp.raise_for_status()
-        return resp.json()
+        result: list[dict] = resp.json()
+        return result
 
     def get_bundle(self, slug: str) -> dict | None:
         """Get a single bundle by slug."""
@@ -92,7 +94,8 @@ class HubClient:
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
-        return resp.json()
+        bundle: dict = resp.json()
+        return bundle
 
     def download_bundle(self, slug: str, dest_dir: str | None = None) -> Path:
         """Download a bundle tarball and extract it.
@@ -143,7 +146,8 @@ class HubClient:
         data = resp.json()
         if not data.get("success"):
             raise HubError(data.get("error", "Submission failed"))
-        return data.get("bundle", {})
+        bundle: dict = data.get("bundle", {})
+        return bundle
 
     def close(self):
         if self._client:

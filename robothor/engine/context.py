@@ -269,16 +269,14 @@ def _default_pre_compress_hook(messages: list[dict[str, Any]]) -> None:
         return
 
     try:
-        from robothor.memory.blocks import write_block
+        from robothor.memory.blocks import read_block, write_block
 
         # Append to working_context block
-        content = "\n".join(f"- {item}" for item in remember_items)
-        write_block(
-            "working_context",
-            content,
-            mode="append",
-            agent_id="system",
-        )
+        new_content = "\n".join(f"- {item}" for item in remember_items)
+        existing = read_block("working_context")
+        old_content = existing.get("content", "") if existing else ""
+        combined = f"{old_content}\n{new_content}".strip() if old_content else new_content
+        write_block("working_context", combined)
         logger.info("Pre-compress hook: saved %d [REMEMBER] items", len(remember_items))
     except Exception as e:
         logger.debug("Failed to save [REMEMBER] items: %s", e)

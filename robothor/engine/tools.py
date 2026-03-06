@@ -1593,13 +1593,13 @@ def _handle_sync_tool(
     if name == "resolve_task":
         from robothor.crm.dal import resolve_task
 
-        ok = resolve_task(
+        resolve_result = resolve_task(
             task_id=args["id"],
             resolution=args.get("resolution", ""),
             agent_id=agent_id,
             tenant_id=tenant_id,
         )
-        return {"success": ok, "id": args["id"]}
+        return {"success": resolve_result, "id": args["id"]}
 
     if name == "list_agent_tasks":
         from robothor.crm.dal import list_agent_tasks
@@ -1746,14 +1746,14 @@ def _handle_sync_tool(
     if name == "create_message":
         from robothor.crm.dal import send_message
 
-        result = send_message(
+        msg_result = send_message(
             conversation_id=args["conversationId"],
             content=args.get("content", ""),
             message_type=args.get("messageType", "outgoing"),
             private=args.get("private", False),
             tenant_id=tenant_id,
         )
-        return dict(result) if result else {"error": "Failed to create message"}
+        return dict(msg_result) if msg_result else {"error": "Failed to create message"}
 
     if name == "toggle_conversation_status":
         from robothor.crm.dal import toggle_conversation_status
@@ -2247,25 +2247,25 @@ def _handle_sync_tool(
     if name in ("merge_people", "merge_contacts"):
         from robothor.crm.dal import merge_people as _merge_people
 
-        result = _merge_people(
+        merge_result = _merge_people(
             keeper_id=args.get("keeperId", ""),
             loser_id=args.get("loserId", ""),
             tenant_id=tenant_id,
         )
-        if result:
-            return {"success": True, "keeper": result}
+        if merge_result:
+            return {"success": True, "keeper": merge_result}
         return {"error": "Merge failed — one or both IDs not found"}
 
     if name == "merge_companies":
         from robothor.crm.dal import merge_companies as _merge_companies
 
-        result = _merge_companies(
+        company_merge = _merge_companies(
             keeper_id=args.get("keeperId", ""),
             loser_id=args.get("loserId", ""),
             tenant_id=tenant_id,
         )
-        if result:
-            return {"success": True, "keeper": result}
+        if company_merge:
+            return {"success": True, "keeper": company_merge}
         return {"error": "Merge failed — one or both IDs not found"}
 
     return {"error": f"Unknown tool: {name}"}
@@ -2595,7 +2595,7 @@ async def _handle_analyze_pdf(
             # Send images to vision model
             import litellm
 
-            content = []
+            content: list[dict] = []
             for idx, img_b64 in enumerate(images_b64[:3]):  # Max 3 images
                 content.append({"type": "text", "text": f"Page {page_indices[idx] + 1}:"})
                 content.append(
@@ -2644,7 +2644,7 @@ def _parse_page_range(spec: str | None, total: int, max_pages: int = 10) -> list
     if not spec:
         return list(range(min(total, max_pages)))
 
-    indices = set()
+    indices: set[int] = set()
     for part in spec.split(","):
         part = part.strip()
         if "-" in part:
