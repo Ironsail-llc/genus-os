@@ -65,13 +65,17 @@ CALL_CONTEXTS = {}
 # Twilio client for outbound calls
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_API_KEY_SID = os.environ.get("TWILIO_API_KEY_SID", "")
+TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET", "")
 TWILIO_PHONE = "+14134086025"
 
 
 def get_twilio_client() -> TwilioClient:
-    """Get Twilio REST client (lazy init)"""
+    """Get Twilio REST client (lazy init). Prefers API key auth over auth token."""
+    if TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET:
+        return TwilioClient(TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET)
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
+        raise RuntimeError("TWILIO_API_KEY_SID/SECRET or TWILIO_ACCOUNT_SID/AUTH_TOKEN must be set")
     return TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
