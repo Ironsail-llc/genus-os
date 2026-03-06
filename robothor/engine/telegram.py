@@ -204,7 +204,7 @@ class TelegramBot:
         self._model_override: dict[str, str] = {}  # chat_id → model_id
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}  # chat_id → running task
         self._last_message_at: dict[str, float] = {}  # chat_id → monotonic timestamp
-        self._idle_timeout: float = 7200.0  # 2 hours in seconds
+        self._idle_timeout: float = 900.0  # 15 minutes
 
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY

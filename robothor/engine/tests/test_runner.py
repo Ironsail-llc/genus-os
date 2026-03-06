@@ -626,3 +626,101 @@ class TestOnToolCallback:
         # Preview should be truncated
         preview = end_events[0]["result_preview"]
         assert len(preview) <= 2003 + 1  # 2000 chars + "..."
+
+
+class TestThinkingAPI:
+    """Tests for the adaptive thinking API integration."""
+
+    @pytest.mark.asyncio
+    async def test_thinking_sets_temperature_1(self, runner, sample_agent_config):
+        """When thinking is enabled, temperature MUST be 1.0 (Anthropic requirement)."""
+        # Use a thinking-capable model
+        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4-6"
+        sample_agent_config.model_fallbacks = []
+
+        response = MagicMock()
+        response.model = "anthropic/claude-sonnet-4-6"
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "Thought about it."
+        response.choices[0].message.tool_calls = None
+        response.usage = MagicMock(prompt_tokens=100, completion_tokens=50)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        call_kwargs = mock_llm.call_args.kwargs
+        assert call_kwargs["temperature"] == 1.0
+        assert call_kwargs["thinking"]["type"] == "enabled"
+        assert call_kwargs["thinking"]["budget_tokens"] == 10_000
+        # Model should be rewritten to direct Anthropic API
+        assert call_kwargs["model"] == "anthropic/claude-sonnet-4-6"
+
+    @pytest.mark.asyncio
+    async def test_thinking_blocks_filtered_from_output(self, runner, sample_agent_config):
+        """Thinking blocks in response content should be filtered from output text."""
+        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4-6"
+        sample_agent_config.model_fallbacks = []
+
+        response = MagicMock()
+        response.model = "anthropic/claude-sonnet-4-6"
+        response.choices = [MagicMock()]
+        # Simulate content blocks with thinking + text
+        response.choices[0].message.content = [
+            {"type": "thinking", "thinking": "Let me think about this..."},
+            {"type": "text", "text": "Here is my answer."},
+        ]
+        response.choices[0].message.tool_calls = None
+        response.usage = MagicMock(prompt_tokens=100, completion_tokens=50)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ):
+                        run = await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        assert run.status == RunStatus.COMPLETED
+        assert run.output_text == "Here is my answer."
+
+    @pytest.mark.asyncio
+    async def test_non_thinking_model_no_thinking_param(self, runner, sample_agent_config):
+        """Non-thinking models should not get thinking parameter."""
+        sample_agent_config.model_primary = "openrouter/moonshotai/kimi-k2.5"
+        sample_agent_config.model_fallbacks = []
+
+        response = MagicMock()
+        response.model = "openrouter/moonshotai/kimi-k2.5"
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "Hello!"
+        response.choices[0].message.tool_calls = None
+        response.usage = MagicMock(prompt_tokens=100, completion_tokens=50)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        call_kwargs = mock_llm.call_args.kwargs
+        assert "thinking" not in call_kwargs
+        assert call_kwargs["temperature"] == 0.3  # default, not forced to 1.0

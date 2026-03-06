@@ -88,6 +88,73 @@ async def search_web(
     return results
 
 
+async def search_perplexity(
+    query: str,
+    limit: int = 5,
+) -> list[dict]:
+    """Search using Perplexity API (OpenAI-compatible via litellm).
+
+    Requires PERPLEXITY_API_KEY in environment. Uses the sonar model
+    which returns grounded answers with source citations.
+
+    Returns same format as search_web() for interchangeability.
+    """
+    try:
+        import litellm
+
+        response = await litellm.acompletion(
+            model="perplexity/sonar-pro",
+            messages=[{"role": "user", "content": query}],
+            temperature=0.0,
+            max_tokens=1000,
+        )
+
+        content = response.choices[0].message.content or ""
+
+        # Perplexity returns a single answer with citations
+        # Package as a search result for consistency
+        results = [
+            {
+                "title": f"Perplexity: {query[:60]}",
+                "url": "",
+                "content": content,
+                "source": "perplexity",
+                "score": 1.0,
+            }
+        ]
+
+        # Extract citations — check multiple locations (litellm may surface them differently)
+        citations = (
+            getattr(response, "citations", None)
+            or getattr(response, "_hidden_params", {}).get("citations")
+            or []
+        )
+        if citations and isinstance(citations, list):
+            for i, url in enumerate(citations[: limit - 1]):
+                results.append(
+                    {
+                        "title": f"Source {i + 1}",
+                        "url": url if isinstance(url, str) else str(url),
+                        "content": "",
+                        "source": "perplexity",
+                        "score": 0.8,
+                    }
+                )
+
+        return results[:limit]
+
+    except Exception as e:
+        return [
+            {
+                "title": "Perplexity search failed",
+                "url": "",
+                "content": str(e),
+                "source": "perplexity",
+                "score": 0,
+            }
+        ]
+
+
 async def check_searxng_available() -> bool:
     """Check if SearXNG is running and accessible."""
     try:

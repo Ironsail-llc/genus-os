@@ -67,6 +67,68 @@ def create_health_app(
             "agents": agents,
         }
 
+    # Startup state tracking
+    _startup_complete = {"ready": False}
+
+    @app.get("/health/startup")
+    async def startup():
+        """Startup probe — returns 503 until initialization is complete."""
+        from fastapi.responses import JSONResponse
+
+        if _startup_complete["ready"]:
+            return {"status": "started", "service": "engine"}
+        return JSONResponse(
+            {"status": "starting", "service": "engine"},
+            status_code=503,
+        )
+
+    @app.get("/liveness")
+    async def liveness():
+        """Liveness probe — always 200 if process is running."""
+        from robothor.health_contract import liveness_response
+
+        return liveness_response("engine", "0.1.0")
+
+    @app.get("/ready")
+    async def readiness():
+        """Readiness probe — checks all dependencies."""
+        from fastapi.responses import JSONResponse
+
+        from robothor.health_contract import readiness_response
+
+        async def check_db():
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                conn.cursor().execute("SELECT 1")
+            return "ok"
+
+        async def check_schedules():
+            from robothor.engine.tracking import list_schedules
+
+            list_schedules(tenant_id=config.tenant_id)
+            return "ok"
+
+        checks = {
+            "database": check_db,
+            "schedules": check_schedules,
+        }
+        body, status = await readiness_response("engine", "0.1.0", checks)
+        return JSONResponse(body, status_code=status)
+
+    @app.on_event("startup")
+    async def _mark_startup_complete():
+        """Mark startup as complete once FastAPI is serving."""
+        from robothor.db.connection import get_connection
+
+        try:
+            with get_connection() as conn:
+                conn.cursor().execute("SELECT 1")
+            _startup_complete["ready"] = True
+            logger.info("Engine startup probe: ready")
+        except Exception as e:
+            logger.warning("Engine startup probe: DB not ready yet — %s", e)
+
     @app.get("/runs")
     async def list_recent_runs():
         """List recent agent runs."""

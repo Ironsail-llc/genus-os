@@ -36,12 +36,34 @@ class TestTruncateJson:
         data = {"key": "x" * (MAX_TOOL_OUTPUT_CHARS + 100)}
         result = _truncate_json(data)
         assert result["_truncated"] is True
-        assert "preview" in result
+        assert "content" in result
+        assert "[... truncated" in result["content"]
+        assert result["total_chars"] > MAX_TOOL_OUTPUT_CHARS
 
     def test_custom_max_chars(self):
         data = {"key": "hello world"}
         result = _truncate_json(data, max_chars=5)
         assert result["_truncated"] is True
+
+    def test_head_tail_split_preserves_end(self):
+        """Verify the tail captures the end of the output (error messages etc)."""
+        # Build data with a distinctive marker at the end
+        marker = "ERROR_AT_END_12345"
+        data = {"output": "x" * 5000 + marker}
+        result = _truncate_json(data, max_chars=500)
+        assert result["_truncated"] is True
+        assert marker in result["content"]
+
+    def test_50_50_split(self):
+        """Content should use 50/50 split with inline separator."""
+        data = {"key": "a" * 10000}
+        result = _truncate_json(data, max_chars=1000)
+        assert "[... truncated" in result["content"]
+        # 50/50 split: each half should be roughly equal
+        parts = result["content"].split("[... truncated")
+        assert len(parts) == 2
+        # Head and tail should each be close to half of max_chars
+        assert len(parts[0]) > 300  # reasonable head size
 
 
 class TestCreateRun:

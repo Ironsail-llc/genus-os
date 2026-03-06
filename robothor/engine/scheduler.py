@@ -130,7 +130,11 @@ class CronScheduler:
                 )
                 continue
 
-            # Add job
+            # Add job — use APScheduler's misfire_grace_time for catch-up logic
+            if agent_config.catch_up == "skip_if_stale":
+                grace_time = agent_config.stale_after_minutes * 60
+            else:
+                grace_time = None  # always run missed fires
             self.scheduler.add_job(
                 self._run_agent,
                 trigger=trigger,
@@ -139,7 +143,7 @@ class CronScheduler:
                 name=f"agent:{agent_config.name}",
                 max_instances=1,
                 coalesce=True,
-                misfire_grace_time=60,
+                misfire_grace_time=grace_time,
             )
 
             # Upsert schedule state in database
@@ -234,6 +238,9 @@ class CronScheduler:
             if not agent_config:
                 logger.error("Agent config not found for cron job: %s", agent_id)
                 return
+
+            # Skip-if-stale is now handled by APScheduler's misfire_grace_time
+            # (set during job registration in _schedule_agents)
 
             # Circuit breaker: skip after too many consecutive errors
             try:

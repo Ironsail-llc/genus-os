@@ -26,13 +26,20 @@ MAX_TOOL_OUTPUT_CHARS = 4000
 
 
 def _truncate_json(data: Any, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> Any:
-    """Truncate JSON-serializable data to max chars."""
+    """Truncate JSON-serializable data to max chars with inline separator.
+
+    Uses 50/50 head/tail split with a clear separator marker so the LLM
+    sees natural text rather than JSON keys like preview_head/preview_tail.
+    """
     if data is None:
         return None
     text = json.dumps(data, default=str)
     if len(text) <= max_chars:
         return data
-    return {"_truncated": True, "preview": text[:max_chars]}
+    sep = f"\n\n[... truncated {len(text) - max_chars} chars ...]\n\n"
+    half = (max_chars - len(sep)) // 2
+    truncated = text[:half] + sep + text[-half:]
+    return {"_truncated": True, "total_chars": len(text), "content": truncated}
 
 
 # ─── Runs ─────────────────────────────────────────────────────────────

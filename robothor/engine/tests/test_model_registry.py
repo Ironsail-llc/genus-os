@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from robothor.engine.model_registry import (
     _FALLBACK,
+    THINKING_BUDGET_TOKENS,
     ModelLimits,
     compute_token_budget,
     get_model_limits,
@@ -48,6 +49,21 @@ class TestGetModelLimits:
     def test_limits_are_frozen(self):
         limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
         assert isinstance(limits, ModelLimits)
+
+    def test_claude_supports_thinking(self):
+        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
+        assert limits.supports_thinking is True
+
+    def test_kimi_no_thinking(self):
+        limits = get_model_limits("openrouter/moonshotai/kimi-k2.5")
+        assert limits.supports_thinking is False
+
+    def test_thinking_budget_constant(self):
+        assert THINKING_BUDGET_TOKENS == 10_000
+
+    def test_no_default_thinking_budget_field(self):
+        """default_thinking_budget field was removed from ModelLimits."""
+        assert not hasattr(ModelLimits, "default_thinking_budget")
 
 
 class TestComputeTokenBudget:

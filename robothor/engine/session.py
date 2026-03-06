@@ -230,8 +230,21 @@ class AgentSession:
         return "ok"
 
     def get_final_text(self) -> str | None:
-        """Extract the final assistant text from the conversation."""
+        """Extract the final assistant text from the conversation.
+
+        Handles both plain string content and list-of-blocks content
+        (e.g. thinking + text blocks from extended thinking responses).
+        """
         for msg in reversed(self.messages):
-            if msg.get("role") == "assistant" and msg.get("content"):
-                return str(msg["content"])
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not content:
+                continue
+            if isinstance(content, list):
+                text_parts = [
+                    b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                return "\n".join(text_parts) if text_parts else None
+            return str(content)
         return None
