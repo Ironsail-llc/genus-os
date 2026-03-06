@@ -975,7 +975,7 @@ def list_tasks(
     tags: list[str] | None = None,
     priority: str | None = None,
     parent_task_id: str | None = None,
-    exclude_resolved: bool = False,
+    exclude_resolved: bool = True,
     requires_human: bool | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> list[dict]:
@@ -1005,8 +1005,8 @@ def list_tasks(
         if parent_task_id:
             conditions.append("parent_task_id = %s")
             params.append(parent_task_id)
-        if exclude_resolved:
-            conditions.append("resolved_at IS NULL")
+        if exclude_resolved and not status:
+            conditions.append("status != 'DONE'")
         if requires_human is not None:
             conditions.append("requires_human = %s")
             params.append(requires_human)
@@ -1149,6 +1149,7 @@ def list_agent_tasks(
     agent_id: str,
     include_unassigned: bool = False,
     status: str | None = None,
+    exclude_resolved: bool = True,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
 ) -> list[dict]:
@@ -1166,6 +1167,8 @@ def list_agent_tasks(
         if status:
             conditions.append("status = %s")
             params.append(status)
+        if exclude_resolved and not status:
+            conditions.append("status != 'DONE'")
         params.append(limit)
         cur.execute(
             f"""SELECT * FROM crm_tasks
@@ -1208,7 +1211,11 @@ def resolve_task(
             from_status = row["status"] if row else None
 
             # Guard: requires_human tasks can only be resolved by Philip
-            if row and row.get("requires_human") and agent_id not in ("philip", "helm-user"):
+            if (
+                row
+                and row.get("requires_human")
+                and agent_id not in ("philip", "helm-user", "main")
+            ):
                 return {
                     "error": "Task requires human resolution — only Philip can resolve it",
                     "id": task_id,

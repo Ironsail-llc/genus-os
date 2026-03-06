@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 interface Task {
   id: string;
@@ -22,6 +23,7 @@ interface TaskBoardProps {
   tasks: Task[];
   onApprove?: (taskId: string, resolution: string) => void;
   onReject?: (taskId: string, reason: string) => void;
+  onResolve?: (taskId: string, resolution: string) => void;
 }
 
 const statusColumns = ["TODO", "IN_PROGRESS", "REVIEW", "DONE"] as const;
@@ -55,8 +57,10 @@ function isSlaOverdue(slaDeadlineAt?: string): boolean {
   return new Date(slaDeadlineAt) < new Date();
 }
 
-export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
+export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
+  const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
+  const [resolutionText, setResolutionText] = useState("");
 
   const handleApprove = async (taskId: string) => {
     setActionPending(taskId);
@@ -89,6 +93,26 @@ export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
       }
     } finally {
       setActionPending(null);
+    }
+  };
+
+  const handleResolve = async (taskId: string) => {
+    if (!resolutionText.trim()) return;
+    setActionPending(taskId);
+    try {
+      if (onResolve) {
+        onResolve(taskId, resolutionText);
+      } else {
+        await fetch("/api/actions/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: "resolve_task", params: { id: taskId, resolution: resolutionText } }),
+        });
+      }
+    } finally {
+      setActionPending(null);
+      setResolvingTaskId(null);
+      setResolutionText("");
     }
   };
 
@@ -165,6 +189,51 @@ export function TaskBoard({ tasks, onApprove, onReject }: TaskBoardProps) {
                       >
                         Reject
                       </Button>
+                    </div>
+                  )}
+                  {status !== "DONE" && (
+                    <div className="mt-2" data-testid="resolve-section">
+                      {resolvingTaskId === task.id ? (
+                        <div className="flex gap-1.5">
+                          <Input
+                            className="h-8 text-xs"
+                            placeholder="Resolution note..."
+                            value={resolutionText}
+                            onChange={(e) => setResolutionText(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleResolve(task.id)}
+                            autoFocus
+                            data-testid="resolution-input"
+                          />
+                          <Button
+                            size="sm"
+                            className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700"
+                            disabled={actionPending === task.id || !resolutionText.trim()}
+                            onClick={() => handleResolve(task.id)}
+                            data-testid="confirm-resolve-button"
+                          >
+                            Confirm
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs px-2"
+                            onClick={() => { setResolvingTaskId(null); setResolutionText(""); }}
+                          >
+                            ✕
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          disabled={actionPending === task.id}
+                          onClick={() => setResolvingTaskId(task.id)}
+                          data-testid="resolve-button"
+                        >
+                          Resolve
+                        </Button>
+                      )}
                     </div>
                   )}
                 </CardContent>

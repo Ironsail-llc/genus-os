@@ -616,6 +616,11 @@ def get_tool_definitions() -> list[dict]:
                         "default": False,
                     },
                     "status": {"type": "string", "description": "Filter by status"},
+                    "excludeResolved": {
+                        "type": "boolean",
+                        "description": "Exclude DONE tasks (default true)",
+                        "default": True,
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 50)",
@@ -1550,6 +1555,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             agent_id=arguments.get("agentId", ""),
             include_unassigned=arguments.get("includeUnassigned", False),
             status=arguments.get("status"),
+            exclude_resolved=arguments.get("excludeResolved", True),
             limit=arguments.get("limit", 50),
         )
         return {"tasks": results, "count": len(results)}
