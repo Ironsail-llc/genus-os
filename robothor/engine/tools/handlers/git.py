@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import PROTECTED_BRANCHES
-from robothor.engine.tools.dispatch import ToolContext
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -22,7 +25,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("git_status")
-async def _git_status(args: dict, ctx: ToolContext) -> dict:
+async def _git_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
 
     def _run() -> dict[str, Any]:
@@ -42,7 +45,7 @@ async def _git_status(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("git_diff")
-async def _git_diff(args: dict, ctx: ToolContext) -> dict:
+async def _git_diff(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
     staged = args.get("staged", False)
 
@@ -66,7 +69,7 @@ async def _git_diff(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("git_branch")
-async def _git_branch(args: dict, ctx: ToolContext) -> dict:
+async def _git_branch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
     branch_name = args.get("branch_name", "")
 
@@ -93,7 +96,7 @@ async def _git_branch(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("git_commit")
-async def _git_commit(args: dict, ctx: ToolContext) -> dict:
+async def _git_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
     message = args.get("message", "")
     files = args.get("files", [])
@@ -170,7 +173,7 @@ async def _git_commit(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("git_push")
-async def _git_push(args: dict, ctx: ToolContext) -> dict:
+async def _git_push(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
     set_upstream = args.get("set_upstream", True)
 
@@ -211,7 +214,7 @@ async def _git_push(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("create_pull_request")
-async def _create_pull_request(args: dict, ctx: ToolContext) -> dict:
+async def _create_pull_request(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     repo_path = args.get("path") or ctx.workspace or None
     title = args.get("title", "")
     body = args.get("body", "")

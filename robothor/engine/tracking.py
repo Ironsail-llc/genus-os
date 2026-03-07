@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
-from robothor.engine.models import AgentRun, RunStep
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from robothor.engine.models import AgentRun, RunStep
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +146,7 @@ def update_run(
         return bool(cur.rowcount > 0)
 
 
-def get_run(run_id: str) -> dict | None:
+def get_run(run_id: str) -> dict[str, Any] | None:
     """Get a single run by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -157,7 +160,7 @@ def list_runs(
     status: str | None = None,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List runs with optional filters."""
     conditions = ["tenant_id = %s"]
     values: list[Any] = [tenant_id]
@@ -184,7 +187,7 @@ def list_runs(
 # ─── Sub-agent tree queries ───────────────────────────────────────────
 
 
-def get_run_children(run_id: str) -> list[dict]:
+def get_run_children(run_id: str) -> list[dict[str, Any]]:
     """Get direct child runs of a parent run."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -200,7 +203,7 @@ def get_run_children(run_id: str) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
-def get_run_tree(run_id: str) -> dict:
+def get_run_tree(run_id: str) -> dict[str, Any]:
     """Get full execution tree using a recursive CTE.
 
     Returns the root run with aggregate token/cost totals across all
@@ -283,7 +286,7 @@ def create_step(step: RunStep) -> str:
     return step.id
 
 
-def list_steps(run_id: str) -> list[dict]:
+def list_steps(run_id: str) -> list[dict[str, Any]]:
     """List all steps for a run, ordered by step number."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -297,7 +300,7 @@ def list_steps(run_id: str) -> list[dict]:
 # ─── Schedules ────────────────────────────────────────────────────────
 
 
-def get_schedule(agent_id: str) -> dict | None:
+def get_schedule(agent_id: str) -> dict[str, Any] | None:
     """Get schedule state for an agent."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -403,7 +406,7 @@ def update_schedule_state(
 def list_schedules(
     enabled_only: bool = False,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List all agent schedules."""
     conditions = ["tenant_id = %s"]
     values: list[Any] = [tenant_id]
@@ -469,7 +472,7 @@ def log_tool_event(
         logger.debug("Failed to log tool event: %s", e)
 
 
-def get_tool_stats(hours: int = 24) -> list[dict]:
+def get_tool_stats(hours: int = 24) -> list[dict[str, Any]]:
     """Get aggregated tool stats over the last N hours."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -497,7 +500,7 @@ def get_agent_stats(
     agent_id: str,
     hours: int = 24,
     tenant_id: str = DEFAULT_TENANT,
-) -> dict:
+) -> dict[str, Any]:
     """Get aggregated stats for an agent over the last N hours."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)

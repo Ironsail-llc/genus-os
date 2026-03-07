@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -68,7 +68,7 @@ def _insert_full_data(ref_time: datetime):
 
 class TestFullData:
     def test_full_data(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         _insert_full_data(ref)
 
         output = generate_summary(now=ref)
@@ -101,12 +101,12 @@ class TestFullData:
 
 class TestMissingSleep:
     def test_missing_sleep(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         output = generate_summary(now=ref)
         assert "Sleep: N/A" in output
 
     def test_sleep_fallback_to_yesterday(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         dal.upsert_sleep([("2026-02-26", 0, 0, 28800, 3600, 18000, 7200, 900, 76, "FAIR", None)])
         output = generate_summary(now=ref)
         assert "Sleep: 8h 00m (score 76, FAIR)" in output
@@ -114,14 +114,14 @@ class TestMissingSleep:
 
 class TestMissingSteps:
     def test_missing_steps(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         output = generate_summary(now=ref)
         assert "Steps: N/A" in output
 
 
 class TestEmptyDB:
     def test_empty_db(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         output = generate_summary(now=ref)
         assert "Sleep: N/A" in output
         assert "HRV: N/A" in output
@@ -182,12 +182,12 @@ class TestAtomicWrite:
 
 class TestOutputSize:
     def test_output_under_1000_chars(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         _insert_full_data(ref)
         output = generate_summary(now=ref)
         assert len(output) < 1000, f"Output too long: {len(output)} chars"
 
     def test_empty_output_under_1000_chars(self):
-        ref = datetime(2026, 2, 27, 7, 0, 0)
+        ref = datetime(2026, 2, 27, 7, 0, 0, tzinfo=UTC)
         output = generate_summary(now=ref)
         assert len(output) < 1000, f"Output too long: {len(output)} chars"

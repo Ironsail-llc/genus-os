@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 # We mock get_connection so no real DB is needed.
@@ -171,7 +172,7 @@ class TestTaskToDictRequiresHuman:
     def test_task_to_dict_includes_requires_human(self):
         from robothor.crm.models import task_to_dict
 
-        row = {
+        row: dict[str, Any] = {
             "id": "abc-123",
             "title": "Test",
             "body": "",
@@ -200,7 +201,7 @@ class TestTaskToDictRequiresHuman:
     def test_task_to_dict_requires_human_defaults_false(self):
         from robothor.crm.models import task_to_dict
 
-        row = {
+        row: dict[str, Any] = {
             "id": "abc-123",
             "title": "Test",
             "body": "",

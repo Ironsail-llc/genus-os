@@ -90,7 +90,7 @@ def _friendly_tool_name(tool: str) -> str:
     return _TOOL_LABELS.get(tool, tool.replace("_", " ").title())
 
 
-def _plan_state_to_dict(plan: PlanState) -> dict:
+def _plan_state_to_dict(plan: PlanState) -> dict[str, Any]:
     """Serialize PlanState to dict for DB persistence."""
     return {
         "plan_id": plan.plan_id,
@@ -161,7 +161,7 @@ def _md_to_html(text: str) -> str:
     text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
     # Italic (*text* or _text_) — careful not to match inside URLs or words with underscores
     text = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", text)
-    # Links [text](url)
+    # Markdown-style links
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
     return text
 
@@ -433,7 +433,7 @@ class TelegramBot:
                 try:
                     msg = callback.message
                     if msg and hasattr(msg, "edit_reply_markup"):
-                        await msg.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+                        await msg.edit_reply_markup(reply_markup=None)
                 except Exception:
                     pass
                 await self._execute_approved_plan(chat_id, session_key, session)
@@ -451,7 +451,7 @@ class TelegramBot:
                 try:
                     msg = callback.message
                     if msg and hasattr(msg, "edit_reply_markup"):
-                        await msg.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+                        await msg.edit_reply_markup(reply_markup=None)
                 except Exception:
                     pass
                 await callback.answer("Plan rejected")
@@ -486,7 +486,7 @@ class TelegramBot:
             try:
                 msg = callback.message
                 if msg and hasattr(msg, "edit_text"):
-                    await msg.edit_text(  # type: ignore[union-attr]
+                    await msg.edit_text(
                         f"<b>Model switched to:</b> {html.escape(display)}",
                         reply_markup=kb,
                     )
@@ -607,9 +607,8 @@ class TelegramBot:
                     session.active_plan = None
                     await self._run_plan_mode(chat_id, session_key, session, user_text, message)
                     return
-                else:
-                    session.active_plan.status = "expired"
-                    session.active_plan = None
+                session.active_plan.status = "expired"
+                session.active_plan = None
 
             if session.plan_mode:
                 session.plan_mode = False
@@ -646,9 +645,8 @@ class TelegramBot:
                 if not _plan_is_expired(session.active_plan):
                     await self._iterate_plan(chat_id, session_key, session, user_text)
                     return
-                else:
-                    session.active_plan.status = "expired"
-                    session.active_plan = None
+                session.active_plan.status = "expired"
+                session.active_plan = None
 
             # ── Check plan_mode toggle — route through plan pipeline ──
             if session.plan_mode:
@@ -784,12 +782,12 @@ class TelegramBot:
             last_edit_time = now
             last_edit_len = text_len
 
-        async def on_tool(event: dict) -> None:
+        async def on_tool(event: dict[str, Any]) -> None:
             if event.get("event") == "tool_start":
                 label = _friendly_tool_name(event.get("tool", ""))
                 await _edit_status(f"\n\n\U0001f527 {label}...")
 
-        async def on_status(event: dict) -> None:
+        async def on_status(event: dict[str, Any]) -> None:
             if event.get("event") == "tools_done":
                 await _edit_status("\n\n\U0001f4ad Thinking...")
 
@@ -1079,7 +1077,7 @@ class TelegramBot:
         except Exception:
             progress_msg_id = None
 
-        async def on_progress(progress: dict) -> None:
+        async def on_progress(progress: dict[str, Any]) -> None:
             nonlocal progress_msg_id
             elapsed = progress.get("elapsed_s", 0)
             text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"
@@ -1362,7 +1360,7 @@ class TelegramBot:
         except Exception:
             progress_msg_id = None
 
-        async def on_progress(progress: dict) -> None:
+        async def on_progress(progress: dict[str, Any]) -> None:
             nonlocal progress_msg_id
             elapsed = progress.get("elapsed_s", 0)
             text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"

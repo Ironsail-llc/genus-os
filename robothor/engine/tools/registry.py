@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.models import AgentConfig
 from robothor.engine.tools.constants import SPAWN_TOOLS
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.schemas import get_engine_schemas
+
+if TYPE_CHECKING:
+    from robothor.engine.models import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class ToolRegistry:
     """Registry of available tools with schema filtering per agent."""
 
     def __init__(self) -> None:
-        self._schemas: dict[str, dict] = {}
+        self._schemas: dict[str, dict[str, Any]] = {}
         self._register_all()
 
     def _register_all(self) -> None:
@@ -39,12 +41,12 @@ class ToolRegistry:
         # Engine-specific tools
         self._schemas.update(get_engine_schemas())
 
-    def build_for_agent(self, config: AgentConfig) -> list[dict]:
+    def build_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists."""
         names = self._get_filtered_names(config)
         return [self._schemas[n] for n in names]
 
-    def build_readonly_for_agent(self, config: AgentConfig) -> list[dict]:
+    def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
         from robothor.engine.tools.constants import READONLY_TOOLS
 

@@ -13,6 +13,8 @@ Usage:
 
 from __future__ import annotations
 
+from typing import Any
+
 SYSTEM_PROMPT = """You are an AI assistant with access to a personal memory system and web search.
 You have been given relevant context from memory and/or web search below.
 Use this context to answer the user's question accurately.
@@ -20,7 +22,7 @@ If the context doesn't contain relevant information, say so and answer from gene
 Cite your sources when applicable — reference memory entries or web URLs."""
 
 
-def format_context(results: list[dict], max_chars: int = 40000) -> str:
+def format_context(results: list[dict[str, Any]], max_chars: int = 40000) -> str:
     """Format memory search results into a context string for the LLM.
 
     Args:
@@ -57,8 +59,8 @@ def format_context(results: list[dict], max_chars: int = 40000) -> str:
 
 
 def format_merged_context(
-    memory_results: list[dict],
-    web_results: list[dict],
+    memory_results: list[dict[str, Any]],
+    web_results: list[dict[str, Any]],
     max_chars: int = 40000,
 ) -> str:
     """Format merged memory + web results into a context block.

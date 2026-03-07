@@ -60,7 +60,7 @@ def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwarg
 # ─── People ──────────────────────────────────────────────────────────────
 
 
-def search_people(name: str, tenant_id: str = DEFAULT_TENANT) -> list[dict]:
+def search_people(name: str, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
     """Search people by name (ILIKE on first_name/last_name)."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -128,7 +128,7 @@ def create_person(
             return None
 
 
-def get_person(person_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def get_person(person_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
     """Get a person by ID, with company JOIN."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -219,7 +219,9 @@ def delete_person(person_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return False
 
 
-def merge_people(keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def merge_people(
+    keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
     """Merge loser into keeper in a single transaction.
 
     1. Fill keeper's empty fields from loser
@@ -359,7 +361,9 @@ def merge_people(keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENANT)
             return None
 
 
-def merge_companies(keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def merge_companies(
+    keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
     """Merge loser company into keeper.
 
     1. Fill keeper's empty fields from loser
@@ -436,7 +440,7 @@ def merge_companies(keeper_id: str, loser_id: str, tenant_id: str = DEFAULT_TENA
 
 def list_people(
     search: str | None = None, limit: int = 20, tenant_id: str = DEFAULT_TENANT
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List people, optionally filtered by search term."""
     if search:
         return search_people(search, tenant_id)
@@ -532,7 +536,7 @@ def create_company(
             return None
 
 
-def get_company(company_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def get_company(company_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
     """Get a company by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -610,7 +614,7 @@ def delete_company(company_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
 
 def list_companies(
     search: str | None = None, limit: int = 50, tenant_id: str = DEFAULT_TENANT
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List companies, optionally filtered by name search."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -666,7 +670,7 @@ def create_note(
             return None
 
 
-def get_note(note_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def get_note(note_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
     """Get a note by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -683,7 +687,7 @@ def list_notes(
     company_id: str | None = None,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List notes with optional person/company filter."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -812,7 +816,7 @@ def _record_transition(
     to_status: str,
     changed_by: str | None = None,
     reason: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> None:
     """Append a row to crm_task_history."""
@@ -852,7 +856,7 @@ def find_task_by_thread_id(
     assigned_to_agent: str | None = None,
     include_recently_resolved: bool = False,
     tenant_id: str = DEFAULT_TENANT,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Find a task containing a threadId in its body.
 
     Used for server-side dedup — prevents duplicate tasks for the same email thread.
@@ -961,7 +965,7 @@ def create_task(
             return None
 
 
-def get_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def get_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
     """Get a task by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -985,7 +989,7 @@ def list_tasks(
     exclude_resolved: bool = True,
     requires_human: bool | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List tasks with optional filters."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1028,7 +1032,7 @@ def list_tasks(
 
 def update_task(
     task_id: str, changed_by: str | None = None, tenant_id: str = DEFAULT_TENANT, **fields: Any
-) -> bool | dict:
+) -> bool | dict[str, Any]:
     """Update a task.
 
     Accepted: title, body, status, due_at, person_id, company_id,
@@ -1159,7 +1163,7 @@ def list_agent_tasks(
     exclude_resolved: bool = True,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Get an agent's task inbox, priority-ordered."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1201,7 +1205,7 @@ def resolve_task(
     resolution: str,
     agent_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> bool | dict:
+) -> bool | dict[str, Any]:
     """Mark a task as DONE with a resolution summary.
 
     Returns dict with error if the task has requires_human=True and the caller
@@ -1268,7 +1272,7 @@ def approve_task(
     resolution: str,
     reviewer: str,
     tenant_id: str = DEFAULT_TENANT,
-) -> bool | dict:
+) -> bool | dict[str, Any]:
     """Approve a task in REVIEW status. Reviewer must differ from assignee."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1328,7 +1332,7 @@ def reject_task(
     reviewer: str,
     change_requests: list[str] | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> bool | dict:
+) -> bool | dict[str, Any]:
     """Reject a task in REVIEW status. Reverts to IN_PROGRESS."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1403,7 +1407,9 @@ def reject_task(
             return False
 
 
-def get_task_history(task_id: str, limit: int = 50, tenant_id: str = DEFAULT_TENANT) -> list[dict]:
+def get_task_history(
+    task_id: str, limit: int = 50, tenant_id: str = DEFAULT_TENANT
+) -> list[dict[str, Any]]:
     """Get transition history for a task, most recent first."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1425,7 +1431,7 @@ def list_conversations(
     page: int = 1,
     page_size: int = 25,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List conversations by status with pagination."""
     offset = (page - 1) * page_size
     with get_connection() as conn:
@@ -1445,7 +1451,9 @@ def list_conversations(
         return [conversation_to_dict(r) for r in cur.fetchall()]
 
 
-def get_conversation(conversation_id: int, tenant_id: str = DEFAULT_TENANT) -> dict | None:
+def get_conversation(
+    conversation_id: int, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
     """Get a conversation by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1463,7 +1471,7 @@ def get_conversation(conversation_id: int, tenant_id: str = DEFAULT_TENANT) -> d
         return conversation_to_dict(row) if row else None
 
 
-def list_messages(conversation_id: int, tenant_id: str = DEFAULT_TENANT) -> list[dict]:
+def list_messages(conversation_id: int, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
     """List all messages in a conversation."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1484,7 +1492,7 @@ def send_message(
     message_type: str = "outgoing",
     private: bool = False,
     tenant_id: str = DEFAULT_TENANT,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a message in a conversation."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1610,7 +1618,7 @@ def create_routine(
 
 def list_routines(
     active_only: bool = True, limit: int = 50, tenant_id: str = DEFAULT_TENANT
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List routines, optionally filtered to active only."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1696,7 +1704,7 @@ def delete_routine(routine_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return False
 
 
-def get_due_routines(tenant_id: str = DEFAULT_TENANT) -> list[dict]:
+def get_due_routines(tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
     """Get routines due for triggering (next_run_at <= NOW(), active, not deleted)."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1755,7 +1763,7 @@ def send_notification(
     notification_type: str,
     subject: str,
     body: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
     task_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
@@ -1801,7 +1809,7 @@ def get_agent_inbox(
     type_filter: str | None = None,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Get notifications for an agent, ordered by newest first."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1867,7 +1875,7 @@ def list_notifications(
     task_id: str | None = None,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List notifications with optional filters."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1900,7 +1908,7 @@ def create_tenant(
     tenant_id: str,
     display_name: str,
     parent_tenant_id: str | None = None,
-    settings: dict | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> str | None:
     """Create a tenant. Returns tenant ID."""
     with get_connection() as conn:
@@ -1920,7 +1928,7 @@ def create_tenant(
             return None
 
 
-def get_tenant(tenant_id: str) -> dict | None:
+def get_tenant(tenant_id: str) -> dict[str, Any] | None:
     """Get a tenant by ID."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1929,7 +1937,7 @@ def get_tenant(tenant_id: str) -> dict | None:
         return tenant_to_dict(row) if row else None
 
 
-def list_tenants(parent_id: str | None = None, active_only: bool = True) -> list[dict]:
+def list_tenants(parent_id: str | None = None, active_only: bool = True) -> list[dict[str, Any]]:
     """List tenants, optionally filtered by parent."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2029,7 +2037,7 @@ def append_to_block(block_name: str, entry: str, max_entries: int = 20) -> bool:
 # ─── Search & Metadata ───────────────────────────────────────────────────
 
 
-def get_metadata_objects() -> list[dict]:
+def get_metadata_objects() -> list[dict[str, Any]]:
     """Return list of CRM table names and labels."""
     return [
         {"name": "crm_people", "label": "People"},
@@ -2043,7 +2051,7 @@ def get_metadata_objects() -> list[dict]:
     ]
 
 
-def get_object_metadata(object_name: str) -> dict | None:
+def get_object_metadata(object_name: str) -> dict[str, Any] | None:
     """Return column info for a CRM table."""
     valid = {
         "crm_people",
@@ -2075,9 +2083,9 @@ def get_object_metadata(object_name: str) -> dict | None:
 
 def search_records(
     query: str, object_name: str | None = None, limit: int = 20, tenant_id: str = DEFAULT_TENANT
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Cross-table keyword search on CRM entities."""
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     pattern = f"%{query}%"
 
     tables = {
@@ -2106,14 +2114,14 @@ def search_records(
     return results[:limit]
 
 
-def check_health() -> dict:
+def check_health() -> dict[str, Any]:
     """Quick health check: count people + conversations."""
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM crm_people WHERE deleted_at IS NULL")
-        people_count: int = cur.fetchone()[0]  # type: ignore[index]
+        people_count: int = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM crm_conversations")
-        conv_count: int = cur.fetchone()[0]  # type: ignore[index]
+        conv_count: int = cur.fetchone()[0]
         return {"status": "ok", "people": people_count, "conversations": conv_count}
 
 
@@ -2125,7 +2133,7 @@ def resolve_contact(
     identifier: str,
     name: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> dict:
+) -> dict[str, Any]:
     """Resolve a channel identifier to a person_id. Creates person if needed.
 
     Upserts into ``contact_identifiers`` and returns the resolved row.
@@ -2194,7 +2202,9 @@ def resolve_contact(
         return dict(result) if result else {}
 
 
-def get_conversations_for_contact(person_id: str, tenant_id: str = DEFAULT_TENANT) -> list[dict]:
+def get_conversations_for_contact(
+    person_id: str, tenant_id: str = DEFAULT_TENANT
+) -> list[dict[str, Any]]:
     """Get all conversations for a person, newest first."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2213,7 +2223,7 @@ def create_conversation(
     person_id: str,
     inbox_name: str = "Robothor Bridge",
     tenant_id: str = DEFAULT_TENANT,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a new conversation for a person."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2242,7 +2252,7 @@ def create_conversation(
             return None
 
 
-def get_timeline(identifier: str, tenant_id: str = DEFAULT_TENANT) -> dict:
+def get_timeline(identifier: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     """Get unified timeline for a contact across CRM data.
 
     Looks up a contact by identifier (email, phone, name), then gathers

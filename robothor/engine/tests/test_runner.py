@@ -295,7 +295,7 @@ class TestBrokenModelTracking:
 
             if model == "model-a":
                 err = Exception("Rate limited")
-                err.status_code = 403
+                err.status_code = 403  # type: ignore[attr-defined]
                 raise err
 
             # model-b succeeds
@@ -304,8 +304,7 @@ class TestBrokenModelTracking:
                 resp = mock_litellm_response(content=None, tool_calls=[tc], model="model-b")
                 resp.choices[0].message.content = None
                 return resp
-            else:
-                return mock_litellm_response(content="Done", model="model-b")
+            return mock_litellm_response(content="Done", model="model-b")
 
         runner.registry.execute = AsyncMock(return_value={"ok": True})
         runner.registry.build_for_agent.return_value = [
@@ -344,7 +343,7 @@ class TestBrokenModelTracking:
             nonlocal call_count
             call_count += 1
             err = Exception("Forbidden")
-            err.status_code = 403
+            err.status_code = 403  # type: ignore[attr-defined]
             raise err
 
         with patch("robothor.engine.runner.create_run"):

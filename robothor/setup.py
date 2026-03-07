@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -88,7 +89,7 @@ volumes:
 """
 
 
-def run_init(args) -> int:
+def run_init(args: Any) -> int:
     """Main orchestrator for the init wizard."""
     print()
     print("  Robothor Setup")
@@ -233,7 +234,7 @@ def run_init(args) -> int:
     return 0
 
 
-def check_prerequisites(*, docker_required: bool = False) -> list[dict]:
+def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]]:
     """Check for required and optional tools.
 
     Returns a list of dicts: {name, found, detail, required, hint}.
@@ -627,7 +628,7 @@ def _install_hint(apt_pkg: str, brew_pkg: str) -> str:
     return f"apt install {apt_pkg}  OR  brew install {brew_pkg}"
 
 
-def _print_prerequisites(prereqs: list[dict]) -> None:
+def _print_prerequisites(prereqs: list[dict[str, Any]]) -> None:
     """Print formatted prerequisite check results."""
     for p in prereqs:
         mark = "+" if p["found"] else "x"

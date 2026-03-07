@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -21,7 +23,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("exec")
-async def _exec(args: dict, ctx: ToolContext) -> dict:
+async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     command = args.get("command", "")
     if not command:
         return {"error": "No command provided"}
@@ -50,7 +52,7 @@ async def _exec(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("read_file")
-async def _read_file(args: dict, ctx: ToolContext) -> dict:
+async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
@@ -67,7 +69,7 @@ async def _read_file(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_directory")
-async def _list_directory(args: dict, ctx: ToolContext) -> dict:
+async def _list_directory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
@@ -120,7 +122,7 @@ async def _list_directory(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("write_file")
-async def _write_file(args: dict, ctx: ToolContext) -> dict:
+async def _write_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:

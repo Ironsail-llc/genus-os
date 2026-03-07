@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 CSS_PATH = Path(__file__).parent / "theme.tcss"
 
 
-class RobothorApp(App):
+class RobothorApp(App[None]):
     """Terminal chat interface for the Robothor Agent Engine."""
 
     TITLE = "Robothor"
@@ -53,9 +53,9 @@ class RobothorApp(App):
             username = getpass.getuser()
             session_key = f"agent:main:tui-{username}"
         self.client = EngineClient(base_url=engine_url, session_key=session_key)
-        self._stream_task: asyncio.Task | None = None
+        self._stream_task: asyncio.Task[None] | None = None
         self._connected = False
-        self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
         self._input_history: list[str] = []
         self._history_index = -1
 
@@ -68,7 +68,7 @@ class RobothorApp(App):
 
     @property
     def status_bar(self) -> StatusBar:
-        return self.query_one("#status-bar", StatusBar)  # type: ignore[no-any-return]
+        return self.query_one("#status-bar", StatusBar)
 
     async def on_mount(self) -> None:
         """Connect to engine on startup."""
@@ -342,7 +342,7 @@ class RobothorApp(App):
             self._stream_task.cancel()
             await self.client.abort()
 
-    async def on_key(self, event) -> None:
+    async def on_key(self, event: Any) -> None:
         """Handle up/down arrow for input history."""
         input_widget = self.query_one("#message-input", Input)
         if not input_widget.has_focus:
@@ -360,7 +360,7 @@ class RobothorApp(App):
         elif event.key == "down" and self._input_history:
             if self._history_index == -1:
                 return
-            elif self._history_index < len(self._input_history) - 1:
+            if self._history_index < len(self._input_history) - 1:
                 self._history_index += 1
                 input_widget.value = self._input_history[self._history_index]
             else:

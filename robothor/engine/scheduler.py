@@ -518,6 +518,7 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
     delivery, warmup, and budget from heartbeat config.
     """
     hb = agent_config.heartbeat
+    assert hb is not None
     return AgentConfig(
         id=agent_config.id,
         name=agent_config.name,

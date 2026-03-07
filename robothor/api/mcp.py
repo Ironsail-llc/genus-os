@@ -63,7 +63,7 @@ def _svc_url(service: str, path: str = "") -> str:
 # ─── Tool Definitions ────────────────────────────────────────────────
 
 
-def get_tool_definitions() -> list[dict]:
+def get_tool_definitions() -> list[dict[str, Any]]:
     """Return the list of MCP tool definitions."""
     return [
         # Memory tools
@@ -1138,7 +1138,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             ]
         }
 
-    elif name == "store_memory":
+    if name == "store_memory":
         from robothor.memory.facts import extract_facts, store_fact
 
         content = arguments.get("content", "")
@@ -1151,12 +1151,12 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         fact_id = await store_fact(fact, content, content_type)
         return {"id": fact_id, "facts_stored": 1}
 
-    elif name == "get_stats":
+    if name == "get_stats":
         from robothor.memory.facts import get_memory_stats
 
         return get_memory_stats()
 
-    elif name == "get_entity":
+    if name == "get_entity":
         from robothor.memory.entities import get_entity
 
         try:
@@ -1264,17 +1264,17 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
     elif name == "memory_block_read":
         from robothor.memory.blocks import read_block
 
-        return read_block(arguments.get("block_name", ""))  # type: ignore[no-any-return]
+        return read_block(arguments.get("block_name", ""))
 
     elif name == "memory_block_write":
         from robothor.memory.blocks import write_block
 
-        return write_block(arguments.get("block_name", ""), arguments.get("content", ""))  # type: ignore[no-any-return]
+        return write_block(arguments.get("block_name", ""), arguments.get("content", ""))
 
     elif name == "memory_block_list":
         from robothor.memory.blocks import list_blocks
 
-        return list_blocks()  # type: ignore[no-any-return]
+        return list_blocks()
 
     # ── CRM interaction ──
 
@@ -1565,7 +1565,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
     elif name == "approve_task":
         from robothor.crm.dal import approve_task
 
-        approve_result: bool | dict = approve_task(
+        approve_result: bool | dict[str, Any] = approve_task(
             task_id=arguments["id"],
             resolution=arguments.get("resolution", "Approved"),
             reviewer="mcp-user",
@@ -1577,7 +1577,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
     elif name == "reject_task":
         from robothor.crm.dal import reject_task
 
-        reject_result: bool | dict = reject_task(
+        reject_result: bool | dict[str, Any] = reject_task(
             task_id=arguments["id"],
             reason=arguments.get("reason", ""),
             reviewer="mcp-user",
@@ -1703,29 +1703,29 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 # ─── MCP Server ──────────────────────────────────────────────────────
 
 
-def create_server():
+def create_server() -> Any:
     """Create and configure the MCP server."""
     import mcp.types as types
     from mcp.server import Server
 
     server = Server("robothor-memory")
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[untyped-decorator]
     async def list_tools() -> list[types.Tool]:
         return [
             types.Tool(name=d["name"], description=d["description"], inputSchema=d["inputSchema"])
             for d in get_tool_definitions()
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    @server.call_tool()  # type: ignore[untyped-decorator]
+    async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         result = await handle_tool_call(name, arguments or {})
         return [types.TextContent(type="text", text=json.dumps(result, default=str))]
 
     return server
 
 
-async def run_server():
+async def run_server() -> None:
     """Run the MCP server with stdio transport."""
     from mcp.server.stdio import stdio_server
 

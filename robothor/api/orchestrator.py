@@ -20,7 +20,10 @@ import json
 import os
 import time
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -144,7 +147,7 @@ class VisionSuppressionRequest(BaseModel):
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, Any]:
     """Health check — reports status of all components."""
     from robothor.llm.ollama import check_model_available
     from robothor.rag.reranker import check_reranker_available
@@ -166,14 +169,14 @@ async def health():
 
 
 @app.post("/query")
-async def query_endpoint(req: QueryRequest):
+async def query_endpoint(req: QueryRequest) -> Any:
     """Simple RAG query endpoint."""
     result = await run_pipeline(query=req.question, profile=req.profile)
     return result
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatRequest):
+async def chat_completions(req: ChatRequest) -> Any:
     """OpenAI-compatible chat completions endpoint.
 
     Supports the standard OpenAI API format so tools like Open WebUI,
@@ -216,7 +219,7 @@ async def chat_completions(req: ChatRequest):
 
     if req.stream:
 
-        async def stream_response():
+        async def stream_response() -> AsyncGenerator[str, None]:
             chunk = {
                 "id": response.id,
                 "object": "chat.completion.chunk",
@@ -239,7 +242,7 @@ async def chat_completions(req: ChatRequest):
 
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models() -> dict[str, Any]:
     """OpenAI-compatible model listing."""
     return {
         "object": "list",
@@ -255,13 +258,13 @@ async def list_models():
 
 
 @app.get("/profiles")
-async def list_profiles():
+async def list_profiles() -> Any:
     """List available RAG profiles."""
     return RAG_PROFILES
 
 
 @app.get("/stats")
-async def stats():
+async def stats() -> dict[str, Any]:
     """Memory system statistics."""
     from robothor.memory.facts import get_memory_stats
 
@@ -269,7 +272,7 @@ async def stats():
 
 
 @app.post("/ingest")
-async def ingest_endpoint(req: IngestRequest):
+async def ingest_endpoint(req: IngestRequest) -> Any:
     """Ingest content from any channel."""
     from robothor.memory.ingestion import ingest_content
 
@@ -293,7 +296,7 @@ def _vision_url(path: str) -> str:
 
 
 @app.post("/vision/look")
-async def vision_look(req: VisionLookRequest | None = None):
+async def vision_look(req: VisionLookRequest | None = None) -> Any:
     """Proxy to vision service — capture and analyze a snapshot."""
     if req is None:
         req = VisionLookRequest()
@@ -307,7 +310,7 @@ async def vision_look(req: VisionLookRequest | None = None):
 
 
 @app.post("/vision/detect")
-async def vision_detect():
+async def vision_detect() -> Any:
     """Proxy to vision service — run object detection."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -320,7 +323,7 @@ async def vision_detect():
 
 
 @app.post("/vision/identify")
-async def vision_identify():
+async def vision_identify() -> Any:
     """Proxy to vision service — face identification."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -333,7 +336,7 @@ async def vision_identify():
 
 
 @app.get("/vision/status")
-async def vision_status():
+async def vision_status() -> Any:
     """Get the vision service status."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -346,7 +349,7 @@ async def vision_status():
 
 
 @app.post("/vision/enroll")
-async def vision_enroll(req: VisionEnrollRequest):
+async def vision_enroll(req: VisionEnrollRequest) -> Any:
     """Proxy to vision service — enroll a face for recognition."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -359,7 +362,7 @@ async def vision_enroll(req: VisionEnrollRequest):
 
 
 @app.get("/vision/mode")
-async def vision_mode_get():
+async def vision_mode_get() -> Any:
     """Get the current vision mode."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -372,7 +375,7 @@ async def vision_mode_get():
 
 
 @app.post("/vision/mode")
-async def vision_mode_set(req: VisionModeRequest):
+async def vision_mode_set(req: VisionModeRequest) -> Any:
     """Switch the vision mode (disarmed, basic, armed)."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -385,7 +388,7 @@ async def vision_mode_set(req: VisionModeRequest):
 
 
 @app.post("/vision/enroll-from-image")
-async def vision_enroll_from_image(req: VisionEnrollFromImageRequest):
+async def vision_enroll_from_image(req: VisionEnrollFromImageRequest) -> Any:
     """Enroll a face from saved image files (snapshots, photos)."""
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -401,7 +404,7 @@ async def vision_enroll_from_image(req: VisionEnrollFromImageRequest):
 
 
 @app.get("/vision/enrolled")
-async def vision_enrolled():
+async def vision_enrolled() -> Any:
     """List all enrolled faces."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -414,7 +417,7 @@ async def vision_enrolled():
 
 
 @app.post("/vision/unenroll")
-async def vision_unenroll(req: VisionEnrollRequest):
+async def vision_unenroll(req: VisionEnrollRequest) -> Any:
     """Remove a person from face enrollment."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

@@ -57,7 +57,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Web
         "web_fetch",
         "web_search",
-        # Memory (read)
+        # Memory read-only tools
         "search_memory",
         "get_entity",
         "memory_block_read",
@@ -79,7 +79,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_metadata_objects",
         "get_object_metadata",
         "get_inbox",
-        # Vision (read)
+        # Vision read-only tools
         "look",
         "who_is_here",
         "list_enrolled_faces",
@@ -88,10 +88,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_agent_run",
         "list_agent_schedules",
         "get_agent_stats",
-        # Vault (read)
+        # Vault read-only tools
         "vault_get",
         "vault_list",
-        # Healthcare (read)
+        # Healthcare read-only tools
         "search_patients",
         "get_patient_details",
         "get_patient_clinical_notes",
@@ -106,7 +106,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "deep_reason",
         # PDF
         "analyze_pdf",
-        # Git (read-only)
+        # Git read-only tools
         "git_status",
         "git_diff",
         # Google Workspace (read-only)

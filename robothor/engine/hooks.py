@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Legacy fallback — used only when no manifests define hooks.
 # Once all hooks are in manifests, this dict can be removed.
-_LEGACY_EVENT_TRIGGERS: dict[str, list[dict]] = {
+_LEGACY_EVENT_TRIGGERS: dict[str, list[dict[str, Any]]] = {
     "email": [
         {
             "event_type": "email.new",
@@ -67,7 +67,7 @@ _LEGACY_EVENT_TRIGGERS: dict[str, list[dict]] = {
 }
 
 
-def build_event_triggers(manifest_dir) -> dict[str, list[dict]]:
+def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
     """Build event trigger map from agent manifests.
 
     Scans all manifests for `hooks` entries and aggregates them into a
@@ -78,7 +78,7 @@ def build_event_triggers(manifest_dir) -> dict[str, list[dict]]:
 
     from robothor.engine.config import load_all_manifests, manifest_to_agent_config
 
-    triggers: dict[str, list[dict]] = {}
+    triggers: dict[str, list[dict[str, Any]]] = {}
     manifest_dir = Path(manifest_dir)
 
     if not manifest_dir.is_dir():
@@ -122,14 +122,14 @@ class EventHooks:
         self,
         config: EngineConfig,
         runner: AgentRunner,
-        workflow_engine=None,
+        workflow_engine: Any = None,
     ) -> None:
         self.config = config
         self.runner = runner
         self.workflow_engine = workflow_engine
         self._stop_event = asyncio.Event()
         self._prefixed_to_bare: dict[str, str] = {}
-        self._event_triggers: dict[str, list[dict]] = {}
+        self._event_triggers: dict[str, list[dict[str, Any]]] = {}
 
     async def start(self) -> None:
         """Start consuming Redis streams."""
@@ -177,7 +177,7 @@ class EventHooks:
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
 
         # Read loop — subscribe to prefixed keys
-        stream_keys = {s: ">" for s in prefixed_streams}
+        stream_keys = dict.fromkeys(prefixed_streams, ">")
         while not self._stop_event.is_set():
             try:
                 results = await r.xreadgroup(
@@ -208,9 +208,9 @@ class EventHooks:
     async def _handle_event(
         self,
         stream: str,
-        msg_id,
-        data: dict,
-        redis_client,
+        msg_id: Any,
+        data: dict[str, Any],
+        redis_client: Any,
         group: str,
     ) -> None:
         """Process a single event from a stream."""

@@ -15,6 +15,7 @@ import argparse
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import psycopg2.extras
 
@@ -128,7 +129,7 @@ JSONB_COLUMNS = {"raw_data"}
 
 def migrate_table(
     sqlite_conn: sqlite3.Connection,
-    pg_conn,
+    pg_conn: Any,
     sqlite_table: str,
     pg_table: str,
     columns: list[str],
@@ -190,7 +191,7 @@ def migrate_table(
     return sqlite_count, pg_count
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Migrate Garmin data from SQLite to PostgreSQL")
     parser.add_argument(
         "--db",

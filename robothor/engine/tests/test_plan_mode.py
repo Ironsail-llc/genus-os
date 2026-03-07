@@ -42,7 +42,7 @@ class TestPlanStateModel:
         assert plan.execution_run_id == ""
 
     def test_step_type_includes_plan_proposal(self):
-        assert StepType.PLAN_PROPOSAL == "plan_proposal"
+        assert StepType.PLAN_PROPOSAL.value == "plan_proposal"
         assert "plan_proposal" in [s.value for s in StepType]
 
 

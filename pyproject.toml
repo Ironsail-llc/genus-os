@@ -88,8 +88,9 @@ line-length = 100
 exclude = ["brain/"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
-ignore = ["E501", "SIM108", "SIM110", "SIM117"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "RET", "PERF",
+          "TCH", "FURB", "ERA", "PTH", "DTZ", "A"]
+ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 
 [tool.ruff.lint.per-file-ignores]
 "crm/bridge/*.py" = ["E402", "N815", "SIM105"]
@@ -98,11 +99,7 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117"]
 "crm/bridge/tests/*.py" = ["E402"]
 "crm/tests/*.py" = ["E402"]
 
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
+# mypy config lives in mypy.ini (pyproject.toml overrides don't work with editable installs)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

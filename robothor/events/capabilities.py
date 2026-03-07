@@ -13,12 +13,13 @@ import fnmatch
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Cached manifest
-_manifest: dict | None = None
+_manifest: dict[str, Any] | None = None
 
 
 def _get_manifest_path() -> str:
@@ -35,10 +36,10 @@ def _get_manifest_path() -> str:
 
     workspace = os.environ.get("ROBOTHOR_WORKSPACE")
     if workspace:
-        path = os.path.join(workspace, "agent_capabilities.json")
-        if not os.path.exists(path):
-            path = os.path.join(workspace, "brain", "agent_capabilities.json")
-        return path
+        p = Path(workspace) / "agent_capabilities.json"
+        if not p.exists():
+            p = Path(workspace) / "brain" / "agent_capabilities.json"
+        return str(p)
 
     try:
         from robothor.config import get_config
@@ -49,15 +50,13 @@ def _get_manifest_path() -> str:
             p = ws / "brain" / "agent_capabilities.json"
         return str(p)
     except Exception:
-        path = os.path.join(os.path.expanduser("~"), "robothor", "agent_capabilities.json")
-        if not os.path.exists(path):
-            path = os.path.join(
-                os.path.expanduser("~"), "robothor", "brain", "agent_capabilities.json"
-            )
-        return path
+        p = Path.home() / "robothor" / "agent_capabilities.json"
+        if not p.exists():
+            p = Path.home() / "robothor" / "brain" / "agent_capabilities.json"
+        return str(p)
 
 
-def load_capabilities(path: str | None = None) -> dict:
+def load_capabilities(path: str | None = None) -> dict[str, Any]:
     """Load the agent capabilities manifest.
 
     Args:
@@ -69,7 +68,7 @@ def load_capabilities(path: str | None = None) -> dict:
     global _manifest
     manifest_path = path or _get_manifest_path()
     try:
-        with open(manifest_path) as f:
+        with Path(manifest_path).open() as f:
             _manifest = json.load(f)
         return _manifest
     except (FileNotFoundError, json.JSONDecodeError) as e:
@@ -78,14 +77,14 @@ def load_capabilities(path: str | None = None) -> dict:
         return _manifest
 
 
-def _get_manifest() -> dict:
+def _get_manifest() -> dict[str, Any]:
     """Get cached manifest, loading if needed."""
     if _manifest is None:
         load_capabilities()
     return _manifest or {}
 
 
-def _get_agent(agent_id: str) -> dict | None:
+def _get_agent(agent_id: str) -> dict[str, Any] | None:
     """Look up agent config by ID. Returns None if not found."""
     manifest = _get_manifest()
     agents: dict[str, Any] = manifest.get("agents", {})
@@ -155,7 +154,7 @@ def check_stream_access(agent_id: str, stream: str, mode: str = "read") -> bool:
 
     if mode == "read":
         return stream in agent.get("streams_read", [])
-    elif mode == "write":
+    if mode == "write":
         return stream in agent.get("streams_write", [])
     return False
 
@@ -179,7 +178,7 @@ def list_agents() -> list[str]:
     return list(agents.keys())
 
 
-def reset():
+def reset() -> None:
     """Reset the cached manifest (for testing)."""
     global _manifest
     _manifest = None

@@ -9,8 +9,10 @@ Each adapter knows how to:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class FormatAdapter:
@@ -18,7 +20,7 @@ class FormatAdapter:
 
     format_id: str = ""
 
-    def can_install(self, skill_md: dict) -> bool:
+    def can_install(self, skill_md: dict[str, Any]) -> bool:
         """Check if this adapter can handle the given SKILL.md frontmatter."""
         return str(skill_md.get("format", "")).startswith(self.format_id)
 
@@ -36,7 +38,7 @@ class FormatAdapter:
         """
         raise NotImplementedError
 
-    def get_output_paths(self, manifest: dict) -> dict[str, str]:
+    def get_output_paths(self, manifest: dict[str, Any]) -> dict[str, str]:
         """Determine output file paths from a resolved manifest.
 
         Returns dict like {"manifest": "docs/agents/foo.yaml", "instruction": "brain/FOO.md"}.

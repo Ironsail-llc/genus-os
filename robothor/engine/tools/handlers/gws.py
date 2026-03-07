@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -241,7 +243,9 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 # Register all GWS tools as async handlers that delegate to sync _handle_gws_tool
-async def _gws_handler(args: dict, ctx: ToolContext, *, tool_name: str = "") -> dict:
+async def _gws_handler(
+    args: dict[str, Any], ctx: ToolContext, *, tool_name: str = ""
+) -> dict[str, Any]:
     return await asyncio.to_thread(_handle_gws_tool, tool_name, args)
 
 
@@ -259,7 +263,7 @@ for _tool_name in (
 ):
 
     def _make_handler(tn: str) -> Callable[..., Any]:
-        async def handler(args: dict, ctx: ToolContext) -> dict:
+        async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             return await asyncio.to_thread(_handle_gws_tool, tn, args)
 
         return handler

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from robothor.rag.context import SYSTEM_PROMPT, format_context
 
@@ -29,7 +30,7 @@ async def rag_query(
     system_prompt: str | None = None,
     use_reranker: bool = True,
     rerank_top_k: int = 10,
-) -> dict:
+) -> dict[str, Any]:
     """Full RAG pipeline: search memory → rerank → inject context → generate.
 
     Args:
@@ -120,7 +121,7 @@ async def rag_chat(
     max_tokens: int = 4096,
     use_reranker: bool = True,
     rerank_top_k: int = 10,
-) -> dict:
+) -> dict[str, Any]:
     """Multi-turn RAG chat — searches memory based on the latest user message.
 
     Args:
@@ -181,6 +182,6 @@ async def rag_chat(
     }
 
 
-def query_sync(question: str, **kwargs) -> dict:
+def query_sync(question: str, **kwargs: Any) -> dict[str, Any]:
     """Synchronous wrapper for CLI usage."""
     return asyncio.run(rag_query(question, **kwargs))

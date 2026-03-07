@@ -14,8 +14,9 @@ import json
 import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from garminconnect import Garmin
 from garth.exc import GarthHTTPError
@@ -388,7 +389,7 @@ def sync_training_status(client: Garmin, target_date: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sync_date(client: Garmin, target_date: str) -> dict:
+def sync_date(client: Garmin, target_date: str) -> dict[str, Any]:
     """Sync all metrics for a specific date."""
     results = {}
 
@@ -424,7 +425,7 @@ def sync_date(client: Garmin, target_date: str) -> dict:
     return results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Sync Garmin Connect data to PostgreSQL")
     parser.add_argument(
         "--login",
@@ -458,7 +459,9 @@ def main():
     if args.date:
         dates = [args.date]
     else:
-        dates = [(date.today() - timedelta(days=i)).isoformat() for i in range(args.days)]
+        dates = [
+            (datetime.now(tz=UTC).date() - timedelta(days=i)).isoformat() for i in range(args.days)
+        ]
 
     total = {"total": 0}
     for d in dates:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from robothor.db.connection import get_connection
 from robothor.memory.conflicts import resolve_and_store
@@ -39,8 +40,8 @@ async def ingest_content(
     content: str,
     source_channel: str,
     content_type: str,
-    metadata: dict | None = None,
-) -> dict:
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Ingest content from any channel, extracting and storing facts.
 
     Args:
@@ -91,7 +92,7 @@ async def ingest_content(
             _set_source_channel(fact_id, source_channel, metadata)
 
     # Run batch entity extraction on all stored facts
-    entity_results: dict = {"entities_stored": 0, "relations_stored": 0}
+    entity_results: dict[str, Any] = {"entities_stored": 0, "relations_stored": 0}
     if stored_ids:
         try:
             entity_results = await extract_entities_batch(stored_ids)
@@ -114,7 +115,9 @@ async def ingest_content(
     }
 
 
-def _set_source_channel(fact_id: int, source_channel: str, metadata: dict | None = None) -> None:
+def _set_source_channel(
+    fact_id: int, source_channel: str, metadata: dict[str, Any] | None = None
+) -> None:
     """Update a fact's source_channel and merge metadata."""
     with get_connection() as conn:
         cur = conn.cursor()

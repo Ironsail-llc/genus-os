@@ -16,7 +16,7 @@ def _register_mock_sender():
     sender = AsyncMock()
     set_telegram_sender(sender)
     yield sender
-    set_telegram_sender(None)
+    set_telegram_sender(None)  # type: ignore[arg-type]
 
 
 def _make_run(**kwargs: object) -> AgentRun:

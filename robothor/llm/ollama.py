@@ -27,10 +27,12 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,7 @@ async def generate(
     stream: bool = False,
     model: str | None = None,
     think: bool = True,
-    format: Any | None = None,
+    format: Any | None = None,  # noqa: A002
 ) -> str:
     """Generate a response from local LLM via Ollama.
 
@@ -158,7 +160,7 @@ async def chat(
     max_tokens: int = 4096,
     model: str | None = None,
     think: bool = True,
-    format: Any | None = None,
+    format: Any | None = None,  # noqa: A002
 ) -> str:
     """Chat completion via Ollama /api/chat endpoint.
 

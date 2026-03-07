@@ -23,6 +23,7 @@ import logging
 import os
 import signal
 from abc import ABC, abstractmethod
+from typing import Any
 
 from robothor.events.bus import subscribe
 
@@ -52,7 +53,7 @@ class BaseConsumer(ABC):
         self.consumer_name = os.environ.get("CONSUMER_NAME", self.consumer_name)
 
     @abstractmethod
-    def handle(self, event: dict) -> None:
+    def handle(self, event: dict[str, Any]) -> None:
         """Process a single event.
 
         Args:

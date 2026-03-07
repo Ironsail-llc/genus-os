@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class TriggerType(StrEnum):
@@ -344,7 +346,9 @@ class PlanState:
 
     # Iterative refinement
     revision_count: int = 0
-    revision_history: list[dict] = field(default_factory=list)  # [{plan_text, feedback, timestamp}]
+    revision_history: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{plan_text, feedback, timestamp}]
 
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)

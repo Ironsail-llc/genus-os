@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -79,7 +80,7 @@ KNOWN_TOOLS = {
 COMMUNICATION_TOOLS = {"send_message", "create_message", "announce"}
 
 
-def check_event_path(manifest: dict, repo_root: Path) -> CheckResult:
+def check_event_path(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """M. If agent has hooks, verify a cron script publishes to that stream."""
     result = CheckResult("M", "Event path")
     hooks = manifest.get("hooks", [])
@@ -122,7 +123,9 @@ def check_event_path(manifest: dict, repo_root: Path) -> CheckResult:
     return result
 
 
-def check_pipeline_continuity(manifest: dict, all_manifests: dict) -> CheckResult:
+def check_pipeline_continuity(
+    manifest: dict[str, Any], all_manifests: dict[str, Any]
+) -> CheckResult:
     """N. If creates_tasks_for X, verify X receives_tasks_from this agent."""
     result = CheckResult("N", "Pipeline continuity")
     agent_id = manifest.get("id", "")
@@ -149,7 +152,7 @@ def check_pipeline_continuity(manifest: dict, all_manifests: dict) -> CheckResul
     return result
 
 
-def check_workflow_coverage(manifest: dict, repo_root: Path) -> CheckResult:
+def check_workflow_coverage(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """O. If agent appears in a workflow YAML, verify trigger matches."""
     result = CheckResult("O", "Workflow coverage")
     agent_id = manifest.get("id", "")
@@ -159,35 +162,39 @@ def check_workflow_coverage(manifest: dict, repo_root: Path) -> CheckResult:
         return result.skip("docs/workflows/ not found")
 
     # Find workflows that reference this agent
-    appearances = []
+    appearances: list[dict[str, Any]] = []
     for wf_file in workflows_dir.glob("*.yaml"):
         try:
             wf = yaml.safe_load(wf_file.read_text()) or {}
         except (yaml.YAMLError, OSError):
             continue
 
-        for step in wf.get("steps", []):
-            if isinstance(step, dict) and step.get("agent") == agent_id:
-                appearances.append({"workflow": wf.get("id", wf_file.stem), "file": str(wf_file)})
+        appearances.extend(
+            {"workflow": wf.get("id", wf_file.stem), "file": str(wf_file)}
+            for step in wf.get("steps", [])
+            if isinstance(step, dict) and step.get("agent") == agent_id
+        )
 
     if not appearances:
         return result.skip("Agent not referenced in any workflow")
 
     # Check that agent has hooks or cron matching the workflow trigger
-    issues = []
+    issues: list[str] = []
     has_cron = bool(manifest.get("schedule", {}).get("cron"))
     has_hooks = bool(manifest.get("hooks"))
 
     if not has_cron and not has_hooks:
-        for app in appearances:
-            issues.append(f"Agent appears in workflow '{app['workflow']}' but has no cron or hooks")
+        issues.extend(
+            f"Agent appears in workflow '{app['workflow']}' but has no cron or hooks"
+            for app in appearances
+        )
 
     if issues:
         return result.warn("Workflow trigger mismatch", issues)
     return result
 
 
-def check_tool_instruction_coherence(manifest: dict, repo_root: Path) -> CheckResult:
+def check_tool_instruction_coherence(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """P. Parse instruction .md for tool references, verify in tools_allowed."""
     result = CheckResult("P", "Tool-instruction coherence")
 
@@ -228,7 +235,7 @@ def check_tool_instruction_coherence(manifest: dict, repo_root: Path) -> CheckRe
     return result
 
 
-def check_tag_flow(manifest: dict, all_manifests: dict) -> CheckResult:
+def check_tag_flow(manifest: dict[str, Any], all_manifests: dict[str, Any]) -> CheckResult:
     """Q. If tags_produced is set, verify downstream has matching tags_consumed."""
     result = CheckResult("Q", "Tag flow")
     tags_produced = set(manifest.get("tags_produced", []))
@@ -256,7 +263,7 @@ def check_tag_flow(manifest: dict, all_manifests: dict) -> CheckResult:
     return result
 
 
-def check_delivery_coherence(manifest: dict, repo_root: Path) -> CheckResult:
+def check_delivery_coherence(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """R. If delivery: none but instruction mentions communication tools, warn."""
     result = CheckResult("R", "Delivery coherence")
 
@@ -277,10 +284,9 @@ def check_delivery_coherence(manifest: dict, repo_root: Path) -> CheckResult:
     except OSError:
         return result.skip(f"Cannot read instruction file: {instr_file}")
 
-    found_comm_tools = []
-    for tool in COMMUNICATION_TOOLS:
-        if re.search(rf"\b{re.escape(tool)}\b", content):
-            found_comm_tools.append(tool)
+    found_comm_tools = [
+        tool for tool in COMMUNICATION_TOOLS if re.search(rf"\b{re.escape(tool)}\b", content)
+    ]
 
     if found_comm_tools:
         return result.warn(
@@ -291,8 +297,8 @@ def check_delivery_coherence(manifest: dict, repo_root: Path) -> CheckResult:
 
 
 def validate_chain(
-    manifest: dict,
-    all_manifests: dict,
+    manifest: dict[str, Any],
+    all_manifests: dict[str, Any],
     repo_root: Path | None = None,
 ) -> list[CheckResult]:
     """Run all chain validation checks (M-R) for a single agent.

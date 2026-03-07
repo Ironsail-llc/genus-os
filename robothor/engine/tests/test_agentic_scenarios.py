@@ -110,9 +110,8 @@ class TestScenario1AuthFailureTriggersHelperSpawn:
                         _make_tool_call("read_file", {"path": "/tmp/test"}, f"call_{call_count}")
                     ]
                 )
-            else:
-                # After recovery, LLM completes
-                return _make_response(content="Recovered using helper's findings.")
+            # After recovery, LLM completes
+            return _make_response(content="Recovered using helper's findings.")
 
         tool_call_count = 0
 
@@ -165,8 +164,7 @@ class TestScenario2RateLimitBackoff:
                 return _make_response(
                     tool_calls=[_make_tool_call("web_fetch", {"url": "https://example.com"})]
                 )
-            else:
-                return _make_response(content="Done after backoff.")
+            return _make_response(content="Done after backoff.")
 
         exec_count = 0
 
@@ -221,8 +219,7 @@ class TestScenario3BudgetExhaustionTriggersReplan:
                         _make_tool_call("read_file", {"path": "/tmp/test"}, f"call_{call_count}")
                     ]
                 )
-            else:
-                return _make_response(content="Done with revised plan.")
+            return _make_response(content="Done with revised plan.")
 
         exec_count = 0
 

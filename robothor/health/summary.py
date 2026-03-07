@@ -13,7 +13,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from robothor.health import dal
@@ -52,7 +52,7 @@ def stress_label(avg: float | None) -> str:
 def generate_summary(now: datetime | None = None) -> str:
     """Generate the health summary markdown from PostgreSQL."""
     if now is None:
-        now = datetime.now()
+        now = datetime.now(tz=UTC)
 
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -126,12 +126,12 @@ def write_summary(content: str, output_path: Path = OUTPUT_PATH) -> None:
     try:
         os.write(fd, content.encode("utf-8"))
         os.close(fd)
-        os.replace(tmp, output_path)
+        Path(tmp).replace(output_path)
     except Exception:
         with contextlib.suppress(OSError):
             os.close(fd)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        if Path(tmp).exists():
+            Path(tmp).unlink()
         raise
 
 

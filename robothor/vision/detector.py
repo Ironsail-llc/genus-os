@@ -59,7 +59,7 @@ class ObjectDetector:
         """Check if model is loaded."""
         return self._model is not None
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
         """Run YOLO detection on a frame.
 
         Args:
@@ -72,16 +72,16 @@ class ObjectDetector:
             return []
 
         results = self._model(frame, verbose=False, conf=self.confidence)
-        detections = []
+        detections: list[dict[str, Any]] = []
         for r in results:
-            for box in r.boxes:
-                detections.append(
-                    {
-                        "class": r.names[int(box.cls[0])],
-                        "confidence": round(float(box.conf[0]), 3),
-                        "bbox": [round(float(x), 1) for x in box.xyxy[0].tolist()],
-                    }
-                )
+            detections.extend(
+                {
+                    "class": r.names[int(box.cls[0])],
+                    "confidence": round(float(box.conf[0]), 3),
+                    "bbox": [round(float(x), 1) for x in box.xyxy[0].tolist()],
+                }
+                for box in r.boxes
+            )
         return detections
 
     def has_person(self, frame: np.ndarray) -> bool:

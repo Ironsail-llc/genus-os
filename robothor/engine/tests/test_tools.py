@@ -716,15 +716,15 @@ class TestMergeAndAliasTools:
 class TestRegistrySingleton:
     def test_singleton(self):
         """get_registry returns the same instance."""
-        import robothor.engine.tools as tools_mod
+        import robothor.engine.tools.registry as registry_mod
 
-        tools_mod._registry = None  # Reset
+        registry_mod._registry = None  # Reset
 
         with patch("robothor.api.mcp.get_tool_definitions", return_value=[]):
             r1 = get_registry()
             r2 = get_registry()
         assert r1 is r2
-        tools_mod._registry = None  # Cleanup
+        registry_mod._registry = None  # Cleanup
 
 
 class TestAnalyzePdfSecurity:

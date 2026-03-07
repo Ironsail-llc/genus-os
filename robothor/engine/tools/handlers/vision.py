@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from robothor.engine.tools.dispatch import ToolContext, _cfg
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 HANDLERS: dict[str, Any] = {}
 
@@ -21,7 +23,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("look")
-async def _look(args: dict, ctx: ToolContext) -> dict:
+async def _look(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     prompt = args.get("prompt", "Describe what you see in this image in detail.")
     async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(f"{_cfg().vision_url}/look", json={"prompt": prompt})
@@ -30,7 +32,7 @@ async def _look(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("who_is_here")
-async def _who_is_here(args: dict, ctx: ToolContext) -> dict:
+async def _who_is_here(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{_cfg().vision_url}/health")
         resp.raise_for_status()
@@ -44,7 +46,7 @@ async def _who_is_here(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("enroll_face")
-async def _enroll_face(args: dict, ctx: ToolContext) -> dict:
+async def _enroll_face(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     face_name = args.get("name", "")
     if not face_name:
         return {"error": "Name is required for face enrollment"}
@@ -55,7 +57,7 @@ async def _enroll_face(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("enroll_face_from_image")
-async def _enroll_face_from_image(args: dict, ctx: ToolContext) -> dict:
+async def _enroll_face_from_image(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     face_name = args.get("name", "")
     image_paths = args.get("image_paths", [])
     if not face_name:
@@ -72,7 +74,7 @@ async def _enroll_face_from_image(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_enrolled_faces")
-async def _list_enrolled_faces(args: dict, ctx: ToolContext) -> dict:
+async def _list_enrolled_faces(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{_cfg().vision_url}/enrolled")
         resp.raise_for_status()
@@ -80,7 +82,7 @@ async def _list_enrolled_faces(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("unenroll_face")
-async def _unenroll_face(args: dict, ctx: ToolContext) -> dict:
+async def _unenroll_face(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     face_name = args.get("name", "")
     if not face_name:
         return {"error": "Name is required"}
@@ -91,7 +93,7 @@ async def _unenroll_face(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("set_vision_mode")
-async def _set_vision_mode(args: dict, ctx: ToolContext) -> dict:
+async def _set_vision_mode(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     mode = args.get("mode", "")
     if mode not in ("disarmed", "basic", "armed"):
         return {"error": f"Invalid mode: {mode}. Valid: disarmed, basic, armed"}
@@ -102,7 +104,7 @@ async def _set_vision_mode(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("log_interaction")
-async def _log_interaction(args: dict, ctx: ToolContext) -> dict:
+async def _log_interaction(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{_cfg().bridge_url}/log-interaction",
