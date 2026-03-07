@@ -1,7 +1,7 @@
 id: conversation-inbox
 name: Conversation Inbox Monitor
 description: Checks for urgent unread messages in open conversations
-version: "2026-02-24"
+version: "2026-03-07"
 department: communications
 
 reports_to: main
@@ -19,7 +19,7 @@ model:
 schedule:
   cron: "0 6-22 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
+  timeout_seconds: 360
   max_iterations: 5
   session_target: isolated
 
@@ -87,5 +87,7 @@ v2:
     - "brain/memory/conversation-inbox-status.md"
 
 changelog:
+  - date: "2026-03-07"
+    change: "Reduce timeout 480s→360s — 17.6% timeout rate (3/17 runs), avg duration 71s. 360s = 5.1x avg, still generous. Fail faster on stuck runs. [nightwatch]"
   - date: "2026-02-24"
     change: "Initial manifest creation; payload model fixed from qwen3-14b to kimi; added notification inbox RBAC"
