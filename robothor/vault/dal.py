@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from robothor.vault.crypto import decrypt, encrypt
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TENANT = "robothor-primary"
 
 
-def _get_conn():
+def _get_conn() -> Any:
     """Get a database connection using the standard Robothor config."""
     import psycopg2
 
@@ -33,7 +34,7 @@ def set_secret(
     master_key: bytes,
     *,
     category: str = "credential",
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> None:
     """Encrypt and upsert a secret."""

@@ -130,7 +130,7 @@ class TestSpawnAgentTool:
             assert result["output_tokens"] == 200
             assert "error" not in result
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -161,7 +161,7 @@ class TestSpawnAgentTool:
             # Runner.execute should NOT have been called
             mock_runner.execute.assert_not_called()
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -189,7 +189,7 @@ class TestSpawnAgentTool:
             assert "error" in result
             assert "not found" in result["error"]
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -229,7 +229,7 @@ class TestSpawnAgentTool:
             assert child_ctx is not None
             assert child_ctx.remaining_token_budget == 100000
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -265,7 +265,7 @@ class TestSpawnAgentTool:
             # Budget should be decremented
             assert spawn_context.remaining_token_budget == initial_tokens - 1000 - 500
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -302,7 +302,7 @@ class TestSpawnAgentTool:
             passed_config = call_kwargs.kwargs.get("agent_config")
             assert passed_config.delivery_mode == DeliveryMode.NONE
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -339,7 +339,7 @@ class TestSpawnAgentTool:
             passed_config = mock_runner.execute.call_args.kwargs.get("agent_config")
             assert passed_config.tools_allowed == ["exec", "web_search"]
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -372,7 +372,7 @@ class TestSpawnAgentTool:
             call_kwargs = mock_runner.execute.call_args.kwargs
             assert call_kwargs["correlation_id"] == spawn_context.correlation_id
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -402,7 +402,7 @@ class TestSpawnAgentTool:
             assert "error" in result
             assert "already running" in result["error"]
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -414,7 +414,7 @@ class TestSpawnAgentTool:
             set_runner,
         )
 
-        set_runner(None)
+        set_runner(None)  # type: ignore[arg-type]
         _current_spawn_context.set(None)
 
         result = await _handle_spawn_agent(
@@ -445,7 +445,7 @@ class TestSpawnAgentTool:
             assert "error" in result
             assert "No spawn context" in result["error"]
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_concurrency_semaphore(self, spawn_context, child_agent_config):
@@ -483,7 +483,7 @@ class TestSpawnAgentTool:
             # Semaphore should be released after spawn completes
             assert sem._value == MAX_CONCURRENT_SPAWNS
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
 
@@ -526,7 +526,7 @@ class TestSpawnAgentsTool:
             assert result["failed"] == 0
             assert len(result["results"]) == 3
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -574,7 +574,7 @@ class TestSpawnAgentsTool:
             failed = [r for r in result["results"] if r.get("error")]
             assert len(failed) == 1
         finally:
-            set_runner(None)
+            set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
 
     @pytest.mark.asyncio
@@ -636,7 +636,11 @@ class TestToolScoping:
         )
 
         # Simulate build_for_agent logic
-        schemas = {"spawn_agent": {}, "spawn_agents": {}, "list_tasks": {}}
+        schemas: dict[str, dict[str, str]] = {
+            "spawn_agent": {},
+            "spawn_agents": {},
+            "list_tasks": {},
+        }
         names = [n for n in config.tools_allowed if n in schemas]
         if not config.can_spawn_agents:
             names = [n for n in names if n not in SPAWN_TOOLS]
@@ -846,11 +850,9 @@ class TestDeliverySafetyNet:
 
 class TestModels:
     def test_trigger_type_sub_agent(self):
-        assert TriggerType.SUB_AGENT == "sub_agent"
         assert TriggerType.SUB_AGENT.value == "sub_agent"
 
     def test_step_type_spawn_agent(self):
-        assert StepType.SPAWN_AGENT == "spawn_agent"
         assert StepType.SPAWN_AGENT.value == "spawn_agent"
 
     def test_spawn_context_defaults(self):

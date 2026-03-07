@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from robothor.rag.context import SYSTEM_PROMPT, format_merged_context
 from robothor.rag.profiles import RAG_PROFILES, classify_query
@@ -28,8 +29,8 @@ from robothor.rag.web_search import search_web, web_results_to_memory_format
 async def run_pipeline(
     query: str,
     profile: str | None = None,
-    messages: list[dict] | None = None,
-) -> dict:
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Run the full RAG pipeline.
 
     Steps:
@@ -58,7 +59,7 @@ async def run_pipeline(
     p = RAG_PROFILES.get(selected_profile, RAG_PROFILES["general"])
 
     # Step 2: Parallel retrieval
-    retrieval_tasks: list = []
+    retrieval_tasks: list[Any] = []
 
     retrieval_tasks.append(
         asyncio.to_thread(
@@ -72,15 +73,17 @@ async def run_pipeline(
         retrieval_tasks.append(search_web(query, limit=p["web_limit"]))
     else:
 
-        async def _no_web() -> list:
+        async def _no_web() -> list[Any]:
             return []
 
         retrieval_tasks.append(_no_web())
 
     raw_results = await asyncio.gather(*retrieval_tasks, return_exceptions=True)
 
-    memory_results: list[dict] = raw_results[0] if isinstance(raw_results[0], list) else []
-    raw_web_results: list[dict] = (
+    memory_results: list[dict[str, Any]] = (
+        raw_results[0] if isinstance(raw_results[0], list) else []
+    )
+    raw_web_results: list[dict[str, Any]] = (
         raw_results[1] if len(raw_results) > 1 and isinstance(raw_results[1], list) else []
     )
 
@@ -104,7 +107,7 @@ async def run_pipeline(
     # Step 5: Format context
     context = format_merged_context(
         reranked_memory,
-        reranked_web if reranked_web else raw_web_results,
+        reranked_web or raw_web_results,
     )
 
     # Step 6: Generate
@@ -163,7 +166,7 @@ async def run_pipeline(
                     "title": r.get("title", ""),
                     "url": r.get("url", r.get("metadata", {}).get("url", "")),
                 }
-                for r in (reranked_web if reranked_web else raw_web_results)[:5]
+                for r in (reranked_web or raw_web_results)[:5]
             ],
         },
     }

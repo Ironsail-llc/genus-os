@@ -42,8 +42,11 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,7 @@ MAXLEN = int(os.environ.get("EVENT_BUS_MAXLEN", "10000"))
 _redis_client = None
 
 
-def _get_redis():
+def _get_redis() -> Any:
     """Get or create Redis connection. Returns None on failure."""
     global _redis_client
     if _redis_client is not None:
@@ -94,13 +97,13 @@ def _get_redis():
         return None
 
 
-def set_redis_client(client):
+def set_redis_client(client: Any) -> None:
     """Override Redis client for testing."""
     global _redis_client
     _redis_client = client
 
 
-def reset_client():
+def reset_client() -> None:
     """Reset the Redis client singleton."""
     global _redis_client
     _redis_client = None
@@ -113,7 +116,7 @@ def _stream_key(stream: str) -> str:
 
 def _make_envelope(
     event_type: str,
-    payload: dict,
+    payload: dict[str, Any],
     *,
     source: str = "unknown",
     actor: str = "robothor",
@@ -135,7 +138,7 @@ def _make_envelope(
 def publish(
     stream: str,
     event_type: str,
-    payload: dict,
+    payload: dict[str, Any],
     *,
     source: str = "unknown",
     actor: str = "robothor",
@@ -210,7 +213,7 @@ def subscribe(
     group: str,
     consumer: str,
     *,
-    handler: Callable[[dict], None],
+    handler: Callable[[dict[str, Any]], None],
     batch_size: int = 10,
     block_ms: int = 5000,
     max_iterations: int | None = None,
@@ -332,7 +335,7 @@ def stream_length(stream: str) -> int:
         return 0
 
 
-def stream_info(stream: str) -> dict | None:
+def stream_info(stream: str) -> dict[str, Any] | None:
     """Get info about a stream (length, groups, first/last entry)."""
     try:
         r = _get_redis()
@@ -350,7 +353,7 @@ def stream_info(stream: str) -> dict | None:
         return None
 
 
-def read_recent(stream: str, count: int = 10) -> list[dict]:
+def read_recent(stream: str, count: int = 10) -> list[dict[str, Any]]:
     """Read the most recent N entries from a stream (no consumer group).
 
     Useful for dashboards and monitoring.

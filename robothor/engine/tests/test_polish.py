@@ -40,7 +40,6 @@ class TestDownstreamAgentChains:
     async def test_downstream_triggered_on_success(self, engine_config, sample_agent_config):
         import asyncio as _asyncio
 
-        import robothor.engine.scheduler as sched_module
         from robothor.engine.runner import AgentRunner
         from robothor.engine.scheduler import CronScheduler
 
@@ -73,7 +72,7 @@ class TestDownstreamAgentChains:
             patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
             patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
             patch.object(runner, "execute", new_callable=AsyncMock, return_value=run),
-            patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task),
+            patch("robothor.engine.scheduler.asyncio.create_task", side_effect=track_create_task),
         ):
             await scheduler._run_agent("test-agent")
 
@@ -83,7 +82,6 @@ class TestDownstreamAgentChains:
     async def test_no_downstream_on_failure(self, engine_config, sample_agent_config):
         import asyncio as _asyncio
 
-        import robothor.engine.scheduler as sched_module
         from robothor.engine.runner import AgentRunner
         from robothor.engine.scheduler import CronScheduler
 
@@ -115,7 +113,7 @@ class TestDownstreamAgentChains:
             patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
             patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
             patch.object(runner, "execute", new_callable=AsyncMock, return_value=run),
-            patch.object(sched_module.asyncio, "create_task", side_effect=track_create_task),
+            patch("robothor.engine.scheduler.asyncio.create_task", side_effect=track_create_task),
         ):
             await scheduler._run_agent("test-agent")
 

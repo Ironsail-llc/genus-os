@@ -19,6 +19,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from robothor.config import get_config
 
@@ -38,7 +39,7 @@ _ENV_OVERRIDES = {
 }
 
 # Cache
-_manifest: dict | None = None
+_manifest: dict[str, Any] | None = None
 _manifest_mtime: float = 0.0
 
 
@@ -66,7 +67,7 @@ def _find_manifest() -> Path | None:
     return None
 
 
-def _load_manifest() -> dict:
+def _load_manifest() -> dict[str, Any]:
     """Load and cache the service manifest. Reloads if file changed."""
     global _manifest, _manifest_mtime
 
@@ -88,7 +89,7 @@ def _load_manifest() -> dict:
         return _manifest
 
     try:
-        with open(path) as f:
+        with path.open() as f:
             _manifest = json.load(f)
             _manifest_mtime = mtime
             return _manifest
@@ -99,10 +100,10 @@ def _load_manifest() -> dict:
         return {"services": {}}
 
 
-def get_service(name: str) -> dict | None:
+def get_service(name: str) -> dict[str, Any] | None:
     """Get full service definition by name."""
     manifest = _load_manifest()
-    result: dict | None = manifest.get("services", {}).get(name)
+    result: dict[str, Any] | None = manifest.get("services", {}).get(name)
     return result
 
 
@@ -148,10 +149,10 @@ def get_health_url(name: str) -> str | None:
     return get_service_url(name, health_path)
 
 
-def list_services() -> dict:
+def list_services() -> dict[str, Any]:
     """List all services from the manifest."""
     manifest = _load_manifest()
-    result: dict = manifest.get("services", {})
+    result: dict[str, Any] = manifest.get("services", {})
     return result
 
 

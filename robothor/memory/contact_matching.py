@@ -7,6 +7,7 @@ Used by periodic_analysis.py Phase 4 to link memory entities to CRM contacts.
 
 import re
 import unicodedata
+from typing import Any
 
 # Common nickname → canonical mappings
 NICKNAMES = {
@@ -154,10 +155,10 @@ def name_similarity(name_a: str, name_b: str) -> float:
 
 def find_best_match(
     name: str,
-    candidates: list[dict],
+    candidates: list[dict[str, Any]],
     threshold: float = 0.75,
     name_key: str = "name",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Find the best matching candidate above threshold.
 
     Args:

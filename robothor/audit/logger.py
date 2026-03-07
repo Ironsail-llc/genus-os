@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import psycopg2
 from psycopg2.extras import Json
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 _conn_factory = None
 
 
-def _get_connection():
+def _get_connection() -> Any:
     """Get a database connection using robothor.db or fallback DSN."""
     if _conn_factory is not None:
         return _conn_factory()
@@ -45,7 +46,7 @@ def _get_connection():
         return psycopg2.connect(cfg.db.dsn)
 
 
-def _release_connection(conn):
+def _release_connection(conn: Any) -> None:
     """Return connection to pool if using pooled connections."""
     try:
         from robothor.db.connection import get_pool
@@ -56,13 +57,13 @@ def _release_connection(conn):
         conn.close()
 
 
-def set_connection_factory(factory):
+def set_connection_factory(factory: Any) -> None:
     """Override connection factory for testing."""
     global _conn_factory
     _conn_factory = factory
 
 
-def reset_connection_factory():
+def reset_connection_factory() -> None:
     """Reset connection factory to default."""
     global _conn_factory
     _conn_factory = None
@@ -75,11 +76,11 @@ def log_event(
     category: str | None = None,
     actor: str = "robothor",
     session_key: str | None = None,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
     source_channel: str | None = None,
     target: str | None = None,
     status: str = "ok",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Log a structured audit event.
 
     Returns {"id": int, "timestamp": str} on success, None on failure.
@@ -123,9 +124,9 @@ def log_crm_mutation(
     entity_id: str | None,
     *,
     actor: str = "robothor",
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
     status: str = "ok",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Convenience wrapper for CRM mutations.
 
     operation: create, update, delete, merge
@@ -155,7 +156,7 @@ def query_log(
     target: str | None = None,
     since: str | None = None,
     status: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Query audit log with filters."""
     try:
         conn = _get_connection()
@@ -166,7 +167,7 @@ def query_log(
             "details, source_channel, target, status, session_key "
             "FROM audit_log WHERE 1=1"
         )
-        params: list = []
+        params: list[Any] = []
 
         if event_type:
             query += " AND event_type = %s"
@@ -215,7 +216,7 @@ def query_log(
         return []
 
 
-def stats() -> dict:
+def stats() -> dict[str, Any]:
     """Get audit log statistics."""
     try:
         conn = _get_connection()
@@ -255,7 +256,7 @@ def log_telemetry(
     value: float,
     *,
     unit: str | None = None,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
 ) -> bool:
     """Write a telemetry data point to the telemetry table.
 
@@ -284,7 +285,7 @@ def query_telemetry(
     metric: str | None = None,
     since: str | None = None,
     limit: int = 100,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Query telemetry data points."""
     try:
         conn = _get_connection()
@@ -293,7 +294,7 @@ def query_telemetry(
         query = (
             "SELECT id, timestamp, service, metric, value, unit, details FROM telemetry WHERE 1=1"
         )
-        params: list = []
+        params: list[Any] = []
 
         if service:
             query += " AND service = %s"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -36,26 +37,30 @@ class TestAppPilot:
         """When engine is unreachable, shows error message."""
         app = RobothorApp()
         # Patch the client's health check to return None
-        app.client.check_health = AsyncMock(return_value=None)
-        app.client.get_history = AsyncMock(return_value=[])
-        app.client.close = AsyncMock()
+        object.__setattr__(app.client, "check_health", AsyncMock(return_value=None))
+        object.__setattr__(app.client, "get_history", AsyncMock(return_value=[]))
+        object.__setattr__(app.client, "close", AsyncMock())
 
         async with app.run_test() as _pilot:
-            status_bar = app.query_one("#status-bar")
+            status_bar: Any = app.query_one("#status-bar")
             assert "disconnected" in status_bar._format()
 
     @pytest.mark.asyncio
     async def test_connected_shows_welcome(self):
         """When engine is reachable, shows welcome banner."""
         app = RobothorApp()
-        app.client.check_health = AsyncMock(
-            return_value={
-                "status": "healthy",
-                "agents": {"a": {}, "b": {}},
-            }
+        object.__setattr__(
+            app.client,
+            "check_health",
+            AsyncMock(
+                return_value={
+                    "status": "healthy",
+                    "agents": {"a": {}, "b": {}},
+                }
+            ),
         )
-        app.client.get_history = AsyncMock(return_value=[])
-        app.client.close = AsyncMock()
+        object.__setattr__(app.client, "get_history", AsyncMock(return_value=[]))
+        object.__setattr__(app.client, "close", AsyncMock())
 
         async with app.run_test() as _pilot:
             banners = app.query(WelcomeBanner)
@@ -65,18 +70,22 @@ class TestAppPilot:
     async def test_slash_command_handled_locally(self):
         """Slash commands are handled without sending to engine."""
         app = RobothorApp()
-        app.client.check_health = AsyncMock(
-            return_value={
-                "status": "healthy",
-                "agents": {},
-            }
+        object.__setattr__(
+            app.client,
+            "check_health",
+            AsyncMock(
+                return_value={
+                    "status": "healthy",
+                    "agents": {},
+                }
+            ),
         )
-        app.client.get_history = AsyncMock(return_value=[])
-        app.client.close = AsyncMock()
-        app.client.send_message = AsyncMock()
+        object.__setattr__(app.client, "get_history", AsyncMock(return_value=[]))
+        object.__setattr__(app.client, "close", AsyncMock())
+        object.__setattr__(app.client, "send_message", AsyncMock())
 
         async with app.run_test() as pilot:
-            input_widget = app.query_one("#message-input")
+            input_widget: Any = app.query_one("#message-input")
             input_widget.value = "/help"
             await pilot.press("enter")
 
@@ -84,9 +93,11 @@ class TestAppPilot:
             await pilot.pause()
 
             # Engine's send_message should not have been called
-            app.client.send_message.assert_not_called()
+            mock_send = app.client.send_message
+            assert hasattr(mock_send, "assert_not_called")
+            mock_send.assert_not_called()
 
             # System message should appear in chat
             messages = app.query(MessageDisplay)
-            system_msgs = [m for m in messages if m._role == "system"]
+            system_msgs = [m for m in messages if getattr(m, "_role", None) == "system"]
             assert len(system_msgs) >= 1

@@ -147,21 +147,20 @@ class TestAgenticIntegration:
 
         # Auth: None at 1, spawn at 2+ (if can_spawn)
         assert get_recovery_action(ErrorType.AUTH, 1, config_spawn, "t", "401") is None
-        assert get_recovery_action(ErrorType.AUTH, 2, config_spawn, "t", "401").action == "spawn"
+        auth_action = get_recovery_action(ErrorType.AUTH, 2, config_spawn, "t", "401")
+        assert auth_action is not None
+        assert auth_action.action == "spawn"
         assert get_recovery_action(ErrorType.AUTH, 2, config_no_spawn, "t", "401") is None
 
         # Timeout: retry at 1, spawn at 2+
-        assert (
-            get_recovery_action(ErrorType.TIMEOUT, 1, config_spawn, "t", "timeout").action
-            == "retry"
-        )
-        assert (
-            get_recovery_action(ErrorType.TIMEOUT, 2, config_spawn, "t", "timeout").action
-            == "spawn"
-        )
+        timeout_retry = get_recovery_action(ErrorType.TIMEOUT, 1, config_spawn, "t", "timeout")
+        assert timeout_retry is not None
+        assert timeout_retry.action == "retry"
+        timeout_spawn = get_recovery_action(ErrorType.TIMEOUT, 2, config_spawn, "t", "timeout")
+        assert timeout_spawn is not None
+        assert timeout_spawn.action == "spawn"
 
         # Permission: always inject
-        assert (
-            get_recovery_action(ErrorType.PERMISSION, 1, config_spawn, "t", "denied").action
-            == "inject"
-        )
+        perm_action = get_recovery_action(ErrorType.PERMISSION, 1, config_spawn, "t", "denied")
+        assert perm_action is not None
+        assert perm_action.action == "inject"

@@ -160,7 +160,7 @@ async def cmd_history(app: RobothorApp, args: str) -> str:
 
 async def cmd_model(app: RobothorApp, args: str) -> str:
     """Show current model."""
-    model = app.status_bar._model if app.status_bar._model else "default"
+    model = app.status_bar._model or "default"
     return f"Current model: {model}"
 
 

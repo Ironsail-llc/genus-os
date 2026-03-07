@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,7 +29,7 @@ class TestEstimateTokens:
         assert estimate_tokens(messages) == 4
 
     def test_tool_calls_add_overhead(self):
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "user", "content": "test"},  # 4 chars / 4 = 1
             {
                 "role": "assistant",

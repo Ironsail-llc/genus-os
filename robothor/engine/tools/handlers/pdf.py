@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -153,7 +154,7 @@ async def _handle_analyze_pdf(
 
             import litellm
 
-            content: list[dict] = []
+            content: list[dict[str, Any]] = []
             for idx, img_b64 in enumerate(images_b64[:3]):
                 content.append({"type": "text", "text": f"Page {page_indices[idx] + 1}:"})
                 content.append(

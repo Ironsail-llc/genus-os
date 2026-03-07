@@ -10,11 +10,13 @@ from template bundles with {{ variable }} resolution.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.templates.adapters.base import FormatAdapter
 from robothor.templates.resolver import TemplateResolver
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class RobothorNativeAdapter(FormatAdapter):
@@ -22,7 +24,7 @@ class RobothorNativeAdapter(FormatAdapter):
 
     format_id = "robothor-native"
 
-    def can_install(self, skill_md: dict) -> bool:
+    def can_install(self, skill_md: dict[str, Any]) -> bool:
         fmt = str(skill_md.get("format", ""))
         return fmt.startswith("robothor-native") or fmt == ""
 
@@ -48,7 +50,7 @@ class RobothorNativeAdapter(FormatAdapter):
         errors = validate_bundle(bundle_path)
         return [str(e) for e in errors]
 
-    def get_output_paths(self, manifest: dict) -> dict[str, str]:
+    def get_output_paths(self, manifest: dict[str, Any]) -> dict[str, str]:
         """Determine output paths from a resolved manifest."""
         agent_id = manifest.get("id", "unknown")
         instruction_file = manifest.get("instruction_file", "")

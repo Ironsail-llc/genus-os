@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
+from typing import Any
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,34 +220,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return _cmd_init(args)
-    elif args.command == "migrate":
+    if args.command == "migrate":
         return _cmd_migrate(args)
-    elif args.command == "serve":
+    if args.command == "serve":
         return _cmd_serve(args)
-    elif args.command == "mcp":
+    if args.command == "mcp":
         return _cmd_mcp()
-    elif args.command == "status":
+    if args.command == "status":
         return _cmd_status(args)
-    elif args.command == "pipeline":
+    if args.command == "pipeline":
         return _cmd_pipeline(args)
-    elif args.command == "tunnel":
+    if args.command == "tunnel":
         return _cmd_tunnel(args)
-    elif args.command == "vault":
+    if args.command == "vault":
         return _cmd_vault(args)
-    elif args.command == "agent":
+    if args.command == "agent":
         return _cmd_agent(args)
-    elif args.command == "engine":
+    if args.command == "engine":
         return _cmd_engine(args)
-    elif args.command == "config":
+    if args.command == "config":
         return _cmd_config(args)
-    elif args.command == "tui":
+    if args.command == "tui":
         return _cmd_tui(args)
-    elif args.command is None:
+    if args.command is None:
         # No subcommand — launch the TUI
         return _cmd_tui(args)
-    else:
-        parser.print_help()
-        return 0
+    parser.print_help()
+    return 0
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -358,9 +359,8 @@ def _cmd_migrate_check() -> int:
                 print(f"  - {t}")
             print("\nRun 'robothor migrate' to create them.")
             return 1
-        else:
-            print(f"All {len(REQUIRED_TABLES)} required tables present.")
-            return 0
+        print(f"All {len(REQUIRED_TABLES)} required tables present.")
+        return 0
 
     except Exception as e:
         print(f"Error: Cannot check tables: {e}")
@@ -437,7 +437,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             password=cfg.redis.password or None,
             socket_connect_timeout=3,
         )
-        info: dict = r.info("server")  # type: ignore[assignment]
+        info: dict[str, Any] = r.info("server")  # type: ignore[assignment]
         print(f"               Connected — Redis {info.get('redis_version', '?')}")
     except Exception as e:
         print(f"               UNREACHABLE — {e}")
@@ -850,35 +850,34 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     sub = getattr(args, "agent_command", None)
     if sub == "scaffold":
         return _cmd_agent_scaffold(args)
-    elif sub == "list":
+    if sub == "list":
         return _cmd_agent_list()
-    elif sub == "catalog":
+    if sub == "catalog":
         return _cmd_agent_catalog(args)
-    elif sub == "install":
+    if sub == "install":
         return _cmd_agent_install(args)
-    elif sub == "remove":
+    if sub == "remove":
         return _cmd_agent_remove(args)
-    elif sub == "update":
+    if sub == "update":
         return _cmd_agent_update(args)
-    elif sub == "resolve":
+    if sub == "resolve":
         return _cmd_agent_resolve(args)
-    elif sub == "import":
+    if sub == "import":
         return _cmd_agent_import(args)
-    elif sub == "setup":
+    if sub == "setup":
         return _cmd_agent_setup()
-    elif sub == "search":
+    if sub == "search":
         return _cmd_agent_search(args)
-    elif sub == "publish":
+    if sub == "publish":
         return _cmd_agent_publish(args)
-    elif sub == "bind":
+    if sub == "bind":
         return _cmd_agent_bind(args)
-    elif sub == "unbind":
+    if sub == "unbind":
         return _cmd_agent_unbind(args)
-    else:
-        print(
-            "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish|bind|unbind}"
-        )
-        return 0
+    print(
+        "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish|bind|unbind}"
+    )
+    return 0
 
 
 def _cmd_agent_scaffold(args: argparse.Namespace) -> int:
@@ -1141,10 +1140,9 @@ def _cmd_agent_remove(args: argparse.Namespace) -> int:
         print(f"{action}: {agent_id}")
         print("Restart engine: sudo systemctl restart robothor-engine")
         return 0
-    else:
-        print(f"Agent not found in installed registry: {agent_id}")
-        print("Use 'robothor agent list' to see installed agents.")
-        return 1
+    print(f"Agent not found in installed registry: {agent_id}")
+    print("Use 'robothor agent list' to see installed agents.")
+    return 1
 
 
 def _cmd_agent_update(args: argparse.Namespace) -> int:
@@ -1219,8 +1217,8 @@ def _cmd_agent_resolve(args: argparse.Namespace) -> int:
     unresolved = result.get("unresolved", {})
     if unresolved:
         print("Unresolved variables:")
-        for filename, vars in unresolved.items():
-            for v in vars:
+        for filename, var_names in unresolved.items():
+            for v in var_names:
                 print(f"  {filename}: {{ {v} }}")
     else:
         print("All variables resolved successfully.")
@@ -1407,33 +1405,33 @@ def _cmd_agent_publish(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_manifest(path):
+def _load_manifest(path: str | Path) -> tuple[Any, Any]:
     """Load a YAML manifest, preferring ruamel.yaml for comment preservation."""
     try:
         from ruamel.yaml import YAML
 
         yaml_handler = YAML()
         yaml_handler.preserve_quotes = True
-        with open(path) as f:
+        with Path(path).open() as f:
             data = yaml_handler.load(f)
         return data, yaml_handler
     except ImportError:
         import yaml
 
         print("Note: ruamel.yaml not installed — comments may not be preserved")
-        with open(path) as f:
+        with Path(path).open() as f:
             return yaml.safe_load(f), None
 
 
-def _save_manifest(path, data, yaml_handler=None):
+def _save_manifest(path: str | Path, data: Any, yaml_handler: Any = None) -> None:
     """Save a YAML manifest using the same handler that loaded it."""
     if yaml_handler is not None:
-        with open(path, "w") as f:
+        with Path(path).open("w") as f:
             yaml_handler.dump(data, f)
     else:
         import yaml
 
-        with open(path, "w") as f:
+        with Path(path).open("w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
@@ -1511,21 +1509,20 @@ def _cmd_engine(args: argparse.Namespace) -> int:
 
     if sub == "run":
         return _cmd_engine_run(args)
-    elif sub == "start":
+    if sub == "start":
         return _cmd_engine_start()
-    elif sub == "stop":
+    if sub == "stop":
         return _cmd_engine_stop()
-    elif sub == "status":
+    if sub == "status":
         return _cmd_engine_status()
-    elif sub == "list":
+    if sub == "list":
         return _cmd_engine_list()
-    elif sub == "history":
+    if sub == "history":
         return _cmd_engine_history(args)
-    elif sub == "workflow":
+    if sub == "workflow":
         return _cmd_engine_workflow(args)
-    else:
-        print("Usage: robothor engine {run|start|stop|status|list|history|workflow}")
-        return 0
+    print("Usage: robothor engine {run|start|stop|status|list|history|workflow}")
+    return 0
 
 
 def _cmd_engine_run(args: argparse.Namespace) -> int:
@@ -1564,7 +1561,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     print(f"Tools: {len(agent_config.tools_allowed)} allowed")
     print()
 
-    async def _run():
+    async def _run() -> Any:
         from robothor.engine.runner import AgentRunner
 
         runner = AgentRunner(config)
@@ -1594,7 +1591,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     return 0 if run.status.value == "completed" else 1
 
 
-def _cmd_engine_run_deep(args: argparse.Namespace, config) -> int:
+def _cmd_engine_run_deep(args: argparse.Namespace, config: Any) -> int:
     """Run deep reasoning (RLM) from the CLI."""
     import asyncio
     import sys
@@ -1610,12 +1607,12 @@ def _cmd_engine_run_deep(args: argparse.Namespace, config) -> int:
 
     start = time.monotonic()
 
-    async def _run():
+    async def _run() -> Any:
         from robothor.engine.runner import AgentRunner
 
         runner = AgentRunner(config)
 
-        async def on_progress(progress: dict) -> None:
+        async def on_progress(progress: dict[str, Any]) -> None:
             elapsed = progress.get("elapsed_s", 0)
             sys.stdout.write(f"\r... {elapsed}s elapsed")
             sys.stdout.flush()
@@ -1766,11 +1763,10 @@ def _cmd_engine_workflow(args: argparse.Namespace) -> int:
 
     if wf_sub == "list":
         return _cmd_workflow_list()
-    elif wf_sub == "run":
+    if wf_sub == "run":
         return _cmd_workflow_run(args)
-    else:
-        print("Usage: robothor engine workflow {list|run}")
-        return 0
+    print("Usage: robothor engine workflow {list|run}")
+    return 0
 
 
 def _cmd_workflow_list() -> int:
@@ -1781,10 +1777,7 @@ def _cmd_workflow_list() -> int:
     config = EngineConfig.from_env()
 
     # We don't need a full runner just to list workflows
-    class _StubRunner:
-        pass
-
-    engine = WorkflowEngine(config, _StubRunner())
+    engine = WorkflowEngine(config, None)  # type: ignore[arg-type]
     engine.load_workflows(config.workflow_dir)
 
     workflows = engine.list_workflows()
@@ -1830,7 +1823,7 @@ def _cmd_workflow_run(args: argparse.Namespace) -> int:
     print(f"Steps: {len(wf.steps)}")
     print()
 
-    async def _run():
+    async def _run() -> Any:
         return await engine.execute(
             workflow_id=workflow_id,
             trigger_type="manual",

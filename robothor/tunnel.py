@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 # Service → (subdomain, port) mapping
 SERVICE_MAP = {
@@ -63,7 +64,7 @@ def generate_tunnel_config(
             camera_enabled=camera_enabled,
             camera_port=camera_port,
         )
-    elif provider == "caddy":
+    if provider == "caddy":
         return _generate_caddy(
             domain,
             output_dir,
@@ -74,8 +75,7 @@ def generate_tunnel_config(
             camera_enabled=camera_enabled,
             camera_port=camera_port,
         )
-    else:
-        raise ValueError(f"Unknown tunnel provider: {provider}. Use 'cloudflare' or 'caddy'.")
+    raise ValueError(f"Unknown tunnel provider: {provider}. Use 'cloudflare' or 'caddy'.")
 
 
 def _generate_cloudflare(
@@ -157,11 +157,11 @@ def _generate_caddy(
     return out_path
 
 
-def check_tunnel_status(provider: str) -> dict:
+def check_tunnel_status(provider: str) -> dict[str, Any]:
     """Check if the tunnel service is running."""
     import socket
 
-    result: dict = {"provider": provider, "connected": False}
+    result: dict[str, Any] = {"provider": provider, "connected": False}
     if provider == "cloudflare":
         try:
             # cloudflared metrics endpoint
@@ -180,6 +180,6 @@ def _find_infra_dir() -> Path:
     infra = repo_root / "infra"
     if infra.is_dir():
         return infra
-    # Fallback: workspace
+    # Fall back to workspace directory
     workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
     return workspace / "infra"

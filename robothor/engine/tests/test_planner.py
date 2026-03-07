@@ -48,6 +48,7 @@ async def test_generate_plan_all_models_fail():
         result = await generate_plan("Do stuff", ["tool1"], "bad-model")
 
     assert result.success is False
+    assert result.error is not None
     assert "failed" in result.error.lower()
 
 

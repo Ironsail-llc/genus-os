@@ -16,6 +16,7 @@ import hashlib
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -43,7 +44,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _ensure_table(conn) -> None:
+def _ensure_table(conn: Any) -> None:
     """Create schema_migrations table if it doesn't exist."""
     cur = conn.cursor()
     cur.execute("""
@@ -57,7 +58,7 @@ def _ensure_table(conn) -> None:
     conn.commit()
 
 
-def _applied(conn) -> dict[str, dict]:
+def _applied(conn: Any) -> dict[str, dict[str, Any]]:
     """Return {version: {filename, applied_at, checksum}} for all applied migrations."""
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute(
@@ -66,14 +67,14 @@ def _applied(conn) -> dict[str, dict]:
     return {r["version"]: dict(r) for r in cur.fetchall()}
 
 
-def status(migrations_dir: Path | None = None) -> list[dict]:
+def status(migrations_dir: Path | None = None) -> list[dict[str, Any]]:
     """Return list of dicts with version, filename, status, checksum info."""
     all_files = _discover(migrations_dir)
     with get_connection() as conn:
         _ensure_table(conn)
         applied = _applied(conn)
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for version, path in all_files:
         file_checksum = _sha256(path)
         if version in applied:

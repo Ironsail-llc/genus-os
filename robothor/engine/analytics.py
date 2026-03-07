@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from psycopg2.extras import RealDictCursor
 
@@ -251,7 +254,7 @@ def detect_anomalies(
 
     # Calculate baseline stats and check for anomalies
     anomalies = []
-    metrics_to_check = [
+    metrics_to_check: list[tuple[str, Callable[[dict[str, Any]], float], bool]] = [
         ("error_rate", lambda r: (r["failed"] or 0) / max(r["total_runs"] or 1, 1), True),
         ("avg_duration_ms", lambda r: float(r.get("avg_duration_ms") or 0), True),
         ("avg_cost_usd", lambda r: float(r.get("avg_cost_usd") or 0), True),

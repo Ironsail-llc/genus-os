@@ -268,7 +268,7 @@ def update_model_override(
 
 def save_plan_state(
     session_key: str,
-    plan_dict: dict,
+    plan_dict: dict[str, Any],
     tenant_id: str = DEFAULT_TENANT,
 ) -> None:
     """Persist plan state JSONB to the chat_sessions row."""
@@ -424,7 +424,7 @@ async def clear_session_async(
 
 async def save_plan_state_async(
     session_key: str,
-    plan_dict: dict,
+    plan_dict: dict[str, Any],
     tenant_id: str = DEFAULT_TENANT,
 ) -> None:
     """Non-blocking wrapper around save_plan_state."""

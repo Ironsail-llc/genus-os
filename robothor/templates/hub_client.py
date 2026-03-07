@@ -11,6 +11,7 @@ import os
 import tarfile
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -63,7 +64,7 @@ class HubClient:
             )
         return self._client
 
-    def fetch_registry(self) -> dict:
+    def fetch_registry(self) -> dict[str, Any]:
         """Fetch all bundles from the hub.
 
         Returns dict mapping agent_id -> {slug, name, description, version, ...}
@@ -73,7 +74,7 @@ class HubClient:
         bundles = resp.json()
         return {b["slug"]: b for b in bundles}
 
-    def search(self, query: str, department: str | None = None) -> list[dict]:
+    def search(self, query: str, department: str | None = None) -> list[dict[str, Any]]:
         """Search the hub for agents matching a query.
 
         Returns list of bundle dicts.
@@ -85,16 +86,16 @@ class HubClient:
             params["department"] = department
         resp = self.client.get("/api/bundles", params=params)
         resp.raise_for_status()
-        result: list[dict] = resp.json()
+        result: list[dict[str, Any]] = resp.json()
         return result
 
-    def get_bundle(self, slug: str) -> dict | None:
+    def get_bundle(self, slug: str) -> dict[str, Any] | None:
         """Get a single bundle by slug."""
         resp = self.client.get(f"/api/bundles/{slug}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
-        bundle: dict = resp.json()
+        bundle: dict[str, Any] = resp.json()
         return bundle
 
     def download_bundle(self, slug: str, dest_dir: str | None = None) -> Path:
@@ -136,7 +137,7 @@ class HubClient:
             return subdirs[0]
         return dest
 
-    def submit(self, repo_url: str) -> dict:
+    def submit(self, repo_url: str) -> dict[str, Any]:
         """Submit a GitHub repo to the hub catalog.
 
         Returns the created bundle metadata.
@@ -146,16 +147,16 @@ class HubClient:
         data = resp.json()
         if not data.get("success"):
             raise HubError(data.get("error", "Submission failed"))
-        bundle: dict = data.get("bundle", {})
+        bundle: dict[str, Any] = data.get("bundle", {})
         return bundle
 
-    def close(self):
+    def close(self) -> None:
         if self._client:
             self._client.close()
             self._client = None
 
-    def __enter__(self):
+    def __enter__(self) -> HubClient:
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         self.close()

@@ -9,10 +9,10 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import SpawnContext
-from robothor.engine.tools.dispatch import ToolContext
 
 if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
+    from robothor.engine.tools.dispatch import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -245,11 +245,11 @@ async def _handle_spawn_agents(
 
 
 # Register handlers — wrap to extract agent_id from ctx
-async def _spawn_agent_handler(args: dict, ctx: ToolContext) -> dict:
+async def _spawn_agent_handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return await _handle_spawn_agent(args, ctx, agent_id=ctx.agent_id)
 
 
-async def _spawn_agents_handler(args: dict, ctx: ToolContext) -> dict:
+async def _spawn_agents_handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return await _handle_spawn_agents(args, ctx, agent_id=ctx.agent_id)
 
 

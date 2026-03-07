@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
+from typing import Any
 
 import httpx
 
@@ -35,7 +36,7 @@ class AlertHandler(ABC):
         event_type: str,
         message: str,
         image_bytes: bytes | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Send an alert.
 
@@ -66,7 +67,7 @@ class TelegramAlert(AlertHandler):
         event_type: str,
         message: str,
         image_bytes: bytes | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         if not self.bot_token or not self.chat_id:
             logger.warning("Telegram alert skipped: missing bot_token or chat_id")
@@ -94,7 +95,7 @@ class TelegramAlert(AlertHandler):
 class WebhookAlert(AlertHandler):
     """Send alerts via generic HTTP webhook."""
 
-    def __init__(self, url: str, headers: dict | None = None):
+    def __init__(self, url: str, headers: dict[str, str] | None = None):
         self.url = url
         self.headers = headers or {}
 
@@ -103,7 +104,7 @@ class WebhookAlert(AlertHandler):
         event_type: str,
         message: str,
         image_bytes: bytes | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         try:
             payload = {
@@ -138,7 +139,7 @@ class AlertManager:
         event_type: str,
         message: str,
         image_bytes: bytes | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         """Send alert to all registered handlers.
 

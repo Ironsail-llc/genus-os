@@ -58,9 +58,11 @@ def validate_skill_md(bundle_path: Path) -> list[ValidationError]:
         return errors
 
     required = ["name", "version", "description", "format"]
-    for field in required:
-        if field not in frontmatter or not frontmatter[field]:
-            errors.append(ValidationError("error", f"Missing required field: {field}", "SKILL.md"))
+    errors.extend(
+        ValidationError("error", f"Missing required field: {field}", "SKILL.md")
+        for field in required
+        if field not in frontmatter or not frontmatter[field]
+    )
 
     return errors
 
@@ -141,14 +143,14 @@ def validate_template_resolves(
     # Check for unresolved variables
     unresolved = find_unresolved(content)
     if unresolved:
-        for var in unresolved:
-            errors.append(
-                ValidationError(
-                    "warning",
-                    f"Unresolved variable: {{{{ {var} }}}}",
-                    "manifest.template.yaml",
-                )
+        errors.extend(
+            ValidationError(
+                "warning",
+                f"Unresolved variable: {{{{ {var} }}}}",
+                "manifest.template.yaml",
             )
+            for var in unresolved
+        )
 
     # Try to parse as valid YAML
     try:
@@ -191,7 +193,7 @@ def validate_post_install(
     manifest_dir = repo_root / "docs" / "agents"
     all_manifests = {}
     for f in sorted(manifest_dir.glob("*.yaml")):
-        with open(f) as fh:
+        with f.open() as fh:
             data = yaml.safe_load(fh)
         if data and isinstance(data, dict) and "id" in data:
             all_manifests[data["id"]] = data
@@ -207,10 +209,11 @@ def validate_post_install(
         pass
 
     results = validate_agent(manifest, all_manifests, registered_tools, repo_root=repo_root)
-    messages = []
-    for r in results:
-        if r.status in ("FAIL", "WARN"):
-            messages.append(f"[{r.check_id}] {r.name}: {r.status} -- {r.message}")
+    messages = [
+        f"[{r.check_id}] {r.name}: {r.status} -- {r.message}"
+        for r in results
+        if r.status in ("FAIL", "WARN")
+    ]
     return messages
 
 
@@ -233,14 +236,15 @@ def validate_chain_post_install(
     manifest_dir = repo_root / "docs" / "agents"
     all_manifests = {}
     for f in sorted(manifest_dir.glob("*.yaml")):
-        with open(f) as fh:
+        with f.open() as fh:
             data = yaml.safe_load(fh)
         if data and isinstance(data, dict) and "id" in data:
             all_manifests[data["id"]] = data
 
     results = validate_chain(manifest, all_manifests, repo_root=repo_root)
-    messages = []
-    for r in results:
-        if r.status in ("FAIL", "WARN"):
-            messages.append(f"[{r.check_id}] {r.name}: {r.status} -- {r.message}")
+    messages = [
+        f"[{r.check_id}] {r.name}: {r.status} -- {r.message}"
+        for r in results
+        if r.status in ("FAIL", "WARN")
+    ]
     return messages

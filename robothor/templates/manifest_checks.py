@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 try:
     from apscheduler.triggers.cron import CronTrigger
 except ImportError:
-    CronTrigger = None  # type: ignore[misc,assignment]
+    CronTrigger = None
 
 # Valid enum values
 VALID_DELIVERY_MODES = {"announce", "none", "log"}
@@ -58,7 +59,7 @@ class CheckResult:
         return self
 
 
-def load_schema(schema_path: Path) -> tuple[dict, set[str], set[str]]:
+def load_schema(schema_path: Path) -> tuple[dict[str, Any], set[str], set[str]]:
     """Load the agent manifest schema.
 
     Returns (schema_dict, required_fields, department_enums).
@@ -66,7 +67,7 @@ def load_schema(schema_path: Path) -> tuple[dict, set[str], set[str]]:
     import yaml
 
     if schema_path.exists():
-        with open(schema_path) as f:
+        with schema_path.open() as f:
             schema = yaml.safe_load(f) or {}
         required_fields = set(schema.get("required", {}).keys())
         dept_info = schema.get("required", {}).get("department", {})
@@ -76,18 +77,20 @@ def load_schema(schema_path: Path) -> tuple[dict, set[str], set[str]]:
 
 
 def check_schema_required(
-    manifest: dict,
+    manifest: dict[str, Any],
     required_fields: set[str],
     departments: set[str],
 ) -> CheckResult:
     """A. Schema required fields -- strict, blocks commit."""
     result = CheckResult("A", "Schema required fields")
-    issues = []
+    issues: list[str] = []
 
     required = required_fields or {"id", "name"}
-    for field in required:
-        if field not in manifest or not manifest[field]:
-            issues.append(f"Missing required field: {field}")
+    issues.extend(
+        f"Missing required field: {field}"
+        for field in required
+        if field not in manifest or not manifest[field]
+    )
 
     agent_id = manifest.get("id", "")
     if agent_id and not re.match(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$", agent_id):
@@ -102,7 +105,7 @@ def check_schema_required(
     return result
 
 
-def check_structure(manifest: dict) -> CheckResult:
+def check_structure(manifest: dict[str, Any]) -> CheckResult:
     """B. Manifest structure -- delivery, session, model enums."""
     result = CheckResult("B", "Manifest structure")
     issues = []
@@ -129,7 +132,7 @@ def check_structure(manifest: dict) -> CheckResult:
     return result
 
 
-def check_files(manifest: dict, repo_root: Path) -> CheckResult:
+def check_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """C. Instruction + bootstrap file existence."""
     result = CheckResult("C", "File existence")
     issues = []
@@ -156,7 +159,7 @@ def check_files(manifest: dict, repo_root: Path) -> CheckResult:
     return result
 
 
-def check_tools_registered(manifest: dict, registered: set[str]) -> CheckResult:
+def check_tools_registered(manifest: dict[str, Any], registered: set[str]) -> CheckResult:
     """D. tools_allowed entries are registered in ToolRegistry."""
     result = CheckResult("D", "Tools registered")
     if not registered:
@@ -172,7 +175,7 @@ def check_tools_registered(manifest: dict, registered: set[str]) -> CheckResult:
     return result
 
 
-def check_status_file_tools(manifest: dict) -> CheckResult:
+def check_status_file_tools(manifest: dict[str, Any]) -> CheckResult:
     """E. Agents with status_file have file write tools."""
     result = CheckResult("E", "Status file tools")
     status_file = manifest.get("status_file")
@@ -192,7 +195,7 @@ def check_status_file_tools(manifest: dict) -> CheckResult:
     return result
 
 
-def check_cron(manifest: dict) -> CheckResult:
+def check_cron(manifest: dict[str, Any]) -> CheckResult:
     """F. Cron expression validity."""
     result = CheckResult("F", "Cron expression")
     cron_expr = manifest.get("schedule", {}).get("cron", "")
@@ -209,15 +212,17 @@ def check_cron(manifest: dict) -> CheckResult:
     return result
 
 
-def check_relationships(manifest: dict, all_manifests: dict) -> CheckResult:
+def check_relationships(manifest: dict[str, Any], all_manifests: dict[str, Any]) -> CheckResult:
     """G. Relationship targets reference valid agent IDs."""
     result = CheckResult("G", "Relationships")
-    issues = []
+    issues: list[str] = []
 
     for field in ["creates_tasks_for", "receives_tasks_from"]:
-        for target in manifest.get(field, []):
-            if target not in all_manifests:
-                issues.append(f"{field} target '{target}' has no manifest")
+        issues.extend(
+            f"{field} target '{target}' has no manifest"
+            for target in manifest.get(field, [])
+            if target not in all_manifests
+        )
 
     reports_to = manifest.get("reports_to")
     if reports_to and reports_to not in all_manifests:
@@ -232,7 +237,7 @@ def check_relationships(manifest: dict, all_manifests: dict) -> CheckResult:
     return result
 
 
-def check_permission_coherence(manifest: dict) -> CheckResult:
+def check_permission_coherence(manifest: dict[str, Any]) -> CheckResult:
     """H. No tool in both allowed AND denied."""
     result = CheckResult("H", "Permission coherence")
     allowed = set(manifest.get("tools_allowed", []))
@@ -244,7 +249,7 @@ def check_permission_coherence(manifest: dict) -> CheckResult:
     return result
 
 
-def check_downstream(manifest: dict, all_manifests: dict) -> CheckResult:
+def check_downstream(manifest: dict[str, Any], all_manifests: dict[str, Any]) -> CheckResult:
     """I. Downstream agents reference valid IDs."""
     result = CheckResult("I", "Downstream agents")
     downstream = manifest.get("downstream_agents", [])
@@ -257,7 +262,7 @@ def check_downstream(manifest: dict, all_manifests: dict) -> CheckResult:
     return result
 
 
-def check_warmup_files(manifest: dict, repo_root: Path) -> CheckResult:
+def check_warmup_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     """J. Warmup context_files exist on disk."""
     result = CheckResult("J", "Warmup files")
     warmup = manifest.get("warmup", {})
@@ -276,7 +281,7 @@ def check_warmup_files(manifest: dict, repo_root: Path) -> CheckResult:
     return result
 
 
-def check_basic_io_tools(manifest: dict) -> CheckResult:
+def check_basic_io_tools(manifest: dict[str, Any]) -> CheckResult:
     """K. Agents with tools_allowed should include basic I/O tools."""
     result = CheckResult("K", "Basic I/O tools")
     tools_allowed = set(manifest.get("tools_allowed", []))
@@ -292,7 +297,7 @@ def check_basic_io_tools(manifest: dict) -> CheckResult:
     return result
 
 
-def check_hooks(manifest: dict) -> CheckResult:
+def check_hooks(manifest: dict[str, Any]) -> CheckResult:
     """L. Hooks entries are well-formed (stream, event_type required)."""
     result = CheckResult("L", "Hooks validity")
     hooks = manifest.get("hooks", [])
@@ -317,7 +322,7 @@ def check_hooks(manifest: dict) -> CheckResult:
     return result
 
 
-def check_secret_refs(manifest: dict) -> CheckResult:
+def check_secret_refs(manifest: dict[str, Any]) -> CheckResult:
     """M. SecretRef keys are present in the environment."""
     result = CheckResult("M", "Secret references")
     secret_refs = manifest.get("secret_refs", [])
@@ -339,8 +344,8 @@ def check_secret_refs(manifest: dict) -> CheckResult:
 
 
 def validate_agent(
-    manifest: dict,
-    all_manifests: dict,
+    manifest: dict[str, Any],
+    all_manifests: dict[str, Any],
     registered_tools: set[str],
     repo_root: Path | None = None,
     ci: bool = False,

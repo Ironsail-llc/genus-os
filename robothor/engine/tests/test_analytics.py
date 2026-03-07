@@ -179,9 +179,9 @@ class TestDetectAnomalies:
                 "total_runs": 10,
                 "completed": 9,
                 "failed": 1,
-                "avg_duration_ms": Decimal("5000"),
+                "avg_duration_ms": Decimal(5000),
                 "avg_cost_usd": Decimal("0.05"),
-                "avg_tokens": Decimal("1500"),
+                "avg_tokens": Decimal(1500),
             }
             for i in range(5)
         ]
@@ -190,9 +190,9 @@ class TestDetectAnomalies:
             "total_runs": 10,
             "completed": 3,
             "failed": 7,
-            "avg_duration_ms": Decimal("5000"),
+            "avg_duration_ms": Decimal(5000),
             "avg_cost_usd": Decimal("0.05"),
-            "avg_tokens": Decimal("1500"),
+            "avg_tokens": Decimal(1500),
         }
 
         cursor = _mock_cursor([baseline_rows, [recent_row]])
@@ -216,9 +216,9 @@ class TestDetectAnomalies:
                 "total_runs": 10,
                 "completed": 9,
                 "failed": 1,
-                "avg_duration_ms": Decimal("5000"),
+                "avg_duration_ms": Decimal(5000),
                 "avg_cost_usd": Decimal("0.05"),
-                "avg_tokens": Decimal("1500"),
+                "avg_tokens": Decimal(1500),
             }
             for i in range(5)
         ]
@@ -227,9 +227,9 @@ class TestDetectAnomalies:
             "total_runs": 10,
             "completed": 9,
             "failed": 1,
-            "avg_duration_ms": Decimal("5000"),
+            "avg_duration_ms": Decimal(5000),
             "avg_cost_usd": Decimal("0.05"),
-            "avg_tokens": Decimal("1500"),
+            "avg_tokens": Decimal(1500),
         }
 
         cursor = _mock_cursor([baseline_rows, [recent_row]])
@@ -274,9 +274,9 @@ class TestDetectAnomalies:
                         "total_runs": 10,
                         "completed": 9,
                         "failed": 1,
-                        "avg_duration_ms": Decimal("5000"),
+                        "avg_duration_ms": Decimal(5000),
                         "avg_cost_usd": Decimal("0.05"),
-                        "avg_tokens": Decimal("1500"),
+                        "avg_tokens": Decimal(1500),
                     }
                 ],
                 [

@@ -29,8 +29,7 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import litellm
 
@@ -57,6 +56,9 @@ from robothor.engine.prompts import (
 from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +100,10 @@ class AgentRunner:
         correlation_id: str | None = None,
         agent_config: AgentConfig | None = None,
         on_content: Callable[[str], Awaitable[None]] | None = None,
-        on_tool: Callable[[dict], Awaitable[None]] | None = None,
-        on_status: Callable[[dict], Awaitable[None]] | None = None,
+        on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_status: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         model_override: str | None = None,
-        conversation_history: list[dict] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         resume_from_run_id: str | None = None,
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
@@ -337,8 +339,8 @@ class AgentRunner:
         self,
         query: str,
         *,
-        on_progress: Callable[[dict], Awaitable[None]] | None = None,
-        conversation_history: list[dict] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         context_override: str | None = None,
     ) -> AgentRun:
         """Execute a deep reasoning session via the RLM, bypassing the LLM loop.
@@ -403,8 +405,8 @@ class AgentRunner:
         # Thread-safe queue for RLM event callbacks (called from worker thread)
         import queue as _queue
 
-        event_queue: _queue.SimpleQueue[dict] = _queue.SimpleQueue()
-        last_event: dict | None = None
+        event_queue: _queue.SimpleQueue[dict[str, Any]] = _queue.SimpleQueue()
+        last_event: dict[str, Any] | None = None
 
         async def _progress_loop() -> None:
             nonlocal last_event
@@ -433,7 +435,7 @@ class AgentRunner:
             from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
 
             config = DeepReasonConfig(workspace=str(self.config.workspace))
-            result = await asyncio.to_thread(
+            result = await asyncio.to_thread(  # type: ignore[call-arg]
                 execute_deep_reason,
                 query=query,
                 context=context,
@@ -513,10 +515,10 @@ class AgentRunner:
         self,
         session: AgentSession,
         models: list[str],
-        tool_schemas: list[dict],
+        tool_schemas: list[dict[str, Any]],
         agent_config: AgentConfig,
         on_content: Callable[[str], Awaitable[None]] | None = None,
-        on_tool: Callable[[dict], Awaitable[None]] | None = None,
+        on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         *,
         max_iterations: int = 20,
         route: Any = None,
@@ -525,7 +527,7 @@ class AgentRunner:
         resumed_scratchpad: Any = None,
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
-        on_status: Callable[[dict], Awaitable[None]] | None = None,
+        on_status: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
         # Track models that hit permanent errors (401/403/429) across iterations
@@ -1024,12 +1026,12 @@ class AgentRunner:
         self,
         session: AgentSession,
         models: list[str],
-        tool_schemas: list[dict],
+        tool_schemas: list[dict[str, Any]],
         on_content: Callable[[str], Awaitable[None]] | None,
         broken_models: set[str],
         temperature: float,
         trace: Any = None,
-    ) -> tuple[Any, str, int, dict]:
+    ) -> tuple[Any, str, int, dict[str, Any]]:
         """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
         start = time.monotonic()
 
@@ -1112,7 +1114,7 @@ class AgentRunner:
         self,
         session: AgentSession,
         models: list[str],
-        tool_schemas: list[dict],
+        tool_schemas: list[dict[str, Any]],
         on_content: Callable[[str], Awaitable[None]] | None,
         broken_models: set[str],
         temperature: float,
@@ -1350,7 +1352,7 @@ class AgentRunner:
         agent_config: AgentConfig,
         session: AgentSession,
         models: list[str],
-        tool_schemas: list[dict],
+        tool_schemas: list[dict[str, Any]],
         output_text: str | None,
         on_content: Callable[[str], Awaitable[None]] | None,
         on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None,
@@ -1450,7 +1452,7 @@ class AgentRunner:
     def _build_llm_kwargs(
         model: str,
         messages: list[dict[str, Any]],
-        tools: list[dict],
+        tools: list[dict[str, Any]],
         input_est: int,
         temperature: float,
         *,
@@ -1511,7 +1513,7 @@ class AgentRunner:
         self,
         messages: list[dict[str, Any]],
         models: list[str],
-        tools: list[dict],
+        tools: list[dict[str, Any]],
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
     ) -> Any:
@@ -1536,7 +1538,7 @@ class AgentRunner:
         self,
         messages: list[dict[str, Any]],
         models: list[str],
-        tools: list[dict],
+        tools: list[dict[str, Any]],
         on_content: Callable[[str], Awaitable[None]],
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
@@ -1554,7 +1556,7 @@ class AgentRunner:
                 )
                 stream = await litellm.acompletion(**kwargs)
 
-                chunks: list = []
+                chunks: list[Any] = []
                 accumulated_content = ""
                 has_tool_calls = False
 
@@ -1598,9 +1600,9 @@ class AgentRunner:
                 delivery_status=run.delivery_status,
                 delivered_at=run.delivered_at,
                 delivery_channel=run.delivery_channel,
-                token_budget=run.token_budget if run.token_budget else None,
-                cost_budget_usd=run.cost_budget_usd if run.cost_budget_usd else None,
-                budget_exhausted=run.budget_exhausted if run.budget_exhausted else None,
+                token_budget=run.token_budget or None,
+                cost_budget_usd=run.cost_budget_usd or None,
+                budget_exhausted=run.budget_exhausted or None,
             )
             # Record steps
             for step in run.steps:

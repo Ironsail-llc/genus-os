@@ -7,10 +7,12 @@ crewai) will be added when the Agent Hub needs them.
 
 from __future__ import annotations
 
+from robothor.templates.adapters.base import FormatAdapter
+
 __all__ = ["get_adapter", "FormatAdapter"]
 
 
-def get_adapter(format_id: str = "robothor-native/v1"):
+def get_adapter(format_id: str = "robothor-native/v1") -> FormatAdapter:
     """Get a format adapter by ID."""
     if format_id.startswith("robothor-native"):
         from robothor.templates.adapters.robothor_native import RobothorNativeAdapter

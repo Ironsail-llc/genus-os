@@ -25,10 +25,9 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from robothor.engine.models import (
     ConditionBranch,
@@ -42,6 +41,12 @@ from robothor.engine.models import (
     WorkflowStepType,
     WorkflowTriggerDef,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from robothor.engine.config import EngineConfig
+    from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
 
@@ -76,33 +81,31 @@ def _eval_condition(expression: str, value: Any) -> bool:
         return False
 
 
-def parse_workflow(data: dict) -> WorkflowDef:
+def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
     """Parse a workflow definition from a YAML dict."""
-    triggers = []
-    for t in data.get("triggers", []):
-        triggers.append(
-            WorkflowTriggerDef(
-                type=t.get("type", ""),
-                stream=t.get("stream", ""),
-                event_type=t.get("event_type", ""),
-                cron=t.get("cron", ""),
-                timezone=t.get("timezone", "America/New_York"),
-            )
+    triggers = [
+        WorkflowTriggerDef(
+            type=t.get("type", ""),
+            stream=t.get("stream", ""),
+            event_type=t.get("event_type", ""),
+            cron=t.get("cron", ""),
+            timezone=t.get("timezone", "America/New_York"),
         )
+        for t in data.get("triggers", [])
+    ]
 
     steps = []
     for s in data.get("steps", []):
         step_type = WorkflowStepType(s.get("type", "noop"))
 
-        branches = []
-        for b in s.get("branches", []):
-            branches.append(
-                ConditionBranch(
-                    when=b.get("when"),
-                    otherwise=b.get("otherwise", False),
-                    goto=b.get("goto", ""),
-                )
+        branches = [
+            ConditionBranch(
+                when=b.get("when"),
+                otherwise=b.get("otherwise", False),
+                goto=b.get("goto", ""),
             )
+            for b in s.get("branches", [])
+        ]
 
         steps.append(
             WorkflowStepDef(
@@ -140,9 +143,7 @@ def parse_workflow(data: dict) -> WorkflowDef:
 class WorkflowEngine:
     """Executes declarative multi-step workflows."""
 
-    def __init__(self, config, runner) -> None:
-        from robothor.engine.config import EngineConfig
-        from robothor.engine.runner import AgentRunner
+    def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
 
         self.config: EngineConfig = config
         self.runner: AgentRunner = runner
@@ -157,7 +158,7 @@ class WorkflowEngine:
         loaded = 0
         for f in sorted(workflow_dir.glob("*.yaml")):
             try:
-                with open(f) as fh:
+                with f.open() as fh:
                     data = yaml.safe_load(fh)
                 if data and isinstance(data, dict) and "id" in data:
                     wf = parse_workflow(data)
@@ -194,12 +195,12 @@ class WorkflowEngine:
 
     def get_workflows_for_cron(self) -> list[tuple[WorkflowDef, WorkflowTriggerDef]]:
         """Find workflows with cron triggers, returning (workflow, trigger) pairs."""
-        results = []
-        for wf in self._workflows.values():
-            for trigger in wf.triggers:
-                if trigger.type == "cron" and trigger.cron:
-                    results.append((wf, trigger))
-        return results
+        return [
+            (wf, trigger)
+            for wf in self._workflows.values()
+            for trigger in wf.triggers
+            if trigger.type == "cron" and trigger.cron
+        ]
 
     async def execute(
         self,
@@ -305,7 +306,7 @@ class WorkflowEngine:
                     run.error_message = f"Step '{step.id}' failed: {result.error_message}"
                     run.status = RunStatus.FAILED
                     return
-                elif step.on_failure == "skip":
+                if step.on_failure == "skip":
                     result.status = WorkflowStepStatus.SKIPPED
                     # Continue to next step
 
@@ -393,7 +394,7 @@ class WorkflowEngine:
         result.agent_run_id = agent_run.id
         result.output_text = agent_run.output_text
 
-        if agent_run.status.value in ("completed",):
+        if agent_run.status.value == "completed":
             result.status = WorkflowStepStatus.COMPLETED
         else:
             result.status = WorkflowStepStatus.FAILED

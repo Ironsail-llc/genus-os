@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +24,13 @@ logger = logging.getLogger(__name__)
 _telegram_send = None
 
 
-def set_telegram_sender(send_func) -> None:
+def set_telegram_sender(send_func: Callable[..., Any]) -> None:
     """Register the Telegram send function (called by daemon on startup)."""
     global _telegram_send
     _telegram_send = send_func
 
 
-def get_telegram_sender():
+def get_telegram_sender() -> Callable[..., Any] | None:
     """Get the registered Telegram send function (or None)."""
     return _telegram_send
 

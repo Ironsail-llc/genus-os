@@ -9,9 +9,11 @@ from __future__ import annotations
 import contextlib
 import json
 import statistics
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass
@@ -29,7 +31,7 @@ class Criterion:
     """A grading criterion for an agent run."""
 
     name: str = ""
-    check_fn: Callable[[dict, list[dict]], bool] | None = None
+    check_fn: Callable[[dict[str, Any], list[dict[str, Any]]], bool] | None = None
     weight: float = 1.0
 
 
@@ -63,7 +65,7 @@ class TranscriptInsight:
     recommendation: str = ""
 
 
-def generate_test_cases(manifest: dict, instruction_content: str = "") -> list[TestCase]:
+def generate_test_cases(manifest: dict[str, Any], instruction_content: str = "") -> list[TestCase]:
     """Auto-generate test cases from manifest analysis.
 
     Examines manifest fields to create appropriate test scenarios.
@@ -134,8 +136,8 @@ def generate_test_cases(manifest: dict, instruction_content: str = "") -> list[T
 
 
 def grade_run(
-    run: dict,
-    steps: list[dict],
+    run: dict[str, Any],
+    steps: list[dict[str, Any]],
     criteria: list[Criterion],
 ) -> EvalResult:
     """Grade an agent run against criteria.
@@ -161,10 +163,10 @@ def grade_run(
     return result
 
 
-def _check_calls_tool(tool_name: str) -> Callable[[dict, list[dict]], bool]:
+def _check_calls_tool(tool_name: str) -> Callable[[dict[str, Any], list[dict[str, Any]]], bool]:
     """Create a check function that verifies a tool was called."""
 
-    def check(run: dict, steps: list[dict]) -> bool:
+    def check(run: dict[str, Any], steps: list[dict[str, Any]]) -> bool:
         return any(
             s.get("tool_name") == tool_name
             for s in steps
@@ -174,15 +176,15 @@ def _check_calls_tool(tool_name: str) -> Callable[[dict, list[dict]], bool]:
     return check
 
 
-def _check_no_errors(run: dict, steps: list[dict]) -> bool:
+def _check_no_errors(run: dict[str, Any], steps: list[dict[str, Any]]) -> bool:
     """Check that the run completed without errors."""
     return run.get("status") in ("completed", "COMPLETED") and not run.get("error_message")
 
 
-def _check_writes_file(file_pattern: str) -> Callable[[dict, list[dict]], bool]:
+def _check_writes_file(file_pattern: str) -> Callable[[dict[str, Any], list[dict[str, Any]]], bool]:
     """Create a check function that verifies a file was written."""
 
-    def check(run: dict, steps: list[dict]) -> bool:
+    def check(run: dict[str, Any], steps: list[dict[str, Any]]) -> bool:
         for step in steps:
             if step.get("tool_name") in ("write_file", "exec"):
                 tool_input = step.get("tool_input")
@@ -229,8 +231,8 @@ def build_criteria_for_test_case(test_case: TestCase) -> list[Criterion]:
 
 
 def review_transcripts(
-    runs: list[dict],
-    steps_by_run: dict[str, list[dict]],
+    runs: list[dict[str, Any]],
+    steps_by_run: dict[str, list[dict[str, Any]]],
 ) -> list[TranscriptInsight]:
     """Analyze recent runs for optimization opportunities.
 

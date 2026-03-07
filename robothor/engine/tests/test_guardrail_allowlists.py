@@ -59,8 +59,9 @@ def _extract_exec_commands(text: str) -> list[str]:
     commands: list[str] = []
 
     # Pattern 1: backtick-wrapped commands  e.g. `gog gmail thread get ...`
-    for match in re.finditer(r"`((?:gog |python3 |python )[^`]+)`", text):
-        commands.append(match.group(1).strip())
+    commands.extend(
+        match.group(1).strip() for match in re.finditer(r"`((?:gog |python3 |python )[^`]+)`", text)
+    )
 
     # Pattern 2: indented code blocks (4+ spaces or tab at start of line)
     for line in text.splitlines():
@@ -154,10 +155,7 @@ class TestExecAllowlistCoversInstructionCommands:
         allowlist = manifest["v2"]["exec_allowlist"]
         patterns = [re.compile(p) for p in allowlist]
 
-        uncovered = []
-        for cmd in commands:
-            if not any(p.search(cmd) for p in patterns):
-                uncovered.append(cmd)
+        uncovered = [cmd for cmd in commands if not any(p.search(cmd) for p in patterns)]
 
         assert not uncovered, (
             f"Agent '{manifest['_agent_id']}' exec_allowlist does not cover "
@@ -201,10 +199,9 @@ class TestWritePathCoversInstructionWrites:
 
         allowlist = manifest["v2"]["write_path_allowlist"]
 
-        uncovered = []
-        for wp in write_paths:
-            if not any(fnmatch.fnmatch(wp, pat) for pat in allowlist):
-                uncovered.append(wp)
+        uncovered = [
+            wp for wp in write_paths if not any(fnmatch.fnmatch(wp, pat) for pat in allowlist)
+        ]
 
         assert not uncovered, (
             f"Agent '{manifest['_agent_id']}' write_path_allowlist does not cover "

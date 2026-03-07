@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -23,7 +25,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("create_person")
-async def _create_person(args: dict, ctx: ToolContext) -> dict:
+async def _create_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import create_person
 
     person_id = await asyncio.to_thread(
@@ -42,7 +44,7 @@ async def _create_person(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_person")
-async def _get_person(args: dict, ctx: ToolContext) -> dict:
+async def _get_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_person
 
     return await asyncio.to_thread(get_person, args["id"], tenant_id=ctx.tenant_id) or {
@@ -51,7 +53,7 @@ async def _get_person(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("update_person")
-async def _update_person(args: dict, ctx: ToolContext) -> dict:
+async def _update_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import update_person
 
     pid = args.get("id", "")
@@ -72,7 +74,7 @@ async def _update_person(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_people")
-async def _list_people(args: dict, ctx: ToolContext) -> dict:
+async def _list_people(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_people
 
     results = await asyncio.to_thread(
@@ -85,7 +87,7 @@ async def _list_people(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("delete_person")
-async def _delete_person(args: dict, ctx: ToolContext) -> dict:
+async def _delete_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import delete_person
 
     ok = await asyncio.to_thread(delete_person, args["id"], tenant_id=ctx.tenant_id)
@@ -96,7 +98,7 @@ async def _delete_person(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("create_company")
-async def _create_company(args: dict, ctx: ToolContext) -> dict:
+async def _create_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import create_company
 
     company_id = await asyncio.to_thread(
@@ -117,7 +119,7 @@ async def _create_company(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_company")
-async def _get_company(args: dict, ctx: ToolContext) -> dict:
+async def _get_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_company
 
     return await asyncio.to_thread(get_company, args["id"], tenant_id=ctx.tenant_id) or {
@@ -126,7 +128,7 @@ async def _get_company(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("update_company")
-async def _update_company(args: dict, ctx: ToolContext) -> dict:
+async def _update_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import update_company
 
     cid = args.get("id", "")
@@ -144,7 +146,7 @@ async def _update_company(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_companies")
-async def _list_companies(args: dict, ctx: ToolContext) -> dict:
+async def _list_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_companies
 
     results = await asyncio.to_thread(
@@ -157,7 +159,7 @@ async def _list_companies(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("delete_company")
-async def _delete_company(args: dict, ctx: ToolContext) -> dict:
+async def _delete_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import delete_company
 
     ok = await asyncio.to_thread(delete_company, args["id"], tenant_id=ctx.tenant_id)
@@ -168,7 +170,7 @@ async def _delete_company(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("create_note")
-async def _create_note(args: dict, ctx: ToolContext) -> dict:
+async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import create_note
 
     note_id = await asyncio.to_thread(
@@ -187,7 +189,7 @@ async def _create_note(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_note")
-async def _get_note(args: dict, ctx: ToolContext) -> dict:
+async def _get_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_note
 
     return await asyncio.to_thread(get_note, args["id"], tenant_id=ctx.tenant_id) or {
@@ -196,7 +198,7 @@ async def _get_note(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_notes")
-async def _list_notes(args: dict, ctx: ToolContext) -> dict:
+async def _list_notes(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_notes
 
     results = await asyncio.to_thread(
@@ -210,7 +212,7 @@ async def _list_notes(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("update_note")
-async def _update_note(args: dict, ctx: ToolContext) -> dict:
+async def _update_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import update_note
 
     nid = args.get("id", "")
@@ -226,7 +228,7 @@ async def _update_note(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("delete_note")
-async def _delete_note(args: dict, ctx: ToolContext) -> dict:
+async def _delete_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import delete_note
 
     ok = await asyncio.to_thread(delete_note, args["id"], tenant_id=ctx.tenant_id)
@@ -237,7 +239,7 @@ async def _delete_note(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("create_task")
-async def _create_task(args: dict, ctx: ToolContext) -> dict:
+async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import re as _re
 
     from robothor.crm.dal import create_task, find_task_by_thread_id
@@ -283,7 +285,7 @@ async def _create_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_task")
-async def _get_task(args: dict, ctx: ToolContext) -> dict:
+async def _get_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_task
 
     return await asyncio.to_thread(get_task, args["id"], tenant_id=ctx.tenant_id) or {
@@ -292,7 +294,7 @@ async def _get_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_tasks")
-async def _list_tasks(args: dict, ctx: ToolContext) -> dict:
+async def _list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_tasks
 
     results = await asyncio.to_thread(
@@ -312,7 +314,7 @@ async def _list_tasks(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("update_task")
-async def _update_task(args: dict, ctx: ToolContext) -> dict:
+async def _update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import update_task
 
     tid = args.get("id", "")
@@ -335,7 +337,7 @@ async def _update_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("delete_task")
-async def _delete_task(args: dict, ctx: ToolContext) -> dict:
+async def _delete_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import delete_task
 
     ok = await asyncio.to_thread(delete_task, args["id"], tenant_id=ctx.tenant_id)
@@ -343,7 +345,7 @@ async def _delete_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("resolve_task")
-async def _resolve_task(args: dict, ctx: ToolContext) -> dict:
+async def _resolve_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import resolve_task
 
     resolve_result = await asyncio.to_thread(
@@ -357,7 +359,7 @@ async def _resolve_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_agent_tasks")
-async def _list_agent_tasks(args: dict, ctx: ToolContext) -> dict:
+async def _list_agent_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_agent_tasks
 
     results = await asyncio.to_thread(
@@ -373,7 +375,7 @@ async def _list_agent_tasks(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_my_tasks")
-async def _list_my_tasks(args: dict, ctx: ToolContext) -> dict:
+async def _list_my_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_agent_tasks
 
     results = await asyncio.to_thread(
@@ -392,7 +394,7 @@ async def _list_my_tasks(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("approve_task")
-async def _approve_task(args: dict, ctx: ToolContext) -> dict:
+async def _approve_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import approve_task
 
     approve_result = await asyncio.to_thread(
@@ -408,7 +410,7 @@ async def _approve_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("reject_task")
-async def _reject_task(args: dict, ctx: ToolContext) -> dict:
+async def _reject_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import reject_task
 
     reject_result = await asyncio.to_thread(
@@ -428,7 +430,7 @@ async def _reject_task(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("send_notification")
-async def _send_notification(args: dict, ctx: ToolContext) -> dict:
+async def _send_notification(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import send_notification
 
     nid = await asyncio.to_thread(
@@ -450,7 +452,7 @@ async def _send_notification(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_inbox")
-async def _get_inbox(args: dict, ctx: ToolContext) -> dict:
+async def _get_inbox(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_agent_inbox
 
     results = await asyncio.to_thread(
@@ -465,7 +467,7 @@ async def _get_inbox(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("ack_notification")
-async def _ack_notification(args: dict, ctx: ToolContext) -> dict:
+async def _ack_notification(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import acknowledge_notification
 
     ok = await asyncio.to_thread(
@@ -478,14 +480,14 @@ async def _ack_notification(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_metadata_objects")
-async def _get_metadata_objects(args: dict, ctx: ToolContext) -> dict:
+async def _get_metadata_objects(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_metadata_objects
 
     return {"objects": await asyncio.to_thread(get_metadata_objects)}
 
 
 @_handler("get_object_metadata")
-async def _get_object_metadata(args: dict, ctx: ToolContext) -> dict:
+async def _get_object_metadata(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_object_metadata
 
     return await asyncio.to_thread(get_object_metadata, args.get("objectName", "")) or {
@@ -494,7 +496,7 @@ async def _get_object_metadata(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("search_records")
-async def _search_records(args: dict, ctx: ToolContext) -> dict:
+async def _search_records(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import search_records
 
     results = await asyncio.to_thread(
@@ -511,7 +513,7 @@ async def _search_records(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_conversations")
-async def _list_conversations(args: dict, ctx: ToolContext) -> dict:
+async def _list_conversations(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_conversations
 
     convos = await asyncio.to_thread(
@@ -524,7 +526,7 @@ async def _list_conversations(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_conversation")
-async def _get_conversation(args: dict, ctx: ToolContext) -> dict:
+async def _get_conversation(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_conversation
 
     return await asyncio.to_thread(
@@ -533,7 +535,7 @@ async def _get_conversation(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_messages")
-async def _list_messages(args: dict, ctx: ToolContext) -> dict:
+async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_messages
 
     return {
@@ -544,7 +546,7 @@ async def _list_messages(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("create_message")
-async def _create_message(args: dict, ctx: ToolContext) -> dict:
+async def _create_message(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import send_message
 
     msg_result = await asyncio.to_thread(
@@ -559,7 +561,7 @@ async def _create_message(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("toggle_conversation_status")
-async def _toggle_conversation_status(args: dict, ctx: ToolContext) -> dict:
+async def _toggle_conversation_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import toggle_conversation_status
 
     ok = await asyncio.to_thread(
@@ -575,7 +577,7 @@ async def _toggle_conversation_status(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("merge_people")
-async def _merge_people(args: dict, ctx: ToolContext) -> dict:
+async def _merge_people(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import merge_people as _merge_people
 
     merge_result = await asyncio.to_thread(
@@ -590,13 +592,13 @@ async def _merge_people(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("merge_contacts")
-async def _merge_contacts(args: dict, ctx: ToolContext) -> dict:
+async def _merge_contacts(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Alias for merge_people
-    return cast(dict[str, Any], await _merge_people(args, ctx))
+    return cast("dict[str, Any]", await _merge_people(args, ctx))
 
 
 @_handler("merge_companies")
-async def _merge_companies(args: dict, ctx: ToolContext) -> dict:
+async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import merge_companies as _merge_companies_dal
 
     company_merge = await asyncio.to_thread(

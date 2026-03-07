@@ -15,13 +15,14 @@ Usage:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from robothor.db import get_connection
 
 logger = logging.getLogger(__name__)
 
 
-def read_block(block_name: str) -> dict:
+def read_block(block_name: str) -> dict[str, Any]:
     """Read a named memory block and increment its read count.
 
     Returns:
@@ -49,7 +50,7 @@ def read_block(block_name: str) -> dict:
             }
 
 
-def write_block(block_name: str, content: str) -> dict:
+def write_block(block_name: str, content: str) -> dict[str, Any]:
     """Write or update a named memory block.
 
     Uses UPSERT — creates the block if it doesn't exist, updates if it does.
@@ -74,7 +75,7 @@ def write_block(block_name: str, content: str) -> dict:
             return {"success": True, "block_name": block_name}
 
 
-def list_blocks() -> dict:
+def list_blocks() -> dict[str, Any]:
     """List all memory blocks with their sizes and timestamps.
 
     Returns:

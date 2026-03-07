@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -75,7 +76,7 @@ Content:
 {content}"""
 
 
-def parse_extraction_response(raw: str) -> list[dict]:
+def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
     """Parse the LLM's extraction response into structured facts.
 
     Handles markdown fences, single objects, missing fields, and
@@ -200,7 +201,7 @@ def parse_extraction_response(raw: str) -> list[dict]:
     return filtered
 
 
-async def extract_facts(content: str, max_retries: int = 3) -> list[dict]:
+async def extract_facts(content: str, max_retries: int = 3) -> list[dict[str, Any]]:
     """Extract facts from content using the local LLM.
 
     Retries on empty results because thinking models sometimes exhaust
@@ -239,10 +240,10 @@ async def extract_facts(content: str, max_retries: int = 3) -> list[dict]:
 
 
 async def store_fact(
-    fact: dict,
+    fact: dict[str, Any],
     source_content: str,
     source_type: str,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> int:
     """Store a fact with its embedding in the database.
 
@@ -284,10 +285,10 @@ async def store_fact(
 
 
 async def store_facts_batch(
-    facts: list[dict],
+    facts: list[dict[str, Any]],
     source_content: str,
     source_type: str,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> list[int]:
     """Store multiple facts with batch-embedded vectors.
 
@@ -345,7 +346,7 @@ async def search_facts(
     active_only: bool = True,
     use_reranker: bool = False,
     expand_entities: bool = False,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
 
     Pipeline:
@@ -409,7 +410,7 @@ async def search_facts(
     bm25_ranks = {r["id"]: rank for rank, r in enumerate(bm25_results)}
 
     all_ids = set(vector_ranks.keys()) | set(bm25_ranks.keys())
-    all_results_by_id: dict[int, dict] = {}
+    all_results_by_id: dict[int, dict[str, Any]] = {}
     for r in vector_results + bm25_results:
         if r["id"] not in all_results_by_id:
             all_results_by_id[r["id"]] = r
@@ -472,7 +473,7 @@ async def search_facts(
         except Exception:
             pass  # Entity expansion is best-effort
 
-    # Reranker (optional)
+    # Optional reranker pass
     if use_reranker and candidates:
         try:
             from brain.memory_system.reranker import rerank_with_fallback
@@ -487,7 +488,7 @@ async def search_facts(
     return candidates[:limit]
 
 
-def get_memory_stats() -> dict:
+def get_memory_stats() -> dict[str, Any]:
     """Get memory system statistics from the facts-based memory system.
 
     Returns counts for total facts, active facts, superseded facts,
@@ -533,8 +534,8 @@ def get_memory_stats() -> dict:
 def search_facts_compat(
     query: str,
     limit: int = 10,
-    **kwargs,
-) -> list[dict]:
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     """Sync compatibility wrapper for search_facts, matching the old tiers API.
 
     Maps fact fields to the RAG pipeline's expected format:
@@ -550,15 +551,14 @@ def search_facts_compat(
     import asyncio
 
     results = asyncio.run(search_facts(query, limit=limit))
-    compat_results = []
-    for r in results:
-        compat_results.append(
-            {
-                **r,
-                "content": r.get("fact_text", ""),
-                "content_type": r.get("source_type", "unknown"),
-                "tier": "facts",
-                "similarity": r.get("rrf_score", 0.0),
-            }
-        )
+    compat_results = [
+        {
+            **r,
+            "content": r.get("fact_text", ""),
+            "content_type": r.get("source_type", "unknown"),
+            "tier": "facts",
+            "similarity": r.get("rrf_score", 0.0),
+        }
+        for r in results
+    ]
     return compat_results

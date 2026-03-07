@@ -8,7 +8,8 @@ All reads return plain dicts/lists for easy consumption.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
 
 import psycopg2.extras
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def parse_timestamp(ts) -> int | None:
+def parse_timestamp(ts: Any) -> int | None:
     """Convert various timestamp formats to Unix seconds."""
     if ts is None:
         return None
@@ -33,7 +34,7 @@ def parse_timestamp(ts) -> int | None:
     if isinstance(ts, str):
         for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
             try:
-                dt = datetime.strptime(ts.replace("Z", "").split("+")[0], fmt)
+                dt = datetime.strptime(ts.replace("Z", "").split("+")[0], fmt).replace(tzinfo=UTC)
                 return int(dt.timestamp())
             except ValueError:
                 continue
@@ -45,7 +46,7 @@ def parse_timestamp(ts) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def upsert_heart_rate(rows: list[tuple]) -> int:
+def upsert_heart_rate(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, heart_rate, source) rows."""
     if not rows:
         return 0
@@ -63,7 +64,7 @@ def upsert_heart_rate(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_resting_heart_rate(rows: list[tuple]) -> int:
+def upsert_resting_heart_rate(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (date, resting_hr, timestamp) rows."""
     if not rows:
         return 0
@@ -81,7 +82,7 @@ def upsert_resting_heart_rate(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_stress(rows: list[tuple]) -> int:
+def upsert_stress(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, stress_level) rows."""
     if not rows:
         return 0
@@ -98,7 +99,7 @@ def upsert_stress(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_body_battery(rows: list[tuple]) -> int:
+def upsert_body_battery(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, level, charged, drained) rows."""
     if not rows:
         return 0
@@ -117,7 +118,7 @@ def upsert_body_battery(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_sleep(rows: list[tuple]) -> int:
+def upsert_sleep(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (date, start_timestamp, end_timestamp, total_sleep_seconds,
     deep_sleep_seconds, light_sleep_seconds, rem_sleep_seconds, awake_seconds,
     score, quality, raw_data) rows."""
@@ -148,7 +149,7 @@ def upsert_sleep(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_spo2(rows: list[tuple]) -> int:
+def upsert_spo2(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, spo2_value, reading_type) rows."""
     if not rows:
         return 0
@@ -166,7 +167,7 @@ def upsert_spo2(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_respiration(rows: list[tuple]) -> int:
+def upsert_respiration(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, respiration_rate) rows."""
     if not rows:
         return 0
@@ -183,7 +184,7 @@ def upsert_respiration(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_hrv(rows: list[tuple]) -> int:
+def upsert_hrv(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (timestamp, hrv_value, reading_type, status) rows."""
     if not rows:
         return 0
@@ -202,7 +203,7 @@ def upsert_hrv(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_steps(rows: list[tuple]) -> int:
+def upsert_steps(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (date, total_steps, goal, distance_meters, calories, timestamp) rows."""
     if not rows:
         return 0
@@ -224,7 +225,7 @@ def upsert_steps(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_daily_summary(rows: list[tuple]) -> int:
+def upsert_daily_summary(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (date, calories_total, calories_active, calories_bmr,
     floors_climbed, intensity_minutes, raw_data) rows."""
     if not rows:
@@ -249,7 +250,7 @@ def upsert_daily_summary(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_training_status(rows: list[tuple]) -> int:
+def upsert_training_status(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (date, training_status, training_status_phrase, vo2max_running,
     vo2max_cycling, training_load_7_day, training_load_28_day,
     recovery_time_hours, raw_data) rows."""
@@ -278,7 +279,7 @@ def upsert_training_status(rows: list[tuple]) -> int:
     return len(rows)
 
 
-def upsert_activities(rows: list[tuple]) -> int:
+def upsert_activities(rows: list[tuple[Any, ...]]) -> int:
     """Upsert (activity_id, name, activity_type, start_timestamp, duration_seconds,
     distance_meters, calories, avg_heart_rate, max_heart_rate, avg_pace,
     elevation_gain, vo2max, training_effect_aerobic, training_effect_anaerobic,
@@ -326,7 +327,7 @@ def log_sync(
                 """INSERT INTO health_sync_log
                    (sync_timestamp, metric_type, records_synced, status, error_message)
                    VALUES (%s, %s, %s, %s, %s)""",
-                (int(datetime.now().timestamp()), metric_type, records, status, error),
+                (int(datetime.now(tz=UTC).timestamp()), metric_type, records, status, error),
             )
 
 
@@ -335,7 +336,7 @@ def log_sync(
 # ---------------------------------------------------------------------------
 
 
-def get_sleep(today: str, yesterday: str) -> dict:
+def get_sleep(today: str, yesterday: str) -> dict[str, Any]:
     """Get last night's sleep. Try today first, then yesterday."""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -360,7 +361,7 @@ def get_sleep(today: str, yesterday: str) -> dict:
     return {}
 
 
-def get_body_battery(start_ts: int, end_ts: int) -> dict:
+def get_body_battery(start_ts: int, end_ts: int) -> dict[str, Any]:
     """Get current body battery level and today's peak."""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -384,7 +385,7 @@ def get_body_battery(start_ts: int, end_ts: int) -> dict:
     return {"current": current, "peak": peak}
 
 
-def get_stress_avg(start_ts: int, end_ts: int) -> dict:
+def get_stress_avg(start_ts: int, end_ts: int) -> dict[str, Any]:
     """Get today's average and peak stress."""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -400,7 +401,7 @@ def get_stress_avg(start_ts: int, end_ts: int) -> dict:
     return {"avg": avg, "peak": peak}
 
 
-def get_steps(date_str: str) -> dict:
+def get_steps(date_str: str) -> dict[str, Any]:
     """Get today's steps and goal."""
     with get_connection() as conn:
         with conn.cursor() as cur:

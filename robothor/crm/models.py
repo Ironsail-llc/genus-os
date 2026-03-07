@@ -13,8 +13,10 @@ Usage:
 
 from __future__ import annotations
 
+from typing import Any
 
-def person_to_dict(row: dict) -> dict:
+
+def person_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_people row to API response shape.
 
     Response format maintains backward compatibility with Twenty CRM GraphQL shape
@@ -50,7 +52,7 @@ def person_to_dict(row: dict) -> dict:
     }
 
 
-def company_to_dict(row: dict) -> dict:
+def company_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_companies row to API response shape."""
     return {
         "id": str(row["id"]),
@@ -66,7 +68,7 @@ def company_to_dict(row: dict) -> dict:
     }
 
 
-def note_to_dict(row: dict) -> dict:
+def note_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_notes row to API response shape."""
     return {
         "id": str(row["id"]),
@@ -80,7 +82,7 @@ def note_to_dict(row: dict) -> dict:
     }
 
 
-def task_to_dict(row: dict) -> dict:
+def task_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_tasks row to API response shape."""
     return {
         "id": str(row["id"]),
@@ -107,7 +109,7 @@ def task_to_dict(row: dict) -> dict:
     }
 
 
-def history_to_dict(row: dict) -> dict:
+def history_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_task_history row to API response shape."""
     return {
         "id": str(row["id"]),
@@ -122,7 +124,7 @@ def history_to_dict(row: dict) -> dict:
     }
 
 
-def routine_to_dict(row: dict) -> dict:
+def routine_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_routines row to API response shape."""
     return {
         "id": str(row["id"]),
@@ -145,7 +147,7 @@ def routine_to_dict(row: dict) -> dict:
     }
 
 
-def conversation_to_dict(row: dict) -> dict:
+def conversation_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_conversations row to API response shape."""
     return {
         "id": row["id"],  # Integer, not UUID
@@ -164,7 +166,7 @@ def conversation_to_dict(row: dict) -> dict:
     }
 
 
-def tenant_to_dict(row: dict) -> dict:
+def tenant_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_tenants row to API response shape."""
     return {
         "id": row["id"],
@@ -177,7 +179,7 @@ def tenant_to_dict(row: dict) -> dict:
     }
 
 
-def notification_to_dict(row: dict) -> dict:
+def notification_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_agent_notifications row to API response shape."""
     return {
         "id": str(row["id"]),

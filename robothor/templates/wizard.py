@@ -31,12 +31,12 @@ class AgentIntent:
 class BuildPlan:
     """Complete build plan assembled from intent."""
 
-    manifest: dict = field(default_factory=dict)
+    manifest: dict[str, Any] = field(default_factory=dict)
     instruction_skeleton: str = ""
-    hook_config: list[dict] = field(default_factory=list)
+    hook_config: list[dict[str, Any]] = field(default_factory=list)
     cron_script_suggestion: str = ""
-    workflow_patch: dict | None = None
-    tool_list: list[dict] = field(default_factory=list)
+    workflow_patch: dict[str, Any] | None = None
+    tool_list: list[dict[str, Any]] = field(default_factory=list)
     model_tier: str = ""
     model_rationale: str = ""
     pattern: str = ""
@@ -205,7 +205,7 @@ def select_tool_profile(intent: AgentIntent) -> list[str]:
                     tools.append(t)
         return tools
 
-    # Read-only (monitors/analyzers)
+    # Read-only profile for monitors and analyzers
     if not intent.downstream_agents and not any(
         kw in " ".join(outputs_lower) for kw in ["write", "create", "send"]
     ):
@@ -298,7 +298,7 @@ def generate_plan(intent: AgentIntent) -> BuildPlan:
             "session_target": "isolated",
         },
         "delivery": {"mode": intent.delivery},
-        "tools_allowed": tools if tools else [],
+        "tools_allowed": tools or [],
         "instruction_file": "",
         "bootstrap_files": [],
         "v2": {"error_feedback": True},
@@ -330,7 +330,7 @@ def generate_plan(intent: AgentIntent) -> BuildPlan:
     return plan
 
 
-def _build_instruction_skeleton(intent: AgentIntent, manifest: dict) -> str:
+def _build_instruction_skeleton(intent: AgentIntent, manifest: dict[str, Any]) -> str:
     """Build an instruction file skeleton from intent and manifest."""
     sections = []
     sections.append("# {agent_name}\n")

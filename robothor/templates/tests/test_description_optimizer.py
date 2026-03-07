@@ -70,7 +70,7 @@ class TestSuggestTags:
         assert "email" in tags
 
     def test_tags_from_instruction_keywords(self):
-        manifest = {}
+        manifest: dict[str, str] = {}
         tags = suggest_tags(
             manifest, instruction_content="Monitor the GitHub pull request pipeline"
         )

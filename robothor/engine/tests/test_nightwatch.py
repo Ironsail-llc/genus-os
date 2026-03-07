@@ -7,6 +7,7 @@ import subprocess
 # Import the shared library
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -383,7 +384,7 @@ class TestResearchParsing:
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "brain" / "scripts"))
 
         # Test the parsing logic
-        result = {
+        result: dict[str, Any] = {
             "improvements": [
                 {
                     "title": "Parallel tool calling",
@@ -398,6 +399,6 @@ class TestResearchParsing:
             "summary": "Found improvements",
         }
         # Inline the parsing logic
-        improvements = result.get("improvements", [])
+        improvements: list[dict[str, Any]] = result.get("improvements", [])
         assert len(improvements) == 1
         assert improvements[0]["title"] == "Parallel tool calling"
