@@ -47,9 +47,11 @@ class TestGwsToolSchemas:
     def test_gws_tools_in_set(self):
         from robothor.engine.tools import GWS_TOOLS
 
-        assert len(GWS_TOOLS) == 8
+        assert len(GWS_TOOLS) == 10
         assert "gws_gmail_search" in GWS_TOOLS
         assert "gws_chat_send" in GWS_TOOLS
+        assert "gws_chat_list_spaces" in GWS_TOOLS
+        assert "gws_chat_list_messages" in GWS_TOOLS
 
 
 # ─── _run_gws helper ────────────────────────────────────────────────
@@ -61,7 +63,7 @@ class TestRunGws:
         mock_result.returncode = 0
         mock_result.stdout = '{"messages": [{"id": "abc"}]}'
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result):
+        with patch("robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result):
             from robothor.engine.tools import _run_gws
 
             result = _run_gws(["gmail", "users", "messages", "list"])
@@ -73,7 +75,7 @@ class TestRunGws:
         mock_result.returncode = 1
         mock_result.stderr = "auth failed"
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result):
+        with patch("robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result):
             from robothor.engine.tools import _run_gws
 
             result = _run_gws(["gmail", "users", "messages", "list"])
@@ -85,7 +87,7 @@ class TestRunGws:
         mock_result.returncode = 0
         mock_result.stdout = "deleted successfully"
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result):
+        with patch("robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result):
             from robothor.engine.tools import _run_gws
 
             result = _run_gws(["calendar", "events", "delete"])
@@ -96,7 +98,7 @@ class TestRunGws:
         import subprocess as sp
 
         with patch(
-            "robothor.engine.tools.subprocess.run",
+            "robothor.engine.tools.handlers.gws.subprocess.run",
             side_effect=sp.TimeoutExpired(cmd="gws", timeout=30),
         ):
             from robothor.engine.tools import _run_gws
@@ -107,7 +109,7 @@ class TestRunGws:
 
     def test_file_not_found(self):
         with patch(
-            "robothor.engine.tools.subprocess.run",
+            "robothor.engine.tools.handlers.gws.subprocess.run",
             side_effect=FileNotFoundError(),
         ):
             from robothor.engine.tools import _run_gws
@@ -128,7 +130,9 @@ class TestGwsGmailSearch:
             {"messages": [{"id": "msg1", "threadId": "t1"}], "resultSizeEstimate": 1}
         )
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool("gws_gmail_search", {"query": "is:unread"})
@@ -143,7 +147,9 @@ class TestGwsGmailSearch:
     def test_search_max_results_capped(self):
         mock_result = MagicMock(returncode=0, stdout='{"messages":[]}')
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             _handle_gws_tool("gws_gmail_search", {"query": "test", "max_results": 500})
@@ -162,7 +168,9 @@ class TestGwsGmailGet:
         mock_result.returncode = 0
         mock_result.stdout = json.dumps({"id": "msg1", "snippet": "hello"})
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool("gws_gmail_get", {"message_id": "msg1"})
@@ -177,7 +185,9 @@ class TestGwsGmailGet:
         mock_result.returncode = 0
         mock_result.stdout = json.dumps({"id": "t1", "messages": []})
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool("gws_gmail_get", {"thread_id": "t1"})
@@ -202,7 +212,9 @@ class TestGwsGmailSend:
         mock_result.returncode = 0
         mock_result.stdout = json.dumps({"id": "sent1", "threadId": "t1"})
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(
@@ -221,7 +233,9 @@ class TestGwsGmailSend:
     def test_send_reply(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"r1"}')
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             _handle_gws_tool(
@@ -246,7 +260,9 @@ class TestGwsGmailModify:
     def test_mark_read(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"msg1"}')
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(
@@ -282,7 +298,9 @@ class TestGwsCalendarList:
         mock_result.returncode = 0
         mock_result.stdout = json.dumps({"items": [{"summary": "Meeting", "id": "e1"}]})
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(
@@ -310,7 +328,9 @@ class TestGwsCalendarCreate:
     def test_create_event(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"e1","summary":"Lunch"}')
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(
@@ -345,7 +365,9 @@ class TestGwsCalendarDelete:
     def test_delete_event(self):
         mock_result = MagicMock(returncode=0, stdout="")
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             _handle_gws_tool(
@@ -371,7 +393,9 @@ class TestGwsChatSend:
     def test_send_message(self):
         mock_result = MagicMock(returncode=0, stdout='{"name":"spaces/x/messages/1"}')
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(

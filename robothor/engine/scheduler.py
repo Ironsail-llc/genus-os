@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -39,7 +39,7 @@ class CronScheduler:
         self,
         config: EngineConfig,
         runner: AgentRunner,
-        workflow_engine=None,
+        workflow_engine: Any = None,
     ) -> None:
         self.config = config
         self.runner = runner
@@ -217,114 +217,131 @@ class CronScheduler:
         while True:
             await asyncio.sleep(60)
 
-    async def _run_agent(self, agent_id: str) -> None:
-        """Execute an agent as a scheduled cron job.
+    # ─── Shared execution path ────────────────────────────────────────
 
-        Wraps the entire execution in a safety timeout (agent timeout + 120s)
-        to guarantee APScheduler's job function always returns, preventing
-        zombie jobs that block future cron triggers via max_instances=1.
+    async def _run_scheduled(
+        self,
+        agent_id: str,
+        dedup_key: str,
+        agent_config: AgentConfig,
+        trigger_detail: str,
+        *,
+        downstream_agents: list[str] | None = None,
+    ) -> None:
+        """Shared entry point for cron and heartbeat runs.
+
+        Handles: dedup → circuit breaker → safety timeout → execute/deliver → track.
         """
-        from robothor.engine.config import load_agent_config
-
-        # Cross-trigger dedup
-        if not try_acquire(agent_id):
-            logger.info("Cron skipped: %s already running", agent_id)
+        if not try_acquire(dedup_key):
+            logger.info("Cron skipped: %s already running", dedup_key)
             return
 
         try:
-            logger.info("Cron trigger: running %s", agent_id)
-
-            agent_config = load_agent_config(agent_id, self.config.manifest_dir)
-            if not agent_config:
-                logger.error("Agent config not found for cron job: %s", agent_id)
-                return
-
-            # Skip-if-stale is now handled by APScheduler's misfire_grace_time
-            # (set during job registration in _schedule_agents)
+            logger.info("Cron trigger: running %s (key=%s)", agent_id, dedup_key)
 
             # Circuit breaker: skip after too many consecutive errors
-            try:
-                from robothor.engine.tracking import get_schedule
+            if self._circuit_breaker_tripped(dedup_key, agent_config):
+                return
 
-                schedule = get_schedule(agent_id)
-                if schedule:
-                    errors = schedule.get("consecutive_errors", 0) or 0
-                    if errors >= CIRCUIT_BREAKER_THRESHOLD:
-                        logger.warning(
-                            "Circuit breaker: %s has %d consecutive errors, skipping",
-                            agent_id,
-                            errors,
-                        )
-                        # Send Telegram alert (best-effort)
-                        try:
-                            from robothor.engine.delivery import get_telegram_sender
-
-                            sender = get_telegram_sender()
-                            if sender and agent_config.delivery_to:
-                                await sender(
-                                    agent_config.delivery_to,
-                                    f"*Circuit Breaker*\n\n{agent_config.name} "
-                                    f"has {errors} consecutive errors. "
-                                    f"Skipping scheduled run. Check logs.",
-                                )
-                        except Exception:
-                            pass
-                        return
-            except Exception:
-                pass  # Don't block execution if circuit breaker check fails
-
-            # Safety timeout: agent timeout + 120s buffer.
-            # This guarantees the scheduler function returns even if
-            # runner.execute() hangs beyond its own timeout (e.g. stuck LLM call).
             safety_timeout = agent_config.timeout_seconds + 120
 
             try:
                 async with asyncio.timeout(safety_timeout):
-                    await self._execute_and_deliver(agent_id, agent_config)
+                    await self._execute_and_deliver(
+                        agent_id,
+                        dedup_key,
+                        agent_config,
+                        trigger_detail,
+                        downstream_agents=downstream_agents,
+                    )
             except TimeoutError:
                 logger.error(
                     "Scheduler safety timeout (%ds) hit for %s — "
-                    "runner.execute() hung beyond agent timeout (%ds)",
+                    "runner.execute() hung beyond timeout (%ds)",
                     safety_timeout,
-                    agent_id,
+                    dedup_key,
                     agent_config.timeout_seconds,
                 )
-                # Record timeout in schedule state so circuit breaker can track it
-                try:
-                    prev_schedule = None
-                    with contextlib.suppress(Exception):
-                        prev_schedule = get_schedule(agent_id)
-                    consecutive_errors = (
-                        (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
-                    )
-                    update_schedule_state(
-                        agent_id=agent_id,
-                        last_run_at=datetime.now(UTC),
-                        last_status="timeout",
-                        consecutive_errors=consecutive_errors,
-                    )
-                except Exception:
-                    pass
-                return
+                self._record_timeout(dedup_key)
 
         finally:
-            release(agent_id)
+            release(dedup_key)
 
-    async def _execute_and_deliver(self, agent_id: str, agent_config: AgentConfig) -> AgentRun:
-        """Run the agent and handle delivery + schedule tracking.
+    def _circuit_breaker_tripped(self, dedup_key: str, agent_config: AgentConfig) -> bool:
+        """Check circuit breaker. Returns True if tripped (should skip)."""
+        try:
+            from robothor.engine.tracking import get_schedule
 
-        Extracted from _run_agent so the safety timeout wrapper is clean.
-        """
+            schedule = get_schedule(dedup_key)
+            if schedule:
+                errors = schedule.get("consecutive_errors", 0) or 0
+                if errors >= CIRCUIT_BREAKER_THRESHOLD:
+                    logger.warning(
+                        "Circuit breaker: %s has %d consecutive errors, skipping",
+                        dedup_key,
+                        errors,
+                    )
+                    # Best-effort Telegram alert
+                    try:
+                        from robothor.engine.delivery import get_telegram_sender
+
+                        sender = get_telegram_sender()
+                        delivery_to = agent_config.delivery_to
+                        if sender and delivery_to:
+                            asyncio.create_task(
+                                sender(
+                                    delivery_to,
+                                    f"*Circuit Breaker*\n\n{agent_config.name} "
+                                    f"has {errors} consecutive errors. "
+                                    f"Skipping scheduled run. Check logs.",
+                                )
+                            )
+                    except Exception:
+                        pass
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _record_timeout(self, dedup_key: str) -> None:
+        """Record a timeout in the schedule state for circuit breaker tracking."""
+        try:
+            from robothor.engine.tracking import get_schedule
+
+            prev_schedule = None
+            with contextlib.suppress(Exception):
+                prev_schedule = get_schedule(dedup_key)
+            consecutive_errors = (
+                (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
+            )
+            update_schedule_state(
+                agent_id=dedup_key,
+                last_run_at=datetime.now(UTC),
+                last_status="timeout",
+                consecutive_errors=consecutive_errors,
+            )
+        except Exception:
+            pass
+
+    async def _execute_and_deliver(
+        self,
+        agent_id: str,
+        dedup_key: str,
+        agent_config: AgentConfig,
+        trigger_detail: str,
+        *,
+        downstream_agents: list[str] | None = None,
+    ) -> AgentRun:
+        """Run agent, deliver output, update schedule state."""
         from robothor.engine.tracking import get_schedule
 
-        # Build the cron payload message
         payload = self._build_payload(agent_config)
 
         run = await self.runner.execute(
             agent_id=agent_id,
             message=payload,
             trigger_type=TriggerType.CRON,
-            trigger_detail=agent_config.cron_expr,
+            trigger_detail=trigger_detail,
             agent_config=agent_config,
         )
 
@@ -351,215 +368,6 @@ class CronScheduler:
             if run.status.value in ("failed", "timeout"):
                 prev_schedule = None
                 with contextlib.suppress(Exception):
-                    prev_schedule = get_schedule(agent_id)
-                consecutive_errors = (
-                    (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
-                )
-
-            update_schedule_state(
-                agent_id=agent_id,
-                last_run_at=run.started_at,
-                last_run_id=run.id,
-                last_status=run.status.value,
-                last_duration_ms=run.duration_ms,
-                consecutive_errors=consecutive_errors,
-            )
-        except Exception as e:
-            logger.warning("Failed to update schedule state for %s: %s", agent_id, e)
-
-        logger.info(
-            "Cron complete: %s status=%s duration=%dms tokens=%d/%d",
-            agent_id,
-            run.status.value,
-            run.duration_ms or 0,
-            run.input_tokens,
-            run.output_tokens,
-        )
-
-        # Downstream agent triggers (fire-and-forget on success)
-        if run.status.value == "completed" and agent_config.downstream_agents:
-            for downstream_id in agent_config.downstream_agents:
-                logger.info("Triggering downstream agent: %s", downstream_id)
-                asyncio.create_task(self._run_agent(downstream_id))
-
-        return run
-
-    async def _run_heartbeat(self, agent_id: str) -> None:
-        """Execute a heartbeat run for an agent.
-
-        Uses the heartbeat config overrides (instruction file, delivery,
-        warmup, budget) while inheriting model + tools from the parent agent.
-        Dedup key is {agent_id}:heartbeat so it doesn't block interactive runs.
-
-        Wrapped in a safety timeout to prevent APScheduler zombie jobs.
-        """
-        from robothor.engine.config import load_agent_config
-
-        dedup_key = f"{agent_id}:heartbeat"
-
-        if not try_acquire(dedup_key):
-            logger.info("Heartbeat skipped: %s already running", dedup_key)
-            return
-
-        try:
-            logger.info("Heartbeat trigger: running %s", agent_id)
-
-            agent_config = load_agent_config(agent_id, self.config.manifest_dir)
-            if not agent_config or not agent_config.heartbeat:
-                logger.error("Agent config or heartbeat not found for: %s", agent_id)
-                return
-
-            hb = agent_config.heartbeat
-
-            # Circuit breaker (uses heartbeat-specific schedule key)
-            try:
-                from robothor.engine.tracking import get_schedule
-
-                schedule = get_schedule(dedup_key)
-                if schedule:
-                    errors = schedule.get("consecutive_errors", 0) or 0
-                    if errors >= CIRCUIT_BREAKER_THRESHOLD:
-                        logger.warning(
-                            "Circuit breaker: %s heartbeat has %d consecutive errors, skipping",
-                            agent_id,
-                            errors,
-                        )
-                        try:
-                            from robothor.engine.delivery import get_telegram_sender
-
-                            sender = get_telegram_sender()
-                            if sender and hb.delivery_to:
-                                await sender(
-                                    hb.delivery_to,
-                                    f"*Circuit Breaker*\n\n{agent_config.name} heartbeat "
-                                    f"has {errors} consecutive errors. "
-                                    f"Skipping scheduled run. Check logs.",
-                                )
-                        except Exception:
-                            pass
-                        return
-            except Exception:
-                pass
-
-            # Build override config from heartbeat settings,
-            # inheriting model + tools from parent
-            override_config = AgentConfig(
-                id=agent_config.id,
-                name=agent_config.name,
-                description=agent_config.description,
-                model_primary=agent_config.model_primary,
-                model_fallbacks=agent_config.model_fallbacks,
-                temperature=agent_config.temperature,
-                cron_expr=hb.cron_expr,
-                timezone=hb.timezone,
-                timeout_seconds=hb.timeout_seconds,
-                max_iterations=hb.max_iterations,
-                session_target=hb.session_target,
-                delivery_mode=hb.delivery_mode,
-                delivery_channel=hb.delivery_channel,
-                delivery_to=hb.delivery_to,
-                tools_allowed=agent_config.tools_allowed,
-                tools_denied=agent_config.tools_denied,
-                instruction_file=hb.instruction_file,
-                bootstrap_files=hb.bootstrap_files,
-                reports_to=agent_config.reports_to,
-                department=agent_config.department,
-                task_protocol=agent_config.task_protocol,
-                review_workflow=agent_config.review_workflow,
-                notification_inbox=agent_config.notification_inbox,
-                shared_working_state=agent_config.shared_working_state,
-                warmup_memory_blocks=hb.warmup_memory_blocks,
-                warmup_context_files=hb.warmup_context_files,
-                warmup_peer_agents=hb.warmup_peer_agents,
-                # token_budget auto-derived at runtime from model registry
-                error_feedback=agent_config.error_feedback,
-            )
-
-            # Safety timeout: heartbeat timeout + 120s buffer
-            safety_timeout = hb.timeout_seconds + 120
-
-            try:
-                async with asyncio.timeout(safety_timeout):
-                    await self._execute_heartbeat(agent_id, dedup_key, override_config, hb)
-            except TimeoutError:
-                logger.error(
-                    "Scheduler safety timeout (%ds) hit for %s heartbeat — "
-                    "runner.execute() hung beyond heartbeat timeout (%ds)",
-                    safety_timeout,
-                    agent_id,
-                    hb.timeout_seconds,
-                )
-                try:
-                    prev_schedule = None
-                    with contextlib.suppress(Exception):
-                        from robothor.engine.tracking import get_schedule
-
-                        prev_schedule = get_schedule(dedup_key)
-                    consecutive_errors = (
-                        (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
-                    )
-                    update_schedule_state(
-                        agent_id=dedup_key,
-                        last_run_at=datetime.now(UTC),
-                        last_status="timeout",
-                        consecutive_errors=consecutive_errors,
-                    )
-                except Exception:
-                    pass
-
-        finally:
-            release(dedup_key)
-
-    async def _execute_heartbeat(
-        self,
-        agent_id: str,
-        dedup_key: str,
-        override_config: AgentConfig,
-        hb,
-    ) -> None:
-        """Run the heartbeat agent and handle delivery + tracking.
-
-        Extracted from _run_heartbeat so the safety timeout wrapper is clean.
-        """
-        from robothor.engine.tracking import get_schedule
-
-        payload = self._build_payload(override_config)
-
-        run = await self.runner.execute(
-            agent_id=agent_id,
-            message=payload,
-            trigger_type=TriggerType.CRON,
-            trigger_detail=f"heartbeat:{hb.cron_expr}",
-            agent_config=override_config,
-        )
-
-        # Deliver with heartbeat's announce mode
-        await deliver(override_config, run)
-
-        # Persist delivery status back to DB
-        if run.delivery_status or run.delivered_at:
-            try:
-                from robothor.engine.tracking import update_run
-
-                update_run(
-                    run.id,
-                    delivery_status=run.delivery_status,
-                    delivered_at=run.delivered_at,
-                    delivery_channel=run.delivery_channel,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to persist heartbeat delivery status for %s: %s",
-                    agent_id,
-                    e,
-                )
-
-        # Update schedule state under heartbeat key
-        try:
-            consecutive_errors = 0
-            if run.status.value in ("failed", "timeout"):
-                prev_schedule = None
-                with contextlib.suppress(Exception):
                     prev_schedule = get_schedule(dedup_key)
                 consecutive_errors = (
                     (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
@@ -574,19 +382,60 @@ class CronScheduler:
                 consecutive_errors=consecutive_errors,
             )
         except Exception as e:
-            logger.warning(
-                "Failed to update heartbeat schedule state for %s: %s",
-                agent_id,
-                e,
-            )
+            logger.warning("Failed to update schedule state for %s: %s", dedup_key, e)
 
         logger.info(
-            "Heartbeat complete: %s status=%s duration=%dms tokens=%d/%d",
+            "Cron complete: %s status=%s duration=%dms tokens=%d/%d",
             agent_id,
             run.status.value,
             run.duration_ms or 0,
             run.input_tokens,
             run.output_tokens,
+        )
+
+        # Downstream agent triggers (fire-and-forget on success)
+        if run.status.value == "completed" and downstream_agents:
+            for downstream_id in downstream_agents:
+                logger.info("Triggering downstream agent: %s", downstream_id)
+                asyncio.create_task(self._run_agent(downstream_id))
+
+        return run
+
+    # ─── Thin wrappers ────────────────────────────────────────────────
+
+    async def _run_agent(self, agent_id: str) -> None:
+        """Execute an agent as a scheduled cron job."""
+        from robothor.engine.config import load_agent_config
+
+        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        if not agent_config:
+            logger.error("Agent config not found for cron job: %s", agent_id)
+            return
+
+        await self._run_scheduled(
+            agent_id,
+            agent_id,
+            agent_config,
+            agent_config.cron_expr,
+            downstream_agents=agent_config.downstream_agents,
+        )
+
+    async def _run_heartbeat(self, agent_id: str) -> None:
+        """Execute a heartbeat run for an agent."""
+        from robothor.engine.config import load_agent_config
+
+        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        if not agent_config or not agent_config.heartbeat:
+            logger.error("Agent config or heartbeat not found for: %s", agent_id)
+            return
+
+        override_config = _build_heartbeat_config(agent_config)
+
+        await self._run_scheduled(
+            agent_id,
+            f"{agent_id}:heartbeat",
+            override_config,
+            f"heartbeat:{agent_config.heartbeat.cron_expr}",
         )
 
     async def _run_workflow(self, workflow_id: str) -> None:
@@ -610,11 +459,7 @@ class CronScheduler:
             logger.error("Workflow cron failed for %s: %s", workflow_id, e)
 
     def _build_payload(self, config: AgentConfig) -> str:
-        """Build the cron payload message from agent config.
-
-        Warmup preamble is now handled centrally by runner.execute(),
-        so this method just returns the base instruction.
-        """
+        """Build the cron payload message from agent config."""
         now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
         return (
             f"Current time: {now}\n\n"
@@ -664,3 +509,42 @@ class CronScheduler:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("Cron scheduler stopped")
+
+
+def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
+    """Build override AgentConfig for heartbeat runs.
+
+    Inherits model + tools from parent agent, overrides instruction file,
+    delivery, warmup, and budget from heartbeat config.
+    """
+    hb = agent_config.heartbeat
+    return AgentConfig(
+        id=agent_config.id,
+        name=agent_config.name,
+        description=agent_config.description,
+        model_primary=agent_config.model_primary,
+        model_fallbacks=agent_config.model_fallbacks,
+        temperature=agent_config.temperature,
+        cron_expr=hb.cron_expr,
+        timezone=hb.timezone,
+        timeout_seconds=hb.timeout_seconds,
+        max_iterations=hb.max_iterations,
+        session_target=hb.session_target,
+        delivery_mode=hb.delivery_mode,
+        delivery_channel=hb.delivery_channel,
+        delivery_to=hb.delivery_to,
+        tools_allowed=agent_config.tools_allowed,
+        tools_denied=agent_config.tools_denied,
+        instruction_file=hb.instruction_file,
+        bootstrap_files=hb.bootstrap_files,
+        reports_to=agent_config.reports_to,
+        department=agent_config.department,
+        task_protocol=agent_config.task_protocol,
+        review_workflow=agent_config.review_workflow,
+        notification_inbox=agent_config.notification_inbox,
+        shared_working_state=agent_config.shared_working_state,
+        warmup_memory_blocks=hb.warmup_memory_blocks,
+        warmup_context_files=hb.warmup_context_files,
+        warmup_peer_agents=hb.warmup_peer_agents,
+        error_feedback=agent_config.error_feedback,
+    )

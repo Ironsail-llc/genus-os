@@ -499,7 +499,7 @@ class TestImpetusTool:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("robothor.engine.tools.httpx.AsyncClient") as mock_client_cls:
+        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -521,7 +521,7 @@ class TestImpetusTool:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("robothor.engine.tools.httpx.AsyncClient") as mock_client_cls:
+        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -543,7 +543,7 @@ class TestImpetusTool:
             response=MagicMock(status_code=502),
         )
 
-        with patch("robothor.engine.tools.httpx.AsyncClient") as mock_client_cls:
+        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -734,10 +734,12 @@ class TestAnalyzePdfSecurity:
     async def test_path_traversal_blocked(self, tmp_path):
         """Path traversal attempt should be rejected."""
         from robothor.engine.tools import _handle_analyze_pdf
+        from robothor.engine.tools.dispatch import ToolContext
 
+        ctx = ToolContext(workspace=str(tmp_path))
         result = await _handle_analyze_pdf(
             {"path": "../../../etc/passwd"},
-            workspace=str(tmp_path),
+            ctx,
         )
         assert "error" in result
         assert "within workspace" in result["error"]
@@ -746,10 +748,12 @@ class TestAnalyzePdfSecurity:
     async def test_path_traversal_with_dotdot(self, tmp_path):
         """Various traversal patterns should all be blocked."""
         from robothor.engine.tools import _handle_analyze_pdf
+        from robothor.engine.tools.dispatch import ToolContext
 
+        ctx = ToolContext(workspace=str(tmp_path))
         result = await _handle_analyze_pdf(
             {"path": "subdir/../../etc/shadow"},
-            workspace=str(tmp_path),
+            ctx,
         )
         assert "error" in result
 
@@ -757,16 +761,18 @@ class TestAnalyzePdfSecurity:
     async def test_oversized_pdf_rejected(self, tmp_path):
         """PDFs over 50MB should be rejected."""
         from robothor.engine.tools import _handle_analyze_pdf
+        from robothor.engine.tools.dispatch import ToolContext
 
         # Create a file that looks large (we'll mock stat)
         big_pdf = tmp_path / "big.pdf"
         big_pdf.write_bytes(b"%PDF-" + b"\0" * 100)
 
+        ctx = ToolContext(workspace=str(tmp_path))
         with patch("pathlib.Path.stat") as mock_stat:
             mock_stat.return_value = MagicMock(st_size=60 * 1024 * 1024)
             result = await _handle_analyze_pdf(
                 {"path": "big.pdf"},
-                workspace=str(tmp_path),
+                ctx,
             )
         assert "error" in result
         assert "50MB" in result["error"]

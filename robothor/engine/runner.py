@@ -47,123 +47,18 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
+from robothor.engine.prompts import (
+    DEEP_PLAN_PREAMBLE,
+    DEEP_PLAN_SUFFIX,
+    EXECUTION_MODE_PREAMBLE,
+    PLAN_MODE_PREAMBLE,
+    PLAN_MODE_SUFFIX,
+)
 from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
 
 logger = logging.getLogger(__name__)
-
-# ─── Plan Mode Instructions (sandwich pattern) ──────────────────────
-# Preamble goes BEFORE the system prompt so the LLM reads constraints first,
-# before SOUL.md's action-oriented identity locks in.
-# Suffix goes AFTER for recency-bias reinforcement.
-
-PLAN_MODE_PREAMBLE = """\
-[PLAN MODE — STRATEGIC PAUSE]
-
-You are in PLAN MODE. This overrides your normal action-oriented behavior.
-
-Channel your drive into research and analysis, not execution. \
-Philip wants to review your approach before you act. \
-Your job right now is to INVESTIGATE and PROPOSE — not to do the work.
-
-## Rules (non-negotiable)
-- You have READ-ONLY tools. Write tools have been removed.
-- Do NOT attempt write operations or workarounds that mutate state. If something requires a write tool, describe it in your plan.
-- Do NOT apologize for lacking tools. This is by design.
-- Do NOT output a plan without researching first. Use your read tools.
-
-## Discovery strategy
-1. Use `list_directory` to explore directories and find file paths
-2. Use `read_file` to read the actual content of files you discover
-3. Use `search_memory` / `get_entity` for known facts and context
-4. Try obvious paths first (e.g. `brain/agents/`, `docs/agents/`, `robothor/engine/`) before broad searches
-5. Web search/fetch for external information
-
-## Autonomy (CRITICAL)
-NEVER ask Philip to run commands, look up paths, or do research on your behalf. \
-You have the tools to discover everything yourself. \
-Asking the user to do your research is a FAILURE MODE.
-
-## Your tools
-{tool_names_placeholder}
-
-[END OF PLAN MODE PREAMBLE — identity and context follow]
-
-"""
-
-PLAN_MODE_SUFFIX = """
-
-[PLAN MODE REMINDER]
-
-You are in PLAN MODE. Describe what you WOULD do — do not attempt to do it.
-
-## How to work
-1. **Discover, don't guess** — use `list_directory` to find files rather than assuming paths. Explore before you propose.
-2. **Research first** — use read-only tools to gather context before forming opinions
-3. **Ask only about intent** — if you need clarification, ask about WHAT Philip wants, not ask him to look things up for you
-4. **Propose when ready** — output a structured plan when you have enough context
-
-## Proposing a plan
-Include:
-1. **What you found** — key facts from your research (2-3 bullets)
-2. **Steps** — numbered actions with specific tools and expected outcomes
-3. **Risks** — anything that could go wrong
-4. **Verification** — how to confirm success
-
-End with [PLAN_READY] on its own line.
-
-## If NOT ready to propose
-Respond normally WITHOUT [PLAN_READY]. The user will reply and you'll continue.
-
-## On revision
-If the user gives feedback on a previous plan, refine it — don't start over.
-Address their specific feedback while keeping parts they didn't object to."""
-
-EXECUTION_MODE_PREAMBLE = """\
-[EXECUTION MODE]
-A plan has been approved. Your job is to EXECUTE it using your tools.
-Do NOT discuss, re-plan, re-draft, or ask for confirmation. ACT on each step.
-If a step fails, try alternatives. Report what you did and the results.
-"""
-
-# ─── Deep Plan Mode Instructions ─────────────────────────────────────
-# Used when /deep triggers planning first — gathers rich context for the RLM.
-
-DEEP_PLAN_PREAMBLE = """\
-[DEEP PLAN MODE — CONTEXT GATHERING FOR RLM]
-
-You are preparing context for a deep reasoning (RLM) session.
-Your goal: gather ALL relevant context that the RLM will need.
-
-## Your job
-1. Research the query using read-only tools — search memory, read files, list tasks/contacts
-2. Summarize what you found — key facts, relevant data, file contents
-3. Propose what the RLM should reason about and what context it needs
-
-## Important
-- The RLM has a 10M token context window — be generous with context
-- Include raw data (file contents, task lists, contact info) — don't just summarize
-- The RLM will receive everything you output as context
-
-[END DEEP PLAN PREAMBLE — identity and context follow]
-
-"""
-
-DEEP_PLAN_SUFFIX = """
-
-[DEEP PLAN REMINDER — CONTEXT GATHERING]
-
-You are gathering context for deep reasoning. Include ALL relevant data.
-
-## Proposing a plan
-Include:
-1. **Context gathered** — raw data, file contents, memory facts
-2. **Question refinement** — the specific question for the RLM
-3. **Missing context** — anything else needed
-
-End with [PLAN_READY] on its own line.
-"""
 
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
@@ -505,17 +400,32 @@ class AgentRunner:
 
         # Progress heartbeat: emit elapsed time every 5s while RLM runs
         progress_stop = asyncio.Event()
+        # Thread-safe queue for RLM event callbacks (called from worker thread)
+        import queue as _queue
+
+        event_queue: _queue.SimpleQueue[dict] = _queue.SimpleQueue()
+        last_event: dict | None = None
 
         async def _progress_loop() -> None:
+            nonlocal last_event
             elapsed = 0
             while not progress_stop.is_set():
                 await asyncio.sleep(5)
                 if progress_stop.is_set():
                     break
                 elapsed = int(time.monotonic() - start_time)
+                # Drain event queue
+                while not event_queue.empty():
+                    try:
+                        last_event = event_queue.get_nowait()
+                    except Exception:
+                        break
                 if on_progress:
+                    progress: dict[str, Any] = {"elapsed_s": elapsed, "status": "running"}
+                    if last_event:
+                        progress["last_event"] = last_event
                     with contextlib.suppress(Exception):
-                        await on_progress({"elapsed_s": elapsed, "status": "running"})
+                        await on_progress(progress)
 
         progress_task = asyncio.create_task(_progress_loop())
 
@@ -528,6 +438,7 @@ class AgentRunner:
                 query=query,
                 context=context,
                 config=config,
+                on_event=lambda e: event_queue.put_nowait(e),
             )
 
             progress_stop.set()
@@ -1441,9 +1352,9 @@ class AgentRunner:
         models: list[str],
         tool_schemas: list[dict],
         output_text: str | None,
-        on_content,
-        on_tool,
-        **loop_kwargs,
+        on_content: Callable[[str], Awaitable[None]] | None,
+        on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        **loop_kwargs: Any,
     ) -> str | None:
         """Run verification step. If it fails, retry once."""
         try:
@@ -1512,7 +1423,89 @@ class AgentRunner:
             logger.warning("Failed to resume from checkpoint: %s", e)
             return None
 
-    # ─── LLM Call Methods (unchanged) ─────────────────────────────────
+    # ─── LLM Call Methods ────────────────────────────────────────────
+
+    async def _prepare_llm_call(
+        self,
+        messages: list[dict[str, Any]],
+        models: list[str],
+    ) -> int:
+        """Shared pre-flight: compress context and estimate input tokens.
+
+        Mutates messages in-place. Returns estimated input token count.
+        """
+        from robothor.engine.context import estimate_tokens, maybe_compress
+        from robothor.engine.model_registry import get_model_limits
+
+        try:
+            model_limits = get_model_limits(models[0])
+            compress_threshold = int(model_limits.max_input_tokens * 0.75)
+            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
+        except Exception as e:
+            logger.debug("Pre-flight compression failed: %s", e)
+
+        return estimate_tokens(messages)
+
+    @staticmethod
+    def _build_llm_kwargs(
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict],
+        input_est: int,
+        temperature: float,
+        *,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        """Build kwargs dict for litellm.acompletion."""
+        from robothor.engine.model_registry import get_model_limits, get_output_tokens
+
+        limits = get_model_limits(model)
+        actual_model = model
+        if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
+            actual_model = model.replace("openrouter/", "", 1)
+
+        kwargs: dict[str, Any] = {
+            "model": actual_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": get_output_tokens(model, input_est),
+            "timeout": 120,
+        }
+        if stream:
+            kwargs["stream"] = True
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        if limits.supports_thinking:
+            from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
+
+            kwargs["temperature"] = 1.0  # Required by Anthropic API
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": THINKING_BUDGET_TOKENS,
+            }
+        return kwargs
+
+    @staticmethod
+    def _handle_model_error(
+        e: Exception,
+        model: str,
+        broken_models: set[str] | None,
+        *,
+        streaming: bool = False,
+    ) -> None:
+        """Handle model failure: mark broken or log warning."""
+        status = getattr(e, "status_code", None)
+        if broken_models is not None and status in (401, 403, 429):
+            broken_models.add(model)
+            logger.warning(
+                "Model %s permanently failed (%s), removing from rotation",
+                model,
+                status,
+            )
+        else:
+            suffix = " (streaming)" if streaming else ""
+            logger.warning("Model %s%s failed: %s", model, suffix, e)
 
     async def _call_llm(
         self,
@@ -1523,69 +1516,18 @@ class AgentRunner:
         temperature: float = 0.3,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
-        from robothor.engine.context import estimate_tokens, maybe_compress
-        from robothor.engine.model_registry import get_model_limits, get_output_tokens
-
-        # Pre-flight compression: if context grew during the run, compress now
-        try:
-            model_limits = get_model_limits(models[0])
-            compress_threshold = int(model_limits.max_input_tokens * 0.75)
-            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
-        except Exception as e:
-            logger.debug("Pre-flight compression failed: %s", e)
-
+        input_est = await self._prepare_llm_call(messages, models)
         last_error = None
-        input_est = estimate_tokens(messages)
 
         for model in models:
             if broken_models and model in broken_models:
                 continue
-
             try:
-                # Check if thinking is requested and model supports it
-                limits = get_model_limits(model)
-                actual_model = model
-                if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
-                    # Route to direct Anthropic API for thinking-enabled calls
-                    actual_model = model.replace("openrouter/", "", 1)
-
-                kwargs: dict[str, Any] = {
-                    "model": actual_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": get_output_tokens(model, input_est),
-                    "timeout": 120,
-                }
-                if tools:
-                    kwargs["tools"] = tools
-                    kwargs["tool_choice"] = "auto"
-
-                # Add thinking if model supports it
-                if limits.supports_thinking:
-                    from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
-
-                    kwargs["temperature"] = 1.0  # Required by Anthropic API
-                    kwargs["thinking"] = {
-                        "type": "enabled",
-                        "budget_tokens": THINKING_BUDGET_TOKENS,
-                    }
-
-                response = await litellm.acompletion(**kwargs)
-                return response
-
+                kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
+                return await litellm.acompletion(**kwargs)
             except Exception as e:
-                status = getattr(e, "status_code", None)
-                if broken_models is not None and status in (401, 403, 429):
-                    broken_models.add(model)
-                    logger.warning(
-                        "Model %s permanently failed (%s), removing from rotation",
-                        model,
-                        status,
-                    )
-                else:
-                    logger.warning("Model %s failed: %s", model, e)
+                self._handle_model_error(e, model, broken_models)
                 last_error = e
-                continue
 
         logger.error("All models failed. Last error: %s", last_error)
         return None
@@ -1599,58 +1541,17 @@ class AgentRunner:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
     ) -> Any:
-        """Call LLM with streaming. Streams text content via on_content callback.
-
-        Returns a reconstructed ModelResponse identical to non-streaming _call_llm,
-        so the rest of the loop processes it the same way.
-        """
-        from robothor.engine.context import estimate_tokens, maybe_compress
-        from robothor.engine.model_registry import get_model_limits, get_output_tokens
-
-        # Pre-flight compression: if context grew during the run, compress now
-        try:
-            model_limits = get_model_limits(models[0])
-            compress_threshold = int(model_limits.max_input_tokens * 0.75)
-            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
-        except Exception as e:
-            logger.debug("Pre-flight compression (streaming) failed: %s", e)
-
+        """Call LLM with streaming. Returns reconstructed ModelResponse."""
+        input_est = await self._prepare_llm_call(messages, models)
         last_error = None
-        input_est = estimate_tokens(messages)
 
         for model in models:
             if broken_models and model in broken_models:
                 continue
-
             try:
-                # Check if thinking is requested and model supports it
-                limits = get_model_limits(model)
-                actual_model = model
-                if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
-                    actual_model = model.replace("openrouter/", "", 1)
-
-                kwargs: dict[str, Any] = {
-                    "model": actual_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": get_output_tokens(model, input_est),
-                    "stream": True,
-                    "timeout": 120,
-                }
-                if tools:
-                    kwargs["tools"] = tools
-                    kwargs["tool_choice"] = "auto"
-
-                # Add thinking if model supports it
-                if limits.supports_thinking:
-                    from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
-
-                    kwargs["temperature"] = 1.0  # Required by Anthropic API
-                    kwargs["thinking"] = {
-                        "type": "enabled",
-                        "budget_tokens": THINKING_BUDGET_TOKENS,
-                    }
-
+                kwargs = self._build_llm_kwargs(
+                    model, messages, tools, input_est, temperature, stream=True
+                )
                 stream = await litellm.acompletion(**kwargs)
 
                 chunks: list = []
@@ -1662,34 +1563,18 @@ class AgentRunner:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
-                    # Accumulate text content
                     if getattr(delta, "content", None):
                         accumulated_content += delta.content
-                        # Stream to callback only if no tool calls detected yet
                         if not has_tool_calls:
                             with contextlib.suppress(Exception):
                                 await on_content(accumulated_content)
-                    # Track tool call presence
                     if getattr(delta, "tool_calls", None):
                         has_tool_calls = True
 
-                # Reconstruct full response from chunks
-                response = litellm.stream_chunk_builder(chunks)
-                return response
-
+                return litellm.stream_chunk_builder(chunks)
             except Exception as e:
-                status = getattr(e, "status_code", None)
-                if broken_models is not None and status in (401, 403, 429):
-                    broken_models.add(model)
-                    logger.warning(
-                        "Model %s permanently failed (%s), removing from rotation",
-                        model,
-                        status,
-                    )
-                else:
-                    logger.warning("Model %s (streaming) failed: %s", model, e)
+                self._handle_model_error(e, model, broken_models, streaming=True)
                 last_error = e
-                continue
 
         logger.error("All models failed (streaming). Last error: %s", last_error)
         return None

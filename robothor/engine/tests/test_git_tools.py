@@ -118,7 +118,9 @@ class TestGitStatusExecutor:
         mock_result.stdout = "## main\n M file.py\n?? new.txt"
         mock_result.returncode = 0
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool("git_status", {}, workspace="/tmp/repo")
@@ -132,7 +134,9 @@ class TestGitStatusExecutor:
         mock_result.stdout = "## main"
         mock_result.returncode = 0
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             _handle_sync_tool("git_status", {"path": "/custom/repo"}, workspace="/tmp/repo")
@@ -146,7 +150,9 @@ class TestGitDiffExecutor:
         mock_result.stdout = "diff --git a/file.py b/file.py\n+new line"
         mock_result.returncode = 0
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool("git_diff", {}, workspace="/tmp/repo")
@@ -160,7 +166,9 @@ class TestGitDiffExecutor:
         mock_result.stdout = "staged changes"
         mock_result.returncode = 0
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             _handle_sync_tool("git_diff", {"staged": True}, workspace="/tmp/repo")
@@ -174,7 +182,7 @@ class TestGitBranchExecutor:
         mock_result.returncode = 0
         mock_result.stderr = ""
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool(
@@ -224,7 +232,7 @@ class TestGitCommitExecutor:
             call_count += 1
             return r
 
-        with patch("robothor.engine.tools.subprocess.run", side_effect=side_effect):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", side_effect=side_effect):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool(
@@ -238,7 +246,7 @@ class TestGitCommitExecutor:
     def test_commit_rejects_main_branch(self):
         branch_result = MagicMock(stdout="main\n", returncode=0)
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=branch_result):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=branch_result):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool(
@@ -262,7 +270,7 @@ class TestGitCommitExecutor:
             results = [branch_result, add_result, commit_result, hash_result]
             return results[len(calls) - 1]
 
-        with patch("robothor.engine.tools.subprocess.run", side_effect=side_effect):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", side_effect=side_effect):
             from robothor.engine.tools import _handle_sync_tool
 
             _handle_sync_tool(
@@ -294,7 +302,7 @@ class TestGitPushExecutor:
             call_count += 1
             return r
 
-        with patch("robothor.engine.tools.subprocess.run", side_effect=side_effect):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", side_effect=side_effect):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
@@ -304,7 +312,7 @@ class TestGitPushExecutor:
     def test_push_rejects_main(self):
         branch_result = MagicMock(stdout="main\n", returncode=0)
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=branch_result):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=branch_result):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
@@ -314,7 +322,7 @@ class TestGitPushExecutor:
     def test_push_rejects_master(self):
         branch_result = MagicMock(stdout="master\n", returncode=0)
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=branch_result):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=branch_result):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
@@ -328,7 +336,9 @@ class TestCreatePullRequestExecutor:
         mock_result.stdout = "https://github.com/org/repo/pull/42\n"
         mock_result.stderr = ""
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool(
@@ -347,7 +357,9 @@ class TestCreatePullRequestExecutor:
     def test_pr_always_includes_nightwatch_label(self):
         mock_result = MagicMock(returncode=0, stdout="https://github.com/pull/1\n", stderr="")
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result
+        ) as mock_run:
             from robothor.engine.tools import _handle_sync_tool
 
             _handle_sync_tool(
@@ -374,7 +386,7 @@ class TestCreatePullRequestExecutor:
     def test_pr_failure(self):
         mock_result = MagicMock(returncode=1, stdout="", stderr="no remote configured")
 
-        with patch("robothor.engine.tools.subprocess.run", return_value=mock_result):
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=mock_result):
             from robothor.engine.tools import _handle_sync_tool
 
             result = _handle_sync_tool(

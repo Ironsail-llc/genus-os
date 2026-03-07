@@ -221,13 +221,26 @@ class TestRunHeartbeat:
         config = EngineConfig(manifest_dir=tmp_path, workspace=tmp_path)
         scheduler = CronScheduler(config, runner)
 
+        parent_config = AgentConfig(
+            id="main",
+            name="Robothor",
+            model_primary="test/model",
+            heartbeat=HeartbeatConfig(
+                cron_expr="0 6-22/4 * * *",
+                instruction_file="brain/HEARTBEAT.md",
+            ),
+        )
+
         acquire_calls = []
 
         def mock_acquire(key):
             acquire_calls.append(key)
             return False  # Simulate already running
 
-        with patch("robothor.engine.scheduler.try_acquire", side_effect=mock_acquire):
+        with (
+            patch("robothor.engine.config.load_agent_config", return_value=parent_config),
+            patch("robothor.engine.scheduler.try_acquire", side_effect=mock_acquire),
+        ):
             await scheduler._run_heartbeat("main")
 
         assert acquire_calls == ["main:heartbeat"]
