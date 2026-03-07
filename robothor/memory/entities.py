@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -64,7 +65,7 @@ ENTITY_EXTRACTION_SCHEMA = {
 }
 
 
-async def extract_entities(text: str) -> dict:
+async def extract_entities(text: str) -> dict[str, Any]:
     """Extract entities and relations from text using the LLM.
 
     Args:
@@ -184,7 +185,7 @@ async def add_relation(
     return rel_id
 
 
-async def get_entity(name: str) -> dict | None:
+async def get_entity(name: str) -> dict[str, Any] | None:
     """Look up an entity and all its relationships.
 
     Args:
@@ -232,7 +233,7 @@ async def get_entity(name: str) -> dict | None:
     return entity
 
 
-async def get_all_about(entity_name: str) -> dict:
+async def get_all_about(entity_name: str) -> dict[str, Any]:
     """Get everything known about an entity: entity info, facts, and relations.
 
     Args:
@@ -265,7 +266,7 @@ async def get_all_about(entity_name: str) -> dict:
     }
 
 
-async def extract_and_store_entities(content: str, fact_id: int | None = None) -> dict:
+async def extract_and_store_entities(content: str, fact_id: int | None = None) -> dict[str, Any]:
     """Extract entities and relations from content and store them.
 
     Args:
@@ -296,7 +297,7 @@ async def extract_and_store_entities(content: str, fact_id: int | None = None) -
     }
 
 
-async def extract_entities_batch(fact_ids: list[int]) -> dict:
+async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
     """Batch-extract entities from multiple facts in a single LLM call.
 
     Instead of one LLM call per fact, this concatenates all fact texts

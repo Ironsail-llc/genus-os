@@ -10,9 +10,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, HeartbeatConfig
 
@@ -102,7 +103,7 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     hardcoding them.
     """
     try:
-        with open(manifest_path) as f:
+        with Path(manifest_path).open() as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
             return _resolve_env_vars(data)  # type: ignore[return-value]
@@ -112,9 +113,9 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
         return None
 
 
-def load_all_manifests(manifest_dir: Path) -> list[dict]:
+def load_all_manifests(manifest_dir: Path) -> list[dict[str, Any]]:
     """Load all YAML manifests from a directory."""
-    manifests: list[dict] = []
+    manifests: list[dict[str, Any]] = []
     if not manifest_dir.is_dir():
         logger.warning("Manifest directory not found: %s", manifest_dir)
         return manifests
@@ -125,7 +126,7 @@ def load_all_manifests(manifest_dir: Path) -> list[dict]:
     return manifests
 
 
-def manifest_to_agent_config(manifest: dict) -> AgentConfig:
+def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
     schedule = manifest.get("schedule", {})

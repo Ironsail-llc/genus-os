@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Generator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import psycopg2
 import psycopg2.pool
 
 from robothor.config import get_config
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 

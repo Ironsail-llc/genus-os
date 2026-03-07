@@ -17,6 +17,8 @@ This is an authoring layer that outputs the same manifests the engine expects.
 
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = [
     "resolve_template",
     "install_agent",
@@ -25,7 +27,9 @@ __all__ = [
 ]
 
 
-def resolve_template(template_path: str, variables: dict | None = None, **kwargs) -> dict:
+def resolve_template(
+    template_path: str, variables: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
     """Convenience wrapper — resolve a template bundle and return file contents."""
     from robothor.templates.resolver import TemplateResolver
 
@@ -33,21 +37,21 @@ def resolve_template(template_path: str, variables: dict | None = None, **kwargs
     return resolver.resolve_bundle(template_path, variables or {}, **kwargs)
 
 
-def install_agent(template_path: str, **kwargs) -> dict:
+def install_agent(template_path: str, **kwargs: Any) -> dict[str, Any]:
     """Convenience wrapper — install an agent from a template bundle."""
     from robothor.templates.installer import install
 
     return install(template_path, **kwargs)
 
 
-def remove_agent(agent_id: str, **kwargs) -> bool:
+def remove_agent(agent_id: str, **kwargs: Any) -> bool:
     """Convenience wrapper — remove an installed agent."""
     from robothor.templates.installer import remove
 
     return remove(agent_id, **kwargs)
 
 
-def list_installed() -> dict:
+def list_installed() -> dict[str, Any]:
     """Convenience wrapper — list installed agents."""
     from robothor.templates.instance import InstanceConfig
 

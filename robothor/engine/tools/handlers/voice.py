@@ -11,7 +11,7 @@ from robothor.engine.tools.dispatch import ToolContext, _cfg
 HANDLERS: dict[str, Any] = {}
 
 
-async def _make_call(args: dict, ctx: ToolContext) -> dict:
+async def _make_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     to_number = args.get("to", "")
     recipient = args.get("recipient", "someone")
     purpose = args.get("purpose", "")

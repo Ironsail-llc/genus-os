@@ -77,7 +77,7 @@ class FaceRecognizer:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         face_file = self.data_dir / "enrolled_faces.json"
         if face_file.exists():
-            with open(face_file) as f:
+            with face_file.open() as f:
                 data = json.load(f)
             for name, emb_list in data.items():
                 self.enrolled[name] = np.array(emb_list, dtype=np.float32)
@@ -88,11 +88,11 @@ class FaceRecognizer:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         face_file = self.data_dir / "enrolled_faces.json"
         data = {name: emb.tolist() for name, emb in self.enrolled.items()}
-        with open(face_file, "w") as f:
+        with face_file.open("w") as f:
             json.dump(data, f)
         logger.info("Saved %d enrolled faces", len(self.enrolled))
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
         """Detect faces and extract embeddings from a frame.
 
         Returns list of dicts with 'bbox', 'embedding', 'det_score'.

@@ -47,27 +47,27 @@ class InstanceConfig:
         return self.config_path.exists()
 
     @property
-    def config(self) -> dict:
+    def config(self) -> dict[str, Any]:
         """Load config.yaml."""
         if self.config_path.exists():
             return yaml.safe_load(self.config_path.read_text()) or {}
         return {}
 
     @config.setter
-    def config(self, data: dict) -> None:
+    def config(self, data: dict[str, Any]) -> None:
         """Write config.yaml."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
     @property
-    def installed_agents(self) -> dict:
+    def installed_agents(self) -> dict[str, Any]:
         """Load installed.yaml agents section."""
         if self.installed_path.exists():
             data = yaml.safe_load(self.installed_path.read_text()) or {}
             return dict(data.get("agents", {}))
         return {}
 
-    def _save_installed(self, agents: dict) -> None:
+    def _save_installed(self, agents: dict[str, Any]) -> None:
         """Write installed.yaml."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.installed_path.write_text(
@@ -99,22 +99,22 @@ class InstanceConfig:
         }
         self._save_installed(agents)
 
-    def record_remove(self, agent_id: str) -> dict | None:  # type: ignore[type-arg]
+    def record_remove(self, agent_id: str) -> dict[str, Any] | None:
         """Remove an agent from installed.yaml. Returns the removed record or None."""
         agents = self.installed_agents
-        record: dict | None = agents.pop(agent_id, None)  # type: ignore[type-arg]
+        record: dict[str, Any] | None = agents.pop(agent_id, None)
         if record is not None:
             self._save_installed(agents)
         return record
 
-    def get_agent_overrides(self, agent_id: str) -> dict:
+    def get_agent_overrides(self, agent_id: str) -> dict[str, Any]:
         """Load per-agent overrides from overrides/<agent_id>.yaml."""
         override_path = self.overrides_dir / f"{agent_id}.yaml"
         if override_path.exists():
             return yaml.safe_load(override_path.read_text()) or {}
         return {}
 
-    def save_agent_overrides(self, agent_id: str, overrides: dict) -> None:
+    def save_agent_overrides(self, agent_id: str, overrides: dict[str, Any]) -> None:
         """Save per-agent overrides."""
         self.overrides_dir.mkdir(parents=True, exist_ok=True)
         override_path = self.overrides_dir / f"{agent_id}.yaml"
@@ -124,7 +124,7 @@ class InstanceConfig:
         """Archive agent files to .robothor/archive/<agent_id>/."""
         archive_path = self.archive_dir / agent_id
         archive_path.mkdir(parents=True, exist_ok=True)
-        for _name, src in files.items():
+        for src in files.values():
             if src.exists():
                 dst = archive_path / src.name
                 shutil.copy2(src, dst)
@@ -137,7 +137,7 @@ class InstanceConfig:
         quality_model: str = "openrouter/anthropic/claude-sonnet-4.6",
         owner_name: str = "",
         hub_org: str = "programmaticresources",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Initialize a fresh config.yaml with defaults."""
         config = {
             "instance": {

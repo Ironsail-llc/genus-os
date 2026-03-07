@@ -8,8 +8,10 @@ and provides stats for the /context command.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +29,16 @@ COMPRESS_MODEL = "gemini/gemini-2.5-flash"
 
 # ── Compression hooks ──────────────────────────────────────────────
 
-_pre_compress_hooks: list[Callable] = []
-_post_compress_hooks: list[Callable] = []
+_pre_compress_hooks: list[Callable[..., Any]] = []
+_post_compress_hooks: list[Callable[..., Any]] = []
 
 
-def register_pre_compress_hook(fn: Callable) -> None:
+def register_pre_compress_hook(fn: Callable[..., Any]) -> None:
     """Register a hook called before compression with (messages,)."""
     _pre_compress_hooks.append(fn)
 
 
-def register_post_compress_hook(fn: Callable) -> None:
+def register_post_compress_hook(fn: Callable[..., Any]) -> None:
     """Register a hook called after compression with (old_messages, compressed, summary)."""
     _post_compress_hooks.append(fn)
 

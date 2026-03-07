@@ -29,6 +29,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
@@ -175,10 +178,10 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     last_sent_len = len(cumulative)
                     await queue.put({"event": "delta", "data": {"text": delta}})
 
-            async def on_tool(event: dict) -> None:
+            async def on_tool(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
-            async def on_status(event: dict) -> None:
+            async def on_status(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
             # Determine agent ID from session key or default
@@ -267,7 +270,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     task = asyncio.create_task(run_agent())
     session.active_task = task
 
-    async def sse_generator():
+    async def sse_generator() -> AsyncGenerator[str, None]:
         """Yield SSE events from the queue, with keepalive comments."""
         import json
 
@@ -478,10 +481,10 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     last_sent_len = len(cumulative)
                     await queue.put({"event": "delta", "data": {"text": delta}})
 
-            async def on_tool(event: dict) -> None:
+            async def on_tool(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
-            async def on_status(event: dict) -> None:
+            async def on_status(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
             agent_id = _config.default_chat_agent if _config else "main"
@@ -580,7 +583,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     task = asyncio.create_task(run_plan_agent())
     session.active_task = task
 
-    async def sse_generator():
+    async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
 
         try:
@@ -663,7 +666,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     }
                 )
 
-                async def on_deep_progress(progress: dict) -> None:
+                async def on_deep_progress(progress: dict[str, Any]) -> None:
                     await queue.put({"event": "deep_progress", "data": progress})
 
                 run = await _runner.execute_deep(
@@ -757,10 +760,10 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                         last_sent_len = len(cumulative)
                         await queue.put({"event": "delta", "data": {"text": delta}})
 
-                async def on_tool(event: dict) -> None:
+                async def on_tool(event: dict[str, Any]) -> None:
                     await queue.put({"event": event["event"], "data": event})
 
-                async def on_status(event: dict) -> None:
+                async def on_status(event: dict[str, Any]) -> None:
                     await queue.put({"event": event["event"], "data": event})
 
                 agent_id = _config.default_chat_agent if _config else "main"
@@ -850,7 +853,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     task = asyncio.create_task(run_approved())
     session.active_task = task
 
-    async def sse_generator():
+    async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
 
         try:
@@ -967,10 +970,10 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                     last_sent_len = len(cumulative)
                     await queue.put({"event": "delta", "data": {"text": delta}})
 
-            async def on_tool(event: dict) -> None:
+            async def on_tool(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
-            async def on_status(event: dict) -> None:
+            async def on_status(event: dict[str, Any]) -> None:
                 await queue.put({"event": event["event"], "data": event})
 
             agent_id = _config.default_chat_agent if _config else "main"
@@ -1056,7 +1059,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     task = asyncio.create_task(run_iteration())
     session.active_task = task
 
-    async def sse_generator():
+    async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
 
         try:
@@ -1159,7 +1162,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
             # Acknowledge start
             await queue.put({"event": "deep_start", "data": {"deep_id": deep_id, "query": query}})
 
-            async def on_progress(progress: dict) -> None:
+            async def on_progress(progress: dict[str, Any]) -> None:
                 await queue.put({"event": "deep_progress", "data": progress})
 
             run = await _runner.execute_deep(
@@ -1247,7 +1250,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     task = asyncio.create_task(run_deep())
     session.active_task = task
 
-    async def sse_generator():
+    async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
 
         try:

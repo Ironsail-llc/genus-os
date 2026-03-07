@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -40,7 +41,7 @@ async def find_similar_facts(
     query: str,
     limit: int = 5,
     threshold: float = 0.5,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Find existing facts semantically similar to a query.
 
     Args:
@@ -103,7 +104,7 @@ Return JSON: {{"classification": "<type>", "reasoning": "<brief explanation>"}}
 Return ONLY the JSON object, no other text."""
 
 
-async def classify_relationship(new_fact: str, existing_fact: str) -> dict:
+async def classify_relationship(new_fact: str, existing_fact: str) -> dict[str, Any]:
     """Classify the relationship between a new fact and an existing one.
 
     Args:
@@ -150,11 +151,11 @@ def _supersede_fact(old_id: int, new_id: int) -> None:
 
 
 async def resolve_and_store(
-    fact: dict,
+    fact: dict[str, Any],
     source_content: str,
     source_type: str,
     similarity_threshold: float = 0.7,
-) -> dict:
+) -> dict[str, Any]:
     """Full conflict resolution pipeline: find similar -> classify -> act.
 
     Args:
@@ -200,6 +201,6 @@ async def resolve_and_store(
             "reasoning": classification["reasoning"],
         }
 
-    # classification == "new"
+    # Classified as new — store directly
     fact_id = await store_fact(fact, source_content, source_type)
     return {"action": "stored", "new_id": fact_id}

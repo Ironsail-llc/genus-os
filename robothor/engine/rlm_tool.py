@@ -18,7 +18,10 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +59,7 @@ class DeepReasonConfig:
     log_dir: str = field(
         default_factory=lambda: os.environ.get(
             "ROBOTHOR_RLM_LOG_DIR",
-            os.path.expanduser("~/robothor/brain/memory/rlm-traces"),
+            str(Path("~/robothor/brain/memory/rlm-traces").expanduser()),
         )
     )
 
@@ -67,7 +70,7 @@ class DeepReasonConfig:
 # (via asyncio.to_thread) with no event loop.
 
 
-def _make_search_memory_fn():
+def _make_search_memory_fn() -> Callable[..., str]:
     """Return a sync wrapper around ``search_facts``."""
 
     def search_memory(query: str, limit: int = 10) -> str:
@@ -91,7 +94,7 @@ def _make_search_memory_fn():
     return search_memory
 
 
-def _make_get_entity_fn():
+def _make_get_entity_fn() -> Callable[..., str]:
     """Return a sync wrapper around ``get_entity``."""
 
     def get_entity(name: str) -> str:
@@ -107,7 +110,7 @@ def _make_get_entity_fn():
 _READ_FILE_LIMIT = 200_000
 
 
-def _make_read_file_fn(workspace: str):
+def _make_read_file_fn(workspace: str) -> Callable[..., str]:
     """Return a sync file reader with 200 KB truncation."""
 
     def read_file(path: str) -> str:
@@ -129,7 +132,7 @@ def _make_read_file_fn(workspace: str):
     return read_file
 
 
-def _make_memory_block_read_fn():
+def _make_memory_block_read_fn() -> Callable[..., str]:
     """Return a sync wrapper around ``read_block``."""
 
     def memory_block_read(block_name: str) -> str:
@@ -160,8 +163,9 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
         if not results:
             return None
         lines = [f"## Memory search: {query}"]
-        for r in results:
-            lines.append(f"- [{r['category']}, conf={r['confidence']}] {r['fact_text']}")
+        lines.extend(
+            f"- [{r['category']}, conf={r['confidence']}] {r['fact_text']}" for r in results
+        )
         return "\n".join(lines)
 
     if src_type == "file":
@@ -199,7 +203,7 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
             return None
         from robothor.memory.entities import get_entity
 
-        entity: dict[str, Any] | None = asyncio.run(get_entity(name))  # type: ignore[arg-type]
+        entity: dict[str, Any] | None = asyncio.run(get_entity(name))
         if not entity:
             return None
         return f"## Entity: {name}\n\n{json.dumps(entity, indent=2)}"
@@ -211,7 +215,7 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
 # ─── Custom tools for the RLM REPL ──────────────────────────────────
 
 
-def _make_web_search_fn():
+def _make_web_search_fn() -> Callable[..., str]:
     """Return a sync wrapper around SearXNG for web search.
 
     SearXNG runs on localhost:8888 — this is infrastructure code, not
@@ -251,7 +255,7 @@ def _make_web_search_fn():
     return web_search
 
 
-def _make_exec_fn(workspace: str):
+def _make_exec_fn(workspace: str) -> Callable[..., str]:
     """Return a sync shell executor with 30s timeout and 4K truncation."""
     import subprocess
 

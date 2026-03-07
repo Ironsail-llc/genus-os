@@ -32,11 +32,11 @@ class Catalog:
 
     def __init__(self, catalog_dir: Path | None = None):
         self.catalog_dir = catalog_dir or _find_catalog_dir()
-        self._catalog: dict | None = None
-        self._defaults: dict | None = None
+        self._catalog: dict[str, Any] | None = None
+        self._defaults: dict[str, Any] | None = None
 
     @property
-    def catalog(self) -> dict:
+    def catalog(self) -> dict[str, Any]:
         if self._catalog is None:
             path = self.catalog_dir / "_catalog.yaml"
             if path.exists():
@@ -46,7 +46,7 @@ class Catalog:
         return self._catalog
 
     @property
-    def defaults(self) -> dict:
+    def defaults(self) -> dict[str, Any]:
         if self._defaults is None:
             path = self.catalog_dir / "_defaults.yaml"
             if path.exists():
@@ -63,7 +63,7 @@ class Catalog:
     def presets(self) -> dict[str, Any]:
         return dict(self.catalog.get("presets", {}))
 
-    def list_departments(self) -> list[dict]:
+    def list_departments(self) -> list[dict[str, Any]]:
         """List all departments with their agents."""
         result = []
         for dept_id, dept in self.departments.items():
@@ -77,7 +77,7 @@ class Catalog:
             )
         return result
 
-    def list_presets(self) -> list[dict]:
+    def list_presets(self) -> list[dict[str, Any]]:
         """List all installation presets."""
         result = []
         for preset_id, preset in self.presets.items():
@@ -135,7 +135,7 @@ class Catalog:
 
         return None
 
-    def list_available_templates(self) -> list[dict]:
+    def list_available_templates(self) -> list[dict[str, Any]]:
         """List all available template bundles found on disk."""
         templates = []
         for dept_dir in sorted(self.catalog_dir.iterdir()):

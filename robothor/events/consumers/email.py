@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from pathlib import Path
+from typing import Any
 
 from robothor.events.consumers.base import BaseConsumer
 
@@ -23,7 +25,7 @@ class EmailConsumer(BaseConsumer):
     group = "email-pipeline"
     consumer_name = "pipeline-worker"
 
-    def handle(self, event: dict) -> None:
+    def handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
         payload = event.get("payload", {})
 
@@ -34,7 +36,7 @@ class EmailConsumer(BaseConsumer):
         else:
             logger.debug("Email consumer ignoring event type: %s", event_type)
 
-    def _process_new_email(self, event: dict, payload: dict) -> None:
+    def _process_new_email(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Trigger email classification for a new email."""
         email_id = payload.get("email_id", payload.get("id", "unknown"))
         subject = payload.get("subject", "")
@@ -42,11 +44,11 @@ class EmailConsumer(BaseConsumer):
 
         # Trigger the email hook pipeline if configured
         hook_script = os.environ.get("EMAIL_HOOK_SCRIPT")
-        if hook_script and os.path.exists(hook_script):
+        if hook_script and Path(hook_script).exists():
             try:
                 subprocess.Popen(  # noqa: S603
                     ["python3", hook_script],
-                    cwd=os.path.dirname(hook_script),
+                    cwd=str(Path(hook_script).parent),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     env={**os.environ, "EMAIL_EVENT_ID": str(email_id)},
@@ -58,7 +60,7 @@ class EmailConsumer(BaseConsumer):
         else:
             logger.info("No EMAIL_HOOK_SCRIPT configured, event logged only")
 
-    def _process_classified(self, event: dict, payload: dict) -> None:
+    def _process_classified(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a classified email event (from the classifier agent)."""
         email_id = payload.get("email_id", "unknown")
         classification = payload.get("classification", "unknown")

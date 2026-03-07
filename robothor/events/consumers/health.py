@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 
@@ -25,7 +26,7 @@ class HealthConsumer(BaseConsumer):
     group = "health-escalation"
     consumer_name = "escalation-worker"
 
-    def handle(self, event: dict) -> None:
+    def handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
         payload = event.get("payload", {})
 
@@ -36,7 +37,7 @@ class HealthConsumer(BaseConsumer):
         else:
             logger.debug("Health consumer ignoring event type: %s", event_type)
 
-    def _handle_health_report(self, event: dict, payload: dict) -> None:
+    def _handle_health_report(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Process a health check report."""
         status = payload.get("status", "unknown")
         services = payload.get("services", {})
@@ -60,7 +61,7 @@ class HealthConsumer(BaseConsumer):
         else:
             logger.debug("All services healthy")
 
-    def _escalate(self, event: dict, payload: dict) -> None:
+    def _escalate(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Escalate a health issue via audit log and optional webhook."""
         degraded = payload.get("degraded_services", [])
         msg = f"Health degraded: {', '.join(degraded)}" if degraded else "Service health issue"

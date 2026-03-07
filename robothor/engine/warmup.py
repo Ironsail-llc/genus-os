@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.models import AgentConfig
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.models import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +416,7 @@ def _build_peer_section(peer_agent_ids: list[str]) -> str:
 _holidays_cache: dict[int, Any] = {}
 
 
-def _get_us_holidays(year: int):
+def _get_us_holidays(year: int) -> Any:
     """Get cached US holidays object for a given year."""
     if year not in _holidays_cache:
         import holidays
@@ -425,9 +427,9 @@ def _get_us_holidays(year: int):
 
 def _date_context() -> str | None:
     """Current date, day of week, and upcoming US holidays."""
-    from datetime import date, timedelta
+    from datetime import UTC, datetime, timedelta
 
-    today = date.today()
+    today = datetime.now(tz=UTC).date()
     day_name = today.strftime("%A")
     date_str = today.strftime("%Y-%m-%d")
     result = f"Today: {day_name}, {date_str}"

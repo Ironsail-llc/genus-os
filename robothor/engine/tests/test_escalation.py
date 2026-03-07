@@ -47,6 +47,7 @@ class TestEscalationManager:
         for _ in range(THRESHOLD_STOP):
             mgr.record_error()
         msg1 = mgr.get_escalation_message()
+        assert msg1 is not None
         assert "STOP" in msg1.upper()
 
         mgr.record_error()

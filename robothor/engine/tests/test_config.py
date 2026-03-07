@@ -367,8 +367,11 @@ class TestResolveEnvVars:
         monkeypatch.setenv("CHAT_ID", "12345")
         data = {"delivery": {"to": "${CHAT_ID}", "mode": "announce"}}
         result = _resolve_env_vars(data)
-        assert result["delivery"]["to"] == "12345"
-        assert result["delivery"]["mode"] == "announce"
+        assert isinstance(result, dict)
+        delivery = result["delivery"]
+        assert isinstance(delivery, dict)
+        assert delivery["to"] == "12345"
+        assert delivery["mode"] == "announce"
 
     def test_nested_list(self, monkeypatch):
         monkeypatch.setenv("VAL", "resolved")

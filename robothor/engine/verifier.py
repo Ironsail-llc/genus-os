@@ -105,11 +105,9 @@ def format_verification_feedback(result: VerificationResult) -> str:
     lines = ["[VERIFICATION FAILED]"]
     if result.issues:
         lines.append("Issues found:")
-        for issue in result.issues:
-            lines.append(f"  - {issue}")
+        lines.extend(f"  - {issue}" for issue in result.issues)
     if result.suggestions:
         lines.append("Suggestions:")
-        for s in result.suggestions:
-            lines.append(f"  - {s}")
+        lines.extend(f"  - {s}" for s in result.suggestions)
     lines.append("Please address these issues and try again.")
     return "\n".join(lines)

@@ -1,5 +1,7 @@
 """Tests for chain_validator — full-chain validation checks M-R."""
 
+from typing import Any
+
 import pytest
 import yaml
 
@@ -71,7 +73,7 @@ class TestCheckEventPath:
         assert "calendar" in result.message
 
     def test_skip_when_no_hooks(self, chain_repo):
-        manifest = {}
+        manifest: dict[str, Any] = {}
         result = check_event_path(manifest, chain_repo)
         assert result.status == "SKIP"
 
@@ -83,7 +85,7 @@ class TestCheckEventPath:
 
 class TestCheckPipelineContinuity:
     def test_pass_when_bidirectional(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "classifier": {
                 "id": "classifier",
                 "creates_tasks_for": ["responder"],
@@ -98,7 +100,7 @@ class TestCheckPipelineContinuity:
         assert result.status == "PASS"
 
     def test_warn_when_target_missing_receives_from(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "classifier": {
                 "id": "classifier",
                 "creates_tasks_for": ["responder"],
@@ -114,7 +116,7 @@ class TestCheckPipelineContinuity:
         assert "receives_tasks_from" in result.details[0]
 
     def test_warn_when_target_missing_task_protocol(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "classifier": {
                 "id": "classifier",
                 "creates_tasks_for": ["responder"],
@@ -129,7 +131,7 @@ class TestCheckPipelineContinuity:
         assert "task_protocol" in result.details[0]
 
     def test_warn_when_target_has_no_manifest(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "classifier": {
                 "id": "classifier",
                 "creates_tasks_for": ["nonexistent"],
@@ -200,7 +202,7 @@ class TestCheckToolInstructionCoherence:
 
 class TestCheckTagFlow:
     def test_pass_when_tags_consumed(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "producer": {
                 "id": "producer",
                 "tags_produced": ["email", "reply-needed"],
@@ -214,7 +216,7 @@ class TestCheckTagFlow:
         assert result.status == "PASS"
 
     def test_warn_when_orphaned_tags(self):
-        all_manifests = {
+        all_manifests: dict[str, dict[str, Any]] = {
             "producer": {
                 "id": "producer",
                 "tags_produced": ["email", "orphan-tag"],

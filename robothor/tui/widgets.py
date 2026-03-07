@@ -9,6 +9,8 @@ WelcomeBanner — startup banner with agent count and commands hint.
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.content import Content
 from textual.widgets import Static
 
@@ -26,7 +28,7 @@ class MessageDisplay(Static):
         role: str = "assistant",
         *,
         name: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002
         classes: str | None = None,
     ) -> None:
         self._role = role
@@ -41,10 +43,9 @@ class MessageDisplay(Static):
     def _format(self) -> str:
         if self._role == "user":
             return f"[cyan]> {self._content}[/cyan]"
-        elif self._role == "system":
+        if self._role == "system":
             return f"[dim italic]{self._content}[/dim italic]"
-        else:
-            return self._content
+        return self._content
 
     def update_content(self, text: str) -> None:
         """Update the displayed content (used during streaming)."""
@@ -71,11 +72,11 @@ class ToolCard(Static):
     def __init__(
         self,
         tool_name: str,
-        args: dict | None = None,
+        args: dict[str, Any] | None = None,
         call_id: str = "",
         *,
         name: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002
         classes: str | None = None,
     ) -> None:
         self.tool_name = tool_name
@@ -99,10 +100,9 @@ class ToolCard(Static):
 
         if self._state == "running":
             return f"[dim]  \u25b6 {call_str} [yellow]running...[/yellow][/dim]"
-        elif self._state == "error":
+        if self._state == "error":
             return f"[dim]  \u2717 {call_str} [red]{self._error}[/red][/dim]"
-        else:
-            return f"[dim]  \u2713 {call_str} [green]{self._duration_ms}ms[/green][/dim]"
+        return f"[dim]  \u2713 {call_str} [green]{self._duration_ms}ms[/green][/dim]"
 
     def mark_complete(self, duration_ms: int) -> None:
         """Mark the tool call as completed."""
@@ -137,7 +137,7 @@ class StatusBar(Static):
         self,
         *,
         name: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002
         classes: str | None = None,
     ) -> None:
         self._connected = False
@@ -207,7 +207,7 @@ class WelcomeBanner(Static):
         agent_count: int = 0,
         *,
         name: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002
         classes: str | None = None,
     ) -> None:
         text = (

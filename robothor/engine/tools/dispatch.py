@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from robothor.config import Config
+if TYPE_CHECKING:
+    from robothor.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -92,4 +93,4 @@ async def _execute_tool(
     handler = handlers.get(name)
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
-    return cast(dict[str, Any], await handler(args, ctx))
+    return cast("dict[str, Any]", await handler(args, ctx))

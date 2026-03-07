@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 
@@ -25,7 +26,7 @@ class VisionConsumer(BaseConsumer):
     group = "vision-alerts"
     consumer_name = "alert-worker"
 
-    def handle(self, event: dict) -> None:
+    def handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
         payload = event.get("payload", {})
 
@@ -38,7 +39,7 @@ class VisionConsumer(BaseConsumer):
         else:
             logger.debug("Vision consumer ignoring event type: %s", event_type)
 
-    def _handle_person(self, event: dict, payload: dict) -> None:
+    def _handle_person(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a person detection event."""
         name = payload.get("name", "unknown")
         confidence = payload.get("confidence", 0)
@@ -50,18 +51,18 @@ class VisionConsumer(BaseConsumer):
         else:
             logger.info("Known person detected: %s", name)
 
-    def _handle_motion(self, event: dict, payload: dict) -> None:
+    def _handle_motion(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a motion detection event."""
         zone = payload.get("zone", "unknown")
         logger.debug("Motion in zone: %s", zone)
 
-    def _handle_analysis(self, event: dict, payload: dict) -> None:
+    def _handle_analysis(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a VLM scene analysis result."""
         description = payload.get("description", "")
         if description:
             logger.info("Scene analysis: %s", description[:100])
 
-    def _alert(self, message: str, payload: dict) -> None:
+    def _alert(self, message: str, payload: dict[str, Any]) -> None:
         """Send an alert for a vision event."""
         log_event(
             "vision.alert",

@@ -13,7 +13,9 @@ Usage:
 
 from __future__ import annotations
 
-RAG_PROFILES: dict[str, dict] = {
+from typing import Any
+
+RAG_PROFILES: dict[str, dict[str, Any]] = {
     "fast": {
         "description": "Quick answers, minimal retrieval",
         "memory_limit": 5,
@@ -185,7 +187,7 @@ def classify_query(query: str) -> str:
     """
     query_lower = query.lower()
 
-    scores: dict[str, int] = {profile: 0 for profile in CLASSIFICATION_RULES}
+    scores: dict[str, int] = dict.fromkeys(CLASSIFICATION_RULES, 0)
     for profile, keywords in CLASSIFICATION_RULES.items():
         for kw in keywords:
             if kw in query_lower:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -20,7 +22,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("vault_get")
-async def _vault_get(args: dict, ctx: ToolContext) -> dict:
+async def _vault_get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import robothor.vault as vault
 
     value = await asyncio.to_thread(vault.get, args["key"], tenant_id=ctx.tenant_id)
@@ -30,7 +32,7 @@ async def _vault_get(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("vault_set")
-async def _vault_set(args: dict, ctx: ToolContext) -> dict:
+async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import robothor.vault as vault
 
     await asyncio.to_thread(
@@ -44,7 +46,7 @@ async def _vault_set(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("vault_list")
-async def _vault_list(args: dict, ctx: ToolContext) -> dict:
+async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import robothor.vault as vault
 
     keys = await asyncio.to_thread(
@@ -54,7 +56,7 @@ async def _vault_list(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("vault_delete")
-async def _vault_delete(args: dict, ctx: ToolContext) -> dict:
+async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import robothor.vault as vault
 
     deleted = await asyncio.to_thread(vault.delete, args["key"], tenant_id=ctx.tenant_id)

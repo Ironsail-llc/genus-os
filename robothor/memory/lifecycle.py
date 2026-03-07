@@ -16,6 +16,7 @@ import json
 import logging
 import math
 from datetime import UTC, datetime
+from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -120,7 +121,7 @@ Fact: "{content}" """
 async def find_consolidation_candidates(
     min_group_size: int = 3,
     similarity_threshold: float = 0.8,
-) -> list[list[dict]]:
+) -> list[list[dict[str, Any]]]:
     """Find groups of similar facts that could be consolidated.
 
     Args:
@@ -147,7 +148,7 @@ async def find_consolidation_candidates(
         return []
 
     used: set[int] = set()
-    groups: list[list[dict]] = []
+    groups: list[list[dict[str, Any]]] = []
 
     for fact in facts:
         if fact["id"] in used:
@@ -184,7 +185,7 @@ async def find_consolidation_candidates(
     return groups
 
 
-async def consolidate_facts(fact_group: list[dict]) -> dict:
+async def consolidate_facts(fact_group: list[dict[str, Any]]) -> dict[str, Any]:
     """Consolidate a group of similar facts into one summary fact.
 
     Args:
@@ -219,7 +220,7 @@ Return ONLY the consolidated statement, nothing else."""
         }
 
 
-async def prune_low_quality_facts() -> dict:
+async def prune_low_quality_facts() -> dict[str, Any]:
     """Deactivate facts that are low-quality garbage.
 
     Targets:
@@ -275,7 +276,7 @@ async def prune_low_quality_facts() -> dict:
     }
 
 
-async def run_lifecycle_maintenance() -> dict:
+async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
     Steps:
@@ -364,7 +365,7 @@ async def run_lifecycle_maintenance() -> dict:
                 consolidated_fact = {
                     "fact_text": result["consolidated_text"],
                     "category": group[0].get("category", "personal"),
-                    "entities": list(set(e for f in group for e in (f.get("entities") or []))),
+                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
                     "confidence": 0.9,
                 }
                 new_id = await store_fact(

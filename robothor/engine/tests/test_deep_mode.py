@@ -61,7 +61,7 @@ class TestStepTypeDeepReason:
     """Verify DEEP_REASON is in the StepType enum."""
 
     def test_deep_reason_exists(self):
-        assert StepType.DEEP_REASON == "deep_reason"
+        assert StepType.DEEP_REASON.value == "deep_reason"
 
     def test_deep_reason_is_valid_value(self):
         assert StepType("deep_reason") == StepType.DEEP_REASON

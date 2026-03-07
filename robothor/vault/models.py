@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class VaultEntry(BaseModel):
@@ -14,6 +17,6 @@ class VaultEntry(BaseModel):
     tenant_id: str
     key: str
     category: str = "credential"
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
     created_at: datetime | None = None
     updated_at: datetime | None = None

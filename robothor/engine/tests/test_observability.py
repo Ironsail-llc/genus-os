@@ -44,7 +44,7 @@ class TestDeliveryStatus:
         sender = AsyncMock()
         set_telegram_sender(sender)
         yield sender
-        set_telegram_sender(None)
+        set_telegram_sender(None)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_sub_agent_suppressed(self):
@@ -123,6 +123,7 @@ class TestDeliveryStatus:
         run = _make_run()
         result = await deliver(config, run)
         assert result is False
+        assert run.delivery_status is not None
         assert run.delivery_status.startswith("failed")
 
 
@@ -212,7 +213,9 @@ def _import_cron_health_check():
     spec = importlib.util.spec_from_file_location(
         "cron_health_check", Path(_BRAIN_SCRIPTS) / "cron_health_check.py"
     )
+    assert spec is not None
     mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
@@ -302,7 +305,7 @@ class TestCronHealthCheck:
             "total_cost_usd": 0.05,
             "avg_duration_ms": 150,
         }
-        tools = {"slowest": [], "failing": []}
+        tools: dict[str, list[str]] = {"slowest": [], "failing": []}
         self.chc.write_status(agents, fleet, tools, output_path=output)
         content = output.read_text()
         assert "# Cron Health Status" in content

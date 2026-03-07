@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Same regex as workflow.py:49
 TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
@@ -98,14 +100,14 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
     """Recursively resolve templates in any YAML value (str, list, dict)."""
     if isinstance(value, str):
         return resolve_string(value, context)
-    elif isinstance(value, list):
+    if isinstance(value, list):
         return [resolve_value(item, context) for item in value]
-    elif isinstance(value, dict):
+    if isinstance(value, dict):
         return {k: resolve_value(v, context) for k, v in value.items()}
     return value
 
 
-def deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep-merge two dicts. Override wins for scalars, recurse for dicts, deduplicate lists."""
     result = copy.deepcopy(base)
     for key, value in override.items():
@@ -136,11 +138,11 @@ class TemplateResolver:
 
     def build_context(
         self,
-        setup_yaml: dict,
-        defaults_yaml: dict | None = None,
-        instance_config: dict | None = None,
-        overrides: dict | None = None,
-        cli_sets: dict | None = None,
+        setup_yaml: dict[str, Any],
+        defaults_yaml: dict[str, Any] | None = None,
+        instance_config: dict[str, Any] | None = None,
+        overrides: dict[str, Any] | None = None,
+        cli_sets: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build variable context with proper priority.
 
@@ -168,9 +170,7 @@ class TemplateResolver:
             instance_defaults = instance_config.get("defaults", {})
             context.update(instance_defaults)
             # Also merge instance-level values
-            inst = instance_config.get("instance", {})
-            for k, v in inst.items():
-                context[k] = v
+            context.update(instance_config.get("instance", {}))
 
         # 4. Per-agent overrides
         if overrides:
@@ -187,7 +187,7 @@ class TemplateResolver:
         content = file_path.read_text()
         return resolve_string(content, context)
 
-    def resolve_yaml_file(self, file_path: Path, context: dict[str, Any]) -> dict:
+    def resolve_yaml_file(self, file_path: Path, context: dict[str, Any]) -> dict[str, Any]:
         """Resolve a YAML template file and return parsed dict."""
         content = self.resolve_file(file_path, context)
         return yaml.safe_load(content) or {}
@@ -197,7 +197,7 @@ class TemplateResolver:
         bundle_path: str | Path,
         variables: dict[str, Any] | None = None,
         defaults_path: str | Path | None = None,
-        instance_config: dict | None = None,
+        instance_config: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Resolve an entire template bundle.
 
@@ -247,7 +247,7 @@ class TemplateResolver:
         bundle_path: str | Path,
         variables: dict[str, Any] | None = None,
         defaults_path: str | Path | None = None,
-        instance_config: dict | None = None,
+        instance_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Dry-run resolve: returns resolved content + any unresolved variables."""
         files = self.resolve_bundle(bundle_path, variables, defaults_path, instance_config)

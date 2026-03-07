@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from typing import Any
 
 import httpx
 
@@ -109,10 +110,10 @@ async def rerank_pair(
 
 async def rerank(
     query: str,
-    results: list[dict],
+    results: list[dict[str, Any]],
     top_k: int = 10,
     batch_size: int = 10,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Rerank search results using the cross-encoder.
 
     Strategy:
@@ -139,8 +140,8 @@ async def rerank(
         return results[:top_k]
 
     t0 = time.time()
-    yes_results: list[dict] = []
-    no_results: list[dict] = []
+    yes_results: list[dict[str, Any]] = []
+    no_results: list[dict[str, Any]] = []
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         for i in range(0, len(results), batch_size):
@@ -172,9 +173,9 @@ async def rerank(
 
 async def rerank_with_fallback(
     query: str,
-    results: list[dict],
+    results: list[dict[str, Any]],
     top_k: int = 10,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Rerank with automatic fallback to cosine similarity ordering."""
     try:
         return await rerank(query, results, top_k=top_k)
@@ -182,6 +183,6 @@ async def rerank_with_fallback(
         return results[:top_k]
 
 
-def rerank_sync(query: str, results: list[dict], top_k: int = 10) -> list[dict]:
+def rerank_sync(query: str, results: list[dict[str, Any]], top_k: int = 10) -> list[dict[str, Any]]:
     """Synchronous wrapper for rerank()."""
     return asyncio.run(rerank_with_fallback(query, results, top_k=top_k))

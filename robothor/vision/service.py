@@ -33,21 +33,23 @@ import logging
 import os
 import signal
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
-import numpy as np
 
 from robothor.vision.alerts import AlertManager, TelegramAlert
 from robothor.vision.detector import ObjectDetector, detect_motion
 from robothor.vision.face import FaceRecognizer
 
+if TYPE_CHECKING:
+    import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
-def _get_cv2():
+def _get_cv2() -> Any:
     """Lazy-import cv2 so vision module can be imported without opencv installed."""
     try:
         import cv2
@@ -186,9 +188,9 @@ class VisionService:
         self._suppression_announced: bool = False  # one-shot event flag
 
         # State
-        self.people_present: dict[str, dict] = {}
+        self.people_present: dict[str, dict[str, Any]] = {}
         self.last_detection_time: str | None = None
-        self.last_detection_details: dict | None = None
+        self.last_detection_details: dict[str, Any] | None = None
         self.running = True
         self.start_time: str | None = None
 
@@ -241,14 +243,14 @@ class VisionService:
 
     def save_snapshot(self, frame: np.ndarray) -> str:
         """Save a frame to the date-organized snapshot directory."""
-        now = datetime.now()
+        now = datetime.now(tz=UTC)
         day_dir = self.snapshot_dir / now.strftime("%Y-%m-%d")
         day_dir.mkdir(parents=True, exist_ok=True)
         path = day_dir / now.strftime("%H%M%S.jpg")
         _get_cv2().imwrite(str(path), frame)
         return str(path)
 
-    async def ingest_event(self, event_text: str, metadata: dict) -> None:
+    async def ingest_event(self, event_text: str, metadata: dict[str, Any]) -> None:
         """Post a vision event to the orchestrator for ingestion."""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -268,7 +270,7 @@ class VisionService:
         except Exception as e:
             logger.warning("Ingestion error: %s", e)
 
-    async def publish_event(self, event_type: str, payload: dict) -> None:
+    async def publish_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Publish to event bus (best-effort)."""
         try:
             from robothor.events.bus import publish
@@ -373,7 +375,7 @@ class VisionService:
             return
 
         now_ts = time.time()
-        now_str = datetime.now().isoformat()
+        now_str = datetime.now(tz=UTC).isoformat()
 
         detections = self.detector.detect(frame)
         persons = [d for d in detections if d["class"] == "person"]
@@ -498,7 +500,7 @@ class VisionService:
         """Armed mode: YOLO + face ID on every motion frame, full tracking."""
         await self._check_auto_arm()
 
-        now = datetime.now()
+        now = datetime.now(tz=UTC)
         now_str = now.isoformat()
 
         motion_detected, motion_score, self._prev_gray = detect_motion(
@@ -658,7 +660,7 @@ class VisionService:
 
     def _track_departures(self, now_str: str) -> None:
         """Track people who have left (basic mode)."""
-        now = datetime.now()
+        now = datetime.now(tz=UTC)
         departed = []
         for identity, info in list(self.people_present.items()):
             if identity.startswith("_"):
@@ -674,7 +676,7 @@ class VisionService:
 
     # ── Enrollment ───────────────────────────────────────────────
 
-    async def enroll_person(self, name: str, num_frames: int = 5) -> dict:
+    async def enroll_person(self, name: str, num_frames: int = 5) -> dict[str, Any]:
         """Capture multiple frames and enroll a person's face."""
         camera = CameraStream(self.rtsp_url)
         embeddings = []
@@ -723,7 +725,7 @@ class VisionService:
             "snapshot_path": snapshot_path,
         }
 
-    def enroll_from_image(self, name: str, image_paths: list[str]) -> dict:
+    def enroll_from_image(self, name: str, image_paths: list[str]) -> dict[str, Any]:
         """Enroll a person from saved image files (snapshots, photos, etc.)."""
         cv2 = _get_cv2()
         self.recognizer._ensure_loaded()
@@ -764,7 +766,7 @@ class VisionService:
             "name": name,
             "samples": len(embeddings),
             "images_provided": len(image_paths),
-            "errors": errors if errors else None,
+            "errors": errors or None,
         }
 
     # ── Alert Suppression Persistence ────────────────────────────
@@ -823,7 +825,7 @@ class VisionService:
 
     # ── HTTP Server ──────────────────────────────────────────────
 
-    def _json_response(self, status: str, body: dict) -> bytes:
+    def _json_response(self, status: str, body: dict[str, Any]) -> bytes:
         """Build a minimal HTTP response."""
         body_str = json.dumps(body)
         return f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {len(body_str)}\r\n\r\n{body_str}".encode()
@@ -1123,14 +1125,14 @@ class VisionService:
     async def run(self) -> None:
         """Start the vision service (HTTP server + detection loop)."""
 
-        def handle_signal(sig, _frame):
+        def handle_signal(sig: int, _frame: Any) -> None:
             logger.info("Signal %s received, shutting down...", sig)
             self.running = False
 
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
 
-        self.start_time = datetime.now().isoformat()
+        self.start_time = datetime.now(tz=UTC).isoformat()
         self.current_mode = self.load_mode()
         self.load_suppression()
         logger.info(

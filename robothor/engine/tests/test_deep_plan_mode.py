@@ -76,7 +76,7 @@ class TestDeepPlanPreamble:
 
     def test_preamble_constants_exist(self):
         """DEEP_PLAN_PREAMBLE and DEEP_PLAN_SUFFIX should be defined."""
-        from robothor.engine.runner import DEEP_PLAN_PREAMBLE, DEEP_PLAN_SUFFIX
+        from robothor.engine.prompts import DEEP_PLAN_PREAMBLE, DEEP_PLAN_SUFFIX
 
         assert "DEEP PLAN MODE" in DEEP_PLAN_PREAMBLE
         assert "context gathering" in DEEP_PLAN_SUFFIX.lower()
@@ -493,7 +493,7 @@ class TestTelegramDeepPlanRouting:
         bot._max_history = 50
 
         # Mock _run_plan_mode
-        bot._run_plan_mode = AsyncMock()
+        object.__setattr__(bot, "_run_plan_mode", AsyncMock())
 
         # Simulate cmd_deep
         mock_message = MagicMock()
@@ -515,6 +515,7 @@ class TestTelegramDeepPlanRouting:
             chat_id, session_key, session, deep_arg, mock_message, deep_plan=True
         )
 
-        bot._run_plan_mode.assert_called_once_with(
+        mock_plan = bot._run_plan_mode
+        mock_plan.assert_called_once_with(  # type: ignore[attr-defined]
             chat_id, session_key, session, deep_arg, mock_message, deep_plan=True
         )

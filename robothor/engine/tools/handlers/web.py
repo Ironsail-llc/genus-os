@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from robothor.engine.tools.dispatch import ToolContext, _cfg
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 HANDLERS: dict[str, Any] = {}
 
@@ -21,7 +23,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("web_fetch")
-async def _web_fetch(args: dict, ctx: ToolContext) -> dict:
+async def _web_fetch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     url = args.get("url", "")
     if not url:
         return {"error": "No URL provided"}
@@ -46,7 +48,7 @@ async def _web_fetch(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("web_search")
-async def _web_search(args: dict, ctx: ToolContext) -> dict:
+async def _web_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     query = args.get("query", "")
     limit = args.get("limit", 5)
     provider = args.get("provider", "searxng")
@@ -62,7 +64,7 @@ async def _web_search(args: dict, ctx: ToolContext) -> dict:
         except Exception as e:
             return {"error": f"Perplexity search failed: {e}"}
 
-    # Default: SearXNG
+    # Fallback to SearXNG
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(

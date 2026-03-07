@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.dispatch import ToolContext
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
@@ -20,7 +22,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 @_handler("list_agent_runs")
-async def _list_agent_runs(args: dict, ctx: ToolContext) -> dict:
+async def _list_agent_runs(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import list_runs
 
     runs = await asyncio.to_thread(
@@ -53,7 +55,7 @@ async def _list_agent_runs(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_agent_run")
-async def _get_agent_run(args: dict, ctx: ToolContext) -> dict:
+async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import get_run, list_steps
 
     run = await asyncio.to_thread(get_run, args["run_id"])
@@ -93,7 +95,7 @@ async def _get_agent_run(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("list_agent_schedules")
-async def _list_agent_schedules(args: dict, ctx: ToolContext) -> dict:
+async def _list_agent_schedules(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import list_schedules
 
     schedules = await asyncio.to_thread(
@@ -123,7 +125,7 @@ async def _list_agent_schedules(args: dict, ctx: ToolContext) -> dict:
 
 
 @_handler("get_agent_stats")
-async def _get_agent_stats(args: dict, ctx: ToolContext) -> dict:
+async def _get_agent_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import get_agent_stats as _get_agent_stats
 
     stats = await asyncio.to_thread(

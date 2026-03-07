@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def create_health_app(
-    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None
-):
+    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
+) -> Any:
     """Create a lightweight FastAPI health app."""
     from fastapi import FastAPI
 
@@ -37,7 +37,7 @@ def create_health_app(
         app.include_router(chat_router)
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, Any]:
         """Health check endpoint."""
         # Get schedule summary
         schedules = []
@@ -71,7 +71,7 @@ def create_health_app(
     _startup_complete = {"ready": False}
 
     @app.get("/health/startup")
-    async def startup():
+    async def startup() -> Any:
         """Startup probe — returns 503 until initialization is complete."""
         from fastapi.responses import JSONResponse
 
@@ -83,33 +83,33 @@ def create_health_app(
         )
 
     @app.get("/liveness")
-    async def liveness():
+    async def liveness() -> dict[str, Any]:
         """Liveness probe — always 200 if process is running."""
         from robothor.health_contract import liveness_response
 
         return liveness_response("engine", "0.1.0")
 
     @app.get("/ready")
-    async def readiness():
+    async def readiness() -> Any:
         """Readiness probe — checks all dependencies."""
         from fastapi.responses import JSONResponse
 
         from robothor.health_contract import readiness_response
 
-        async def check_db():
+        async def check_db() -> str:
             from robothor.db.connection import get_connection
 
             with get_connection() as conn:
                 conn.cursor().execute("SELECT 1")
             return "ok"
 
-        async def check_schedules():
+        async def check_schedules() -> str:
             from robothor.engine.tracking import list_schedules
 
             list_schedules(tenant_id=config.tenant_id)
             return "ok"
 
-        checks = {
+        checks: dict[str, Any] = {
             "database": check_db,
             "schedules": check_schedules,
         }
@@ -117,7 +117,7 @@ def create_health_app(
         return JSONResponse(body, status_code=status)
 
     @app.on_event("startup")
-    async def _mark_startup_complete():
+    async def _mark_startup_complete() -> None:
         """Mark startup as complete once FastAPI is serving."""
         from robothor.db.connection import get_connection
 
@@ -130,7 +130,7 @@ def create_health_app(
             logger.warning("Engine startup probe: DB not ready yet — %s", e)
 
     @app.get("/runs")
-    async def list_recent_runs():
+    async def list_recent_runs() -> dict[str, Any]:
         """List recent agent runs."""
         try:
             from robothor.engine.tracking import list_runs
@@ -160,7 +160,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/api/runs/{run_id}/children")
-    async def get_run_children(run_id: str):
+    async def get_run_children(run_id: str) -> dict[str, Any]:
         """Get direct child runs of a parent run."""
         try:
             from robothor.engine.tracking import get_run_children as _get_children
@@ -187,7 +187,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/api/runs/{run_id}/tree")
-    async def get_run_tree(run_id: str):
+    async def get_run_tree(run_id: str) -> dict[str, Any]:
         """Get full execution tree (recursive) for a run."""
         try:
             from robothor.engine.tracking import get_run_tree as _get_tree
@@ -198,7 +198,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/costs")
-    async def costs(hours: int = 24):
+    async def costs(hours: int = 24) -> dict[str, Any]:
         """Cost tracking — per-agent breakdown over the last N hours."""
         try:
             from robothor.engine.tracking import get_agent_stats, list_schedules
@@ -238,7 +238,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/costs/deep")
-    async def costs_deep(hours: int = 24):
+    async def costs_deep(hours: int = 24) -> dict[str, Any]:
         """RLM deep reasoning cost tracking — queries runs with deep_reason steps."""
         try:
             from robothor.db.connection import get_connection
@@ -282,7 +282,7 @@ def create_health_app(
     # ── Workflow API endpoints ───────────────────────────────────────
 
     @app.get("/api/workflows")
-    async def list_workflows():
+    async def list_workflows() -> dict[str, Any]:
         """List loaded workflow definitions."""
         if not workflow_engine:
             return {"workflows": []}
@@ -309,7 +309,7 @@ def create_health_app(
         }
 
     @app.get("/api/workflows/{workflow_id}/runs")
-    async def list_workflow_runs(workflow_id: str, limit: int = 20):
+    async def list_workflow_runs(workflow_id: str, limit: int = 20) -> dict[str, Any]:
         """List runs for a specific workflow."""
         try:
             from robothor.db.connection import get_connection
@@ -341,7 +341,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/api/workflows/runs/{run_id}")
-    async def get_workflow_run(run_id: str):
+    async def get_workflow_run(run_id: str) -> dict[str, Any]:
         """Get workflow run detail with step results."""
         try:
             from robothor.db.connection import get_connection
@@ -392,7 +392,7 @@ def create_health_app(
     # ── v2 Enhancement endpoints ─────────────────────────────────────
 
     @app.post("/api/runs/{run_id}/resume")
-    async def resume_run(run_id: str):
+    async def resume_run(run_id: str) -> dict[str, Any]:
         """Resume a run from its latest checkpoint."""
         if not runner:
             return {"error": "Runner not available"}
@@ -419,7 +419,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.get("/api/v2/stats")
-    async def v2_stats(hours: int = 24):
+    async def v2_stats(hours: int = 24) -> dict[str, Any]:
         """v2 enhancement stats — guardrail events, budget exhaustions, checkpoints."""
         try:
             from robothor.db.connection import get_connection
@@ -468,7 +468,7 @@ def create_health_app(
             return {"error": str(e)}
 
     @app.post("/api/workflows/{workflow_id}/execute")
-    async def execute_workflow(workflow_id: str):
+    async def execute_workflow(workflow_id: str) -> dict[str, Any]:
         """Manually trigger a workflow execution."""
         if not workflow_engine:
             return {"error": "Workflow engine not available"}
@@ -493,7 +493,7 @@ def create_health_app(
 
 
 async def serve_health(
-    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine=None
+    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> None:
     """Start the health endpoint server."""
     import uvicorn

@@ -39,6 +39,7 @@ class TestHandleCommand:
         """Unknown slash command returns error message."""
         handled, output = await handle_command(mock_app, "/unknown")
         assert handled is True
+        assert output is not None
         assert "Unknown command" in output
 
     @pytest.mark.asyncio
@@ -67,7 +68,9 @@ class TestStatusCommand:
         """Status shows engine info when connected."""
         handled, output = await handle_command(mock_app, "/status")
         assert handled is True
+        assert output is not None
         assert "healthy" in output
+        assert output is not None
         assert "0.1.0" in output
 
     @pytest.mark.asyncio
@@ -76,6 +79,7 @@ class TestStatusCommand:
         mock_app.client.check_health = AsyncMock(return_value=None)
         handled, output = await handle_command(mock_app, "/status")
         assert handled is True
+        assert output is not None
         assert "unreachable" in output.lower()
 
 
@@ -85,7 +89,9 @@ class TestAgentsCommand:
         """Agents command shows agent table."""
         handled, output = await handle_command(mock_app, "/agents")
         assert handled is True
+        assert output is not None
         assert "email-classifier" in output
+        assert output is not None
         assert "supervisor" in output
 
     @pytest.mark.asyncio
@@ -94,6 +100,7 @@ class TestAgentsCommand:
         mock_app.client.check_health = AsyncMock(return_value=None)
         handled, output = await handle_command(mock_app, "/agents")
         assert handled is True
+        assert output is not None
         assert "unreachable" in output.lower()
 
 
@@ -103,7 +110,9 @@ class TestCostsCommand:
         """Costs with no args uses 24h."""
         handled, output = await handle_command(mock_app, "/costs")
         assert handled is True
+        assert output is not None
         assert "24h" in output
+        assert output is not None
         assert "10" in output  # total_runs
 
     @pytest.mark.asyncio
@@ -111,6 +120,7 @@ class TestCostsCommand:
         """Costs with custom hours argument."""
         handled, output = await handle_command(mock_app, "/costs 48")
         assert handled is True
+        assert output is not None
         assert "48h" in output
 
 
@@ -120,6 +130,7 @@ class TestHistoryCommand:
         """History shows count of 0 for empty session."""
         handled, output = await handle_command(mock_app, "/history")
         assert handled is True
+        assert output is not None
         assert "0 messages" in output
 
 
@@ -129,6 +140,7 @@ class TestModelCommand:
         """Model command shows current model."""
         handled, output = await handle_command(mock_app, "/model")
         assert handled is True
+        assert output is not None
         assert "model" in output.lower()
 
 
@@ -138,6 +150,7 @@ class TestClearCommand:
         """Clear resets session and returns success."""
         handled, output = await handle_command(mock_app, "/clear")
         assert handled is True
+        assert output is not None
         assert "cleared" in output.lower()
 
 
@@ -147,6 +160,7 @@ class TestAbortCommand:
         """Abort cancels running response."""
         handled, output = await handle_command(mock_app, "/abort")
         assert handled is True
+        assert output is not None
         assert "aborted" in output.lower()
 
 
@@ -156,10 +170,15 @@ class TestHelpCommand:
         """Help shows all available commands."""
         handled, output = await handle_command(mock_app, "/help")
         assert handled is True
+        assert output is not None
         assert "/status" in output
+        assert output is not None
         assert "/agents" in output
+        assert output is not None
         assert "/costs" in output
+        assert output is not None
         assert "/help" in output
+        assert output is not None
         assert "/quit" in output
 
 
@@ -185,8 +204,11 @@ class TestDeepCommand:
         """Deep with no args shows usage information."""
         handled, output = await handle_command(mock_app, "/deep")
         assert handled is True
+        assert output is not None
         assert "Usage" in output
+        assert output is not None
         assert "RLM" in output
+        assert output is not None
         assert "$0.50" in output
 
     @pytest.mark.asyncio
@@ -212,7 +234,9 @@ class TestPlanCommand:
         """Plan with no args shows usage information."""
         handled, output = await handle_command(mock_app, "/plan")
         assert handled is True
+        assert output is not None
         assert "Usage" in output
+        assert output is not None
         assert "Plan Mode" in output
 
     @pytest.mark.asyncio
@@ -228,5 +252,7 @@ class TestPlanCommand:
         """Help output includes /deep and /plan commands."""
         handled, output = await handle_command(mock_app, "/help")
         assert handled is True
+        assert output is not None
         assert "/deep" in output
+        assert output is not None
         assert "/plan" in output

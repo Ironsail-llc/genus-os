@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from pathlib import Path
+from typing import Any
 
 from robothor.events.consumers.base import BaseConsumer
 
@@ -23,7 +25,7 @@ class CalendarConsumer(BaseConsumer):
     group = "calendar-monitor"
     consumer_name = "monitor-worker"
 
-    def handle(self, event: dict) -> None:
+    def handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
         payload = event.get("payload", {})
 
@@ -36,32 +38,32 @@ class CalendarConsumer(BaseConsumer):
         else:
             logger.debug("Calendar consumer ignoring event type: %s", event_type)
 
-    def _handle_conflict(self, event: dict, payload: dict) -> None:
+    def _handle_conflict(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a calendar conflict event."""
         events = payload.get("events", [])
         logger.warning("Calendar conflict detected: %d overlapping events", len(events))
         self._trigger_monitor(event)
 
-    def _handle_cancellation(self, event: dict, payload: dict) -> None:
+    def _handle_cancellation(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a meeting cancellation."""
         title = payload.get("title", "Unknown meeting")
         logger.info("Meeting cancelled: %s", title)
         self._trigger_monitor(event)
 
-    def _handle_change(self, event: dict, payload: dict) -> None:
+    def _handle_change(self, event: dict[str, Any], payload: dict[str, Any]) -> None:
         """Handle a calendar event change (time, attendees, etc.)."""
         title = payload.get("title", "Unknown meeting")
         change = payload.get("change_type", "unknown")
         logger.info("Calendar change (%s): %s", change, title)
 
-    def _trigger_monitor(self, event: dict) -> None:
+    def _trigger_monitor(self, event: dict[str, Any]) -> None:
         """Trigger the Calendar Monitor script if configured."""
         monitor_script = os.environ.get("CALENDAR_MONITOR_SCRIPT")
-        if monitor_script and os.path.exists(monitor_script):
+        if monitor_script and Path(monitor_script).exists():
             try:
                 subprocess.Popen(  # noqa: S603
                     ["python3", monitor_script],
-                    cwd=os.path.dirname(monitor_script),
+                    cwd=str(Path(monitor_script).parent),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )

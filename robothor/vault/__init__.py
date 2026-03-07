@@ -11,7 +11,7 @@ Public API:
 
 from __future__ import annotations
 
-import builtins
+from typing import TYPE_CHECKING
 
 from robothor.vault.crypto import get_master_key, init_master_key
 from robothor.vault.dal import (
@@ -22,6 +22,9 @@ from robothor.vault.dal import (
     set_secret,
 )
 
+if TYPE_CHECKING:
+    import builtins
+
 DEFAULT_TENANT = "robothor-primary"
 
 
@@ -31,7 +34,7 @@ def get(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     return get_secret(key, master_key, tenant_id=tenant_id)
 
 
-def set(
+def set(  # noqa: A001
     key: str, value: str, *, category: str = "credential", tenant_id: str = DEFAULT_TENANT
 ) -> None:
     """Encrypt and store a secret."""
@@ -44,7 +47,7 @@ def delete(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     return delete_secret(key, tenant_id=tenant_id)
 
 
-def list(  # type: ignore[override]  # noqa: A001
+def list(  # noqa: A001
     *, category: str | None = None, tenant_id: str = DEFAULT_TENANT
 ) -> builtins.list[str]:
     """List all secret keys, optionally filtered by category."""

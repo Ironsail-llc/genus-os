@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 

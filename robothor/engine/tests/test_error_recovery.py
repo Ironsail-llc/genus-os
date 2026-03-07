@@ -126,6 +126,7 @@ class TestGetRecoveryAction:
 
     def test_rate_limit_never_spawns(self):
         action = get_recovery_action(ErrorType.RATE_LIMIT, 5, self._config(), "web_fetch", "429")
+        assert action is not None
         assert action.action == "backoff"  # never spawn for rate limits
 
     def test_auth_no_action_at_count_1(self):

@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -183,7 +184,7 @@ def analyze_description(description: str) -> DescriptionScore:
     else:
         score.length_score = max(0.0, 1.0 - (word_count - 80) / 80.0)
 
-    # Composite (0-100)
+    # Composite score, scale 0 to 100
     score.total = (
         score.specificity * 30
         + score.actionability * 30
@@ -194,7 +195,7 @@ def analyze_description(description: str) -> DescriptionScore:
     return score
 
 
-def suggest_tags(manifest: dict, instruction_content: str = "") -> list[str]:
+def suggest_tags(manifest: dict[str, Any], instruction_content: str = "") -> list[str]:
     """Suggest tags based on tools, produced/consumed tags, and instruction keywords."""
     tags: set[str] = set()
 
@@ -238,7 +239,7 @@ def suggest_tags(manifest: dict, instruction_content: str = "") -> list[str]:
     return sorted(tags)
 
 
-def generate_skill_md(manifest: dict, instruction_content: str = "") -> str:
+def generate_skill_md(manifest: dict[str, Any], instruction_content: str = "") -> str:
     """Generate a rich SKILL.md with frontmatter, description, variables, and capabilities."""
     agent_id = manifest.get("id", "unknown")
     name = manifest.get("name", agent_id)
@@ -291,8 +292,7 @@ def generate_skill_md(manifest: dict, instruction_content: str = "") -> str:
     if capabilities:
         lines.append("## Capabilities")
         lines.append("")
-        for cap in capabilities:
-            lines.append(f"- {cap}")
+        lines.extend(f"- {cap}" for cap in capabilities)
         lines.append("")
 
     # Coordination section
@@ -307,8 +307,7 @@ def generate_skill_md(manifest: dict, instruction_content: str = "") -> str:
     if coordination:
         lines.append("## Coordination")
         lines.append("")
-        for item in coordination:
-            lines.append(f"- {item}")
+        lines.extend(f"- {item}" for item in coordination)
         lines.append("")
 
     # Model tier
@@ -429,7 +428,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
                 typed_count = 0
                 described_count = 0
                 total = len(variables)
-                for _var_name, var_def in variables.items():
+                for var_def in variables.values():
                     if isinstance(var_def, dict):
                         if var_def.get("type"):
                             typed_count += 1

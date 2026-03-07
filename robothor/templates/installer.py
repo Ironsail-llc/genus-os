@@ -40,7 +40,7 @@ def install(
     auto_yes: bool = False,
     instance_dir: Path | None = None,
     repo_root: Path | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Install an agent from a template bundle.
 
     1. Load setup.yaml from template
@@ -127,7 +127,7 @@ def install(
             output_files["instruction"] = (instr_dest, instructions_content)
 
     # Write files
-    for _file_type, (dest, content) in output_files.items():
+    for dest, content in output_files.values():
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content)
 
@@ -202,7 +202,7 @@ def remove(
     if archive:
         instance.archive_agent(agent_id, file_paths)
 
-    for _file_type, path in file_paths.items():
+    for path in file_paths.values():
         if path.exists():
             path.unlink()
 
@@ -217,7 +217,7 @@ def update(
     auto_yes: bool = False,
     instance_dir: Path | None = None,
     repo_root: Path | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Update an installed agent with a new or same template.
 
     1. Read current install record from .robothor/installed.yaml
@@ -294,7 +294,7 @@ def import_agent(
     output_dir: str | Path | None = None,
     repo_root: Path | None = None,
     defaults_path: str | Path | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Reverse-engineer an existing agent manifest into a template bundle.
 
     1. Read manifest from docs/agents/<id>.yaml

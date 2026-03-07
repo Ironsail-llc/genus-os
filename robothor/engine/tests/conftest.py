@@ -9,7 +9,7 @@ Follows brain/memory_system/conftest.py patterns:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +19,9 @@ from robothor.engine.models import (
     AgentConfig,
     DeliveryMode,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # test_prefix is inherited from the root conftest.py
 

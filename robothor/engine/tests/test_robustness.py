@@ -60,10 +60,12 @@ class TestCircuitBreaker:
             patch("robothor.engine.tracking.update_schedule_state"),
             patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
             patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
-            patch.object(runner, "execute", new_callable=AsyncMock, return_value=run),
+            patch.object(
+                runner, "execute", new_callable=AsyncMock, return_value=run
+            ) as mock_execute,
         ):
             await scheduler._run_agent("test-agent")
-            runner.execute.assert_called_once()
+            mock_execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_sends_telegram_alert(self, engine_config, sample_agent_config):

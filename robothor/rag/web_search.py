@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 
 import httpx
 
@@ -41,7 +42,7 @@ async def search_web(
     categories: str = "general",
     language: str = "en",
     time_range: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Search the web via SearXNG.
 
     Args:
@@ -73,17 +74,16 @@ async def search_web(
     except Exception:
         return []
 
-    results = []
-    for r in data.get("results", [])[:limit]:
-        results.append(
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "content": r.get("content", ""),
-                "source": r.get("engine", "web"),
-                "score": r.get("score", 0.0),
-            }
-        )
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "content": r.get("content", ""),
+            "source": r.get("engine", "web"),
+            "score": r.get("score", 0.0),
+        }
+        for r in data.get("results", [])[:limit]
+    ]
 
     return results
 
@@ -91,7 +91,7 @@ async def search_web(
 async def search_perplexity(
     query: str,
     limit: int = 5,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Search using Perplexity API (OpenAI-compatible via litellm).
 
     Requires PERPLEXITY_API_KEY in environment. Uses the sonar model
@@ -173,7 +173,7 @@ async def check_searxng_available() -> bool:
             return False
 
 
-def format_web_results(results: list[dict], max_chars: int = 4000) -> str:
+def format_web_results(results: list[dict[str, Any]], max_chars: int = 4000) -> str:
     """Format web search results into a context string.
 
     Args:
@@ -198,26 +198,25 @@ def format_web_results(results: list[dict], max_chars: int = 4000) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def web_results_to_memory_format(results: list[dict]) -> list[dict]:
+def web_results_to_memory_format(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert web results to the same format as memory search results.
 
     This allows web results to be merged with memory results and
     passed through the reranker.
     """
-    formatted = []
-    for r in results:
-        formatted.append(
-            {
-                "content": f"{r['title']}\n{r['content']}",
-                "content_type": "web_search",
-                "tier": "web",
-                "similarity": min(r.get("score", 0.5), 1.0),
-                "metadata": {"url": r["url"], "source": r["source"]},
-            }
-        )
+    formatted = [
+        {
+            "content": f"{r['title']}\n{r['content']}",
+            "content_type": "web_search",
+            "tier": "web",
+            "similarity": min(r.get("score", 0.5), 1.0),
+            "metadata": {"url": r["url"], "source": r["source"]},
+        }
+        for r in results
+    ]
     return formatted
 
 
-def search_web_sync(query: str, **kwargs) -> list[dict]:
+def search_web_sync(query: str, **kwargs: Any) -> list[dict[str, Any]]:
     """Synchronous wrapper for search_web()."""
     return asyncio.run(search_web(query, **kwargs))
