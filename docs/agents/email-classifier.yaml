@@ -42,6 +42,9 @@ tools_allowed:
   - resolve_task
   - update_task
   - append_to_block
+  - gws_gmail_search
+  - gws_gmail_get
+  - gws_gmail_modify
 tools_denied:
   - message
 bridge_endpoints:
@@ -104,6 +107,7 @@ v2:
     - "^gog gmail thread (get|modify)"
     - "^gog gmail search"
     - "^python3"
+    - "^gws gmail"
   write_path_allowlist:
     - "brain/memory/email-classifier-status.md"
     - "brain/memory/triage-*"

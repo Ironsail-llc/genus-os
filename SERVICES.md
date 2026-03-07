@@ -28,6 +28,15 @@ Logs: `journalctl -u <unit> -f`
 | cloudflared.service | — | — | Cloudflare tunnel (robothor.ai) |
 | tailscaled.service | — | — | Tailscale VPN (ironsail tailnet) |
 
+## CLI Dependencies
+
+| CLI | Install | Purpose |
+|-----|---------|---------|
+| `gog` | Go binary (`go install`) | Legacy Google Workspace CLI (Gmail, Calendar) — used via `exec` tool |
+| `gws` | `npm install -g @googleworkspace/cli` | Google Workspace CLI v0.8+ — native engine tools (`gws_*`), MCP server for Claude Code |
+| `gh` | `apt install gh` | GitHub CLI — used by `create_pull_request` tool |
+| `nlm` | `pip install notebooklm-cli` | NotebookLM CLI — research notebooks |
+
 ## Health Checks
 
 ```bash

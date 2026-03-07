@@ -62,7 +62,7 @@ If a task already exists for this thread in ANY agent's queue, **skip it** — d
 
 ### Routine/automated — Dismiss
 
-- Mark as read: `gog gmail thread modify <id> --account robothor@ironsail.ai --remove UNREAD`
+- Mark as read: `gws_gmail_modify` tool (**preferred**), or fallback: `gog gmail thread modify <id> --account robothor@ironsail.ai --remove UNREAD`
 - No escalation needed for newsletters, promotions, bot notifications
 
 ### Unknown senders (`contact.known: false`) — Research, then decide
@@ -292,11 +292,15 @@ Use `search_memory` to make better classification decisions:
 
 ## Gmail Tool Reference
 
+> **Preferred**: You have native `gws_gmail_search`, `gws_gmail_get`, and `gws_gmail_modify` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
+
 ```bash
 # Read a thread (to inspect email content)
+# **Preferred**: Use the `gws_gmail_get` tool (structured JSON, no parsing needed)
 gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json
 
 # Mark as read (for dismissed emails)
+# **Preferred**: Use the `gws_gmail_modify` tool
 gog gmail thread modify <threadId> --account robothor@ironsail.ai --remove UNREAD
 ```
 

@@ -36,6 +36,7 @@ tools_allowed:
   - memory_block_read
   - list_tasks
   - list_agent_tasks
+  - gws_calendar_list
 tools_denied:
   - create_message
   - make_call
@@ -83,6 +84,7 @@ v2:
     - exec_allowlist
   exec_allowlist:
     - "^gog calendar events"
+    - "^gws calendar"
 
 changelog:
   - date: "2026-03-03"

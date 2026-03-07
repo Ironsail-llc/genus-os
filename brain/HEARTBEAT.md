@@ -32,17 +32,17 @@ Handle each notification silently. `ack_notification(notificationId=<id>)` after
 - Needs changes: `reject_task(id=<taskId>, reason="<issue>", changeRequests=[...])`
 - Unsure: create task with `needs-philip` tag + `requiresHuman=true`
 
-### 2. Task cleanup (skip `requires_human=true` tasks)
+### 2. Task cleanup
 
 - `list_my_tasks` — handle escalations assigned to you
-- Age >48h AND `requiresHuman` is false: `resolve_task(id, resolution="Stale — auto-resolved")`
+- Age >48h with no recent activity: `resolve_task(id, resolution="Stale — auto-resolved")`
 - Self-inflicted agent tasks (Misconfigured, Missing Tool, etc.): resolve if agent status file shows recovery
 - Vision events >6h old: resolve silently
 - Past-date calendar conflicts: resolve silently
 - Duplicates: resolve the newer one
 - `scheduling-link` tasks >72h old and still TODO: resolve as stale, surface in report ("Waiting: [person] hasn't booked yet")
 - `scheduling-booked` tasks assigned to you: move to report's Active section ("Meeting with [person] booked for [time]"), then resolve
-- **Do NOT auto-resolve `requiresHuman=true` tasks during heartbeat** — surface them in "Need You" and let Philip confirm resolution in an interactive session
+- `requiresHuman=true` tasks: surface in "Need You" so Philip sees them. Do not silently auto-resolve during heartbeat. But you CAN and SHOULD resolve them when Philip confirms in Telegram — you have full permission. Never tell Philip to "go to Helm" or "click resolve".
 
 ### 3. Check worker-handoff.json
 

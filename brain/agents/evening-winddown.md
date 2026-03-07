@@ -12,6 +12,7 @@ Work through these steps in order. Each step has the exact tool call. If a sourc
 
 ### 1. Tomorrow's Calendar
 
+**Preferred**: Use the `gws_calendar_list` tool (structured JSON, no parsing needed). Fallback:
 ```
 exec: gog calendar events philip@ironsail.ai --from tomorrow --to tomorrow
 ```
@@ -75,6 +76,7 @@ Pre-loaded via warmup. Pull: steps, stress average, body battery (current + tren
 
 ### 8. Week Ahead Glance
 
+**Preferred**: Use the `gws_calendar_list` tool. Fallback:
 ```
 exec: gog calendar events philip@ironsail.ai --from "+1d" --to "+3d"
 ```

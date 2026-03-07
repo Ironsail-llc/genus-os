@@ -22,7 +22,7 @@ One repo. One CLI. Your hardware.
 
 ## Highlights
 
-**Platform** — 16 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 93 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). Deep reasoning (RLM) with custom tool REPL and context pre-loading. 7 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning, exec allowlist, write path restriction). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC.
+**Platform** — 16 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 101 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). Deep reasoning (RLM) with custom tool REPL and context pre-loading. 7 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning, exec allowlist, write path restriction). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC.
 
 **The Helm** — Not a dashboard, a control plane. Next.js 16 + Dockview with 45 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor service health. Fully extensible component registry.
 
@@ -186,7 +186,7 @@ robothor engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
-The engine provides **93 tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, and more. Each agent sees only the tools in its `tools_allowed` list.
+The engine provides **101 tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, and more. Each agent sees only the tools in its `tools_allowed` list.
 
 ### Agent Engine v2
 
@@ -358,7 +358,7 @@ Always-on camera monitoring with runtime mode switching:
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  Agent Engine                                            │
-│  YAML manifests · workflow pipelines · 93 tools         │
+│  YAML manifests · workflow pipelines · 101 tools         │
 │  APScheduler · Redis Stream hooks · Telegram delivery    │
 │  v2: guardrails · planning · checkpoints · telemetry    │
 │  sub-agents · analytics · Nightwatch                     │

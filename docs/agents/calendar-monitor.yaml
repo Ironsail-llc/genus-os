@@ -37,6 +37,9 @@ tools_allowed:
   - list_my_tasks
   - resolve_task
   - append_to_block
+  - gws_calendar_list
+  - gws_calendar_create
+  - gws_calendar_delete
 tools_denied:
   - create_person
   - update_person
@@ -104,6 +107,7 @@ v2:
   exec_allowlist:
     - "^gog calendar"
     - "^python3"
+    - "^gws calendar"
   write_path_allowlist:
     - "brain/memory/calendar-monitor-status.md"
     - "brain/memory/calendar-log.json"
