@@ -24,9 +24,6 @@ DRAIN_THRESHOLD = 60_000
 # Number of recent messages to always keep verbatim
 KEEP_RECENT = 20
 
-# Model for compression summaries (cheap, fast)
-COMPRESS_MODEL = "gemini/gemini-2.5-flash"
-
 # ── Compression hooks ──────────────────────────────────────────────
 
 _pre_compress_hooks: list[Callable[..., Any]] = []
@@ -66,15 +63,18 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
 def _clear_old_tool_results(
     messages: list[dict[str, Any]], keep_last: int = 10
 ) -> list[dict[str, Any]]:
-    """Replace old tool results with placeholders to save tokens."""
+    """Replace old tool results with semantic summaries to save tokens."""
+    from robothor.engine.compaction import extract_tool_summary
+
     tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     for idx in tool_indices[:-keep_last]:
         content = messages[idx].get("content", "")
         char_count = len(content) if isinstance(content, str) else len(str(content))
         if char_count > 200:
+            summary = extract_tool_summary(content if isinstance(content, str) else str(content))
             messages[idx] = {
                 **messages[idx],
-                "content": f"[tool result: {char_count} chars, cleared]",
+                "content": f"[tool result: {summary}]",
             }
     return messages
 
@@ -88,17 +88,19 @@ async def maybe_compress(
 
     Returns potentially compressed message list. Original list is not modified.
 
+    Delegates to the graduated 4-pass compaction system:
+    1. Tool result thinning (heuristic summaries)
+    2. Structured fact extraction (LLM → retained context)
+    3. Segmented LLM summary (chunked, not lossy single-pass)
+    4. Progressive pruning (drop oldest summaries, keep facts)
+
     Args:
         messages: The conversation messages to potentially compress.
         models: Optional list of models (first is used for summarization).
         threshold: Token threshold for compression. Defaults to COMPRESS_THRESHOLD (80K).
-
-    Strategy:
-    - Keep messages[0] (system prompt) always
-    - Summarize messages[1:-KEEP_RECENT] via a cheap LLM call
-    - Keep last KEEP_RECENT messages verbatim
-    - If LLM summary fails, use a static placeholder
     """
+    from robothor.engine.compaction import compact
+
     compress_at = threshold if threshold is not None else COMPRESS_THRESHOLD
     est = estimate_tokens(messages)
     if est < compress_at:
@@ -120,44 +122,28 @@ async def maybe_compress(
         except Exception as e:
             logger.debug("Pre-compress hook failed: %s", e)
 
-    # First pass: clear old tool results to save tokens without losing structure
-    messages = _clear_old_tool_results(list(messages), keep_last=KEEP_RECENT)
-    cleared_est = estimate_tokens(messages)
-    if cleared_est < DRAIN_THRESHOLD:
-        logger.info(
-            "Tool result clearing sufficient: ~%d → ~%d tokens",
-            est,
-            cleared_est,
-        )
-        return messages
+    # Delegate to graduated compaction
+    result = await compact(
+        messages,
+        models=models,
+        threshold=compress_at,
+        drain_to=DRAIN_THRESHOLD,
+    )
 
-    system_msg = messages[0]
-    old_messages = messages[1:-KEEP_RECENT]
-    recent_messages = messages[-KEEP_RECENT:]
-
-    # Build summary of old messages
-    summary = await _summarize_messages(old_messages, models)
-
-    compressed = [
-        system_msg,
-        {"role": "user", "content": summary},
-        {
-            "role": "assistant",
-            "content": "Understood. I have context from our previous conversation.",
-        },
-        *recent_messages,
-    ]
-
-    new_est = estimate_tokens(compressed)
+    compressed = result.messages
     logger.info(
-        "Compression complete: %d → %d messages, ~%d → ~%d tokens",
+        "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
+        "%d facts extracted, %d passes used",
         len(messages),
         len(compressed),
-        est,
-        new_est,
+        result.tokens_before,
+        result.tokens_after,
+        len(result.facts_extracted),
+        result.passes_used,
     )
 
     # Post-compression hooks (log stats, persist summaries, etc.)
+    summary = f"[Compacted: {result.passes_used} passes, {len(result.facts_extracted)} facts]"
     for hook in _post_compress_hooks:
         try:
             hook(messages, compressed, summary)
@@ -165,67 +151,6 @@ async def maybe_compress(
             logger.debug("Post-compress hook failed: %s", e)
 
     return compressed
-
-
-async def _summarize_messages(
-    messages: list[dict[str, Any]],
-    models: list[str] | None = None,
-) -> str:
-    """Summarize a list of messages via LLM. Falls back to static placeholder."""
-    # Count stats for the fallback message
-    msg_count = len(messages)
-    token_est = estimate_tokens(messages)
-
-    fallback = (
-        f"[Previous conversation: {msg_count} messages, ~{token_est} tokens, details compressed]"
-    )
-
-    # Extract text content for summarization
-    text_parts: list[str] = []
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content")
-        if content and role in ("user", "assistant"):
-            # Truncate very long messages
-            preview = content[:500] if len(content) > 500 else content
-            text_parts.append(f"{role}: {preview}")
-
-    if not text_parts:
-        return fallback
-
-    conversation_text = "\n".join(text_parts[-30:])  # Last 30 entries max
-
-    try:
-        import litellm
-
-        model = COMPRESS_MODEL
-        if models:
-            model = models[0]
-
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Summarize this conversation history in 2-3 paragraphs. "
-                        "Focus on key topics discussed, decisions made, and any "
-                        "pending items. Be concise."
-                    ),
-                },
-                {"role": "user", "content": conversation_text},
-            ],
-            temperature=0.1,
-            max_tokens=500,
-        )
-
-        summary_text = response.choices[0].message.content
-        if summary_text:
-            return f"[Conversation summary]\n{summary_text}"
-    except Exception as e:
-        logger.warning("Context compression LLM call failed: %s", e)
-
-    return fallback
 
 
 def get_context_stats(messages: list[dict[str, Any]]) -> dict[str, Any]:

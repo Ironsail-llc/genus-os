@@ -64,6 +64,7 @@ class StepType(StrEnum):
     REPLAN = "replan"
     ERROR_RECOVERY = "error_recovery"
     DEEP_REASON = "deep_reason"
+    COMPACTION = "compaction"
 
 
 class DeliveryMode(StrEnum):
