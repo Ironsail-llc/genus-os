@@ -95,14 +95,13 @@ All worker agents (Email Classifier, Calendar Monitor, Email Analyst, Email Resp
   - Actions: `start`, `navigate`, `snapshot`, `screenshot`, `act` (click/type/fill/select), `open` (new tab), `tabs`, `close`
 - **Weather** — Direct lookup via web_search
 - **Code** — Development, debugging, automation
-- **Password Vault** — Vaultwarden (self-hosted Bitwarden) for credential and card storage
-  - `vault_list` — list all stored items (names only, no secrets)
-  - `vault_get(name)` — retrieve full item (login creds, card numbers, etc.)
-  - `vault_search(query)` — search by name
-  - `vault_create(name, username, password, uri?, notes?)` — store login credentials
-  - `vault_create_card(name, number, expMonth, expYear, cardholderName?, code?, brand?)` — store credit/debit cards
-  - **When someone asks about passwords, logins, database credentials, or credit cards — ALWAYS use vault_get or vault_search first.** Never say "I don't store credentials" — I DO, in my vault.
-  - **When given credentials or card details to save — ALWAYS use vault_create or vault_create_card.** Don't ask Philip where to put them.
+- **Password Vault** — PostgreSQL-backed encrypted credential store (AES-256-GCM)
+  - `vault_list(category?)` — list all stored keys (no values exposed)
+  - `vault_get(key)` — retrieve a decrypted secret by key
+  - `vault_set(key, value, category?)` — encrypt and store a secret
+  - `vault_delete(key)` — remove a secret
+  - **When someone asks about passwords, logins, or credentials — ALWAYS use vault_get or vault_list first.** Never say "I don't store credentials" — I DO, in my vault.
+  - **When given credentials to save — ALWAYS use vault_set.** Don't ask Philip where to put them. Use descriptive keys like `google/robothor@ironsail.ai` or `aws/access-key`.
 - **CRM** — Native CRM (PostgreSQL crm_* tables) for contacts and conversations
   - `log_interaction` — record conversations across channels
   - `create_person`, `list_people` — contact management

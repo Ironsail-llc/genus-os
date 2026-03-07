@@ -37,7 +37,6 @@ _ENV_OVERRIDES = {
     "redis": "REDIS_URL",
     "gateway": "GATEWAY_URL",
     "searxng": "SEARXNG_URL",
-    "vaultwarden": "VAULTWARDEN_URL",
     "impetus_one": "IMPETUS_ONE_BASE_URL",
     "helm": "HELM_URL",
     "mediamtx": "RTSP_URL",

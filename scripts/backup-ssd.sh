@@ -81,7 +81,7 @@ fi
 
 # ── PostgreSQL dumps (30-day retention) ─────────────────────────
 
-for db in robothor_memory vaultwarden; do
+for db in robothor_memory; do
     DUMP_FILE="$BACKUP_ROOT/db/${db}-${DATE}.sql.gz"
     if [ ! -f "$DUMP_FILE" ]; then
         pg_dump "$db" 2>> "$LOG" | gzip > "$DUMP_FILE"
@@ -96,13 +96,7 @@ find "$BACKUP_ROOT/db" -name "*.sql.gz" -mtime +30 -delete 2>> "$LOG"
 
 # ── Docker volumes ──────────────────────────────────────────────
 
-for vol in crm_vaultwarden-data; do
-    VOLPATH=$(sudo docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null) || true
-    if [ -n "$VOLPATH" ] && [ -d "$VOLPATH" ]; then
-        sudo rsync -a --delete "$VOLPATH/" "$BACKUP_ROOT/docker-volumes/$vol/" 2>> "$LOG"
-        log "  Docker volume: $vol"
-    fi
-done
+# (Docker volume backups removed — no persistent volumes needing backup)
 
 # ── Ollama models ────────────────────────────────────────────────
 
@@ -114,22 +108,7 @@ fi
 
 # ── Docker images (saved as tarballs) ───────────────────────────
 
-for img in vaultwarden/server:latest; do
-    SAFE_NAME=$(echo "$img" | tr '/:' '_')
-    TAR_FILE="$BACKUP_ROOT/docker-images/${SAFE_NAME}.tar"
-    # Only re-export if image ID changed (check via digest)
-    IMG_ID=$(sudo docker image inspect "$img" --format '{{.Id}}' 2>/dev/null) || true
-    ID_FILE="$BACKUP_ROOT/docker-images/${SAFE_NAME}.id"
-    PREV_ID=""
-    [ -f "$ID_FILE" ] && PREV_ID=$(cat "$ID_FILE")
-    if [ -n "$IMG_ID" ] && [ "$IMG_ID" != "$PREV_ID" ]; then
-        sudo docker save "$img" -o "$TAR_FILE" 2>> "$LOG"
-        echo "$IMG_ID" > "$ID_FILE"
-        log "  Docker image: $img ($(du -sh "$TAR_FILE" | cut -f1))"
-    elif [ -f "$TAR_FILE" ]; then
-        log "  Docker image: $img — unchanged, skipping"
-    fi
-done
+# (Docker image backups removed — no custom images needing backup)
 
 # ── Manifests ────────────────────────────────────────────────────
 
@@ -145,7 +124,7 @@ ollama list > "$BACKUP_ROOT/latest/ollama-models.txt" 2>> "$LOG"
     du -sh "$BACKUP_ROOT/latest"/* "$BACKUP_ROOT/db" "$BACKUP_ROOT/docker-volumes" "$BACKUP_ROOT/ollama" "$BACKUP_ROOT/docker-images" 2>/dev/null | sort -rh
     echo ""
     echo "## Database Dumps (today)"
-    for db in robothor_memory vaultwarden; do
+    for db in robothor_memory; do
         DUMP_FILE="$BACKUP_ROOT/db/${db}-${DATE}.sql.gz"
         if [ -f "$DUMP_FILE" ]; then
             SIZE=$(du -sh "$DUMP_FILE" | cut -f1)
@@ -155,11 +134,7 @@ ollama list > "$BACKUP_ROOT/latest/ollama-models.txt" 2>> "$LOG"
     done
     echo ""
     echo "## Docker Volumes"
-    for vol in crm_vaultwarden-data; do
-        if [ -d "$BACKUP_ROOT/docker-volumes/$vol" ]; then
-            echo "  $vol: $(du -sh "$BACKUP_ROOT/docker-volumes/$vol" | cut -f1)"
-        fi
-    done
+    echo "  (none)"
     echo ""
     echo "## SSD Space"
     df -h "$SSD_MOUNT" | tail -1

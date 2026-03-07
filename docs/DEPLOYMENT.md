@@ -111,7 +111,6 @@ Structured audit trail across all operations:
 | TTS | 8880 | Kokoro local voice synthesis |
 | Webcam | 8554/8890 | RTSP + HLS stream |
 | Uptime Kuma | 3010 | Service monitoring |
-| Vaultwarden | 8222 | Password vault |
 
 All services managed by systemd with auto-restart. Cloudflare tunnel for external access with Zero Trust policies.
 

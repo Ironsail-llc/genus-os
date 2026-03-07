@@ -110,6 +110,11 @@ tools_allowed:
   # Sub-agent spawning tools
   - spawn_agent
   - spawn_agents
+  # Vault (credential store)
+  - vault_get
+  - vault_set
+  - vault_list
+  - vault_delete
 tools_denied: []
 
 streams:

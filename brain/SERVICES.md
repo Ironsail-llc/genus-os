@@ -17,15 +17,25 @@ Logs: `journalctl -u <unit> -f`
 | robothor-dashboard.service | 3003 | brain/dashboard | Ops dashboard (ops.robothor.ai) |
 | robothor-privacy.service | 3002 | brain/privacy-policy | Privacy policy (privacy.robothor.ai) |
 | robothor-transcript.service | — | brain/memory_system | Voice transcript watcher |
-| robothor-crm.service | 3010, 8222, 8880 | crm/ | Docker Compose: Vaultwarden, Uptime Kuma, Kokoro TTS (3 containers) |
+| robothor-crm.service | 3010, 8880 | crm/ | Docker Compose: Uptime Kuma, Kokoro TTS (2 containers) |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
 | bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
+| engine-watchdog.timer | — | scripts/ | Self-healing watchdog: checks engine every 2min, direct Telegram alert + auto-restart on 2 failures |
 | robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.robothor.ai) |
 | smbd.service | 445 | — | Samba file sharing (local network + Tailscale only) |
 | nmbd.service | 137-138 | — | NetBIOS name service for Samba |
-| robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks |
+| robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
 | cloudflared.service | — | — | Cloudflare tunnel (robothor.ai) |
 | tailscaled.service | — | — | Tailscale VPN (ironsail tailnet) |
+
+## CLI Dependencies
+
+| CLI | Install | Purpose |
+|-----|---------|---------|
+| `gog` | Go binary (`go install`) | Legacy Google Workspace CLI (Gmail, Calendar) — used via `exec` tool |
+| `gws` | `npm install -g @googleworkspace/cli` | Google Workspace CLI v0.8+ — native engine tools (`gws_*`), MCP server for Claude Code |
+| `gh` | `apt install gh` | GitHub CLI — used by `create_pull_request` tool |
+| `nlm` | `pip install notebooklm-cli` | NotebookLM CLI — research notebooks |
 
 ## Health Checks
 
@@ -69,9 +79,6 @@ curl -s http://localhost:9100/health | jq .
 # Helm (business layer app)
 curl -s -o /dev/null -w "%{http_code}" http://localhost:3004/api/health && echo " OK"
 
-# Vaultwarden
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8222 && echo " OK"
-
 # Uptime Kuma
 curl -s -o /dev/null -w "%{http_code}" http://localhost:3010 && echo " OK"
 
@@ -111,7 +118,6 @@ psql -d robothor_memory -c "SELECT count(*) FROM long_term_memory;" 2>/dev/null
 | orchestrator.robothor.ai | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
 | vision.robothor.ai | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
 | monitor.robothor.ai | localhost:3010 | Cloudflare Access (email OTP) | Uptime Kuma monitoring |
-| vault.robothor.ai | localhost:8222 | Cloudflare Access (email OTP) | Vaultwarden password vault |
 | app.robothor.ai | localhost:3004 | Cloudflare Access (email OTP) | Helm — live dashboard |
 
 All camera/vision ports (`8554`, `8889`, `8890`, `8600`) are bound to `127.0.0.1`. External access to the webcam is only possible through the Cloudflare tunnel with Zero Trust authentication.
@@ -210,6 +216,6 @@ done
 # 2. If orchestrator didn't start (depends on ollama + postgres + docker)
 sudo systemctl restart robothor-orchestrator
 
-# 3. If Docker containers are down (Vaultwarden, Uptime Kuma, Kokoro TTS)
+# 3. If Docker containers are down (Uptime Kuma, Kokoro TTS)
 sudo systemctl restart robothor-crm
 ```
