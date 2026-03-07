@@ -44,7 +44,7 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 | Viewing the webcam | `https://cam.robothor.ai/webcam/` (Cloudflare Access) |
 | Changing cron behavior | `brain/CRON_DESIGN.md` + `docs/agents/*.yaml` manifests + `docs/CRON_MAP.md` |
 | Understanding memory/RAG | `brain/memory_system/MEMORY_SYSTEM.md` |
-| Sending emails or calendar | `brain/TOOLS.md` (gog CLI section) |
+| Sending emails or calendar | `brain/TOOLS.md` (gws native tools + gog CLI fallback) |
 | Voice calling | `brain/TOOLS.md` (voice section) + `brain/voice-server/` |
 | Cloudflare tunnel routes | `brain/TOOLS.md` (Cloudflare section) |
 | Adding new tunnel subdomain | `brain/TOOLS.md` (Cloudflare section — 4-step workflow) |

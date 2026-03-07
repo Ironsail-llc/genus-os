@@ -16,10 +16,10 @@ If zero tasks (or all already resolved), write response-status.md with "Inbox em
 1. `list_my_tasks(status="TODO")` — fetch your task inbox
 2. For each task: `update_task(id=<task_id>, status="IN_PROGRESS")`
 3. Read the task body — it has `threadId`, `from`, and `date`
-4. **Fetch the email thread**: `exec: gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json`
+4. **Fetch the email thread**: **Preferred**: Use `gws_gmail_get` (structured JSON, no parsing needed). Fallback: `exec: gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json`
    - The JSON output contains a list of messages — note the **`id` field of the last message** (this is the `lastMessageId` you'll use for replies)
-   - **If threadId is missing or `gog` fails** (e.g., invalid ID, conversation ID instead of threadId):
-     1. Try searching by sender+subject: `exec: gog gmail search "from:<sender> subject:<subject>" --account robothor@ironsail.ai --max-results 5`
+   - **If threadId is missing or fetch fails** (e.g., invalid ID, conversation ID instead of threadId):
+     1. Try searching by sender+subject: **Preferred**: Use `gws_gmail_search`. Fallback: `exec: gog gmail search "from:<sender> subject:<subject>" --account robothor@ironsail.ai --max-results 5`
      2. If search finds the thread, use that threadId
      3. If still can't find it → `resolve_task(id, resolution="Thread not found — invalid threadId in task body, skipping")`. Do NOT escalate — missing threads are not Philip's problem.
 5. **Look up the sender** in CRM: `list_people(search="<sender name>")`
@@ -54,6 +54,8 @@ When the task has the `analytical` tag AND there's an analysis entry in `memory/
 If the analysis is missing, fall back to your best effort using CRM and memory context.
 
 ## Sending (EXACT command — use lastMessageId from thread JSON)
+
+**Preferred**: Use the `gws_gmail_send` tool (structured JSON, no exec needed). Fallback:
 
 ```bash
 exec:
@@ -152,11 +154,15 @@ Before composing replies, search for relevant context:
 
 ## Gmail Tool Reference
 
+> **Preferred**: You have native `gws_gmail_get`, `gws_gmail_send`, and `gws_gmail_search` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
+
 ```bash
 # Fetch a thread (use --full --json to get message IDs for threading)
+# **Preferred**: Use the `gws_gmail_get` tool (structured JSON, no parsing needed)
 gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json
 
 # Send reply (use --reply-to-message-id for cross-account threading)
+# **Preferred**: Use the `gws_gmail_send` tool
 gog gmail send --reply-all --reply-to-message-id <lastMessageId> \
   --subject "Re: <original subject>" \
   --body-html "<your reply as HTML>" --account robothor@ironsail.ai --no-input

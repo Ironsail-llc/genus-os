@@ -53,6 +53,37 @@ Key flags: `--summary`, `--from`/`--to` (RFC3339 with timezone offset — **alwa
 
 ---
 
+## Google Workspace (gws — Native Tools)
+
+**Preferred over gog+exec.** These are first-class engine tools that return structured JSON — no text parsing or regex needed.
+
+### Gmail
+
+| Tool | Purpose |
+|------|---------|
+| `gws_gmail_search` | Search inbox with Gmail query syntax (e.g. `is:unread from:alice newer_than:1d`) |
+| `gws_gmail_get` | Get a message or thread by ID (returns headers, body, labels) |
+| `gws_gmail_send` | Send a new email or reply to a thread |
+| `gws_gmail_modify` | Add/remove labels (mark read/unread, archive, star) |
+
+### Calendar
+
+| Tool | Purpose |
+|------|---------|
+| `gws_calendar_list` | List events in a date range (returns structured event data) |
+| `gws_calendar_create` | Create a calendar event with attendees, location, description |
+| `gws_calendar_delete` | Delete a calendar event by ID |
+
+### Google Chat
+
+| Tool | Purpose |
+|------|---------|
+| `gws_chat_send` | Send a message to a Google Chat space |
+
+> **Migration note:** `gog` CLI commands via `exec` still work as fallback. Use `gws_*` tools when available — they're faster, return structured data, and don't need shell parsing.
+
+---
+
 ## Web & Browser Tools
 
 **You have full internet access. NEVER tell Philip to open a browser or visit a URL — do it yourself.**

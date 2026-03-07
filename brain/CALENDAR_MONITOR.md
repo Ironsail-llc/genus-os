@@ -185,17 +185,22 @@ Example: `"calendar-monitor: Processed 4 calendar items, 1 conflict escalated"`
 
 ## Calendar Tool Reference
 
+> **Preferred**: You have native `gws_calendar_list`, `gws_calendar_create`, and `gws_calendar_delete` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
+
 ```bash
 # List events (for conflict detection)
+# **Preferred**: Use the `gws_calendar_list` tool
 gog calendar list philip@ironsail.ai --account robothor@ironsail.ai --json --from today --to tomorrow
 
 # Create event (if needed) — derive offset dynamically
+# **Preferred**: Use the `gws_calendar_create` tool
 OFFSET=$(date +%:z)
 gog calendar create philip@ironsail.ai --account robothor@ironsail.ai --json \
   --summary "Title" --from "2026-02-23T15:00:00${OFFSET}" --to "2026-02-23T16:00:00${OFFSET}" \
   --description "Notes" --attendees "person@example.com" --with-meet
 
 # Delete event
+# **Preferred**: Use the `gws_calendar_delete` tool
 gog calendar delete philip@ironsail.ai <eventId> --account robothor@ironsail.ai --force
 ```
 

@@ -15,7 +15,7 @@
 2. If zero tasks: write status file and stop
 3. For each task: `update_task(id=<task_id>, status="IN_PROGRESS")`
 4. Read the `threadId` from the task body
-5. Fetch the email thread: `exec: gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json`
+5. Fetch the email thread: **Preferred**: Use `gws_gmail_get` (structured JSON, no parsing needed). Fallback: `exec: gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json`
 6. Produce a structured analysis (see below)
 7. Write findings to `memory/response-analysis.json` keyed by threadId
 8. **Create a follow-up task for the responder:**

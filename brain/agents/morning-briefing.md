@@ -12,6 +12,7 @@ Work through these steps in order. Each step has the exact tool call. If a sourc
 
 ### 1. Today's Calendar
 
+**Preferred**: Use the `gws_calendar_list` tool (structured JSON, no parsing needed). Fallback:
 ```
 exec: gog calendar events philip@ironsail.ai --from today --to today
 ```
@@ -73,6 +74,7 @@ If the Nightwatch system created overnight PRs, summarize them: count, titles, r
 
 ### 8. Week Preview
 
+**Preferred**: Use the `gws_calendar_list` tool. Fallback:
 ```
 exec: gog calendar events philip@ironsail.ai --from tomorrow --to "+7d"
 ```

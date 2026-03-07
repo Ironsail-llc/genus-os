@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gws": {
+      "command": "gws",
+      "args": ["mcp", "-s", "gmail,calendar,chat,drive", "--tool-mode", "compact"]
+    }
+  }
+}
