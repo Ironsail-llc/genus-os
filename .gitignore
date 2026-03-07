@@ -116,6 +116,9 @@ brain/memory/contacts.json
 brain/memory/tasks.json
 brain/memory/overnight-pr-status.md
 
+# Vault master key
+.vault-key
+
 # Claude Code artifacts
 .claude/
 .plan

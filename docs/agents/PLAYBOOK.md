@@ -362,7 +362,7 @@ Policy changes do NOT auto-propagate. The AI decides which agents need updating.
 | Max iterations (default) | 20 — override per-agent via `schedule.max_iterations` |
 | Max iterations (guideline) | 5 for simple checkers, 8-10 for processors, 15 for complex agents, 30 for interactive |
 | Output limit | <500 chars, emoji prefix. Workers write status file and stop silently. |
-| Credentials | NEVER hardcode. Env vars via SOPS → `/run/robothor/secrets.env`. |
+| Credentials | NEVER hardcode. Infra: env vars via SOPS → `/run/robothor/secrets.env`. Agent-accessible: `vault_get`/`vault_set` (PostgreSQL vault). |
 | Status files | MANDATORY every run. Heartbeat considers >35min = stale. |
 | Bootstrap budget | 12,000 chars per file, 30,000 chars total |
 

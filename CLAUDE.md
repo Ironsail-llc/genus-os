@@ -73,6 +73,7 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 | Rolling back an agent | `docs/agents/PLAYBOOK.md` (section 4.3) |
 | Agent validation | `python scripts/validate_agents.py` |
 | Workflow engine | `docs/agents/PLAYBOOK.md` (section 8) + `docs/workflows/*.yaml` + `robothor/engine/workflow.py` |
+| Vault / credential storage | `robothor/vault/` + `brain/TOOLS.md` (Vault section) |
 | Updating documentation | This file (Doc Maintenance section below) |
 
 ## Doc Maintenance
@@ -89,4 +90,5 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | New Cloudflare route | `INFRASTRUCTURE.md` (tunnel table), `SERVICES.md` (external access table) |
 | New database table | `INFRASTRUCTURE.md` |
 | New interactive mode | `brain/TOOLS.md`, `brain/AGENTS.md`, `CLAUDE.md` (reading guide), `SERVICES.md` (endpoints) |
+| Vault credential changes | `brain/TOOLS.md` (Vault section), `INFRASTRUCTURE.md` (Secrets Management) |
 | Deployment/fix with gotchas | Auto-memory `MEMORY.md` (session-to-session learning) |

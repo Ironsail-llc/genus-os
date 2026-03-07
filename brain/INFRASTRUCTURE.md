@@ -46,10 +46,9 @@ Config: `tunnel/config.yml`
 | orchestrator.robothor.ai | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
 | vision.robothor.ai | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
 | monitor.robothor.ai | localhost:3010 | Cloudflare Access (email OTP) | Uptime Kuma monitoring |
-| vault.robothor.ai | localhost:8222 | Cloudflare Access (email OTP) | Vaultwarden password vault |
 | * (catch-all) | http_status:404 | — | — |
 
-**Cloudflare Access (Zero Trust):** 8 apps protected with email OTP — only `philip@ironsail.ai` and `robothor@ironsail.ai` can access. 24h sessions. Protected apps: cam, gateway, ops, bridge, orchestrator, vision, monitor, vault.
+**Cloudflare Access (Zero Trust):** 7 apps protected with email OTP — only `philip@ironsail.ai` and `robothor@ironsail.ai` can access. 24h sessions. Protected apps: cam, ops, bridge, orchestrator, vision, monitor, engine.
 
 API tokens documented in `brain/TOOLS.md` (tunnel-edit, DNS-edit, Access-edit).
 
@@ -106,14 +105,10 @@ User: `philip` (local peer auth) + `postgres` (legacy tables)
 | health_training_status | philip | Training load, VO2max, recovery (DATE PK) |
 | health_activities | philip | GPS activities — runs, rides, etc. (BIGINT PK = activity_id) |
 | health_sync_log | philip | Garmin sync audit trail (SERIAL PK) |
+| vault_secrets | philip | Encrypted credential store (AES-256-GCM, agent-accessible) |
 | audit_log | postgres | System audit trail |
 
 Embeddings: 1024-dim vectors via Qwen3-Embedding, indexed with pgvector ivfflat.
-
-### vaultwarden
-
-Used by Vaultwarden Docker container. Self-hosted password vault.
-Web UI: `vault.robothor.ai` (Cloudflare Access protected)
 
 ## Redis
 
@@ -196,7 +191,17 @@ Deep reference: `brain/TOOLS.md` (Voice & Calling section)
 
 **Age public key:** `age186mguvnypf7mun49dhn83cm59dva4vvdv3lp2sjch4jj4vdhhalq6uwgt3`
 
-**Credentials stored (~30 keys):** GOG keyring, Telegram bot token + chat ID, PostgreSQL password, GitHub token, Jira token, Cloudflare account email + tunnel/DNS/Access tokens + account/tunnel IDs, ElevenLabs key, N8N keys (API, REST JWT, MCP JWT), OpenAI/OpenRouter/Anthropic/Gemini API keys, gateway token, Vaultwarden admin token, Samba password.
+**Credentials stored (~28 keys):** GOG keyring, Telegram bot token + chat ID, PostgreSQL password, GitHub token, Jira token, Cloudflare account email + tunnel/DNS/Access tokens + account/tunnel IDs, ElevenLabs key, N8N keys (API, REST JWT, MCP JWT), OpenAI/OpenRouter/Anthropic/Gemini API keys, gateway token, Samba password.
+
+### PostgreSQL Vault (agent-accessible credential store)
+
+| Component | Path | Permissions |
+|-----------|------|-------------|
+| Master key | `.vault-key` (project root) | philip:philip 600, gitignored |
+| Table | `vault_secrets` in `robothor_memory` | AES-256-GCM encrypted values |
+| Package | `robothor/vault/` | `get`, `set`, `delete`, `list`, `export_env` |
+
+Agents access credentials via `vault_get(key)` and `vault_set(key, value)` tools. SOPS is for infra env vars decrypted at boot; the vault is for runtime credential storage.
 
 **How it works:**
 - `scripts/decrypt-secrets.sh` decrypts JSON → KEY=VALUE env file at `/run/robothor/secrets.env`
@@ -268,7 +273,6 @@ Now managed by: `robothor-orchestrator.service` (auto-starts)
 
 | Container | Image | Port | Purpose |
 |-----------|-------|------|---------|
-| vaultwarden | vaultwarden/server:latest | 8222 | Password vault (Vaultwarden) |
 | uptime-kuma | louislam/uptime-kuma:1 | 3010 | Service monitoring (Uptime Kuma) |
 | kokoro-tts | ghcr.io/remsky/kokoro-fastapi | 8880 | Local TTS (Kokoro) |
 
@@ -384,10 +388,9 @@ OpenClaw agent sessions (cron jobs, Telegram, Google Chat) can't use MCP servers
 | `list_my_tasks` | GET /api/tasks/agent/{agent_id} | mcp__robothor-memory__list_agent_tasks |
 | `resolve_task` | POST /api/tasks/{id}/resolve | mcp__robothor-memory__resolve_task |
 | `crm_health` | GET /health | — |
-| `vault_list` | GET /api/vault | — |
-| `vault_get` | GET /api/vault/{name} | — |
-| `vault_search` | GET /api/vault/search | — |
-| `vault_create` | POST /api/vault | — |
-| `vault_create_card` | POST /api/vault/card | — |
+| `vault_get` | *(direct DAL — PostgreSQL vault)* | — |
+| `vault_set` | *(direct DAL — PostgreSQL vault)* | — |
+| `vault_list` | *(direct DAL — PostgreSQL vault)* | — |
+| `vault_delete` | *(direct DAL — PostgreSQL vault)* | — |
 
 Tool names are intentionally identical between MCP and plugin so agent instructions (HEARTBEAT.md, AGENTS.md, jobs.json) work unchanged regardless of runtime.

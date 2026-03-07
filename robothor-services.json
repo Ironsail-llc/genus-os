@@ -120,15 +120,6 @@
       "tunnel_route": null,
       "dependencies": []
     },
-    "vaultwarden": {
-      "name": "Vaultwarden",
-      "port": 8222,
-      "host": "127.0.0.1",
-      "health": "/alive",
-      "systemd_unit": null,
-      "tunnel_route": "vault.robothor.ai",
-      "dependencies": ["postgres"]
-    },
     "uptime_kuma": {
       "name": "Uptime Kuma",
       "port": 3010,

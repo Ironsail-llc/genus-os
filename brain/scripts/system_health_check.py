@@ -5,8 +5,8 @@ System Health Check — hourly comprehensive monitoring.
 Checks 8 categories:
 - systemd services (all robothor + cloudflared + mediamtx)
 - HTTP endpoints (bridge, orchestrator, vision, ollama, status x2)
-- Docker containers (vaultwarden, uptime-kuma, kokoro-tts)
-- PostgreSQL databases (robothor_memory, vaultwarden)
+- Docker containers (uptime-kuma, kokoro-tts)
+- PostgreSQL databases (robothor_memory)
 - CRM native tables (crm_people in robothor_memory)
 - Redis
 - Gmail auth (gog gmail search returns valid JSON)
@@ -90,7 +90,7 @@ HTTP_ENDPOINTS = _build_http_endpoints()
 
 DOCKER_CONTAINERS = []
 
-PG_DATABASES = ["robothor_memory", "vaultwarden"]
+PG_DATABASES = ["robothor_memory"]
 
 GOG_PASSWORD = os.environ["GOG_KEYRING_PASSWORD"]
 ACCOUNT = "robothor@ironsail.ai"

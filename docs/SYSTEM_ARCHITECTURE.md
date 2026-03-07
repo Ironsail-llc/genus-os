@@ -160,7 +160,7 @@ All services are **system-level systemd units** (`/etc/systemd/system/`), manage
 | Dashboard | robothor-status-dashboard.service | 3001 | Node.js | status.robothor.ai |
 | Ops dashboard | robothor-dashboard.service | 3003 | Node.js | ops.robothor.ai |
 | Privacy policy | robothor-privacy.service | 3002 | Node.js | privacy.robothor.ai |
-| CRM stack | robothor-crm.service | 3010, 8222, 8880 | Docker Compose | Vaultwarden, Uptime Kuma, Kokoro TTS |
+| CRM stack | robothor-crm.service | 3010, 8880 | Docker Compose | Uptime Kuma, Kokoro TTS |
 | Bridge | robothor-bridge.service | 9100 | Python/FastAPI | Contact resolution, webhooks, REST proxy |
 | Agent Engine | robothor-engine.service | 18800 | Python/FastAPI | Agent orchestration, Telegram, cron scheduler |
 | Transcript watcher | robothor-transcript.service | — | Python | Voice transcript processing |
@@ -218,8 +218,7 @@ Two databases on the same instance:
 
 | Database | Owner | Purpose |
 |----------|-------|---------|
-| `robothor_memory` | philip | Facts, entities, contacts, memory blocks, ingestion state, CRM data |
-| `vaultwarden` | philip | Vaultwarden password vault |
+| `robothor_memory` | philip | Facts, entities, contacts, memory blocks, ingestion state, CRM data, vault secrets |
 
 **Key tables in `robothor_memory`:**
 
@@ -638,8 +637,8 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 | Project directories | `brain/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
 | Config directories | `.config/robothor/`, `.cloudflared/` |
 | Credentials | `.bashrc`, `crm/.env` |
-| Databases | 2x `pg_dump`: robothor\_memory, vaultwarden |
-| Docker volumes | vaultwarden-data, uptime-kuma-data |
+| Databases | `pg_dump`: robothor\_memory |
+| Docker volumes | uptime-kuma-data |
 | System state | crontab export, Ollama model list, systemd service files |
 | Verification | SHA256 manifest of all backed-up files |
 
@@ -666,7 +665,7 @@ robothor/                                 Project root (git repo)
 │   └── backup.log
 │
 ├── crm/                                  CRM stack
-│   ├── docker-compose.yml                Vaultwarden + Uptime Kuma + Kokoro TTS
+│   ├── docker-compose.yml                Uptime Kuma + Kokoro TTS
 │   ├── .env                              Docker secrets
 │   ├── migrate_contacts.py               Contact migration tool
 │   ├── contact_id_map.json               Migration mapping

@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-from models import (
+from models import (  # noqa: TC002 — used at runtime by FastAPI
     LogInteractionRequest,
     ResolveContactRequest,
-    VaultCreateCardRequest,
-    VaultCreateLoginRequest,
 )
 
 from robothor.audit.logger import log_event
 from robothor.events.bus import publish
 
-# Lazy-loaded vault client
-_vault_client = None
 # Lazy-loaded Impetus MCP client
 _impetus_mcp = None
 
@@ -103,76 +98,29 @@ async def log_interaction(body: LogInteractionRequest):
     return {"status": "ok", "contact": body.contact_name, "resolved": bool(person_id)}
 
 
-# ─── Vault ───────────────────────────────────────────────────────────────
-
-
-def _get_vault():
-    global _vault_client
-    if _vault_client is None:
-        import sys
-
-        sys.path.insert(0, os.path.expanduser("~/robothor/brain/scripts"))
-        from vault_client import VaultClient
-
-        _vault_client = VaultClient()
-        _vault_client.login()
-    return _vault_client
+# ─── Vault (PostgreSQL-backed) ────────────────────────────────────────────
 
 
 @router.get("/api/vault/list")
-async def api_vault_list():
+async def api_vault_list(category: str | None = None):
     try:
-        return {"items": _get_vault().list_items()}
+        from robothor.vault import list as vault_list
+
+        keys = vault_list(category=category)
+        return {"keys": keys}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/api/vault/get")
-async def api_vault_get(name: str = Query(..., description="Item name")):
+async def api_vault_get(key: str = Query(..., description="Secret key")):
     try:
-        item = _get_vault().get_item(name)
-        if item:
-            return item
-        return JSONResponse({"error": f"No item matching '{name}'"}, status_code=404)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        from robothor.vault import get as vault_get
 
-
-@router.get("/api/vault/search")
-async def api_vault_search(q: str = Query(..., description="Search query")):
-    try:
-        return {"items": _get_vault().search(q)}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@router.post("/api/vault/create")
-async def api_vault_create(body: VaultCreateLoginRequest):
-    try:
-        return _get_vault().create_login(
-            name=body.name,
-            username=body.username,
-            password=body.password,
-            uri=body.uri,
-            notes=body.notes,
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@router.post("/api/vault/create_card")
-async def api_vault_create_card(body: VaultCreateCardRequest):
-    try:
-        return _get_vault().create_card(
-            name=body.name,
-            cardholderName=body.cardholderName,
-            number=body.number,
-            expMonth=body.expMonth,
-            expYear=body.expYear,
-            code=body.code,
-            brand=body.brand,
-            notes=body.notes,
-        )
+        value = vault_get(key)
+        if value is not None:
+            return {"key": key, "value": value}
+        return JSONResponse({"error": f"No secret with key '{key}'"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
