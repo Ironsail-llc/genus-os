@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -500,30 +500,30 @@ class TestArmedMode:
 
 class TestDepartureTracking:
     def test_departure_removes_stale(self, service):
-        old_time = (datetime.now() - timedelta(seconds=120)).isoformat()
+        old_time = (datetime.now(tz=UTC) - timedelta(seconds=120)).isoformat()
         service.people_present = {
             "Alice": {"last_seen": old_time, "arrived_at": old_time},
         }
         service.person_gone_timeout = 60
-        service._track_departures(datetime.now().isoformat())
+        service._track_departures(datetime.now(tz=UTC).isoformat())
         assert "Alice" not in service.people_present
 
     def test_departure_keeps_recent(self, service):
-        recent = datetime.now().isoformat()
+        recent = datetime.now(tz=UTC).isoformat()
         service.people_present = {
             "Alice": {"last_seen": recent, "arrived_at": recent},
         }
-        service._track_departures(datetime.now().isoformat())
+        service._track_departures(datetime.now(tz=UTC).isoformat())
         assert "Alice" in service.people_present
 
     def test_departure_skips_internal_keys(self, service):
         """Internal keys (starting with _) are skipped by departure tracking."""
-        old_time = (datetime.now() - timedelta(seconds=120)).isoformat()
+        old_time = (datetime.now(tz=UTC) - timedelta(seconds=120)).isoformat()
         service.people_present = {
             "_person_no_face": {"last_seen": old_time, "arrived_at": old_time},
         }
         service.person_gone_timeout = 60
-        service._track_departures(datetime.now().isoformat())
+        service._track_departures(datetime.now(tz=UTC).isoformat())
         # Internal keys are skipped (continue), so they stay in people_present
         assert "_person_no_face" in service.people_present
 
