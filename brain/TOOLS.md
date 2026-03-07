@@ -258,6 +258,38 @@ Returns: `call_sid`, `status` (initiated/ringing/in-progress/completed)
 
 ---
 
+## Vault (Credential Store)
+
+PostgreSQL-backed encrypted credential store. AES-256-GCM encryption with a 32-byte master key at `.vault-key`.
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `vault_get(key)` | Retrieve and decrypt a secret by key |
+| `vault_set(key, value, category?)` | Encrypt and store a secret (upsert) |
+| `vault_list(category?)` | List all keys (no values exposed) |
+| `vault_delete(key)` | Remove a secret |
+
+### Key Naming Convention
+
+Use descriptive, hierarchical keys:
+- `google/robothor@ironsail.ai` — Google account password
+- `aws/access-key` — AWS access key
+- `db/staging/password` — database credential
+- `api/twilio/auth-token` — API token
+
+### When to Use Vault vs SOPS
+
+| Use Case | System |
+|----------|--------|
+| API keys/tokens for systemd services | **SOPS** — decrypted at boot to tmpfs, available as env vars |
+| Credentials agents need at runtime | **Vault** — agents call `vault_get` during execution |
+| Passwords Philip gives you to save | **Vault** — use `vault_set` immediately |
+| Infrastructure secrets (PG password, etc.) | **SOPS** — needed before any service starts |
+
+---
+
 ## What Goes Here
 
 Environment-specific notes: camera names, SSH hosts, preferred TTS voices, device nicknames. Keep it minimal — agents read this file every run.

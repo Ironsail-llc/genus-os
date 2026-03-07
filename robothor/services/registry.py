@@ -33,7 +33,6 @@ _ENV_OVERRIDES = {
     "ollama": "OLLAMA_URL",
     "redis": "REDIS_URL",
     "searxng": "SEARXNG_URL",
-    "vaultwarden": "VAULTWARDEN_URL",
     "helm": "HELM_URL",
     "mediamtx": "RTSP_URL",
 }

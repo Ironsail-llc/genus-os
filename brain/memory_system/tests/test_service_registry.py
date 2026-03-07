@@ -179,8 +179,8 @@ class TestSystemdUnit:
         assert get_systemd_unit("helm") == "robothor-app.service"
 
     def test_docker_service_has_no_unit(self):
-        # Docker-managed services (vaultwarden, kokoro) don't have systemd units
-        assert get_systemd_unit("vaultwarden") is None
+        # Docker-managed services (kokoro) don't have systemd units
+        assert get_systemd_unit("kokoro_tts") is None
 
     def test_unknown_service_returns_none(self):
         assert get_systemd_unit("nonexistent") is None

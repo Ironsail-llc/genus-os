@@ -33,7 +33,6 @@ const ENV_OVERRIDES: Record<string, string> = {
   ollama: "OLLAMA_URL",
   redis: "REDIS_URL",
   searxng: "SEARXNG_URL",
-  vaultwarden: "VAULTWARDEN_URL",
   impetus_one: "IMPETUS_ONE_BASE_URL",
   helm: "HELM_URL",
 };

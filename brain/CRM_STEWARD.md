@@ -377,9 +377,9 @@ Use RAG to enhance enrichment and dedup decisions:
 ## Password Vault Tools
 
 When you need credentials for enrichment research or CRM operations:
-- `vault_list()` — List all vault items
-- `vault_get(name)` — Get item by name (partial match, returns full details)
-- `vault_search(query)` — Search vault items
+- `vault_list(category?)` — List all vault keys
+- `vault_get(key)` — Get a decrypted secret by key
+- `vault_set(key, value, category?)` — Store a secret
 
 ---
 

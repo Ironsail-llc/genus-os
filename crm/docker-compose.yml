@@ -2,35 +2,11 @@
 # This file is kept for backward compatibility with Philip's running system.
 # New installs should use: docker compose -f infra/docker-compose.yml --profile full up -d
 #
-# Robothor Docker Services — Vaultwarden, Uptime Kuma, Kokoro TTS
+# Robothor Docker Services — Uptime Kuma, Kokoro TTS
 # All containers use host PostgreSQL (172.17.0.1:5432) and Redis (host.docker.internal:6379)
 # Ports bound to 127.0.0.1 — external access only via Cloudflare tunnel
 
 services:
-  # --- Vaultwarden (password vault) ---
-  vaultwarden:
-    image: vaultwarden/server:latest
-    container_name: vaultwarden
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql://philip:${PG_PASSWORD}@host.docker.internal:5432/vaultwarden
-      DOMAIN: https://vault.robothor.ai
-      SIGNUPS_ALLOWED: "false"
-      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
-      ROCKET_PORT: "80"
-      LOG_LEVEL: info
-    ports:
-      - "127.0.0.1:8222:80"
-    volumes:
-      - vaultwarden-data:/data
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-
   # --- Kokoro TTS (local OpenAI-compatible TTS) ---
   kokoro-tts:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
@@ -75,7 +51,6 @@ services:
           memory: 512m
 
 volumes:
-  vaultwarden-data:
   uptime-kuma-data:
   kokoro-models:
   kokoro-voices:
