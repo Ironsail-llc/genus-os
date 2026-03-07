@@ -1,7 +1,7 @@
 id: crm-steward
 name: CRM Steward
 description: CRM data hygiene, duplicate merge, and contact enrichment
-version: "2026-03-06"
+version: "2026-03-07"
 department: crm
 
 reports_to: main
@@ -20,7 +20,7 @@ schedule:
   cron: "0 10 * * *"
   timezone: America/New_York
   timeout_seconds: 480
-  max_iterations: 8
+  max_iterations: 6
   session_target: isolated
 
 delivery:
@@ -102,6 +102,8 @@ v2:
     - "brain/memory/crm-steward-status.md"
 
 changelog:
+  - date: "2026-03-07"
+    change: "Reduce max_iterations 8→6 — 28.6% timeout rate (2/7 runs), 322s avg duration (3x fleet avg). Bounded batch processing prevents runaway CRM scans. [nightwatch]"
   - date: "2026-03-06"
     change: "Reduce timeout 600s→480s, reduce max_iterations 10→8 — 33% timeout rate (2/6 runs), 3x fleet avg duration. Nightwatch self-heal."
   - date: "2026-02-28"
