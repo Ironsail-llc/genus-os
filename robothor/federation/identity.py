@@ -150,14 +150,15 @@ def create_invite_token(
         "expires_at": expires.isoformat(),
     }
 
-    # Sign the token payload
+    # Sign the canonical JSON bytes (this exact string is what gets verified)
     private_key = _load_private_key(identity)
-    payload_bytes = json.dumps(token_data, sort_keys=True).encode()
-    signature = private_key.sign(payload_bytes)
+    payload_json = json.dumps(token_data, sort_keys=True, separators=(",", ":"))
+    signature = private_key.sign(payload_json.encode())
 
-    # Bundle payload + signature
+    # Bundle the canonical JSON string (not the dict) + signature
+    # This preserves the exact bytes that were signed
     bundle = {
-        "payload": token_data,
+        "payload_json": payload_json,
         "signature": base64.b64encode(signature).decode(),
     }
     token_str = base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
@@ -186,10 +187,23 @@ def decode_invite_token(token_str: str) -> InviteToken:
     except Exception as exc:
         raise ValueError("Invalid token format") from exc
 
+    # Support both v1 format (payload_json string) and legacy (payload dict)
+    payload_json = bundle.get("payload_json")
     payload = bundle.get("payload")
     signature_b64 = bundle.get("signature")
-    if not payload or not signature_b64:
-        raise ValueError("Token missing payload or signature")
+
+    if payload_json:
+        # v1: canonical JSON string preserved — verify against exact signed bytes
+        payload = json.loads(payload_json)
+        payload_bytes = payload_json.encode()
+    elif payload:
+        # Legacy: payload was a nested dict, re-serialize for verification
+        payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    else:
+        raise ValueError("Token missing payload")
+
+    if not signature_b64:
+        raise ValueError("Token missing signature")
 
     # Verify signature
     public_pem = payload.get("issuer_public_key", "").encode()
@@ -197,7 +211,6 @@ def decode_invite_token(token_str: str) -> InviteToken:
         public_key = serialization.load_pem_public_key(public_pem)
         if not isinstance(public_key, Ed25519PublicKey):
             raise ValueError("Token public key is not Ed25519")
-        payload_bytes = json.dumps(payload, sort_keys=True).encode()
         signature = base64.b64decode(signature_b64)
         public_key.verify(signature, payload_bytes)
     except Exception as exc:
