@@ -17,6 +17,7 @@ import logging
 import os
 import socket
 import sys
+from typing import Any
 
 from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health
@@ -85,6 +86,55 @@ def _cleanup_stale_runs() -> int:
         return 0
 
 
+async def _start_federation(config: EngineConfig) -> Any:
+    """Start federation NATS transport if connections exist.
+
+    Returns the NATSManager (connected) or None. Backward-compatible no-op
+    when no federation is configured.
+    """
+    try:
+        from robothor.federation.config import FederationConfig
+        from robothor.federation.connections import load_connections
+        from robothor.federation.nats import NATSManager
+
+        # Resolve federation config: engine env vars → federation.yaml fallback
+        fed_config = FederationConfig.from_env()
+        instance_id = config.instance_id or fed_config.instance_id
+        nats_url = config.nats_url or (fed_config.nats_url if fed_config.nats_enabled else "")
+
+        if not instance_id:
+            return None
+
+        connections = load_connections()
+        if not connections:
+            logger.debug("Federation: no connections, skipping NATS")
+            return None
+
+        if not nats_url:
+            logger.info("Federation: %d connections but no NATS URL configured", len(connections))
+            return None
+
+        nats_mgr = NATSManager(nats_url)
+        connected = await nats_mgr.connect()
+        if connected:
+            logger.info(
+                "Federation: NATS connected, %d connections loaded",
+                len(connections),
+            )
+            # Ensure streams for active connections
+            for conn in connections:
+                if conn.state.value == "active":
+                    await nats_mgr.ensure_stream(conn.id)
+        else:
+            logger.warning("Federation: NATS connection failed, federation disabled")
+            return None
+
+        return nats_mgr
+    except Exception as e:
+        logger.warning("Federation startup failed (non-fatal): %s", e)
+        return None
+
+
 async def main() -> None:
     """Start all engine subsystems."""
     # Configure logging
@@ -123,6 +173,9 @@ async def main() -> None:
     bot = TelegramBot(config, runner)
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
+
+    # Federation — start NATS if connections exist (no-op otherwise)
+    nats_mgr = await _start_federation(config)
 
     # Start all subsystems concurrently
     tasks = [
@@ -186,6 +239,14 @@ async def main() -> None:
             )
     except Exception as e:
         logger.debug("Shutdown announcement failed: %s", e)
+
+    # Disconnect federation NATS (if connected)
+    if nats_mgr is not None:
+        try:
+            await nats_mgr.disconnect()
+            logger.info("Federation: NATS disconnected")
+        except Exception as e:
+            logger.debug("Federation NATS disconnect failed: %s", e)
 
     await scheduler.stop()
     await hooks.stop()

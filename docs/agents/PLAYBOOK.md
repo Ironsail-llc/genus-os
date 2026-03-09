@@ -41,7 +41,6 @@ robothor engine history --agent my-first-agent  # Check run history
 
 ### Key decisions to make
 
-1. **Model** — `openrouter/moonshotai/kimi-k2.5` (cheap, reliable tool calling) or `openrouter/anthropic/claude-sonnet-4.6` (quality-critical)
 2. **Schedule** — Cron expression for periodic runs, or leave empty for hook-only / interactive agents
 3. **Tools** — Whitelist via `tools_allowed`. Always include `exec`, `read_file`, `write_file` for file I/O.
 4. **Hooks** — Event triggers from Redis Streams (e.g., trigger on `email.new`). Primary fast path; crons as safety net.
@@ -97,8 +96,7 @@ Model aliases (for documentation reference only — manifests use full paths):
 
 | Alias | Full model path |
 |-------|----------------|
-| kimi | openrouter/moonshotai/kimi-k2.5 |
-| sonnet | openrouter/anthropic/claude-sonnet-4.6 |
+| sonnet | openrouter/anthropic/claude-sonnet-4-6 |
 | minimax | openrouter/minimax/minimax-m2.5 |
 | gemini-pro | gemini/gemini-2.5-pro |
 | gemini-flash | gemini/gemini-2.5-flash |
@@ -125,7 +123,6 @@ escalates_to: string          # Agent ID for escalations (usually "main")
 
 # Runtime
 model:
-  primary: string             # Full model path (e.g., openrouter/moonshotai/kimi-k2.5)
   fallbacks: [string]         # Ordered fallback chain
   payload_alias: string       # Human-friendly alias (for docs/logs only)
 
@@ -205,16 +202,16 @@ changelog:
 | ID | Dept | Model | Schedule | Delivery | max_iter | Instruction File |
 |----|------|-------|----------|----------|----------|-----------------|
 | main | core | Sonnet 4.6 | *(interactive)* + heartbeat `0 6-22/4 * * *` | none (heartbeat: announce) | 30 (hb: 15) | SOUL.md (hb: HEARTBEAT.md) |
-| email-classifier | email | Kimi K2.5 | `0 6-22/6 * * *` | none | 10 | EMAIL_CLASSIFIER.md |
-| email-analyst | email | Kimi K2.5 | `30 8-20/6 * * *` | none | 10 | EMAIL_ANALYST.md |
+| email-classifier | email | Qwen 3.5 | `0 6-22/6 * * *` | none | 10 | EMAIL_CLASSIFIER.md |
+| email-analyst | email | Qwen 3.5 | `30 8-20/6 * * *` | none | 10 | EMAIL_ANALYST.md |
 | email-responder | email | Sonnet 4.6 | `0 8-20/4 * * *` | none | 15 | RESPONDER.md |
-| calendar-monitor | calendar | Kimi K2.5 | `0 6-22/6 * * *` | none | 8 | CALENDAR_MONITOR.md |
-| vision-monitor | security | Kimi K2.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
-| conversation-inbox | communications | Kimi K2.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
-| conversation-resolver | communications | Kimi K2.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
-| crm-steward | crm | Kimi K2.5 | `0 10 * * *` | none | 10 | CRM_STEWARD.md |
-| morning-briefing | briefings | Kimi K2.5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
-| evening-winddown | briefings | Kimi K2.5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
+| calendar-monitor | calendar | Qwen 3.5 | `0 6-22/6 * * *` | none | 8 | CALENDAR_MONITOR.md |
+| vision-monitor | security | Qwen 3.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
+| conversation-inbox | communications | Qwen 3.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
+| conversation-resolver | communications | Qwen 3.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
+| crm-steward | crm | Qwen 3.5 | `0 10 * * *` | none | 10 | CRM_STEWARD.md |
+| morning-briefing | briefings | Qwen 3.5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
+| evening-winddown | briefings | Qwen 3.5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
 
 ### 3.2 Org Chart
 
@@ -356,8 +353,8 @@ Policy changes do NOT auto-propagate. The AI decides which agents need updating.
 | Task protocol | `list_my_tasks` → `IN_PROGRESS` → process → `resolve`/`REVIEW` → `append shared_working_state` |
 | Status flow | `TODO` → `IN_PROGRESS` → `REVIEW` → `DONE` (app-enforced state machine) |
 | REVIEW approvers | main and helm-user only |
-| Model selection | Sonnet 4.6 for interactive + heartbeat (main) and quality-critical (responder). Kimi K2.5 for all others. |
-| Fallback chain | primary → fallback[0] → fallback[1] (typically kimi → sonnet/minimax → gemini-pro) |
+| Model selection | Sonnet 4.6 for interactive + heartbeat (main) and quality-critical (responder). Qwen 3.5 for all others. |
+| Fallback chain | primary → fallback[0] → fallback[1] (typically qwen → sonnet/minimax → gemini-pro) |
 | Broken model tracking | Models returning 401/403/429 are removed from rotation for the rest of that run |
 | Max iterations (default) | 20 — override per-agent via `schedule.max_iterations` |
 | Max iterations (guideline) | 5 for simple checkers, 8-10 for processors, 15 for complex agents, 30 for interactive |

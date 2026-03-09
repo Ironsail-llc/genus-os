@@ -39,22 +39,13 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_015,  # $15/M
         supports_thinking=True,
     ),
-    # Claude Sonnet 4.6 direct (for thinking-enabled calls)
-    "anthropic/claude-sonnet-4-6": ModelLimits(
-        max_input_tokens=200_000,
-        max_output_tokens=128_000,
-        default_output_tokens=16_384,
-        input_cost_per_token=0.000_003,  # $3/M
-        output_cost_per_token=0.000_015,  # $15/M
-        supports_thinking=True,
-    ),
-    # Kimi K2.5 via OpenRouter
-    "openrouter/moonshotai/kimi-k2.5": ModelLimits(
-        max_input_tokens=262_144,
-        max_output_tokens=262_144,
+    # GLM-5 via OpenRouter
+    "openrouter/z-ai/glm-5": ModelLimits(
+        max_input_tokens=204_800,
+        max_output_tokens=65_536,
         default_output_tokens=8_192,
-        input_cost_per_token=0.000_000_6,  # $0.60/M
-        output_cost_per_token=0.000_002_4,  # $2.40/M
+        input_cost_per_token=0.000_000_8,  # $0.80/M
+        output_cost_per_token=0.000_002_56,  # $2.56/M
     ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
@@ -71,6 +62,14 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_5,  # $0.50/M
         output_cost_per_token=0.000_002,  # $2/M
+    ),
+    # Qwen 3.5 122B (local Ollama)
+    "ollama_chat/qwen3.5:122b": ModelLimits(
+        max_input_tokens=131_072,
+        max_output_tokens=8_192,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
     ),
     # Gemini 2.5 Pro
     "gemini/gemini-2.5-pro": ModelLimits(

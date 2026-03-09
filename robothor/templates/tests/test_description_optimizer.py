@@ -91,7 +91,7 @@ class TestGenerateSkillMd:
             "version": "1.0.0",
             "description": "A test agent",
             "department": "custom",
-            "model": {"primary": "kimi-k2.5"},
+            "model": {"primary": "glm-5"},
         }
         skill_md = generate_skill_md(manifest)
         assert skill_md.startswith("---\n")
@@ -170,7 +170,7 @@ class TestScoreHubReadiness:
                     "variables": {
                         "model_primary": {
                             "type": "string",
-                            "default": "kimi",
+                            "default": "glm5",
                             "description": "Primary model",
                         },
                         "cron_expr": {

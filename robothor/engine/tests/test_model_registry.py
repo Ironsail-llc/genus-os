@@ -19,10 +19,10 @@ class TestGetModelLimits:
         assert limits.max_output_tokens == 128_000
         assert limits.default_output_tokens == 16_384
 
-    def test_known_model_kimi(self):
-        limits = get_model_limits("openrouter/moonshotai/kimi-k2.5")
-        assert limits.max_input_tokens == 262_144
-        assert limits.max_output_tokens == 262_144
+    def test_known_model_glm5(self):
+        limits = get_model_limits("openrouter/z-ai/glm-5")
+        assert limits.max_input_tokens == 204_800
+        assert limits.max_output_tokens == 65_536
         assert limits.default_output_tokens == 8_192
 
     def test_known_model_gemini_flash(self):
@@ -40,6 +40,15 @@ class TestGetModelLimits:
         assert limits.max_input_tokens == 1_048_576
         assert limits.max_output_tokens == 65_535
 
+    def test_known_model_qwen35(self):
+        limits = get_model_limits("ollama_chat/qwen3.5:122b")
+        assert limits.max_input_tokens == 131_072
+        assert limits.max_output_tokens == 8_192
+        assert limits.default_output_tokens == 8_192
+        assert limits.input_cost_per_token == 0.0
+        assert limits.output_cost_per_token == 0.0
+        assert limits.supports_thinking is False
+
     def test_unknown_model_returns_fallback(self):
         limits = get_model_limits("unknown/model-xyz")
         assert limits == _FALLBACK
@@ -54,8 +63,8 @@ class TestGetModelLimits:
         limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
         assert limits.supports_thinking is True
 
-    def test_kimi_no_thinking(self):
-        limits = get_model_limits("openrouter/moonshotai/kimi-k2.5")
+    def test_glm5_no_thinking(self):
+        limits = get_model_limits("openrouter/z-ai/glm-5")
         assert limits.supports_thinking is False
 
     def test_thinking_budget_constant(self):
@@ -71,9 +80,9 @@ class TestComputeTokenBudget:
         budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 15)
         assert budget == 200_000 * 15  # 3,000,000
 
-    def test_kimi_10_iterations(self):
-        budget = compute_token_budget("openrouter/moonshotai/kimi-k2.5", 10)
-        assert budget == 262_144 * 10  # 2,621,440
+    def test_glm5_10_iterations(self):
+        budget = compute_token_budget("openrouter/z-ai/glm-5", 10)
+        assert budget == 204_800 * 10  # 2,048,000
 
     def test_gemini_pro_10_iterations(self):
         budget = compute_token_budget("gemini/gemini-2.5-pro", 10)
@@ -118,8 +127,8 @@ class TestGetOutputTokens:
         tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 0)
         assert tokens == 16_384  # default
 
-    def test_kimi_default_output(self):
-        tokens = get_output_tokens("openrouter/moonshotai/kimi-k2.5", 50_000)
+    def test_glm5_default_output(self):
+        tokens = get_output_tokens("openrouter/z-ai/glm-5", 50_000)
         assert tokens == 8_192
 
     def test_unknown_model_uses_fallback(self):

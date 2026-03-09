@@ -1,33 +1,31 @@
 # CRM Steward Status
-Last run: 2026-03-04T10:00:00-05:00
+Last run: 2026-03-07T10:00:00-05:00
 
 ## Task Hygiene
 - Stuck tasks reset: 0 (none found >4h old)
 - Duplicate tasks resolved: 0
-- Unassigned tasks fixed: 0 (6 Jira tasks have no tags for routing)
+- Unassigned tasks fixed: 0
 - SLA overdue escalations: 0 (all within SLA)
 
 ## Quality
-- Blocklist deletions: 0 (no new blocklist matches - API smoke test contacts noted for manual cleanup)
-- Field scrubs: 0 (no literal 'null' found in fields)
+- Blocklist deletions: 0
+- Field scrubs: 0
 
 ## Dedup
-- Auto-merged: 0
-- Companies merged: 1
-  - Squadra Solutions + Squadrasolutions (duplicate, merged to Squadra Solutions)
+- Auto-merged: 2
+  - Harry Glorikian (kept: 01c90516-86a0-4d15-872c-6b659054c9f3)
+  - Philip D'Agostino (kept: f1767f50-dc84-4638-9745-675558f52a29)
 - Escalated: 0
-- Orphan identifiers: 0 (not checked this run)
+- Orphan identifiers: 0
 
 ## Companies
-- Companies cleaned: 1
-  - Unlinked Danylo Boiko from 'null' company → linked to Robothor/Impetus One
-- Orphan companies: not checked
+- Companies merged: 0
+- Orphan companies deleted: 0
 
 ## Enrichment
 - Contacts enriched: 0
-- Fields filled: N/A
+- Fields filled: 0
 
-## Issues Found (for tracking)
-- 8 API smoke test contacts (prefix __p1_verify_) should be manually deleted
-- Ironsail vs Ironsail Pharma may be same company (needs Philip review)
-- 6 Jira tasks lack proper tags for auto-routing
+## Notes
+- 3 API smoke test contacts noted for cleanup (have '__p1_verify' prefix)
+- No orphaned tasks requiring assignment

@@ -41,7 +41,7 @@ def tmp_catalog_dir(tmp_path):
 
     # _defaults.yaml
     defaults = {
-        "model_primary": "openrouter/moonshotai/kimi-k2.5",
+        "model_primary": "openrouter/z-ai/glm-5",
         "timezone": "UTC",
     }
     (catalog_dir / "_defaults.yaml").write_text(yaml.dump(defaults, default_flow_style=False))
@@ -104,7 +104,7 @@ class TestCatalog:
 
     def test_defaults(self, tmp_catalog_dir):
         catalog = Catalog(tmp_catalog_dir)
-        assert catalog.defaults["model_primary"] == "openrouter/moonshotai/kimi-k2.5"
+        assert catalog.defaults["model_primary"] == "openrouter/z-ai/glm-5"
         assert catalog.defaults["timezone"] == "UTC"
 
     def test_list_available_templates(self, tmp_catalog_dir):

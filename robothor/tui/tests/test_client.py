@@ -102,14 +102,14 @@ class TestSSEParsing:
             'data: {"text": "check. Found 0 tasks."}',
             "",
             "event: done",
-            'data: {"text": "Let me check. Found 0 tasks.", "model": "kimi", "input_tokens": 100, "output_tokens": 50}',
+            'data: {"text": "Let me check. Found 0 tasks.", "model": "glm5", "input_tokens": 100, "output_tokens": 50}',
             "",
         ]
 
         events = list(_parse_sse_lines(sse_lines))
         assert len(events) == 5
         assert [e.event for e in events] == ["delta", "tool_start", "tool_end", "delta", "done"]
-        assert events[4].data["model"] == "kimi"
+        assert events[4].data["model"] == "glm5"
 
     @pytest.mark.asyncio
     async def test_invalid_json_handled(self):

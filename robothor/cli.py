@@ -180,6 +180,31 @@ def main(argv: list[str] | None = None) -> int:
     unbind_parser = agent_sub.add_parser("unbind", help="Clear cron and set delivery to none")
     unbind_parser.add_argument("agent_id", help="Agent ID to unbind")
 
+    # federation
+    fed_parser = subparsers.add_parser("federation", help="Peer-to-peer instance networking")
+    fed_sub = fed_parser.add_subparsers(dest="federation_command")
+    fed_sub.add_parser("init", help="Initialize instance identity (Ed25519 keypair)")
+    fed_invite = fed_sub.add_parser("invite", help="Generate a connection invite token")
+    fed_invite.add_argument("--name", default="", help="Display name for the peer")
+    fed_invite.add_argument(
+        "--relationship",
+        choices=["parent", "child", "peer"],
+        default="peer",
+        help="Relationship to the connecting instance",
+    )
+    fed_invite.add_argument("--ttl", type=int, default=24, help="Token TTL in hours (default 24)")
+    fed_connect = fed_sub.add_parser("connect", help="Accept a connection invite token")
+    fed_connect.add_argument("token", help="Invite token from the peer instance")
+    fed_sub.add_parser("status", help="Show all connections and their health")
+    fed_sub.add_parser("list", help="List connected instances")
+    fed_export = fed_sub.add_parser("export", help="Expose a capability to a peer")
+    fed_export.add_argument("connection", help="Connection ID")
+    fed_export.add_argument("capability", help="Capability to export")
+    fed_suspend = fed_sub.add_parser("suspend", help="Suspend a connection")
+    fed_suspend.add_argument("connection", help="Connection ID")
+    fed_remove = fed_sub.add_parser("remove", help="Disconnect from a peer")
+    fed_remove.add_argument("connection", help="Connection ID")
+
     # engine
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
@@ -236,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_vault(args)
     if args.command == "agent":
         return _cmd_agent(args)
+    if args.command == "federation":
+        return _cmd_federation(args)
     if args.command == "engine":
         return _cmd_engine(args)
     if args.command == "config":
@@ -291,6 +318,9 @@ REQUIRED_TABLES = [
     "crm_messages",
     "telemetry",
     "vault_secrets",
+    "federation_identity",
+    "federation_connections",
+    "federation_events",
 ]
 
 
@@ -724,6 +754,170 @@ def _cmd_vault(args: argparse.Namespace) -> int:
 
     print("Usage: robothor vault {init|set|get|list|delete|import-env|export-env|audit}")
     return 0
+
+
+def _cmd_federation(args: argparse.Namespace) -> int:
+    sub = getattr(args, "federation_command", None)
+
+    if sub == "init":
+        from robothor.federation.config import FederationConfig
+        from robothor.federation.identity import init_identity
+
+        config = FederationConfig.from_env()
+        instance = init_identity(config)
+        print(f"Instance ID:   {instance.id}")
+        print(f"Display name:  {instance.display_name}")
+        print(f"Identity file: {config.identity_file}")
+        return 0
+
+    if sub == "invite":
+        from robothor.federation.config import FederationConfig
+        from robothor.federation.identity import create_invite_token
+        from robothor.federation.models import Relationship
+
+        config = FederationConfig.from_env()
+        relationship = Relationship(args.relationship)
+        token = create_invite_token(config, relationship=relationship, ttl_hours=args.ttl)
+        print(f"Invite token (expires in {args.ttl}h):\n")
+        print(token.token)
+        print(f"\nRelationship: {relationship.value}")
+        print(f"Peer sees you as: {_invert_rel(relationship)}")
+        return 0
+
+    if sub == "connect":
+        from robothor.federation.config import FederationConfig
+        from robothor.federation.connections import save_connection
+        from robothor.federation.identity import consume_invite_token
+
+        config = FederationConfig.from_env()
+        try:
+            connection = consume_invite_token(config, args.token)
+            save_connection(connection)
+            print(f"Connected to: {connection.peer_name}")
+            print(f"Connection ID: {connection.id}")
+            print(f"Relationship:  {connection.relationship.value}")
+            print(f"State:         {connection.state.value}")
+            print(f"\nExports: {', '.join(connection.exports) or 'none'}")
+            print(f"Imports: {', '.join(connection.imports) or 'none'}")
+            return 0
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            return 1
+
+    if sub == "status":
+        from robothor.federation.config import FederationConfig
+        from robothor.federation.connections import load_connections
+        from robothor.federation.identity import get_identity
+
+        config = FederationConfig.from_env()
+        identity = get_identity(config)
+        if not identity:
+            print("No instance identity. Run: robothor federation init")
+            return 1
+        print(f"Instance: {identity.display_name} ({identity.id[:12]}...)")
+        print()
+        connections = load_connections()
+        if not connections:
+            print("No connections.")
+            return 0
+        for conn in connections:
+            print(
+                f"  {conn.peer_name:<24} {conn.state.value:<12} {conn.relationship.value:<8} {conn.id[:12]}..."
+            )
+            if conn.exports:
+                print(f"    exports: {', '.join(conn.exports)}")
+            if conn.imports:
+                print(f"    imports: {', '.join(conn.imports)}")
+        print(f"\n{len(connections)} connection(s)")
+        return 0
+
+    if sub == "list":
+        from robothor.federation.connections import load_connections
+
+        connections = load_connections()
+        if not connections:
+            print("No connections.")
+            return 0
+        for conn in connections:
+            print(
+                f"{conn.id[:12]}  {conn.peer_name:<24} {conn.state.value:<12} {conn.relationship.value}"
+            )
+        return 0
+
+    if sub == "export":
+        from robothor.federation.connections import (
+            ConnectionManager,
+            load_connections,
+            save_connection,
+        )
+
+        mgr = ConnectionManager()
+        for conn in load_connections():
+            mgr.add(conn)
+        try:
+            conn = mgr.add_export(args.connection, args.capability)
+            save_connection(conn)
+            print(f"Exported '{args.capability}' to {conn.peer_name}")
+            return 0
+        except ValueError as e:
+            # Try partial ID match
+            for c in mgr.list_all():
+                if c.id.startswith(args.connection):
+                    conn = mgr.add_export(c.id, args.capability)
+                    save_connection(conn)
+                    print(f"Exported '{args.capability}' to {conn.peer_name}")
+                    return 0
+            print(f"Error: {e}")
+            return 1
+
+    if sub == "suspend":
+        from robothor.federation.connections import (
+            ConnectionManager,
+            load_connections,
+            save_connection,
+        )
+
+        mgr = ConnectionManager()
+        for conn in load_connections():
+            mgr.add(conn)
+        try:
+            conn = mgr.suspend(args.connection)
+            save_connection(conn)
+            print(f"Suspended connection to {conn.peer_name}")
+            return 0
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
+
+    if sub == "remove":
+        from robothor.federation.connections import delete_connection, load_connections
+
+        connections = load_connections()
+        for conn in connections:
+            if conn.id == args.connection or conn.id.startswith(args.connection):
+                if delete_connection(conn.id):
+                    print(f"Removed connection to {conn.peer_name}")
+                    return 0
+                print("Error: Failed to delete connection")
+                return 1
+        print(f"Error: Connection not found: {args.connection}")
+        return 1
+
+    print("Usage: robothor federation {init|invite|connect|status|list|export|suspend|remove}")
+    return 0
+
+
+def _invert_rel(r: str | Any) -> str:
+    """Invert relationship for display."""
+    s = r.value if hasattr(r, "value") else str(r)
+    if s == "parent":
+        return "child"
+    if s == "child":
+        return "parent"
+    return "peer"
 
 
 def _cmd_vault_audit() -> int:
@@ -1267,8 +1461,7 @@ def _cmd_agent_setup() -> int:
 
         tz = input("  Timezone [America/New_York]: ").strip() or "America/New_York"
         model = (
-            input("  Default model [openrouter/moonshotai/kimi-k2.5]: ").strip()
-            or "openrouter/moonshotai/kimi-k2.5"
+            input("  Default model [openrouter/z-ai/glm-5]: ").strip() or "openrouter/z-ai/glm-5"
         )
         quality = (
             input("  Quality model [openrouter/anthropic/claude-sonnet-4.6]: ").strip()

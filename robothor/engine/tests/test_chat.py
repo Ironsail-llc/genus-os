@@ -315,7 +315,7 @@ class TestToolEvents:
             status=RunStatus.COMPLETED,
             output_text="Hello!",
             trigger_type=TriggerType.WEBCHAT,
-            model_used="openrouter/kimi/k2.5",
+            model_used="openrouter/z-ai/glm-5",
             input_tokens=200,
             output_tokens=100,
             duration_ms=1234,
@@ -332,7 +332,7 @@ class TestToolEvents:
         done = [e for e in events if e["event"] == "done"]
         assert len(done) == 1
         data = done[0]["data"]
-        assert data["model"] == "openrouter/kimi/k2.5"
+        assert data["model"] == "openrouter/z-ai/glm-5"
         assert data["input_tokens"] == 200
         assert data["output_tokens"] == 100
         assert data["duration_ms"] == 1234

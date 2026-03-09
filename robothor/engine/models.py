@@ -25,6 +25,7 @@ class TriggerType(StrEnum):
     WEBCHAT = "webchat"
     WORKFLOW = "workflow"
     SUB_AGENT = "sub_agent"
+    FEDERATION = "federation"
 
 
 class RunStatus(StrEnum):

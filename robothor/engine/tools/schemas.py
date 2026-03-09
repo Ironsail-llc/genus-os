@@ -859,4 +859,79 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Federation tools ──
+    schemas["federation_query"] = {
+        "type": "function",
+        "function": {
+            "name": "federation_query",
+            "description": "Query a connected Robothor instance's data (health, agent runs, memory).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Federation connection ID",
+                    },
+                    "query_type": {
+                        "type": "string",
+                        "description": "What to query: 'health', 'runs'",
+                        "enum": ["health", "runs"],
+                        "default": "health",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Filter by agent ID (for runs query)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                        "default": 20,
+                    },
+                },
+                "required": ["connection_id"],
+            },
+        },
+    }
+    schemas["federation_trigger"] = {
+        "type": "function",
+        "function": {
+            "name": "federation_trigger",
+            "description": "Trigger an agent run on a connected Robothor instance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Federation connection ID",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent ID to trigger on the remote instance",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Message/prompt for the agent run",
+                    },
+                },
+                "required": ["connection_id", "agent_id"],
+            },
+        },
+    }
+    schemas["federation_sync_status"] = {
+        "type": "function",
+        "function": {
+            "name": "federation_sync_status",
+            "description": "Check sync watermarks and pending event counts for federation connections.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Connection ID (omit for all connections)",
+                    },
+                },
+            },
+        },
+    }
+
     return schemas

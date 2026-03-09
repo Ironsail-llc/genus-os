@@ -32,6 +32,7 @@ def _collect_handlers() -> dict[str, Any]:
     """Collect all HANDLERS dicts from handler modules."""
     from robothor.engine.tools.handlers import (
         crm,
+        federation,
         filesystem,
         git,
         gws,
@@ -63,6 +64,7 @@ def _collect_handlers() -> dict[str, Any]:
         pdf,
         impetus,
         reasoning,
+        federation,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

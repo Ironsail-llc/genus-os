@@ -25,6 +25,7 @@ Logs: `journalctl -u <unit> -f`
 | smbd.service | 445 | — | Samba file sharing (local network + Tailscale only) |
 | nmbd.service | 137-138 | — | NetBIOS name service for Samba |
 | robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
+| robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport (config: /etc/nats/nats-server.conf) |
 | cloudflared.service | — | — | Cloudflare tunnel (robothor.ai) |
 | tailscaled.service | — | — | Tailscale VPN (ironsail tailnet) |
 

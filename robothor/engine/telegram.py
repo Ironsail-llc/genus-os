@@ -134,10 +134,11 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
-    "Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
-    "Kimi K2.5": "openrouter/moonshotai/kimi-k2.5",
+    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4-6",
+    "GLM-5": "openrouter/z-ai/glm-5",
     "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
     "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
+    "Qwen 3.5 122B": "ollama_chat/qwen3.5:122b",
 }
 
 # Reverse lookup: model id → display name

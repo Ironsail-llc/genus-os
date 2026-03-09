@@ -133,7 +133,7 @@ class InstanceConfig:
     def init_config(
         self,
         timezone: str = "America/New_York",
-        default_model: str = "openrouter/moonshotai/kimi-k2.5",
+        default_model: str = "openrouter/z-ai/glm-5",
         quality_model: str = "openrouter/anthropic/claude-sonnet-4.6",
         owner_name: str = "",
         hub_org: str = "programmaticresources",

@@ -30,7 +30,7 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 3. **Agent engine is the execution layer, manifests are source of truth** — all agents run via `robothor/engine/`. YAML manifests in `docs/agents/` are canonical config. Edit the manifest FIRST, then run `python scripts/validate_agents.py --agent <id>` and restart the engine.
 4. **All services are system-level, use `sudo systemctl`** — every long-running process is a system-level systemd service in `/etc/systemd/system/`, enabled on boot. No user-level services. All use `Restart=always`, `RestartSec=5`, `KillMode=control-group`.
 5. **Only 3 agents talk to Philip** — Main agent heartbeat (decisions-only), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents use `delivery: none` and coordinate via tasks, status files, and notification inbox.
-6. **Models vary per agent** — Email Responder uses Sonnet 4.6 (quality-critical). All other agents use Kimi K2.5. Main session uses Sonnet 4.6. Fallback: Kimi K2.5 → MiniMax M2.5 → Gemini 2.5 Pro. Local Ollama models (qwen3:14b) are only for Python maintenance scripts — not for agentic tool-calling.
+6. **Manifests are source of truth for models** — each agent's `model:` block in `docs/agents/*.yaml` defines its primary and fallbacks. Check the manifests, not this file, for current assignments. For local Ollama models, always use the `ollama_chat/` litellm prefix (not `ollama/`) — only `ollama_chat/` routes through `/api/chat` which supports native tool calling.
 7. **No localhost URLs in agent instructions** — the engine's `web_fetch` tool blocks loopback addresses. Use registered tools instead. Localhost is fine in internal code and infrastructure docs.
 8. **All services with ports get Cloudflare tunnel routes** — internal/sensitive services use Cloudflare Access (email OTP for philip@ironsail.ai, robothor@ironsail.ai). Public services (status, voice, privacy) have no auth. SearXNG (:8888) is internal-only, no tunnel. See `SERVICES.md` and `INFRASTRUCTURE.md` for full route/port tables.
 9. **Test before commit** — new features require tests, bug fixes require regression tests. Pre-commit: `pytest -m "not slow and not llm and not e2e"`. Full suite: `bash run_tests.sh`. Tests live alongside code: `<module>/tests/test_<feature>.py`. Test AI by properties (structure, types, ranges), not exact values. Mock LLMs in unit tests. Deep reference: `docs/TESTING.md`.
@@ -74,6 +74,9 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 | Agent validation | `python scripts/validate_agents.py` |
 | Workflow engine | `docs/agents/PLAYBOOK.md` (section 8) + `docs/workflows/*.yaml` + `robothor/engine/workflow.py` |
 | Vault / credential storage | `robothor/vault/` + `brain/TOOLS.md` (Vault section) |
+| Federation / multi-instance | `docs/FEDERATION.md` + `robothor/federation/` package |
+| Federation CLI | `robothor federation {init,invite,connect,status,list,export,suspend,remove}` |
+| NATS server (federation transport) | `/etc/nats/nats-server.conf` + `robothor-nats.service` (ports 4222, 7422) |
 | Updating documentation | This file (Doc Maintenance section below) |
 
 ## Doc Maintenance
@@ -89,6 +92,7 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | New MCP/plugin tool | `brain/AGENTS.md` (tool list) |
 | New Cloudflare route | `INFRASTRUCTURE.md` (tunnel table), `SERVICES.md` (external access table) |
 | New database table | `INFRASTRUCTURE.md` |
+| Federation changes | `docs/FEDERATION.md`, `INFRASTRUCTURE.md` (Federation section), `SERVICES.md` |
 | New interactive mode | `brain/TOOLS.md`, `brain/AGENTS.md`, `CLAUDE.md` (reading guide), `SERVICES.md` (endpoints) |
 | Vault credential changes | `brain/TOOLS.md` (Vault section), `INFRASTRUCTURE.md` (Secrets Management) |
 | Deployment/fix with gotchas | Auto-memory `MEMORY.md` (session-to-session learning) |

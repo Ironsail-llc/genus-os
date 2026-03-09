@@ -32,7 +32,7 @@ recommended:
     primary:
       type: string
       description: Full LiteLLM model path
-      example: "openrouter/moonshotai/kimi-k2.5"
+      example: "openrouter/z-ai/glm-5"
     fallbacks:
       type: list[string]
   schedule:

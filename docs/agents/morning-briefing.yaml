@@ -1,7 +1,7 @@
 id: morning-briefing
 name: Morning Briefing
-description: Daily morning briefing with weather, news, calendar, and CRM activity
-version: "2026-03-03"
+description: Daily morning briefing with calendar, tasks, overnight activity, and health stats
+version: "2026-03-09"
 department: briefings
 
 reports_to: null
@@ -10,11 +10,11 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/anthropic/claude-sonnet-4.6
+  primary: ollama_chat/qwen3.5:122b
   fallbacks:
-    - openrouter/moonshotai/kimi-k2.5
+    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: sonnet
+  payload_alias: qwen35
 
 schedule:
   cron: "30 6 * * *"
@@ -35,7 +35,9 @@ tools_allowed:
   - get_entity
   - memory_block_read
   - list_tasks
-  - list_agent_tasks
+  - list_my_tasks
+  - list_notes
+  - create_note
   - gws_calendar_list
 tools_denied:
   - create_message
@@ -64,12 +66,13 @@ warmup:
   memory_blocks:
     - user_profile
     - shared_working_state
-    - nightwatch_log
   context_files:
     - brain/memory/garmin-health.md
     - brain/memory/cron-health-status.md
     - brain/memory/email-classifier-status.md
+    - brain/memory/response-status.md
     - brain/memory/overnight-pr-status.md
+
 instruction_file: brain/agents/morning-briefing.md
 bootstrap_files:
   - brain/AGENTS.md
@@ -87,11 +90,13 @@ v2:
     - "^gws calendar"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
+  - date: "2026-03-06"
+    change: "Add overnight-pr-status.md to warmup context_files for Nightwatch PR updates"
   - date: "2026-03-03"
-    change: "Fix instruction_file (was null), upgrade model to Sonnet 4.6, add missing tools (list_tasks, list_my_tasks, memory_block_read, etc), add shared_working_state warmup + status file context"
-  - date: "2026-02-28"
-    change: "Wire garmin-health.md into warmup context_files (was missing despite changelog claim)"
+    change: "Fix instruction_file path, add missing tools (list_tasks, list_my_tasks, list_notes, create_note)"
   - date: "2026-02-27"
-    change: "Add health section in payload (garmin-health.md)"
+    change: "Add health stream (garmin-health.md) + health section in payload"
   - date: "2026-02-24"
-    change: "Initial manifest creation; agentId changed from 'main' to 'morning-briefing'"
+    change: "Initial manifest creation from existing config"

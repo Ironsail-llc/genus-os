@@ -1,79 +1,6 @@
 {
   "runs": [
     {
-      "timestamp": "2026-02-06T03:30:01.455152",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 6,
-          "ingested": 6,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 27,
-          "ingested": 27,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 136}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant results, mostly unrelated to decision-making or recent events."
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 2,
-              "note": "SCORE: 2 - The results appear to be relevant to the query, but the second result seems to be a perso"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant results; the query is about the status of an e-commerce platform, but the resu"
-            }
-          ],
-          "average_score": 1.3333333333333333
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 669.133101
-    },
-    {
       "timestamp": "2026-02-07T03:30:02.029083",
       "phases": {
         "emails": {
@@ -2606,6 +2533,348 @@
       },
       "success": true,
       "duration_seconds": 800.392665
+    },
+    {
+      "timestamp": "2026-03-07T03:30:01.797774",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:harry@glorikian.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:harry@glorikian.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:consumertrustsupport@twilio.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:olesia@valhallavitality.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:danylo@ironsail.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:DBraun@indhcm.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ankur@mithai.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:twilio@qualtrics-survey.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:pooleyaccounts@yahoo.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:boladji@squadrasolutions.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:invoice+statements@mail.anthropic.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:daniel@valhallams.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ddago4@aol.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:concierge@ypo.org:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:cloudplatform-noreply@google.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:fred@fireflies.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 72,
+          "fields_updated": 2,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 15,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": false,
+            "details": "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        }
+      },
+      "stats_before": {
+        "facts_count": 35711,
+        "entities_count": 5554
+      },
+      "stats_after": {
+        "facts_count": 35776,
+        "entities_count": 5554
+      },
+      "success": true,
+      "duration_seconds": 91.24911
+    },
+    {
+      "timestamp": "2026-03-08T03:30:01.138903",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis:philip@ironsail.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:harry@glorikian.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:consumertrustsupport@twilio.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:olesia@valhallavitality.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:danylo@ironsail.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:DBraun@indhcm.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ankur@mithai.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:twilio@qualtrics-survey.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:pooleyaccounts@yahoo.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:boladji@squadrasolutions.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:invoice+statements@mail.anthropic.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:daniel@valhallams.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ddago4@aol.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:concierge@ypo.org:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:cloudplatform-noreply@google.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:fred@fireflies.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 15,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": false,
+            "details": "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        }
+      },
+      "stats_before": {
+        "facts_count": 35856,
+        "entities_count": 5554
+      },
+      "stats_after": {
+        "facts_count": 35921,
+        "entities_count": 5554
+      },
+      "success": true,
+      "duration_seconds": 78.86264
+    },
+    {
+      "timestamp": "2026-03-09T03:30:01.833460",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis:philip@ironsail.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:harry@glorikian.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:consumertrustsupport@twilio.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:olesia@valhallavitality.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:danylo@ironsail.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:DBraun@indhcm.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ankur@mithai.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:twilio@qualtrics-survey.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:pooleyaccounts@yahoo.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:boladji@squadrasolutions.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:invoice+statements@mail.anthropic.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:daniel@valhallams.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:ddago4@aol.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:concierge@ypo.org:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:cloudplatform-noreply@google.com:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis:fred@fireflies.ai:Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.",
+            "contact_analysis::Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 18,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": false,
+            "details": "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        }
+      },
+      "stats_before": {
+        "facts_count": 35938,
+        "entities_count": 5554
+      },
+      "stats_after": {
+        "facts_count": 36006,
+        "entities_count": 5554
+      },
+      "success": true,
+      "duration_seconds": 89.013639
     }
   ]
 }

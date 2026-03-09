@@ -394,3 +394,28 @@ OpenClaw agent sessions (cron jobs, Telegram, Google Chat) can't use MCP servers
 | `vault_delete` | *(direct DAL — PostgreSQL vault)* | — |
 
 Tool names are intentionally identical between MCP and plugin so agent instructions (HEARTBEAT.md, AGENTS.md, jobs.json) work unchanged regardless of runtime.
+
+## Federation
+
+Peer-to-peer instance networking. See `docs/FEDERATION.md` for full architecture.
+
+| Component | Location | Purpose |
+|---|---|---|
+| NATS server | `/usr/local/bin/nats-server` (v2.12.5) | Federation transport with JetStream |
+| NATS config | `/etc/nats/nats-server.conf` | JetStream store, leaf node listener |
+| NATS service | `robothor-nats.service` | Systemd unit (ports 4222 client, 7422 leaf) |
+| JetStream store | `/var/lib/nats/jetstream` | Persistent message storage |
+| Identity | `~/.robothor/identity.json` + `identity.key` | Ed25519 keypair (never committed) |
+| Federation config | `~/.robothor/federation.yaml` | Instance ID, NATS URL, public endpoint |
+| Federation package | `robothor/federation/` | Models, identity, connections, sync, NATS, commands |
+| Federation tools | `robothor/engine/tools/handlers/federation.py` | Agent-usable federation tools |
+| Migration (fresh) | `infra/migrations/001_init.sql` | Federation tables included |
+| Migration (upgrade) | `crm/migrations/025_federation.sql` | Standalone upgrade migration |
+
+### Database Tables
+
+| Table | Purpose |
+|---|---|
+| `federation_identity` | This instance's UUID, display name, public key |
+| `federation_connections` | Peer links with relationship, state, exports/imports |
+| `federation_events` | Append-only event journal for sync (HLC timestamps) |

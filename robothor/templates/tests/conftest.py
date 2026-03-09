@@ -20,7 +20,7 @@ def tmp_bundle(tmp_path):
         "variables": {
             "model_primary": {
                 "type": "string",
-                "default": "openrouter/moonshotai/kimi-k2.5",
+                "default": "openrouter/z-ai/glm-5",
                 "description": "Primary model",
             },
             "timezone": {
@@ -101,7 +101,7 @@ format: robothor-native/v1
 def tmp_defaults(tmp_path):
     """Create a _defaults.yaml file."""
     defaults = {
-        "model_primary": "openrouter/moonshotai/kimi-k2.5",
+        "model_primary": "openrouter/z-ai/glm-5",
         "timezone": "America/New_York",
         "reports_to": "main",
         "escalates_to": "main",
@@ -167,7 +167,7 @@ def tmp_repo(tmp_path, tmp_bundle):
 
     # _defaults.yaml
     defaults = {
-        "model_primary": "openrouter/moonshotai/kimi-k2.5",
+        "model_primary": "openrouter/z-ai/glm-5",
         "timezone": "America/New_York",
         "reports_to": "main",
     }

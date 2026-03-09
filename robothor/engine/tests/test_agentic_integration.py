@@ -26,8 +26,8 @@ class TestAgenticIntegration:
         config = AgentConfig(
             id="integration-test",
             name="Integration Test Agent",
-            model_primary="openrouter/kimi-k2.5",
-            model_fallbacks=["openrouter/minimax-m2.5"],
+            model_primary="openrouter/z-ai/glm-5",
+            model_fallbacks=["openrouter/minimax/minimax-m2.5"],
             delivery_mode=DeliveryMode.NONE,
             can_spawn_agents=True,
             max_nesting_depth=2,

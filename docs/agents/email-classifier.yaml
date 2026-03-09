@@ -1,7 +1,7 @@
 id: email-classifier
 name: Email Classifier
-description: Classifies incoming emails, creates tasks, routes to analyst or responder
-version: "2026-03-05"
+description: Classifies incoming emails and creates tasks for response pipeline
+version: "2026-03-09"
 department: email
 
 reports_to: main
@@ -10,17 +10,17 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: ollama_chat/qwen3.5:122b
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: qwen35
 
 schedule:
   cron: "0 6-22/2 * * *"
   timezone: America/New_York
-  timeout_seconds: 600
-  max_iterations: 12
+  timeout_seconds: 480
+  max_iterations: 10
   session_target: isolated
 
 delivery:
@@ -33,30 +33,25 @@ tools_allowed:
   - search_memory
   - get_entity
   - store_memory
-  - list_conversations
-  - log_interaction
-  - create_person
   - create_task
-  - list_tasks
   - list_my_tasks
   - resolve_task
   - update_task
+  - get_inbox
+  - ack_notification
   - append_to_block
-  - gws_gmail_search
-  - gws_gmail_get
-  - gws_gmail_modify
 tools_denied:
-  - message
+  - create_message
+  - make_call
+  - transmit_prescription
 bridge_endpoints:
   - "GET /health"
-  - "GET /api/conversations"
-  - "POST /log-interaction"
-  - "POST /api/people"
   - "POST /api/tasks"
-  - "GET /api/tasks"
   - "PATCH /api/tasks/*"
   - "GET /api/tasks/agent/*"
   - "POST /api/tasks/*/resolve"
+  - "GET /api/notifications/inbox/*"
+  - "POST /api/notifications/*/ack"
   - "POST /api/memory/blocks/*/append"
 streams:
   read: [email]
@@ -70,61 +65,40 @@ sla:
 
 task_protocol: true
 review_workflow: false
-notification_inbox: false
+notification_inbox: true
 status_file: brain/memory/email-classifier-status.md
 shared_working_state: true
 
 warmup:
   context_files:
     - brain/memory/email-classifier-status.md
+    - brain/memory/email-log.json
+  peer_agents: []
 
 instruction_file: brain/EMAIL_CLASSIFIER.md
 bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
 
-hooks:
-  - stream: email
-    event_type: email.new
-    message: "New email received. Process the triage inbox and classify emails."
-  - stream: email
-    event_type: triage.refreshed
-    message: "Triage inbox refreshed with new items. Process the triage inbox and classify emails."
-
-downstream_agents:
-  - email-analyst
-  - email-responder
-
-tags_produced: [email, reply-needed, analytical, escalation, needs-philip]
+tags_produced: [email, reply-needed, analytical, escalation, needs-philip, calendar, conflict, cancellation, scheduling-link, scheduling-booked, unknown-person, crm-hygiene]
 tags_consumed: []
 
 v2:
   error_feedback: true
   guardrails:
-    - exec_allowlist
     - write_path_restrict
-  exec_allowlist:
-    - "^gog gmail thread (get|modify)"
-    - "^gog gmail search"
-    - "^python3"
-    - "^gws gmail"
   write_path_allowlist:
     - "brain/memory/email-classifier-status.md"
-    - "brain/memory/triage-*"
     - "brain/memory/email-log.json"
 
 changelog:
-  - date: "2026-03-05"
-    change: "Reduce max_iterations 10→7 — agent averages 214s (2× fleet avg) with 236 runs/week; tighter loop targets ~150s avg and saves ~$0.80/week [nightwatch]"
-  - date: "2026-03-01"
-    change: "Add triage.refreshed hook — classifier now fires on triage prep (not just email.new). Cron is 2h safety net."
-  - date: "2026-02-28"
-    change: "CRITICAL FIX: Add exec, read_file, write_file, search_memory, get_entity, store_memory — agent was blind without file access. Delivery→none."
-  - date: "2026-02-27"
-    change: Relax cron to 6h safety-net (primary trigger is now hook on email.new)
+  - date: "2026-03-09"
+    change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
+  - date: "2026-03-08"
+    change: "Add write_path_allowlist for status file and email log"
+  - date: "2026-03-06"
+    change: "Add append_to_block for shared working state updates"
+  - date: "2026-03-03"
+    change: "Add exec, read_file, write_file, search_memory, get_entity, store_memory — agent was blind without file access"
   - date: "2026-02-24"
-    change: Add list_tasks for dedup check; fix analytical routing to email-analyst
-  - date: "2026-02-24"
-    change: Initial manifest creation from existing config
-  - date: "2026-02-23"
-    change: Per-agent ID created, separated from generic 'email' agent
+    change: "Initial manifest creation from existing config"

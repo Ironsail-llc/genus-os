@@ -1,7 +1,7 @@
 id: vision-monitor
 name: Vision Monitor
 description: Monitors vision events, escalates anomalies and unknown persons
-version: "2026-02-24"
+version: "2026-03-09"
 department: security
 
 reports_to: main
@@ -10,11 +10,11 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: ollama_chat/qwen3.5:122b
   fallbacks:
-    - openrouter/minimax/minimax-m2.5
+    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: qwen35
 
 schedule:
   cron: "0 6-22/6 * * *"
@@ -101,6 +101,8 @@ v2:
     - "brain/memory/vision-monitor-status.md"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-02-28"
     change: "Add VISION_MONITOR.md instruction file, memory tools (search_memory, get_entity, store_memory), update_task"
   - date: "2026-02-28"

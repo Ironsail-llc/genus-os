@@ -70,10 +70,10 @@ litellm.suppress_debug_info = True
 # NOTE: max_tokens here is the MODEL's context window, not the output cap we request.
 litellm.register_model(
     {
-        "openrouter/moonshotai/kimi-k2.5": {
-            "max_tokens": 262144,
-            "input_cost_per_token": 0.0000006,  # $0.60/M
-            "output_cost_per_token": 0.0000024,  # $2.40/M
+        "openrouter/z-ai/glm-5": {
+            "max_tokens": 204800,
+            "input_cost_per_token": 0.0000008,  # $0.80/M
+            "output_cost_per_token": 0.00000256,  # $2.56/M
         },
         "openrouter/anthropic/claude-sonnet-4-6": {
             "max_tokens": 200000,
@@ -303,7 +303,7 @@ class AgentRunner:
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        if self._should_verify(agent_config, route):
+        if self._should_verify(agent_config, route, session):
             output_text = await self._run_verification(
                 agent_config,
                 session,
@@ -560,19 +560,6 @@ class AgentRunner:
                 parent_span_id="",
             )
             _current_spawn_context.set(fresh_ctx)
-
-        # Compress context if it exceeds model's threshold
-        try:
-            from robothor.engine.context import maybe_compress
-            from robothor.engine.model_registry import get_model_limits
-
-            model_limits = get_model_limits(models[0])
-            compress_threshold = int(model_limits.max_input_tokens * 0.75)
-            session.messages = await maybe_compress(
-                session.messages, models, threshold=compress_threshold
-            )
-        except Exception as e:
-            logger.debug("Context compression failed: %s", e)
 
         # ── v2: Initialize enhancement objects ──
         scratchpad = self._create_scratchpad(agent_config, route, resumed_scratchpad)
@@ -1341,10 +1328,26 @@ class AgentRunner:
         except Exception:
             return None
 
-    def _should_verify(self, agent_config: AgentConfig, route: Any) -> bool:
+    def _should_verify(
+        self,
+        agent_config: AgentConfig,
+        route: Any,
+        session: AgentSession | None = None,
+    ) -> bool:
         """Determine if verification step should run."""
         if agent_config.verification_enabled:
             return True
+        # Skip verification for interactive sessions (adds latency, Qwen JSON unreliable)
+        if (
+            session
+            and session.run
+            and session.run.trigger_type
+            in (
+                TriggerType.TELEGRAM,
+                TriggerType.WEBCHAT,
+            )
+        ):
+            return False
         return bool(route and route.verification is True)
 
     async def _run_verification(
@@ -1371,7 +1374,7 @@ class AgentRunner:
                 agent_config.verification_prompt,
                 error_count,
                 models[0],
-                fallback_models=models[1:2],
+                fallback_models=models[1:],
             )
             if result.passed:
                 return output_text
@@ -1463,8 +1466,6 @@ class AgentRunner:
 
         limits = get_model_limits(model)
         actual_model = model
-        if limits.supports_thinking and model.startswith("openrouter/anthropic/"):
-            actual_model = model.replace("openrouter/", "", 1)
 
         kwargs: dict[str, Any] = {
             "model": actual_model,

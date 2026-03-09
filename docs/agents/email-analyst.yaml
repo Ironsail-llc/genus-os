@@ -1,7 +1,7 @@
 id: email-analyst
 name: Email Analyst
 description: Analyzes complex emails for structured response preparation
-version: "2026-02-24"
+version: "2026-03-09"
 department: email
 
 reports_to: main
@@ -10,11 +10,11 @@ receives_tasks_from: [email-classifier]
 escalates_to: main
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: ollama_chat/qwen3.5:122b
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: qwen35
 
 schedule:
   cron: "30 8-20/6 * * *"
@@ -41,7 +41,9 @@ tools_allowed:
   - ack_notification
   - append_to_block
 tools_denied:
-  - message
+  - create_message
+  - make_call
+  - transmit_prescription
 bridge_endpoints:
   - "GET /health"
   - "POST /api/tasks"
@@ -91,6 +93,8 @@ v2:
     - "brain/memory/response-analysis.json"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-02-28"
     change: "CRITICAL FIX: Add exec, read_file, write_file, search_memory, get_entity, store_memory — agent was blind without file access. Delivery→none."
   - date: "2026-02-27"

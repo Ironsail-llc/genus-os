@@ -56,6 +56,10 @@ class EngineConfig:
     # Canonical session key shared by Telegram + Helm webchat
     main_session_key: str = "agent:main:primary"
 
+    # Federation — instance identity
+    instance_id: str = ""
+    nats_url: str = ""
+
     @classmethod
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
@@ -78,6 +82,8 @@ class EngineConfig:
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
             default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
             main_session_key=os.environ.get("ROBOTHOR_MAIN_SESSION_KEY", "agent:main:primary"),
+            instance_id=os.environ.get("ROBOTHOR_INSTANCE_ID", ""),
+            nats_url=os.environ.get("ROBOTHOR_NATS_URL", ""),
         )
 
 

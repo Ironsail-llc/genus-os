@@ -1,0 +1,27 @@
+id: chat-pipeline
+name: Chat Pipeline
+description: Classify and respond to Google Chat messages
+version: "2026-03-06"
+
+triggers:
+  - type: hook
+    stream: chat
+    event_type: chat.new_message
+  - type: cron
+    cron: "0 6-22/6 * * *"
+    timezone: America/New_York
+
+timeout_seconds: 900
+
+steps:
+  - id: classify
+    type: agent
+    agent_id: chat-monitor
+    message: "New Google Chat message detected. Read chat-log.json, classify, and create tasks."
+    on_failure: abort
+
+  - id: respond
+    type: agent
+    agent_id: chat-responder
+    message: "Process your task inbox — respond to classified Chat messages."
+    on_failure: abort

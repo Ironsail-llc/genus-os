@@ -10,6 +10,7 @@ from typing import Any
 
 # ── Core exports ──
 from robothor.engine.tools.constants import (
+    FEDERATION_TOOLS,
     GIT_TOOLS,
     GWS_TOOLS,
     IMPETUS_TOOLS,
@@ -35,6 +36,7 @@ from robothor.engine.tools.registry import ToolRegistry, get_registry
 
 __all__ = [
     # Constants
+    "FEDERATION_TOOLS",
     "GIT_TOOLS",
     "GWS_TOOLS",
     "IMPETUS_TOOLS",

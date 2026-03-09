@@ -660,8 +660,8 @@ class TestThinkingAPI:
         assert call_kwargs["temperature"] == 1.0
         assert call_kwargs["thinking"]["type"] == "enabled"
         assert call_kwargs["thinking"]["budget_tokens"] == 10_000
-        # Model should be rewritten to direct Anthropic API
-        assert call_kwargs["model"] == "anthropic/claude-sonnet-4-6"
+        # Model should stay as OpenRouter path (no prefix stripping)
+        assert call_kwargs["model"] == "openrouter/anthropic/claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_thinking_blocks_filtered_from_output(self, runner, sample_agent_config):
@@ -698,11 +698,11 @@ class TestThinkingAPI:
     @pytest.mark.asyncio
     async def test_non_thinking_model_no_thinking_param(self, runner, sample_agent_config):
         """Non-thinking models should not get thinking parameter."""
-        sample_agent_config.model_primary = "openrouter/moonshotai/kimi-k2.5"
+        sample_agent_config.model_primary = "openrouter/z-ai/glm-5"
         sample_agent_config.model_fallbacks = []
 
         response = MagicMock()
-        response.model = "openrouter/moonshotai/kimi-k2.5"
+        response.model = "openrouter/z-ai/glm-5"
         response.choices = [MagicMock()]
         response.choices[0].message.content = "Hello!"
         response.choices[0].message.tool_calls = None
@@ -723,3 +723,57 @@ class TestThinkingAPI:
         call_kwargs = mock_llm.call_args.kwargs
         assert "thinking" not in call_kwargs
         assert call_kwargs["temperature"] == 0.3  # default, not forced to 1.0
+
+
+class TestShouldVerify:
+    """Tests for _should_verify logic."""
+
+    def test_explicit_verification_enabled(self, runner, sample_agent_config):
+        """verification_enabled=True always returns True."""
+        sample_agent_config.verification_enabled = True
+        assert runner._should_verify(sample_agent_config, None) is True
+
+    def test_route_verification_true(self, runner, sample_agent_config):
+        route = MagicMock()
+        route.verification = True
+        assert runner._should_verify(sample_agent_config, route) is True
+
+    def test_route_verification_false(self, runner, sample_agent_config):
+        route = MagicMock()
+        route.verification = False
+        assert runner._should_verify(sample_agent_config, route) is False
+
+    def test_skip_for_telegram_trigger(self, runner, sample_agent_config):
+        """Verification should be skipped for interactive Telegram sessions."""
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("test-agent", trigger_type=TriggerType.TELEGRAM)
+        route = MagicMock()
+        route.verification = True
+        assert runner._should_verify(sample_agent_config, route, session) is False
+
+    def test_skip_for_webchat_trigger(self, runner, sample_agent_config):
+        """Verification should be skipped for interactive webchat sessions."""
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("test-agent", trigger_type=TriggerType.WEBCHAT)
+        route = MagicMock()
+        route.verification = True
+        assert runner._should_verify(sample_agent_config, route, session) is False
+
+    def test_cron_trigger_allows_verification(self, runner, sample_agent_config):
+        """Cron triggers should still allow route-based verification."""
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("test-agent", trigger_type=TriggerType.CRON)
+        route = MagicMock()
+        route.verification = True
+        assert runner._should_verify(sample_agent_config, route, session) is True
+
+    def test_explicit_enabled_overrides_telegram_skip(self, runner, sample_agent_config):
+        """verification_enabled=True takes precedence even for Telegram."""
+        from robothor.engine.session import AgentSession
+
+        sample_agent_config.verification_enabled = True
+        session = AgentSession("test-agent", trigger_type=TriggerType.TELEGRAM)
+        assert runner._should_verify(sample_agent_config, None, session) is True

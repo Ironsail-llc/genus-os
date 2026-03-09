@@ -50,6 +50,9 @@ vision = [
     "onnxruntime>=1.17",
     "opencv-python>=4.8",
 ]
+federation = [
+    "nats-py>=2.0",
+]
 rlm = [
     "rlms>=0.1.1",
 ]
@@ -65,7 +68,7 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "robothor[api,vision,rlm,tui,dev]",
+    "robothor[api,vision,rlm,tui,federation,dev]",
 ]
 
 [project.scripts]

@@ -1,5 +1,5 @@
 # Vision Monitor Status
-Last run: 2026-03-04T11:01:31.330025+00:00
+Last run: 2026-03-09T10:01:54.567712+00:00
 Persons detected: 0
 Vision mode: disarmed
-Status: No persons detected — room clear
+Status: Room clear — no persons detected. Dimly lit room, early morning conditions.

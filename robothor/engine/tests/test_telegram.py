@@ -360,6 +360,33 @@ class TestDeepCommand:
         assert bot.bot.send_message.call_count >= 2
 
 
+class TestModelPickerRegistry:
+    """Verify all Telegram model picker entries exist in the model registry."""
+
+    def test_all_available_models_in_registry(self):
+        from robothor.engine.model_registry import _MODEL_REGISTRY
+        from robothor.engine.telegram import AVAILABLE_MODELS
+
+        for display_name, model_id in AVAILABLE_MODELS.items():
+            assert model_id in _MODEL_REGISTRY, (
+                f"AVAILABLE_MODELS[{display_name!r}] = {model_id!r} not found in _MODEL_REGISTRY"
+            )
+
+    def test_sonnet_uses_openrouter_prefix(self):
+        from robothor.engine.telegram import AVAILABLE_MODELS
+
+        sonnet_id = AVAILABLE_MODELS["Claude Sonnet 4.6"]
+        assert sonnet_id.startswith("openrouter/"), (
+            f"Sonnet should use openrouter/ prefix, got {sonnet_id!r}"
+        )
+
+    def test_qwen_in_picker(self):
+        from robothor.engine.telegram import AVAILABLE_MODELS
+
+        assert "Qwen 3.5 122B" in AVAILABLE_MODELS
+        assert AVAILABLE_MODELS["Qwen 3.5 122B"] == "ollama_chat/qwen3.5:122b"
+
+
 class TestStreamingToolVisibility:
     """Tests for tool and status visibility during Telegram streaming."""
 

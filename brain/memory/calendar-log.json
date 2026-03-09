@@ -1,157 +1,6 @@
 {
-  "lastCheckedAt": "2026-03-06T09:15:02.400441",
+  "lastCheckedAt": "2026-03-09T14:55:03.055419",
   "meetings": [
-    {
-      "id": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g60q46di56sr4ch1n851k8gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g8gpj8ha68d13gh226ko44dhk8d0jchho890j4hhj6t23ed1j8p30",
-      "title": "Harry/Philip - Zom",
-      "start": "2026-03-06T10:00:00-05:00",
-      "startEpoch": 1772809200,
-      "startLocal": "10:00 AM",
-      "end": "2026-03-06T11:00:00-05:00",
-      "endLocal": "11:00 AM",
-      "location": "zoom",
-      "description": "Harry Glorikian is inviting you to a scheduled Zoom meeting.\n\nTopic: My Meeting\nTime: Mar 6, 2026 10:00 AM Eastern Time (US and Canada)\nJoin Zoom Meeting\nhttps://us06web.zoom.us/j/88171719269?pwd=vJgZOaoHtZQIpBKOC4H8gWFS0GJDuk.1\n\nMeeting ID: 881 7171 9269\nPasscode: 931912\n\n---\n\nOne tap mobile\n+19292056099,,88171719269#,,,,*931912# US (New York)\n+16469313860,,88171719269#,,,,*931912# US\n\nJoin instructions\nhttps://us06web.zoom.us/meetings/88171719269/invitations?signature=3pK3fYqz6c-jqto2e_ug52wZhhHHJ9xGLMnTuXkiQeU\n\n\n",
-      "attendees": [
-        "philip@ironsail.ai",
-        "harry@glorikian.com"
-      ],
-      "conferenceUrl": null,
-      "fetchedAt": "2026-03-06T07:50:02.665070",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400347"
-    },
-    {
-      "id": "3r0ntr5trohgknmbk1gdj288tt_20260306T163000Z",
-      "title": "Thrive Rx Weekly Leadership Meeting",
-      "start": "2026-03-06T11:30:00-05:00",
-      "startEpoch": 1772814600,
-      "startLocal": "11:30 AM",
-      "end": "2026-03-06T12:00:00-05:00",
-      "endLocal": "12:00 PM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "jasmeet@mykaduceus.com",
-        "shahad@mykaduceus.com",
-        "philip@ironsail.ai",
-        "samantha@ironsailpharma.com",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/hnw-srhd-nng",
-      "fetchedAt": "2026-03-04T11:00:03.396383",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400370"
-    },
-    {
-      "id": "k1eu8lj3ac9thod2ae9r7aj9i4",
-      "title": "Demo -- Boladji Agueh / Squadra Solutions",
-      "start": "2026-03-06T14:00:00-05:00",
-      "startEpoch": 1772823600,
-      "startLocal": "2:00 PM",
-      "end": "2026-03-06T15:00:00-05:00",
-      "endLocal": "3:00 PM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "boladji@squadrasolutions.com",
-        "groberts@squadrasolutions.com",
-        "philip@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/ifp-mvxp-yqk",
-      "fetchedAt": "2026-03-06T07:50:02.665184",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400380"
-    },
-    {
-      "id": "j5nt996ebv0o9kv98ao8483lac_20260309T160000Z",
-      "title": " V/I Same Page Meetings",
-      "start": "2026-03-09T09:00:00-04:00",
-      "startEpoch": 1773061200,
-      "startLocal": "9:00 AM",
-      "end": "2026-03-09T09:30:00-04:00",
-      "endLocal": "9:30 AM",
-      "location": null,
-      "description": "<p>A recurring touchpoint between Philip and Daniel to ensure strategic alignment across key initiatives. These meetings serve as a dedicated space to review priorities, align on timelines, and make or prepare for key decisions.</p><p><strong>Agenda:</strong></p><ul><li><p>Quick status check on current initiatives.</p></li><li><p>Review of upcoming timelines and milestones.</p></li><li><p>Strategic alignment and adjustments.</p></li><li><p>Discussion of any decisions needing input or action.</p></li><li><p>Open items or blockers.</p></li></ul>",
-      "attendees": [
-        "daniel@valhallams.com",
-        "philip@ironsail.ai",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/gsd-rzng-avz",
-      "fetchedAt": "2026-03-04T12:00:03.322836",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400390"
-    },
-    {
-      "id": "1ug66ljb1a0bt3n3o4cm44eq5f_20260309T170000Z",
-      "title": "Weekly Alignment Meetings",
-      "start": "2026-03-09T13:00:00-04:00",
-      "startEpoch": 1773075600,
-      "startLocal": "1:00 PM",
-      "end": "2026-03-09T13:30:00-04:00",
-      "endLocal": "1:30 PM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "philip@ironsail.ai",
-        "craig@ironsail.ai",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/uvg-rhki-akm",
-      "fetchedAt": "2026-03-04T14:00:03.077191",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400398"
-    },
     {
       "id": "4uklkvek28885lto956el08r7n_20260310T130000Z",
       "title": "Weekly Catch-Up: Eugene & Philip",
@@ -168,7 +17,7 @@
         "robothor@ironsail.ai"
       ],
       "conferenceUrl": "https://meet.google.com/qwg-ujbr-rpw",
-      "fetchedAt": "2026-03-06T07:50:02.665280",
+      "fetchedAt": "2026-03-09T11:15:03.104374",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -180,7 +29,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400406"
+      "updatedAt": "2026-03-09T14:55:03.055337"
     },
     {
       "id": "7t2ogm09acgrjg5gs5g81e7bc6_20260310T150000Z",
@@ -197,7 +46,7 @@
         "philip@ironsail.ai"
       ],
       "conferenceUrl": "https://meet.google.com/iog-sgsh-fmm",
-      "fetchedAt": "2026-03-06T07:50:02.665341",
+      "fetchedAt": "2026-03-09T11:15:03.104445",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -209,7 +58,71 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400414"
+      "updatedAt": "2026-03-09T14:55:03.055355"
+    },
+    {
+      "id": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-03-10T12:30:00-04:00",
+      "startEpoch": 1773160200,
+      "startLocal": "12:30 PM",
+      "end": "2026-03-10T13:30:00-04:00",
+      "endLocal": "1:30 PM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "caroline@skyfin.net",
+        "daniel@valhallams.com",
+        "philip@ironsail.ai",
+        "konrad@valhallams.com",
+        "samantha@valhallahq.com"
+      ],
+      "conferenceUrl": "https://meet.google.com/sdm-ycdr-iww",
+      "fetchedAt": "2026-03-09T11:15:03.104699",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-09T14:55:03.055364"
+    },
+    {
+      "id": "0p59if5ouv85ttjba219pbg6eq",
+      "title": "Valhalla \u2013 Revive Additional Discovery Discussion",
+      "start": "2026-03-10T14:00:00-04:00",
+      "startEpoch": 1773165600,
+      "startLocal": "2:00 PM",
+      "end": "2026-03-10T14:30:00-04:00",
+      "endLocal": "2:30 PM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "philip@ironsail.ai",
+        "samantha@ironsailpharma.com",
+        "bproctor@thompsoncoburn.com",
+        "apennetti@thompsoncoburn.com",
+        "jdesantis@thompsoncoburn.com"
+      ],
+      "conferenceUrl": "https://meet.google.com/rys-xrvg-tzv",
+      "fetchedAt": "2026-03-09T11:15:03.104518",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-09T14:55:03.055372"
     },
     {
       "id": "47p2hockfed4feuaop30it8ucq",
@@ -233,7 +146,7 @@
         "jennifer@valhallams.com"
       ],
       "conferenceUrl": null,
-      "fetchedAt": "2026-03-06T07:50:02.665398",
+      "fetchedAt": "2026-03-09T11:15:03.104576",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -245,7 +158,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400419"
+      "updatedAt": "2026-03-09T14:55:03.055377"
     },
     {
       "id": "1der3n4hb8msavg993lgp5u40s_20260311T133000Z",
@@ -268,7 +181,7 @@
         "robothor@ironsail.ai"
       ],
       "conferenceUrl": "https://meet.google.com/xjh-vonq-ang",
-      "fetchedAt": "2026-03-06T07:50:02.665456",
+      "fetchedAt": "2026-03-09T11:15:03.104638",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -280,27 +193,29 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400429"
+      "updatedAt": "2026-03-09T14:55:03.055385"
     },
     {
-      "id": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-03-11T11:00:00-04:00",
-      "startEpoch": 1773241200,
-      "startLocal": "11:00 AM",
-      "end": "2026-03-11T12:00:00-04:00",
-      "endLocal": "12:00 PM",
+      "id": "65mslb6kjv0kns18ari0oo1vsk",
+      "title": "Peptide Strategy \u2013 Next Steps & Action Plan",
+      "start": "2026-03-11T11:30:00-04:00",
+      "startEpoch": 1773243000,
+      "startLocal": "11:30 AM",
+      "end": "2026-03-11T12:15:00-04:00",
+      "endLocal": "12:15 PM",
       "location": null,
       "description": null,
       "attendees": [
-        "caroline@skyfin.net",
+        "eugene@ironsail.ai",
+        "olesia@valhallavitality.com",
+        "robothor@ironsail.ai",
         "daniel@valhallams.com",
         "philip@ironsail.ai",
         "konrad@valhallams.com",
-        "samantha@valhallahq.com"
+        "rosanna@valhallavitality.com"
       ],
-      "conferenceUrl": "https://meet.google.com/sdm-ycdr-iww",
-      "fetchedAt": "2026-03-06T08:15:03.295191",
+      "conferenceUrl": "https://meet.google.com/fts-yeof-wdh",
+      "fetchedAt": "2026-03-09T13:25:03.057978",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -312,148 +227,99 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-06T09:15:02.400438"
+      "updatedAt": "2026-03-09T14:55:03.055392"
+    },
+    {
+      "id": "7c9bj2cetghk78aams592bn5i2_20260311T190000Z",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-11T15:00:00-04:00",
+      "startEpoch": 1773255600,
+      "startLocal": "3:00 PM",
+      "end": "2026-03-11T15:30:00-04:00",
+      "endLocal": "3:30 PM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "daniel@valhallams.com",
+        "philip@ironsail.ai",
+        "sandra@valhallams.com",
+        "hr@ironsail.ai",
+        "jennifer@valhallams.com"
+      ],
+      "conferenceUrl": null,
+      "fetchedAt": "2026-03-09T11:15:03.104759",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-09T14:55:03.055401"
+    },
+    {
+      "id": "a304ju1ctclso519dcoj8vci86_20260312T130000Z",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-03-12T09:00:00-04:00",
+      "startEpoch": 1773320400,
+      "startLocal": "9:00 AM",
+      "end": "2026-03-12T10:00:00-04:00",
+      "endLocal": "10:00 AM",
+      "location": null,
+      "description": "<p>Collaborative initiative aimed at enhancing internal brand awareness and engagement within the organizations. This partnership focuses on leveraging innovative marketing strategies and tools to streamline communication, foster a unified culture, and drive employee participation in internal campaigns and projects</p><u></u>",
+      "attendees": [
+        "eugene@ironsail.ai",
+        "philip@ironsail.ai",
+        "cielo@valhallams.com",
+        "robothor@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/iof-jgng-cjj",
+      "fetchedAt": "2026-03-09T11:15:03.104834",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-09T14:55:03.055409"
+    },
+    {
+      "id": "bj98cjvo1t2ujlf1dbga94v3sg",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-03-12T10:00:00-04:00",
+      "startEpoch": 1773324000,
+      "startLocal": "10:00 AM",
+      "end": "2026-03-12T10:15:00-04:00",
+      "endLocal": "10:15 AM",
+      "location": null,
+      "description": "Weekly Thursday check: Has the Mac Studio M5 been announced? Check apple.com/newsroom, MacRumors, 9to5Mac. If live \u2014 ORDER IMMEDIATELY, 512GB+ config, first hour matters.",
+      "attendees": [],
+      "conferenceUrl": null,
+      "fetchedAt": "2026-03-09T13:30:03.039941",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-09T14:55:03.055416"
     }
   ],
   "changes": [
-    {
-      "timestamp": "2026-02-23T08:40:03.255401",
-      "eventId": "3ba7v7i1gbp0sup24ue5v1a5bo",
-      "type": "rescheduled",
-      "title": "ADKON Sailboat Viewing",
-      "oldStart": "2026-02-23T15:00:00-04:00",
-      "newStart": "2026-02-23T13:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T09:30:02.888330",
-      "eventId": "7hvhekigkcc3ihk8f81pcqrlqd_20260224T153000Z",
-      "type": "new",
-      "title": "Valhalla Vitality Daily Stand Up",
-      "start": "2026-02-24T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T09:35:02.793316",
-      "eventId": "1ug66ljb1a0bt3n3o4cm44eq5f_20260223T180000Z",
-      "type": "rescheduled",
-      "title": "Weekly Alignment Meetings",
-      "oldStart": "2026-02-23T14:00:00-04:00",
-      "newStart": "2026-02-23T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T10:00:02.818384",
-      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260224T160000Z",
-      "type": "new",
-      "title": "Weekly Product Update",
-      "start": "2026-02-24T12:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T10:30:03.037348",
-      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g6h244e1n88r3gh1h84ok8gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g892jica56kr3cdhl8osk6c1k6ks38e236gp30e1n6d2j0ea574o0",
-      "type": "new",
-      "title": "Valhalla meeting ",
-      "start": "2026-02-24T14:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T10:30:03.100262",
-      "eventId": "1der3n4hb8msavg993lgp5u40s_20260225T143000Z",
-      "type": "new",
-      "title": "AI Workshop Session  ",
-      "start": "2026-02-25T10:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T10:45:02.912370",
-      "eventId": "ekavrob6r03oiar1n075t8aosk_20260225T144500Z",
-      "type": "new",
-      "title": "Pharma Daily Stand-Up",
-      "start": "2026-02-25T10:45:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T14:00:02.685091",
-      "eventId": "39d9v1pr8438c2q59h84ogfbtc_20260225T150000Z",
-      "type": "new",
-      "title": "Daily Standup Meeting",
-      "start": "2026-02-25T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T14:35:02.805722",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260225T160000Z",
-      "type": "new",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-02-24T13:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-23T16:15:03.015388",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260225T160000Z",
-      "type": "modified",
-      "title": "Weekly Senior Leadership Standup",
-      "details": "attendees/duration/title changed",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T10:00:02.865698",
-      "eventId": "39d9v1pr8438c2q59h84ogfbtc_20260225T150000Z",
-      "type": "new",
-      "title": "Daily Standup Meeting",
-      "start": "2026-02-25T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T10:00:02.903352",
-      "eventId": "7hvhekigkcc3ihk8f81pcqrlqd_20260225T153000Z",
-      "type": "new",
-      "title": "Valhalla Vitality Daily Stand Up",
-      "start": "2026-02-25T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T10:30:02.903085",
-      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260223T170000Z",
-      "type": "new",
-      "title": " V/I Same Page Meetings",
-      "start": "2026-02-25T13:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T10:45:02.982298",
-      "eventId": "7c9bj2cetghk78aams592bn5i2_20260225T200000Z",
-      "type": "new",
-      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
-      "start": "2026-02-25T16:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T11:30:02.503373",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260226T140000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-02-26T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T13:00:03.149424",
-      "eventId": "ekavrob6r03oiar1n075t8aosk_20260226T144500Z",
-      "type": "new",
-      "title": "Pharma Daily Stand-Up",
-      "start": "2026-02-26T10:45:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-02-24T14:00:02.657375",
-      "eventId": "5vlkb2su8gdcio2crgmp4aevn4_20260226T150000Z",
-      "type": "new",
-      "title": "Weekly Backlog Refinement",
-      "start": "2026-02-26T11:00:00-04:00",
-      "reviewedAt": null
-    },
     {
       "timestamp": "2026-02-24T17:10:02.797701",
       "eventId": "ekavrob6r03oiar1n075t8aosk_20260225T144500Z",
@@ -1133,6 +999,143 @@
       "type": "new",
       "title": "Weekly Senior Leadership Standup",
       "start": "2026-03-11T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-06T22:25:02.513722",
+      "eventId": "0p59if5ouv85ttjba219pbg6eq",
+      "type": "new",
+      "title": "Valhalla \u2013 Revive Additional Discovery Discussion",
+      "start": "2026-03-10T14:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-06T22:25:02.555167",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260311T190000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-11T15:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-06T22:25:02.555255",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260312T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-03-12T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T09:30:02.817015",
+      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-03-12T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.063180",
+      "eventId": "1ug66ljb1a0bt3n3o4cm44eq5f_20260309T170000Z",
+      "type": "new",
+      "title": "Weekly Alignment Meetings",
+      "start": "2026-03-09T13:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104275",
+      "eventId": "4uklkvek28885lto956el08r7n_20260310T130000Z",
+      "type": "new",
+      "title": "Weekly Catch-Up: Eugene & Philip",
+      "start": "2026-03-10T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104376",
+      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260310T150000Z",
+      "type": "new",
+      "title": "Weekly Product Update",
+      "start": "2026-03-10T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104447",
+      "eventId": "0p59if5ouv85ttjba219pbg6eq",
+      "type": "new",
+      "title": "Valhalla \u2013 Revive Additional Discovery Discussion",
+      "start": "2026-03-10T14:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104519",
+      "eventId": "47p2hockfed4feuaop30it8ucq",
+      "type": "new",
+      "title": "Jennifer Guerrero Out of Office",
+      "start": "2026-03-11",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104578",
+      "eventId": "1der3n4hb8msavg993lgp5u40s_20260311T133000Z",
+      "type": "new",
+      "title": "AI Workshop Session  ",
+      "start": "2026-03-11T09:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104640",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
+      "type": "new",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-03-11T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104700",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260311T190000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-11T15:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104761",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260312T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-03-12T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T11:15:03.104835",
+      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-03-12T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T12:25:02.653356",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
+      "type": "rescheduled",
+      "title": "Weekly Senior Leadership Standup",
+      "oldStart": "2026-03-11T11:00:00-04:00",
+      "newStart": "2026-03-10T12:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T13:25:03.016870",
+      "eventId": "65mslb6kjv0kns18ari0oo1vsk",
+      "type": "new",
+      "title": "Peptide Strategy \u2013 Next Steps & Action Plan",
+      "start": "2026-03-11T11:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-09T13:30:03.001588",
+      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-03-12T10:00:00-04:00",
       "reviewedAt": null
     }
   ],
