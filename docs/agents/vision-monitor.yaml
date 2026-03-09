@@ -1,7 +1,7 @@
 id: vision-monitor
 name: Vision Monitor
 description: Monitors vision events, escalates anomalies and unknown persons
-version: "2026-02-24"
+version: "2026-03-09"
 department: security
 
 reports_to: main
@@ -10,16 +10,16 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: openrouter/z-ai/glm-5
   fallbacks:
     - openrouter/minimax/minimax-m2.5
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: glm5
 
 schedule:
   cron: "0 6-22/6 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
+  timeout_seconds: 300  # Reduced from 480s — avg duration 112s, 300s = 2.7× headroom
   max_iterations: 5
   session_target: isolated
   stagger_ms: 300000
@@ -101,6 +101,8 @@ v2:
     - "brain/memory/vision-monitor-status.md"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Reduce timeout 480s→300s — avg duration 112s, 300s = 2.7× headroom; 7.7% timeout rate (2/26 runs). Stuck runs fail 3min faster [nightwatch]"
   - date: "2026-02-28"
     change: "Add VISION_MONITOR.md instruction file, memory tools (search_memory, get_entity, store_memory), update_task"
   - date: "2026-02-28"
