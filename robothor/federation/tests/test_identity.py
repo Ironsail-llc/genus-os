@@ -140,9 +140,11 @@ class TestInviteToken:
         init_identity(fed_config)
         token = create_invite_token(fed_config)
 
-        # Tamper with the payload
+        # Tamper with the canonical payload JSON string
         bundle = json.loads(base64.urlsafe_b64decode(token.token))
-        bundle["payload"]["issuer_name"] = "TAMPERED"
+        payload = json.loads(bundle["payload_json"])
+        payload["issuer_name"] = "TAMPERED"
+        bundle["payload_json"] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         tampered = base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
 
         with pytest.raises(ValueError, match="signature verification failed"):
@@ -155,13 +157,13 @@ class TestInviteToken:
     def test_decode_missing_payload(self):
         bundle = {"signature": "abc"}
         token_str = base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
-        with pytest.raises(ValueError, match="missing payload or signature"):
+        with pytest.raises(ValueError, match="missing payload"):
             decode_invite_token(token_str)
 
     def test_decode_missing_signature(self):
         bundle = {"payload": {"issuer_public_key": "x"}}
         token_str = base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
-        with pytest.raises(ValueError, match="missing payload or signature"):
+        with pytest.raises(ValueError, match="missing signature"):
             decode_invite_token(token_str)
 
     def test_create_requires_identity(self, fed_config):
