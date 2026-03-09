@@ -125,17 +125,16 @@ async def _federation_sync_status(args: dict[str, Any], ctx: ToolContext) -> dic
                 mgr.add(conn)
 
             if connection_id:
-                connections = [mgr.get(connection_id)]
-                if connections[0] is None:
+                found = mgr.get(connection_id)
+                if found is None:
                     return {"error": f"Connection not found: {connection_id}"}
+                connections = [found]
             else:
                 connections = mgr.list_all()
 
             results = []
             journal = EventJournal(instance_id="")
             for conn in connections:
-                if conn is None:
-                    continue
                 watermarks = {}
                 unsynced = {}
                 for channel in SyncChannel:
