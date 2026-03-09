@@ -85,6 +85,9 @@ Tools: `memory_block_read`, `memory_block_write`, `memory_block_list`, `append_t
 | `store_memory(content, content_type)` | Store to memory |
 | `make_call(to, recipient, purpose)` | Initiate outbound phone call (Gemini Live AI conversation) |
 | `deep_reason(query, context?, context_sources?)` | Deep reasoning over large context via RLM REPL — $0.50-$2.00/call, main agent only |
+| `federation_query(connection_id, query_type, params?)` | Query a connected instance (health, agent_runs, memory) |
+| `federation_trigger(connection_id, agent_id, message)` | Trigger an agent run on a connected instance |
+| `federation_sync_status(connection_id?)` | Check sync watermarks and pending event counts |
 
 ### Interactive Modes
 

@@ -106,17 +106,32 @@ The dashboard becomes the operating system's shell.
 - [ ] Agent console (interactive chat with any running agent)
 - [ ] Plugin system for custom panels
 
+## v0.10 -- Federation
+
+Peer-to-peer instance networking. Independent instances connect with scoped permissions.
+
+- [x] Instance identity (Ed25519 keypair generation, signed invite tokens)
+- [x] Connection state machine (pending → active → limited/suspended)
+- [x] Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks
+- [x] NATS JetStream transport (hub server + leaf node topology)
+- [x] Federation agent tools (query, trigger, sync_status)
+- [x] CLI commands (init, invite, connect, status, list, export, suspend, remove)
+- [x] Daemon integration (auto-start NATS on active connections)
+- [ ] Local integration test (two daemons on localhost)
+- [ ] Sensor tables + tools (Phase 5 — PF project)
+- [ ] Signal K MCP integration
+
 ## v1.0 -- Unified Syscall Interface
 
 The complete operating system. Every capability accessible through one interface.
 
 - [ ] Syscall-style API (process, memory, device, channel, schedule, capability)
 - [ ] Agent app store (install, update, remove agent packages)
-- [ ] Multi-node support (distribute agents across machines)
+- [x] Multi-node support (federation — distribute agents across machines)
 - [ ] Snapshot and restore (full system state backup)
 - [ ] SDK for building agent apps against the Robothor API
 - [ ] Comprehensive documentation and tutorials
 
 ---
 
-**Current status:** v0.1-0.3 implemented (1,400+ tests passing). The intelligence layer, agent orchestration, and control plane are production-validated. Next: formalizing the process model.
+**Current status:** v0.1-0.3 + v0.10 implemented (2,000+ tests passing). The intelligence layer, agent orchestration, control plane, and federation are production-validated. Next: formalizing the process model.

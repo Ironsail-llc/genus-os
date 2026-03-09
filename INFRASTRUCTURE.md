@@ -106,9 +106,12 @@ User: `philip` (local peer auth) + `postgres` (legacy tables)
 | health_activities | philip | GPS activities — runs, rides, etc. (BIGINT PK = activity_id) |
 | health_sync_log | philip | Garmin sync audit trail (SERIAL PK) |
 | vault_secrets | philip | Encrypted credential store (AES-256-GCM, agent-accessible) |
+| federation_identity | philip | This instance's UUID, display name, Ed25519 public key |
+| federation_connections | philip | Peer links with relationship, state, exports/imports |
+| federation_events | philip | Append-only event journal for sync (HLC timestamps) |
 | audit_log | postgres | System audit trail |
 
-Embeddings: 1024-dim vectors via Qwen3-Embedding, indexed with pgvector ivfflat.
+Embeddings: 1024-dim vectors via Qwen3-Embedding, indexed with pgvector HNSW (m=16, ef_construction=200).
 
 ## Redis
 

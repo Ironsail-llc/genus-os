@@ -167,6 +167,35 @@ sudo tailscale up
 
 ---
 
+## Phase 6: Federation (Optional)
+
+**Trigger:** User wants to connect this instance to another Robothor instance.
+
+1. Generate identity:
+   ```bash
+   robothor federation init
+   ```
+2. If this is the **parent** (hub): generate an invite token:
+   ```bash
+   robothor federation invite --relationship child --ttl 48
+   ```
+3. If this is the **child** (connecting to an existing hub): accept a token:
+   ```bash
+   robothor federation connect <token>
+   ```
+4. Verify:
+   ```bash
+   robothor federation status
+   ```
+5. Restart the engine to activate NATS transport:
+   ```bash
+   robothor engine stop && robothor engine start
+   ```
+
+Full architecture: `docs/FEDERATION.md`
+
+---
+
 ## Quick Reference
 
 | Task | Command |
@@ -181,6 +210,10 @@ sudo tailscale up
 | Install agents | `robothor agent install --preset <name>` |
 | Run history | `robothor engine history` |
 | Tunnel config | `robothor tunnel generate` |
+| Federation init | `robothor federation init` |
+| Invite a peer | `robothor federation invite` |
+| Connect to peer | `robothor federation connect <token>` |
+| Federation status | `robothor federation status` |
 
 ## Principles
 

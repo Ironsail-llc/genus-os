@@ -22,7 +22,7 @@ One repo. One CLI. Your hardware.
 
 ## Highlights
 
-**Platform** — 16 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 101 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). Deep reasoning (RLM) with custom tool REPL and context pre-loading. 7 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning, exec allowlist, write path restriction). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC.
+**Platform** — 17 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 106 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). Deep reasoning (RLM) with custom tool REPL and context pre-loading. 7 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning, exec allowlist, write path restriction). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC. Peer-to-peer federation lets independent instances connect with scoped permissions over NATS JetStream.
 
 **The Helm** — Not a dashboard, a control plane. Next.js 16 + Dockview with 45 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor service health. Fully extensible component registry.
 
@@ -31,6 +31,8 @@ One repo. One CLI. Your hardware.
 **Physical** — YOLOv8 nano + InsightFace ArcFace, loaded once at startup. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Pluggable alert targets. Scene analysis via vision LLM. Telegram file handling — PDFs, images, and documents processed inline. All local, no cloud.
 
 **Operations** — Outbound voice calling (Twilio + Gemini Live). Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline (failure analysis &rarr; improvement proposals &rarr; draft PRs). sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 64 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
+
+**Federation** — Connect independent Robothor instances into a mesh. Ed25519 signed invite tokens, bilateral connections with scoped exports/imports, three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering. NATS JetStream transport with leaf-node topology. PostgreSQL everywhere — every instance runs the same schema.
 
 ## Getting Started
 
@@ -348,6 +350,31 @@ Always-on camera monitoring with runtime mode switching:
 
 **Pipeline:** Motion detection &rarr; YOLOv8 nano (6 MB) &rarr; InsightFace ArcFace (300 MB) &rarr; pluggable alerts. Unknown persons trigger a snapshot to your chosen channel in under 2 seconds. Scene analysis via vision LLM (Ollama). Any RTSP camera source. Mode switch at runtime, no restart.
 
+## Federation
+
+Connect independent Robothor instances into a peer-to-peer mesh. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
+
+```bash
+# On the parent instance:
+robothor federation init
+robothor federation invite --relationship child --ttl 48
+# → prints a one-time token
+
+# On the new instance:
+git clone https://github.com/Ironsail-llc/robothor.git
+cd robothor && pip install -e ".[all]"
+robothor init
+robothor federation init
+robothor federation connect <token>
+robothor engine start
+```
+
+Each connection has a **relationship** (parent, child, or peer) that sets default capability templates, **exports/imports** for scoped data sharing, and a **state machine** (pending → active → limited/suspended). Sync uses three prioritized channels (critical, bulk, media) with Hybrid Logical Clocks for causal ordering across instances.
+
+Transport: NATS with JetStream for reliable, store-and-forward messaging. Hub instances run a full NATS server; leaf instances connect via NATS leaf nodes.
+
+Full architecture: [docs/FEDERATION.md](docs/FEDERATION.md)
+
 ## Architecture
 
 ```
@@ -378,6 +405,12 @@ Always-on camera monitoring with runtime mode switching:
 │  └────────────────────────────────────────────────────┘│
 │                                                          │
 │  PostgreSQL 16 + pgvector  ·  Redis 7  ·  Ollama        │
+└─────────────────────────┬────────────────────────────────┘
+                          │
+┌─────────────────────────┴────────────────────────────────┐
+│  Federation                                               │
+│  NATS JetStream · Ed25519 tokens · HLC sync · Leaf nodes │
+│  Connects independent instances with scoped permissions   │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -394,6 +427,7 @@ robothor/
 │   ├── vision/             # YOLO detection, InsightFace recognition, alerts
 │   ├── events/             # Redis Streams, RBAC, consumer workers
 │   ├── api/                # MCP server (64 tools), RAG orchestrator
+│   ├── federation/          # Peer-to-peer instance networking (identity, sync, NATS)
 │   ├── health/             # Garmin health data sync
 │   └── cli.py              # CLI entry point
 │
@@ -426,6 +460,10 @@ robothor/
 | `robothor engine history` | Recent agent run history |
 | `robothor engine workflow list` | List loaded workflows |
 | `robothor engine workflow run <id>` | Execute a workflow manually |
+| `robothor federation init` | Generate instance identity (Ed25519 keypair) |
+| `robothor federation invite` | Generate signed invite token for a peer |
+| `robothor federation connect <token>` | Accept connection from a peer |
+| `robothor federation status` | Show identity and all connections |
 
 ## Requirements
 
@@ -463,6 +501,7 @@ The system runs as systemd services behind a Cloudflare tunnel with encrypted se
 | Vision | YOLO + InsightFace detection loop |
 | Voice Server | Twilio inbound/outbound calls + Gemini Live + Kokoro TTS |
 | The Helm | Live control plane dashboard |
+| NATS Server | Federation transport (JetStream, leaf nodes) |
 | Cloudflare Tunnel | All `*.robothor.ai` routes with Access policies |
 
 **Local models (Ollama):**

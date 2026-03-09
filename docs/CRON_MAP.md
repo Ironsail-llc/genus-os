@@ -185,6 +185,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | failure-analyzer | `0 */2 * * *` | Sonnet 4.6 | none (silent) | cron |
 | improvement-analyst | `0 2 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
 | overnight-pr | `0 3 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
+| chat-responder | `*/30 6-22 * * *` | GLM-5 | none (silent) | downstream from chat-monitor |
 
 ## Engine Workflow Crons (APScheduler from `docs/workflows/*.yaml`)
 
@@ -194,11 +195,13 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | calendar-pipeline | `0 6-22/6 * * *` | monitor → done | hook: calendar.* |
 | nightwatch | `0 2 * * *` | analyst → condition → overnight-pr | cron (nightly) |
 
+| chat-pipeline | — | chat-responder → done | hook: chat.new (hook-only) |
+
 `vision-pipeline` is hook-only (no cron).
 
 ## Notes
 
-- All Engine agents use **Kimi K2.5** except Email Responder (**Sonnet 4.6**, quality-critical) and all Nightwatch agents (**Sonnet 4.6**).
+- GWS-heavy agents (Main, Email Responder, Chat Responder, Calendar Monitor) use **GLM-5**. Nightwatch agents use **Sonnet 4.6**. Other workers use **Qwen 3.5 122B** (local) or **GLM-5**.
 - Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
 - Main heartbeat runs hourly and reads all worker status files. Always sends a report — never silent.
 - Workers write status files and stop silently.
@@ -214,4 +217,4 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ---
 
-**Updated:** 2026-03-05
+**Updated:** 2026-03-09
