@@ -195,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     fed_invite.add_argument("--ttl", type=int, default=24, help="Token TTL in hours (default 24)")
     fed_connect = fed_sub.add_parser("connect", help="Accept a connection invite token")
     fed_connect.add_argument("token", help="Invite token from the peer instance")
+    fed_connect.add_argument(
+        "--trust",
+        action="store_true",
+        help="Skip signature verification (use for pre-shared tokens on trusted networks)",
+    )
     fed_sub.add_parser("status", help="Show all connections and their health")
     fed_sub.add_parser("list", help="List connected instances")
     fed_export = fed_sub.add_parser("export", help="Expose a capability to a peer")
@@ -791,7 +796,7 @@ def _cmd_federation(args: argparse.Namespace) -> int:
 
         config = FederationConfig.from_env()
         try:
-            connection = consume_invite_token(config, args.token)
+            connection = consume_invite_token(config, args.token, trust=args.trust)
             save_connection(connection)
             print(f"Connected to: {connection.peer_name}")
             print(f"Connection ID: {connection.id}")

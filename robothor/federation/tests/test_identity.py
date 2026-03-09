@@ -251,6 +251,58 @@ class TestConsumeInviteToken:
             consume_invite_token(consumer_config, token.token)
 
 
+class TestTrustMode:
+    def _tamper_signature(self, token_str: str) -> str:
+        """Return a token with a corrupted signature."""
+        bundle = json.loads(base64.urlsafe_b64decode(token_str))
+        sig_bytes = base64.b64decode(bundle["signature"])
+        # Flip a byte in the signature
+        corrupted = bytes([sig_bytes[0] ^ 0xFF]) + sig_bytes[1:]
+        bundle["signature"] = base64.b64encode(corrupted).decode()
+        return base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
+
+    def test_decode_trust_skips_verification(self, fed_config):
+        """Tampered signature succeeds with verify_signature=False."""
+        init_identity(fed_config)
+        token = create_invite_token(fed_config)
+        tampered = self._tamper_signature(token.token)
+
+        decoded = decode_invite_token(tampered, verify_signature=False)
+        assert decoded.issuer_id == token.issuer_id
+        assert decoded.issuer_name == token.issuer_name
+
+    def test_decode_default_still_verifies(self, fed_config):
+        """Tampered signature still fails without verify_signature=False."""
+        init_identity(fed_config)
+        token = create_invite_token(fed_config)
+        tampered = self._tamper_signature(token.token)
+
+        with pytest.raises(ValueError, match="signature verification failed"):
+            decode_invite_token(tampered)
+
+    def test_consume_trust_mode(self, fed_config, tmp_path):
+        """Consume with trust=True on tampered-sig token creates connection."""
+        init_identity(fed_config, display_name="Issuer")
+        token = create_invite_token(fed_config, Relationship.PEER)
+        tampered = self._tamper_signature(token.token)
+
+        consumer_dir = tmp_path / "consumer" / ".robothor"
+        consumer_dir.mkdir(parents=True)
+        consumer_config = FederationConfig(
+            instance_id="",
+            instance_name="consumer",
+            config_dir=consumer_dir,
+            identity_file=consumer_dir / "identity.json",
+            public_endpoint="https://consumer.robothor.ai",
+        )
+        init_identity(consumer_config, display_name="Consumer")
+
+        conn = consume_invite_token(consumer_config, tampered, trust=True)
+        assert conn.state == ConnectionState.PENDING
+        assert conn.peer_name == "Issuer"
+        assert conn.relationship == Relationship.PEER
+
+
 class TestInvertRelationship:
     def test_parent_to_child(self):
         assert _invert_relationship(Relationship.PARENT) == Relationship.CHILD

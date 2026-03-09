@@ -38,6 +38,14 @@ A bilateral link between two instances, established via token exchange:
 4. Both sides see the connection in PENDING state
 5. Activate when NATS handshake completes → ACTIVE
 
+If signature verification fails due to `cryptography` library version mismatches across
+machines (different PEM serialization), use `--trust` to skip verification when the token
+was shared over a trusted channel (same LAN, direct handoff):
+
+```bash
+robothor federation connect <token> --trust
+```
+
 Each connection has:
 - **Relationship**: parent, child, or peer (sets default capability templates)
 - **State**: pending → active → optionally limited or suspended
@@ -148,7 +156,7 @@ Events are timestamped with HLC (wall time + counter + instance ID) for causal o
 |---|---|
 | `robothor federation init` | Generate instance identity (Ed25519 keypair) |
 | `robothor federation invite [--relationship peer\|parent\|child] [--ttl 24]` | Generate invite token |
-| `robothor federation connect <token>` | Accept connection from peer |
+| `robothor federation connect <token> [--trust]` | Accept connection from peer (--trust skips signature verification) |
 | `robothor federation status` | Show instance identity + all connections |
 | `robothor federation list` | List connections (compact) |
 | `robothor federation export <connection> <capability>` | Expose capability to peer |

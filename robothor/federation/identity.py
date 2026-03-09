@@ -176,11 +176,16 @@ def create_invite_token(
     )
 
 
-def decode_invite_token(token_str: str) -> InviteToken:
+def decode_invite_token(token_str: str, *, verify_signature: bool = True) -> InviteToken:
     """Decode and verify an invite token.
 
     Verifies the Ed25519 signature to ensure the token hasn't been tampered with.
     Does NOT check expiry — caller should check expires_at.
+
+    Args:
+        token_str: Base64-encoded invite token.
+        verify_signature: If False, skip Ed25519 signature verification.
+            Use only for pre-shared tokens on trusted networks.
     """
     try:
         bundle = json.loads(base64.urlsafe_b64decode(token_str))
@@ -205,16 +210,19 @@ def decode_invite_token(token_str: str) -> InviteToken:
     if not signature_b64:
         raise ValueError("Token missing signature")
 
-    # Verify signature
-    public_pem = payload.get("issuer_public_key", "").encode()
-    try:
-        public_key = serialization.load_pem_public_key(public_pem)
-        if not isinstance(public_key, Ed25519PublicKey):
-            raise ValueError("Token public key is not Ed25519")
-        signature = base64.b64decode(signature_b64)
-        public_key.verify(signature, payload_bytes)
-    except Exception as exc:
-        raise ValueError(f"Token signature verification failed: {exc}") from exc
+    if verify_signature:
+        # Verify signature
+        public_pem = payload.get("issuer_public_key", "").encode()
+        try:
+            public_key = serialization.load_pem_public_key(public_pem)
+            if not isinstance(public_key, Ed25519PublicKey):
+                raise ValueError("Token public key is not Ed25519")
+            signature = base64.b64decode(signature_b64)
+            public_key.verify(signature, payload_bytes)
+        except Exception as exc:
+            raise ValueError(f"Token signature verification failed: {exc}") from exc
+    else:
+        logger.warning("Signature verification skipped (--trust mode)")
 
     # Check version
     if payload.get("v") != 1:
@@ -236,12 +244,17 @@ def decode_invite_token(token_str: str) -> InviteToken:
 def consume_invite_token(
     config: FederationConfig,
     token_str: str,
+    *,
+    trust: bool = False,
 ) -> Connection:
     """Consume an invite token to establish a connection.
 
     Returns the new Connection (in PENDING state, ready for handshake).
+
+    Args:
+        trust: If True, skip signature verification (for pre-shared tokens).
     """
-    invite = decode_invite_token(token_str)
+    invite = decode_invite_token(token_str, verify_signature=not trust)
 
     # Check expiry
     expires = datetime.fromisoformat(invite.expires_at)
