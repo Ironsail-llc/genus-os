@@ -1,7 +1,7 @@
 id: calendar-monitor
 name: Calendar Monitor
 description: Detects calendar conflicts, cancellations, and changes
-version: "2026-02-24"
+version: "2026-03-09"
 department: calendar
 
 reports_to: main
@@ -10,16 +10,16 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: openrouter/moonshotai/kimi-k2.5
+  primary: openrouter/z-ai/glm-5
   fallbacks:
     - openrouter/minimax/minimax-m2.5
     - gemini/gemini-2.5-pro
-  payload_alias: kimi
+  payload_alias: glm5
 
 schedule:
   cron: "0 6-22/6 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
+  timeout_seconds: 360  # Reduced from 480s — avg duration 153s, 360s = 2.4× headroom
   max_iterations: 8
   session_target: isolated
 
@@ -113,6 +113,8 @@ v2:
     - "brain/memory/calendar-log.json"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Reduce timeout 480s→360s — avg duration 153s, 360s = 2.4× headroom; 6.6% timeout rate (12/181 runs). Limits blast radius while code fixes (d8a53d2b, 43e41fed) await review [nightwatch]"
   - date: "2026-03-06"
     change: "Add scheduling-link resolution: list_tasks tool, GET /api/tasks endpoint, creates scheduling-booked tasks for main, consumes scheduling-link tag"
   - date: "2026-02-28"
