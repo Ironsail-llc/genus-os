@@ -3,13 +3,14 @@
 </p>
 
 <h1 align="center">Genus OS</h1>
-<p align="center"><b>An AI operating system you run on your own hardware.</b></p>
+<p align="center"><b>The enterprise AI operating system you deploy on your own infrastructure.</b></p>
 
 <p align="center">
-Define agents in YAML. Wire them into pipelines. Manage everything from a live control plane.
-Give your system eyes, memory, and a CRM that knows every contact across every channel.
+Define agents in YAML. Wire them into governed pipelines with audit trails and guardrails.
+Federate across sites, teams, and subsidiaries with cryptographic trust and scoped permissions.
 <br><br>
-One repo. One CLI. Your hardware.
+Enterprise security. Enterprise scalability. Enterprise governance.<br>
+Your infrastructure. Your data. Your rules.
 </p>
 
 <p align="center">
@@ -20,19 +21,32 @@ One repo. One CLI. Your hardware.
 
 ---
 
+## Why Genus OS
+
+Most AI platforms force a choice: cloud-hosted convenience or self-hosted complexity. Genus OS eliminates that trade-off. Deploy on your infrastructure — on-prem, private cloud, or air-gapped — and get an enterprise-grade AI operating system with the security, governance, and scalability your organization demands.
+
+| Enterprise Need | How Genus OS Delivers |
+|---|---|
+| **Data sovereignty** | Everything runs on your infrastructure. No data leaves your network. No third-party API required (local LLMs via Ollama). |
+| **Security** | SOPS + age encrypted secrets, per-agent tool allow/deny lists, 7 guardrail policies, secret scanning pre-commit hooks, RBAC on event streams, Ed25519 cryptographic identity for federation. |
+| **Governance** | Full audit trails on every agent run, tool call, and decision. Task state machines with SLA tracking. Review workflows with human-in-the-loop approval. OTel-compatible distributed tracing. |
+| **Scalability** | Federate across sites, teams, and subsidiaries. Each instance is autonomous; federation adds scoped connectivity without single points of failure. |
+| **Multi-tenancy** | Every CRM table scoped by `tenant_id`. Bridge middleware enforces tenant isolation. Separate agent fleets per business unit. |
+| **Compliance** | Air-gap compatible. No internet dependency for core operations. Secrets never touch disk unencrypted. Systemd services with watchdog health checks. |
+
 ## Highlights
 
-**Platform** — 17 agents defined by declarative YAML manifests. A workflow engine with conditional branching. 106 registered tools with per-agent allow/deny lists. Nested sub-agents (agents spawning focused sub-tasks mid-run). Deep reasoning (RLM) with custom tool REPL and context pre-loading. 7 guardrail policies (destructive writes, external HTTP, branch protection, rate limiting, secret scanning, exec allowlist, write path restriction). OTel-compatible tracing. Redis Streams event bus with consumer groups and RBAC. Peer-to-peer federation lets independent instances connect with scoped permissions over NATS JetStream.
+**Governed Agent Platform** — 17 agents defined by declarative YAML manifests with full audit trails. A workflow engine with conditional branching. 106 registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
 
-**The Helm** — Not a dashboard, a control plane. Next.js 16 + Dockview with 45 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor service health. Fully extensible component registry.
+**Enterprise Federation** — Connect Genus OS instances across sites, subsidiaries, and partners into a peer-to-peer mesh. Ed25519 signed invite tokens establish cryptographic trust. Each connection has scoped exports/imports — no implicit access, no transitive trust. Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering across distributed instances. NATS JetStream transport with leaf-node topology handles unreliable networks gracefully. Every instance runs autonomously; federation adds connectivity, not dependency.
 
-**Intelligence** — Two-tier memory: working context and long-term facts with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal Rank Fusion). Knowledge graph that grows autonomously. Local RAG stack with embeddings, reranking, and generation. Facts have confidence scores, categories, and lifecycle states — they decay, consolidate, and get pruned by quality gates. Interactive warmup with entity-aware context injection for conversational sessions.
+**The Helm (Control Plane)** — Not a dashboard — an enterprise control plane. Next.js 16 + Dockview with 45 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor fleet health across federated instances. Fully extensible component registry for custom operational views.
 
-**Physical** — YOLOv8 nano + InsightFace ArcFace, loaded once at startup. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Pluggable alert targets. Scene analysis via vision LLM. Telegram file handling — PDFs, images, and documents processed inline. All local, no cloud.
+**Intelligence Layer** — Two-tier memory: working context and long-term facts with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal Rank Fusion). Knowledge graph that grows autonomously. Fully local RAG stack — embeddings, reranking, and generation never leave your network. Facts carry confidence scores, categories, and lifecycle states with quality gates that prevent knowledge degradation.
 
-**Operations** — Outbound voice calling (Twilio + Gemini Live). Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline (failure analysis &rarr; improvement proposals &rarr; draft PRs). sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 64 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
+**Physical Security** — YOLOv8 nano + InsightFace ArcFace for real-time object detection and face recognition. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Sub-2-second unknown person alerts. Scene analysis via vision LLM. All processing local — no cloud, no external API calls, no video data leaving your premises.
 
-**Federation** — Connect independent Genus OS instances into a mesh. Ed25519 signed invite tokens, bilateral connections with scoped exports/imports, three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering. NATS JetStream transport with leaf-node topology. PostgreSQL everywhere — every instance runs the same schema.
+**Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 64 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
 
 ## Getting Started
 
@@ -352,28 +366,97 @@ Always-on camera monitoring with runtime mode switching:
 
 ## Federation
 
-Connect independent Genus OS instances into a peer-to-peer mesh. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
+Enterprise AI doesn't live on a single server. Genus OS federation connects autonomous instances across offices, data centers, subsidiaries, and partner organizations into a peer-to-peer mesh — without sacrificing data sovereignty or creating single points of failure.
+
+### Use Cases
+
+| Scenario | Topology |
+|---|---|
+| **Multi-site enterprise** | HQ hub with branch office leaf nodes. HQ pushes config and knowledge; branches report health, escalate tasks, and sync CRM data. |
+| **Subsidiary governance** | Parent company connects to subsidiary instances as "parent." Scoped exports push compliance policies; scoped imports surface subsidiary health and alerts without exposing operational data. |
+| **Partner integration** | Two organizations connect as "peers" with explicitly negotiated exports/imports. Share only what's agreed — no implicit access, no transitive trust. |
+| **Dev/staging/production** | Federate staging instances to production for config sync and telemetry aggregation. Staging pushes test results; production pushes config templates. |
+| **Disaster recovery** | Peer-federated instances in separate regions. Each runs autonomously; federation keeps knowledge graphs synchronized. If one site goes down, the other continues with no interruption. |
+
+### How It Works
 
 ```bash
 # On the parent instance:
-robothor federation init
+robothor federation init              # Generate Ed25519 identity
 robothor federation invite --relationship child --ttl 48
-# → prints a one-time token
+# → prints a one-time signed token
 
 # On the new instance:
 git clone https://github.com/Ironsail-llc/genus-os.git
 cd genus-os && pip install -e ".[all]"
 robothor init
 robothor federation init
-robothor federation connect <token>
+robothor federation connect <token>   # Establishes bilateral connection
 robothor engine start
 ```
 
-Each connection has a **relationship** (parent, child, or peer) that sets default capability templates, **exports/imports** for scoped data sharing, and a **state machine** (pending → active → limited/suspended). Sync uses three prioritized channels (critical, bulk, media) with Hybrid Logical Clocks for causal ordering across instances.
+### Architecture
 
-Transport: NATS with JetStream for reliable, store-and-forward messaging. Hub instances run a full NATS server; leaf instances connect via NATS leaf nodes.
+Each connection has a **relationship** (parent, child, or peer) that sets default capability templates, **exports/imports** for scoped data sharing, and a **state machine** (pending → active → limited/suspended).
+
+| Relationship | Parent Exports | Child Exports |
+|---|---|---|
+| Parent ↔ Child | Memory search, CRM read, config push | Health, agent runs, sensor data, alerts, escalation |
+| Peer ↔ Peer | Explicitly negotiated | Explicitly negotiated |
+
+### Security Model
+
+- **Ed25519 cryptographic identity** — every instance has a unique keypair; invite tokens are signed to prevent tampering
+- **One-time tokens** — each invite generates a unique connection secret (SHA-256 hashed), single use
+- **Scoped permissions** — exports and imports are explicit per connection; no blanket access
+- **No transitive trust** — A↔B and B↔C does NOT mean A↔C; every link is bilateral and independently authorized
+- **Private key isolation** — keys stored with `0600` permissions, never transmitted
+- **NATS account isolation** — each connection gets its own subject namespace
+
+### Sync Protocol
+
+Three prioritized channels with Hybrid Logical Clocks for causal ordering:
+
+| Channel | Contents | Priority |
+|---|---|---|
+| Critical | Tasks, config, memory facts, alerts | Sync first |
+| Bulk | Agent runs, tool calls, telemetry | When bandwidth allows |
+| Media | Images, audio, documents | Background |
+
+Conflict resolution uses monotonic lattices (task states only move forward), additive merges (memory facts), and authoritative sources (config from exporting instance).
+
+**Transport:** NATS with JetStream for reliable, store-and-forward messaging. Hub instances run a full NATS server; leaf instances connect via NATS leaf nodes. Designed for unreliable networks — JetStream buffers messages during disconnections and replays on reconnect.
 
 Full architecture: [docs/FEDERATION.md](docs/FEDERATION.md)
+
+## Enterprise Security
+
+Security is not a feature — it's the foundation. Genus OS is designed for environments where data breaches, unauthorized access, and uncontrolled AI behavior are existential risks.
+
+| Layer | Controls |
+|---|---|
+| **Secrets management** | SOPS + age encryption. Secrets decrypted to tmpfs at runtime — never touch persistent disk unencrypted. Pre-commit gitleaks hook blocks accidental secret commits. |
+| **Agent sandboxing** | Per-agent `tools_allowed` / `tools_denied` lists enforced at the engine level. Agents cannot discover or invoke tools outside their authorization scope. 7 runtime guardrail policies block destructive writes, unauthorized HTTP calls, branch manipulation, rate limit violations, secret exposure, unapproved exec commands, and writes to restricted paths. |
+| **Event bus RBAC** | Redis Streams with consumer groups. Agents can only subscribe to and publish on streams declared in their manifest. |
+| **Network isolation** | All processing runs locally. No data sent to external APIs unless explicitly configured. Air-gap compatible for classified or regulated environments. Cloudflare Access with email OTP protects external-facing services. |
+| **Federation security** | Ed25519 cryptographic identity per instance. Signed one-time invite tokens. Scoped exports/imports with no transitive trust. NATS account isolation per connection. Private keys stored with `0600` permissions, never transmitted. |
+| **Infrastructure** | Systemd services with `Restart=always`, sd_notify watchdog with health pings, zombie run reaping. Cloudflare tunnel for TLS termination. |
+
+## Enterprise Governance
+
+Every action in Genus OS is tracked, auditable, and controllable.
+
+| Capability | Detail |
+|---|---|
+| **Audit trails** | Every agent run records: trigger type, model used, tool calls made, tokens consumed, cost incurred, duration, output, and success/failure status. Stored in PostgreSQL with full queryable history. |
+| **Human-in-the-loop** | Task review workflows require human approval before agents can proceed. Configurable per agent via `review_workflow: true` in the manifest. |
+| **SLA tracking** | Tasks carry priority-based SLA targets. The system tracks time-to-resolution and flags breaches. |
+| **Cost controls** | Per-agent token and dollar budgets with hard enforcement. When a budget is exhausted, the agent shuts down gracefully — no runaway spending. |
+| **Graduated escalation** | 3 consecutive errors → retry with feedback. 4 → checkpoint + replan. 5 → abort with full diagnostics. No silent failures. |
+| **Distributed tracing** | OTel-compatible trace context propagated across agent runs, sub-agent spawns, and federated operations. Plug into Jaeger, Grafana Tempo, or any OTel collector. |
+| **Fleet analytics** | Cross-agent performance metrics, anomaly detection (rolling baselines, >2σ flagging), and failure pattern clustering. |
+| **Change management** | Agent manifests are declarative YAML checked into version control. Pre-commit validation hook enforces schema compliance. Changes are reviewed via standard PR workflows. |
+| **Multi-tenancy** | Every CRM table scoped by `tenant_id`. Bridge middleware enforces tenant isolation at the API layer. Separate agent fleets and data boundaries per business unit. |
 
 ## Architecture
 
@@ -465,7 +548,19 @@ robothor/
 | `robothor federation connect <token>` | Accept connection from a peer |
 | `robothor federation status` | Show identity and all connections |
 
-## Requirements
+## Deployment Models
+
+Genus OS runs wherever your security policy requires — no cloud dependency, no vendor lock-in.
+
+| Deployment | Description |
+|---|---|
+| **Single server** | All services on one machine. Suitable for teams, departments, or small organizations. |
+| **Federated multi-site** | Autonomous instances at each site, connected via federation. HQ aggregates health and pushes policy; branches operate independently. |
+| **Air-gapped** | Fully offline with local LLMs (Ollama). No internet dependency for core operations. Federation over private NATS links. |
+| **Hybrid cloud** | On-prem instances for sensitive workloads, cloud instances for scale-out. Federation bridges the gap with scoped permissions. |
+| **Dev/staging/prod** | Separate instances per environment, federated for config sync and telemetry aggregation. |
+
+### Hardware Requirements
 
 | | Minimal | Recommended | Full Stack |
 |--|---------|-------------|------------|
