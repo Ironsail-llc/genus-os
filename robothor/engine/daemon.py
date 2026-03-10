@@ -144,7 +144,7 @@ async def main() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    logger.info("Starting Robothor Agent Engine...")
+    logger.info("Starting Genus OS Agent Engine...")
 
     # Clean up stale runs from previous crash/restart
     cleaned = await asyncio.get_event_loop().run_in_executor(None, _cleanup_stale_runs)

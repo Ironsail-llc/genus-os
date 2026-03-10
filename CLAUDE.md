@@ -1,6 +1,6 @@
-# Robothor — Project Root
+# Genus OS — Project Root
 
-Robothor is an autonomous AI entity — Philip's partner, not an assistant. For identity and personality, read `brain/SOUL.md`.
+Genus OS hosts Robothor, an autonomous AI entity — Philip's partner, not an assistant. For identity and personality, read `brain/SOUL.md`.
 
 ## Identity
 
@@ -19,7 +19,7 @@ Robothor is an autonomous AI entity — Philip's partner, not an assistant. For 
 | `brain/` | In-repo directory | Core workspace: memory, scripts, voice, vision, dashboards, identity |
 | `robothor/engine/` | In-repo Python package | Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hooks, workflow engine |
 | `robothor/health/` | In-repo Python package | Garmin health data sync (every 15 min → PostgreSQL → daily memory) |
-| `templates/` | (real directory) | Bootstrap templates for new Robothor instances |
+| `templates/` | (real directory) | Bootstrap templates for new Genus OS instances |
 | `tunnel/` | `~/.cloudflared/` | Cloudflare tunnel config (robothor.ai routes) |
 | `crm/` | `robothor/crm/` | CRM stack: native PostgreSQL tables, Bridge, Docker Compose |
 

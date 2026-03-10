@@ -1,5 +1,5 @@
 """
-Lifecycle Management for Robothor Memory System.
+Lifecycle Management for Genus OS Memory System.
 
 Handles memory decay, importance scoring, consolidation of similar facts,
 and periodic maintenance. Memories that are accessed frequently, reinforced,

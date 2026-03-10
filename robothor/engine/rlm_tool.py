@@ -1,6 +1,6 @@
 """Deep Reason tool — RLM integration for heavy-context reasoning.
 
-Wraps the `rlms` library to give agents programmatic access to Robothor's
+Wraps the `rlms` library to give agents programmatic access to Genus OS's
 full memory system via a Python REPL.  The RLM session can write code that
 calls search_memory, get_entity, read_file, and memory_block_read from
 inside the REPL, navigating large context far more effectively than
@@ -74,7 +74,7 @@ def _make_search_memory_fn() -> Callable[..., str]:
     """Return a sync wrapper around ``search_facts``."""
 
     def search_memory(query: str, limit: int = 10) -> str:
-        """Search Robothor's semantic memory. Returns JSON list of facts."""
+        """Search semantic memory. Returns JSON list of facts."""
         from robothor.memory.facts import search_facts
 
         results = asyncio.run(search_facts(query, limit=limit))
@@ -297,7 +297,7 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
         "search_memory": {
             "tool": _make_search_memory_fn(),
             "description": (
-                "Search Robothor's semantic memory for facts matching a query. "
+                "Search semantic memory for facts matching a query. "
                 "Returns JSON list of facts with category, confidence, similarity."
             ),
         },

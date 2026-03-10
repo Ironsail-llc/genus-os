@@ -1,5 +1,5 @@
 """
-Robothor Vault — native credential store backed by PostgreSQL + AES-256-GCM.
+Genus OS Vault — native credential store backed by PostgreSQL + AES-256-GCM.
 
 Public API:
     vault.get(key)           → decrypted value or None

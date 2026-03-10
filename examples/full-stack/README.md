@@ -1,6 +1,6 @@
 # Full Stack Example
 
-Run the complete Robothor stack with Docker Compose: PostgreSQL with pgvector, Redis, Ollama, and the Robothor API server. One command to get a fully functional AI memory and RAG system.
+Run the complete Genus OS stack with Docker Compose: PostgreSQL with pgvector, Redis, Ollama, and the Genus OS API server. One command to get a fully functional AI memory and RAG system.
 
 ## Prerequisites
 
@@ -39,11 +39,11 @@ curl http://localhost:9099/health
 | `postgres` | 5432 | PostgreSQL 16 + pgvector 0.8 |
 | `redis` | 6379 | Redis 7 (caching, session store) |
 | `ollama` | 11434 | Ollama LLM server (embeddings, generation) |
-| `robothor` | 9099 | Robothor API (memory, RAG, ingestion) |
+| `robothor` | 9099 | Genus OS API (memory, RAG, ingestion) |
 
 ## Usage
 
-Once the stack is running, you can interact with the Robothor API:
+Once the stack is running, you can interact with the Genus OS API:
 
 ### Ingest content
 ```bash

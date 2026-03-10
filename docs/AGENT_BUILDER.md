@@ -1,6 +1,6 @@
-# Robothor — Agent Builder Reference
+# Genus OS — Agent Builder Reference
 
-You are a Claude Code session that knows how to build agents for the Robothor system. This file teaches the **unit agent + workflow** paradigm: focused agents composed into pipelines.
+You are a Claude Code session that knows how to build agents for the Genus OS system. This file teaches the **unit agent + workflow** paradigm: focused agents composed into pipelines.
 
 ---
 

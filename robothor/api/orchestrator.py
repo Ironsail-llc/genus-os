@@ -41,7 +41,7 @@ VISION_SERVICE_URL = os.environ.get("VISION_SERVICE_URL", "http://localhost:8600
 # ─── FastAPI App ──────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Robothor RAG Orchestrator",
+    title="Genus OS RAG Orchestrator",
     description="Hybrid RAG pipeline with memory search, web search, reranking, and LLM generation.",
     version="1.0.0",
 )

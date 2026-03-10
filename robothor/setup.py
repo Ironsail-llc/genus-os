@@ -1,5 +1,5 @@
 """
-Robothor init — interactive setup wizard.
+Genus OS init — interactive setup wizard.
 
 Guides new users from zero to a working system:
   1. Check prerequisites (Python, psql, Redis, Ollama, Docker)
@@ -92,7 +92,7 @@ volumes:
 def run_init(args: Any) -> int:
     """Main orchestrator for the init wizard."""
     print()
-    print("  Robothor Setup")
+    print("  Genus OS Setup")
     print("  " + "=" * 14)
     print()
 

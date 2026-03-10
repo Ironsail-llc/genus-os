@@ -1,4 +1,4 @@
-/* Robothor TUI — dark terminal aesthetic */
+/* Genus OS TUI — dark terminal aesthetic */
 
 Screen {
     background: $background;

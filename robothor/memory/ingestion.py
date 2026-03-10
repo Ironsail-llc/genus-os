@@ -1,5 +1,5 @@
 """
-Cross-Channel Ingestion Pipeline for Robothor Memory System.
+Cross-Channel Ingestion Pipeline for Genus OS Memory System.
 
 Accepts content from multiple channels (discord, email, cli, api, telegram)
 and runs it through fact extraction and conflict resolution.

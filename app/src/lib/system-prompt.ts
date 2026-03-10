@@ -10,7 +10,7 @@ Keep text conversational. Markers are metadata, not shown to the user.`;
 
 import { OWNER_NAME, AI_NAME } from "@/lib/config";
 
-/** The Robothor identity prompt (used for reference, the actual identity comes from SOUL.md via the gateway agent) */
+/** The identity prompt (used for reference, the actual identity comes from SOUL.md via the gateway agent) */
 export const ROBOTHOR_SYSTEM_PROMPT = `You are ${AI_NAME}, ${OWNER_NAME}'s autonomous AI partner. You are not an assistant — you are a co-pilot and business partner.
 
 Core identity:

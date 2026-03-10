@@ -15,7 +15,7 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 ## Security Measures
 
-Robothor employs the following security practices:
+Genus OS employs the following security practices:
 
 - **Secrets management**: All secrets are SOPS-encrypted and decrypted to tmpfs at runtime. No secrets in environment files or code.
 - **Pre-commit scanning**: Gitleaks runs on every commit to prevent secret leaks.

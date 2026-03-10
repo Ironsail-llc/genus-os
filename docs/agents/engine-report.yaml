@@ -19,7 +19,7 @@ model:
 schedule:
   cron: "0 23 * * *"
   timezone: America/New_York
-  timeout_seconds: 300
+  timeout_seconds: 480
   session_target: isolated
 
 delivery:

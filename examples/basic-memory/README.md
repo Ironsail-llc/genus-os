@@ -1,6 +1,6 @@
 # Basic Memory Example
 
-A minimal example showing how to use Robothor's memory system: store facts, search semantically, and explore the entity knowledge graph.
+A minimal example showing how to use Genus OS's memory system: store facts, search semantically, and explore the entity knowledge graph.
 
 ## Prerequisites
 

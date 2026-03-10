@@ -1,4 +1,4 @@
-"""Test fixtures for the Robothor TUI."""
+"""Test fixtures for the Genus OS TUI."""
 
 from __future__ import annotations
 

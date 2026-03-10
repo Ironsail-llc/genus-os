@@ -1,5 +1,5 @@
 """
-Robothor Agent Engine — Python-native agent execution engine.
+Genus OS Agent Engine — Python-native agent execution engine.
 
 Single daemon that handles Telegram messaging, cron scheduling,
 event-driven triggers, and LLM agent execution with direct DAL calls.

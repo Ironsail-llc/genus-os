@@ -19,7 +19,7 @@ DEFAULT_TENANT = "robothor-primary"
 
 
 def _get_conn() -> Any:
-    """Get a database connection using the standard Robothor config."""
+    """Get a database connection using the standard Genus OS config."""
     import psycopg2
 
     from robothor.config import get_config

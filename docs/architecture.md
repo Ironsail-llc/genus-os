@@ -1,6 +1,6 @@
 # Architecture
 
-Robothor is an AI brain -- a Python package (`robothor.*`) that provides persistent memory, semantic search, a knowledge graph, vision, CRM, and event-driven infrastructure. It is not an agent framework. It is the intelligence layer that any agent framework can build on.
+Genus OS is an AI intelligence layer -- a Python package (`robothor.*`) that provides persistent memory, semantic search, a knowledge graph, vision, CRM, and event-driven infrastructure. It is not an agent framework. It is the intelligence layer that any agent framework can build on.
 
 ## System Diagram
 

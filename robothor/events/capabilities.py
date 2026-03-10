@@ -1,5 +1,5 @@
 """
-Agent RBAC — Capability checking for Robothor agents.
+Agent RBAC — Capability checking for Genus OS agents.
 
 Reads agent_capabilities.json and provides fast lookup for:
 - Tool access: can agent X use tool Y?

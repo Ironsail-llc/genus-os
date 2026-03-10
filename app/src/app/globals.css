@@ -47,7 +47,7 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
-/* Dark-only theme for Robothor */
+/* Dark-only theme for Genus OS */
 :root {
   --radius: 0.625rem;
   --background: oklch(0.12 0.005 285.823);

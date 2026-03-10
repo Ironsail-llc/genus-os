@@ -1,5 +1,5 @@
 """
-Robothor TUI — terminal chat interface for the Agent Engine.
+Genus OS TUI — terminal chat interface for the Agent Engine.
 
 Requires the optional `tui` dependency group:
     pip install robothor[tui]

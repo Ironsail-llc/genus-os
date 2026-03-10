@@ -2,7 +2,7 @@
 Vision Sentry Example
 =====================
 
-Runs Robothor's vision system as an intelligent security camera:
+Runs the Genus OS vision system as an intelligent security camera:
   - Motion detection via frame differencing
   - Object detection via YOLOv8
   - Face recognition via InsightFace (ArcFace)
@@ -64,12 +64,8 @@ def build_alert_manager(webhook_url: str | None = None) -> AlertManager:
         )
         logger.info("Webhook alert handler configured: %s", webhook)
 
-    # Example: Add Telegram alerts (uncomment and set env vars)
-    # from robothor.vision.alerts import TelegramAlert
-    # manager.add_handler(TelegramAlert(
-    #     bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
-    #     chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
-    # ))
+    # To add Telegram alerts, import TelegramAlert from robothor.vision.alerts
+    # and call manager.add_handler() with your bot token and chat ID.
 
     if not manager.handlers:
         logger.warning(
