@@ -1,6 +1,6 @@
 # The Helm — app.robothor.ai
 
-Robothor's command center. Live dashboard and chat interface in a two-panel Dockview layout: canvas (65%) + chat (35%).
+Genus OS's command center. Live dashboard and chat interface in a two-panel Dockview layout: canvas (65%) + chat (35%).
 
 ## Stack
 

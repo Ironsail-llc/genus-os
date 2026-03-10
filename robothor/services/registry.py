@@ -1,5 +1,5 @@
 """
-Service Registry — Single source of truth for all Robothor service endpoints.
+Service Registry — Single source of truth for all Genus OS service endpoints.
 
 Reads robothor-services.json and provides URL lookups. Environment variables
 override manifest defaults (e.g., BRIDGE_URL overrides bridge port).

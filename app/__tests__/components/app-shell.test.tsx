@@ -116,7 +116,7 @@ describe("AppShell", () => {
   it("renders the header bar", () => {
     render(<AppShell />);
     expect(screen.getByTestId("header-bar")).toBeInTheDocument();
-    expect(screen.getByText("Robothor")).toBeInTheDocument();
+    expect(screen.getByText("Genus OS")).toBeInTheDocument();
   });
 
   it("header shows current view title", () => {

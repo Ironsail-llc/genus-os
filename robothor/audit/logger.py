@@ -1,5 +1,5 @@
 """
-Robothor Audit Log — Structured audit logging for all system operations.
+Genus OS Audit Log — Structured audit logging for all system operations.
 
 Event types:
   - crm.create, crm.update, crm.delete, crm.merge — CRM mutations

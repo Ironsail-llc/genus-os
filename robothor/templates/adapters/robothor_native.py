@@ -1,5 +1,5 @@
 """
-Robothor native format adapter — the default and only adapter for now.
+Genus OS native format adapter — the default and only adapter for now.
 
 Generates:
   - docs/agents/<id>.yaml   (agent manifest)
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class RobothorNativeAdapter(FormatAdapter):
-    """Adapter for the native Robothor agent format (YAML manifest + Markdown instructions)."""
+    """Adapter for the native Genus OS agent format (YAML manifest + Markdown instructions)."""
 
     format_id = "robothor-native"
 
@@ -44,7 +44,7 @@ class RobothorNativeAdapter(FormatAdapter):
         return result
 
     def validate(self, bundle_path: Path) -> list[str]:
-        """Validate a Robothor native template bundle."""
+        """Validate a Genus OS native template bundle."""
         from robothor.templates.validators import validate_bundle
 
         errors = validate_bundle(bundle_path)

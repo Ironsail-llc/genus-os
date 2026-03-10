@@ -1,5 +1,5 @@
 """
-Custom Textual widgets for the Robothor TUI.
+Custom Textual widgets for the Genus OS TUI.
 
 MessageDisplay — renders user/assistant chat messages with markup.
 ToolCard — inline status card for tool calls (running → complete → error).
@@ -211,7 +211,7 @@ class WelcomeBanner(Static):
         classes: str | None = None,
     ) -> None:
         text = (
-            "[bold]Robothor[/bold]\n\n"
+            "[bold]Genus OS[/bold]\n\n"
             f"Connected to engine with {agent_count} agent{'s' if agent_count != 1 else ''}.\n"
             "Type a message to chat, or [dim]/help[/dim] for commands.\n"
             "Press [dim]Escape[/dim] to abort a response."

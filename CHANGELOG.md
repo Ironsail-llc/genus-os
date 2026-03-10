@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Rebranded project from "Robothor" to "Genus OS". Robothor remains the name of Philip's personal AI instance. Python package name (`robothor`), directory structure, env vars, and systemd services are unchanged.
+
 ### Added
 - Gateway unification — OpenClaw source as git subtree with `robothor gateway` CLI
 - Gateway manager package (`robothor/gateway/`) — build, process, config gen, migrate

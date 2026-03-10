@@ -85,7 +85,7 @@ export async function triageDashboard(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "HTTP-Referer": "https://app.robothor.ai",
-        "X-Title": "Robothor Dashboard Triage",
+        "X-Title": "Genus OS Dashboard Triage",
       },
       body: JSON.stringify({
         model: MODEL,

@@ -1,6 +1,6 @@
 # Agent Playbook
 
-> AI-consumable reference for building, modifying, and debugging Robothor agents.
+> AI-consumable reference for building, modifying, and debugging Genus OS agents.
 > Manifests in `docs/agents/*.yaml` are the **single source of truth** for each agent.
 > Contracts: `docs/agents/schema.yaml` (manifest schema) + `docs/agents/INSTRUCTION_CONTRACT.md` (instruction file format).
 > Run `python scripts/validate_agents.py` to check for drift.
@@ -209,9 +209,9 @@ changelog:
 | vision-monitor | security | Qwen 3.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
 | conversation-inbox | communications | Qwen 3.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
 | conversation-resolver | communications | Qwen 3.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
-| crm-steward | crm | Qwen 3.5 | `0 10 * * *` | none | 10 | CRM_STEWARD.md |
-| morning-briefing | briefings | Qwen 3.5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
-| evening-winddown | briefings | Qwen 3.5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
+| crm-steward | crm | GLM-5 | `0 10 * * *` | none | 10 | CRM_STEWARD.md |
+| morning-briefing | briefings | GLM-5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
+| evening-winddown | briefings | GLM-5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
 
 ### 3.2 Org Chart
 

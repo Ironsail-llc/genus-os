@@ -2,7 +2,7 @@
 Basic Memory Example
 ====================
 
-Demonstrates the core Robothor memory system:
+Demonstrates the core Genus OS memory system:
   - Storing facts with vector embeddings
   - Semantic search over stored facts
   - Building and querying the entity knowledge graph
@@ -207,7 +207,7 @@ async def main():
     """Run the full memory system demo."""
     # Show current configuration
     cfg = get_config()
-    print("Robothor Memory System Demo")
+    print("Genus OS Memory System Demo")
     print(f"Database: {cfg.db.name} @ {cfg.db.host}:{cfg.db.port}")
     print(f"Ollama: {cfg.ollama.base_url}")
     print(f"Embedding model: {cfg.ollama.embedding_model}")

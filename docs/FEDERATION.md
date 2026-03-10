@@ -1,6 +1,6 @@
 # Federation — Peer-to-Peer Instance Networking
 
-Robothor federation lets independent instances form explicit connections with scoped permissions. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
+Genus OS federation lets independent instances form explicit connections with scoped permissions. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ robothor engine start
 
 ### Instance
 
-Every Robothor installation is an instance with:
+Every Genus OS installation is an instance with:
 - An identity (UUID, display name, Ed25519 public key)
 - Its own PostgreSQL database, agents, tools, memory
 - Zero or more connections to other instances

@@ -20,8 +20,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Robothor",
-  description: "Robothor Business Layer",
+  title: "Genus OS",
+  description: "Genus OS Business Layer",
   icons: {
     icon: "/robothor-bolt.svg",
   },

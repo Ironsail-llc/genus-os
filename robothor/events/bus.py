@@ -1,5 +1,5 @@
 """
-Robothor Event Bus — Redis Streams based publish-subscribe.
+Genus OS Event Bus — Redis Streams based publish-subscribe.
 
 Replaces JSON file polling with real-time event delivery.
 Dual-write mode: events go to Redis AND JSON files as fallback.

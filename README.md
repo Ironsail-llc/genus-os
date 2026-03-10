@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/images/robothor-logo.png" width="200" alt="Robothor">
+  <img src="docs/images/genus-os-logo.png" width="400" alt="Genus OS">
 </p>
 
-<h1 align="center">Robothor</h1>
+<h1 align="center">Genus OS</h1>
 <p align="center"><b>An AI operating system you run on your own hardware.</b></p>
 
 <p align="center">
@@ -32,7 +32,7 @@ One repo. One CLI. Your hardware.
 
 **Operations** — Outbound voice calling (Twilio + Gemini Live). Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking and agent notifications. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline (failure analysis &rarr; improvement proposals &rarr; draft PRs). sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 64 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
 
-**Federation** — Connect independent Robothor instances into a mesh. Ed25519 signed invite tokens, bilateral connections with scoped exports/imports, three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering. NATS JetStream transport with leaf-node topology. PostgreSQL everywhere — every instance runs the same schema.
+**Federation** — Connect independent Genus OS instances into a mesh. Ed25519 signed invite tokens, bilateral connections with scoped exports/imports, three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering. NATS JetStream transport with leaf-node topology. PostgreSQL everywhere — every instance runs the same schema.
 
 ## Getting Started
 
@@ -352,7 +352,7 @@ Always-on camera monitoring with runtime mode switching:
 
 ## Federation
 
-Connect independent Robothor instances into a peer-to-peer mesh. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
+Connect independent Genus OS instances into a peer-to-peer mesh. No hub-spoke designation — an instance becomes a "hub" organically when many connect to it.
 
 ```bash
 # On the parent instance:

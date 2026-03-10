@@ -1,5 +1,5 @@
 """
-Slash command registry for the Robothor TUI.
+Slash command registry for the Genus OS TUI.
 
 Handles local commands like /status, /agents, /costs, /help, etc.
 Returns (handled: bool, output: str | None).

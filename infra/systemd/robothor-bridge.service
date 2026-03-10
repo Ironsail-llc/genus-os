@@ -1,4 +1,4 @@
-# Robothor Bridge Service — systemd service template
+# Genus OS Bridge Service — systemd service template
 #
 # Glue service providing contact resolution, webhooks, CRM integration,
 # and merge operations. Exposes REST API for agent tools.
@@ -14,7 +14,7 @@
 # Health: curl http://localhost:9100/health
 
 [Unit]
-Description=Robothor Bridge Service (CRM + Contact Resolution)
+Description=Genus OS Bridge Service (CRM + Contact Resolution)
 Documentation=https://github.com/robothor-ai/robothor
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target
@@ -22,7 +22,7 @@ Requires=postgresql.service
 
 [Service]
 Type=exec
-# Set User to the system user that runs Robothor
+# Set User to the system user that runs Genus OS
 User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor

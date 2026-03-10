@@ -1,7 +1,7 @@
 -- ============================================================================
--- Robothor Full Schema — copied from infra/migrations/001_init.sql
+-- Genus OS Full Schema — copied from infra/migrations/001_init.sql
 -- ============================================================================
--- This is the complete schema required by the Robothor API. It is loaded
+-- This is the complete schema required by the Genus OS API. It is loaded
 -- automatically by docker-compose on first container start.
 --
 -- If you need to update this file, copy the latest version from:

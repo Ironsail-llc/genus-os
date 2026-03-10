@@ -1,6 +1,6 @@
 # Vision Sentry Example
 
-Use Robothor's vision system as an intelligent security camera. Detects motion, identifies objects with YOLO, recognizes faces with InsightFace, and sends alerts for unknown persons via configurable webhooks.
+Use Genus OS's vision system as an intelligent security camera. Detects motion, identifies objects with YOLO, recognizes faces with InsightFace, and sends alerts for unknown persons via configurable webhooks.
 
 ## Prerequisites
 

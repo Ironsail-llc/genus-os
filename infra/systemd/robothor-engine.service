@@ -1,5 +1,5 @@
 [Unit]
-Description=Robothor Agent Engine (Python)
+Description=Genus OS Agent Engine (Python)
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target
 

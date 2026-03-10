@@ -10,11 +10,10 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: ollama_chat/qwen3.5:122b
+  primary: openrouter/z-ai/glm-5
   fallbacks:
     - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: qwen35
 
 schedule:
   cron: "30 6 * * *"
@@ -90,6 +89,8 @@ v2:
     - "^gws calendar"
 
 changelog:
+  - date: "2026-03-09"
+    change: "Swap to GLM-5 — gws_calendar_list needs reliable multi-param tool calls"
   - date: "2026-03-09"
     change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-03-06"

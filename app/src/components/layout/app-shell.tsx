@@ -91,7 +91,7 @@ export function AppShell() {
                 height={14}
                 className="opacity-70"
               />
-              <span className="text-sm font-semibold tracking-tight">Robothor</span>
+              <span className="text-sm font-semibold tracking-tight">Genus OS</span>
             </div>
 
             <span className="mx-auto text-xs font-medium text-muted-foreground" data-testid="header-title">

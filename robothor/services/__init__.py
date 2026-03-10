@@ -1,4 +1,4 @@
-"""Service registry for Robothor — single source of truth for endpoints."""
+"""Service registry for Genus OS — single source of truth for endpoints."""
 
 from robothor.services.registry import (
     get_dependencies,

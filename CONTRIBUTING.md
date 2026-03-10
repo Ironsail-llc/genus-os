@@ -1,4 +1,4 @@
-# Contributing to Robothor
+# Contributing to Genus OS
 
 Thank you for your interest in contributing to Robothor! This document covers the development setup, coding standards, and contribution process.
 
@@ -138,7 +138,7 @@ Use conventional commit prefixes:
 
 ## Architecture Overview
 
-Robothor is a three-layer system in a single repo:
+Genus OS is a three-layer system in a single repo:
 
 1. **Intelligence Layer** (`robothor/`) — Python package: memory, RAG, knowledge graph, CRM, vision, events, federation
 2. **Agent Engine** (`robothor/engine/`) — Python agent execution with 17 autonomous agents defined as YAML manifests

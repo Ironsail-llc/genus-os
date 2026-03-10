@@ -49,7 +49,7 @@ export function Sidebar({
       <div className="mb-2" data-testid="sidebar-bolt">
         <Image
           src="/robothor-bolt.svg"
-          alt="Robothor"
+          alt="Genus OS"
           width={20}
           height={20}
           className="opacity-80"

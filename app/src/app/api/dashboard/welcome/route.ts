@@ -79,7 +79,7 @@ export async function POST() {
             Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
             "Content-Type": "application/json",
             "HTTP-Referer": "https://app.robothor.ai",
-            "X-Title": "Robothor Welcome Dashboard",
+            "X-Title": "Genus OS Welcome Dashboard",
           },
           body: JSON.stringify({
             model: MODEL,

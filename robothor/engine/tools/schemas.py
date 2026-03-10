@@ -163,7 +163,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "make_call",
-            "description": "Make an outbound phone call via Robothor's voice server. The call connects to Gemini Live for real-time AI conversation.",
+            "description": "Make an outbound phone call via the voice server. The call connects to Gemini Live for real-time AI conversation.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -177,7 +177,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "purpose": {
                         "type": "string",
-                        "description": "Why Robothor is calling (used in the AI's system prompt)",
+                        "description": "Why the AI is calling (used in the system prompt)",
                     },
                 },
                 "required": ["to", "purpose"],
@@ -864,7 +864,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "federation_query",
-            "description": "Query a connected Robothor instance's data (health, agent runs, memory).",
+            "description": "Query a connected Genus OS instance's data (health, agent runs, memory).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -896,7 +896,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "federation_trigger",
-            "description": "Trigger an agent run on a connected Robothor instance.",
+            "description": "Trigger an agent run on a connected Genus OS instance.",
             "parameters": {
                 "type": "object",
                 "properties": {

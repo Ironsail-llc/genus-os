@@ -1,5 +1,5 @@
 """
-Centralized configuration for Robothor.
+Centralized configuration for Genus OS.
 
 All configuration is loaded from environment variables with sensible defaults.
 No hardcoded paths, no personal references.
@@ -104,7 +104,7 @@ class GarminConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """Top-level Robothor configuration."""
+    """Top-level Genus OS configuration."""
 
     # Workspace
     workspace: Path = field(default_factory=lambda: Path.home() / "robothor")

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Robothor Initial Schema Migration
+-- Genus OS Initial Schema Migration
 -- ============================================================================
 -- Database: robothor_memory
 -- Run: psql -U $ROBOTHOR_DB_USER -d $ROBOTHOR_DB_NAME -f 001_init.sql

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Robothor Setup Script
+# Genus OS Setup Script
 # ============================================================================
-# Initializes the Robothor infrastructure: database, models, config, services.
+# Initializes the Genus OS infrastructure: database, models, config, services.
 # Safe to run multiple times (idempotent).
 #
 # Usage:
@@ -47,7 +47,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Robothor Infrastructure Setup
+Genus OS Infrastructure Setup
 
 Options:
   --systemd        Install and enable systemd service files
@@ -376,7 +376,7 @@ fi
 
 echo
 info "============================================"
-info "  Robothor Setup Complete"
+info "  Genus OS Setup Complete"
 info "============================================"
 echo
 
