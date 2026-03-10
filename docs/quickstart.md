@@ -1,6 +1,6 @@
 # Quick Start
 
-From zero to a working Robothor brain in 10 minutes.
+From zero to a working Genus OS instance in 10 minutes.
 
 ## Prerequisites
 

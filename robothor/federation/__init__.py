@@ -1,6 +1,6 @@
-"""Federation — peer-to-peer instance networking for Robothor.
+"""Federation — peer-to-peer instance networking for Genus OS.
 
-Enables independent Robothor instances to form explicit connections
+Enables independent Genus OS instances to form explicit connections
 with scoped permissions. No hub-spoke designation — any instance
 becomes a hub organically when many connect to it.
 """

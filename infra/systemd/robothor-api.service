@@ -1,4 +1,4 @@
-# Robothor API Server — systemd service template
+# Genus OS API Server — systemd service template
 #
 # Installation:
 #   1. Copy this file to /etc/systemd/system/robothor-api.service
@@ -10,7 +10,7 @@
 # Logs: journalctl -u robothor-api -f
 
 [Unit]
-Description=Robothor API Server (RAG Orchestrator)
+Description=Genus OS API Server (RAG Orchestrator)
 Documentation=https://github.com/robothor-ai/robothor
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target
@@ -18,7 +18,7 @@ Requires=postgresql.service
 
 [Service]
 Type=exec
-# Set User to the system user that runs Robothor
+# Set User to the system user that runs Genus OS
 User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor

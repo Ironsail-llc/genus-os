@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "robothor"
 version = "0.1.0"
-description = "An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
+description = "Genus OS — An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Robothor AI", email = "robothor@ironsail.ai" },
+    { name = "Ironsail LLC", email = "robothor@ironsail.ai" },
 ]
 keywords = ["ai", "brain", "memory", "knowledge-graph", "rag", "vision", "agents"]
 classifiers = [

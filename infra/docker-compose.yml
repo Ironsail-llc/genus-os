@@ -1,4 +1,4 @@
-# Robothor Infrastructure Stack
+# Genus OS Infrastructure Stack
 # ============================================================================
 # Usage:
 #   docker compose up -d                              # Core only (postgres, redis, ollama)

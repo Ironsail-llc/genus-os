@@ -1,5 +1,5 @@
 """
-Fact Extraction Layer for Robothor Memory System.
+Fact Extraction Layer for Genus OS Memory System.
 
 Extracts structured facts from unstructured content using a local LLM,
 then stores them with vector embeddings in PostgreSQL for semantic search.

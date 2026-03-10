@@ -190,7 +190,7 @@ async def _extract_pdf_text(raw_bytes: bytes) -> str:
 
 
 class TelegramBot:
-    """Aiogram v3 Telegram bot for Robothor."""
+    """Aiogram v3 Telegram bot for Genus OS."""
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
         self.config = config
@@ -223,7 +223,7 @@ class TelegramBot:
         @self.dp.message(Command("help"))
         async def cmd_help(message: Message) -> None:
             await message.answer(
-                "<b>Robothor Commands</b>\n\n"
+                "<b>Commands</b>\n\n"
                 "/deep — Deep reasoning via RLM ($0.50-$2.00)\n"
                 "/plan — Plan before executing (review + approve)\n"
                 "/model — Switch AI model\n"

@@ -1,5 +1,5 @@
 """
-RobothorApp — main Textual application for the Robothor TUI.
+RobothorApp — main Textual application for the Genus OS TUI.
 
 Connects to the running Engine daemon via SSE and provides a
 streaming terminal chat interface.
@@ -32,9 +32,9 @@ CSS_PATH = Path(__file__).parent / "theme.tcss"
 
 
 class RobothorApp(App[None]):
-    """Terminal chat interface for the Robothor Agent Engine."""
+    """Terminal chat interface for the Genus OS Agent Engine."""
 
-    TITLE = "Robothor"
+    TITLE = "Genus OS"
     CSS_PATH = CSS_PATH
 
     BINDINGS = [

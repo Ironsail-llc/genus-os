@@ -1,6 +1,6 @@
 # Tunnel / Ingress Configuration
 
-Robothor needs external access for Telegram webhooks, voice calls, and mobile access.
+Genus OS needs external access for Telegram webhooks, voice calls, and mobile access.
 Two providers are supported out of the box:
 
 ## Cloudflare Tunnel (Recommended)

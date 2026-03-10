@@ -173,7 +173,7 @@ async def one_shot(question: str):
 
 async def main():
     """Entry point -- parse args and run the appropriate mode."""
-    parser = argparse.ArgumentParser(description="RAG Chatbot powered by Robothor")
+    parser = argparse.ArgumentParser(description="RAG Chatbot powered by Genus OS")
     parser.add_argument(
         "--chat",
         action="store_true",

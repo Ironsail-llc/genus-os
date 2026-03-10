@@ -1,6 +1,6 @@
-# Robothor — System Architecture
+# Genus OS — System Architecture
 
-> Technical reference for the Robothor autonomous AI platform.
+> Technical reference for the Genus OS platform.
 > Last updated: 2026-02-20
 
 ---
@@ -28,7 +28,7 @@
 
 ## Executive Summary
 
-Robothor is an autonomous AI entity running 24/7 on dedicated hardware. It manages the owner's communications, calendar, contacts, security monitoring, and knowledge base — acting as a partner rather than an assistant.
+Genus OS hosts an autonomous AI entity running 24/7 on dedicated hardware. It manages the owner's communications, calendar, contacts, security monitoring, and knowledge base — acting as a partner rather than an assistant.
 
 **Core capabilities:**
 

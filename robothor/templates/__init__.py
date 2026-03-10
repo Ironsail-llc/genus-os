@@ -1,5 +1,5 @@
 """
-Robothor Agent Template System — parameterized agent bundles with variable resolution.
+Genus OS Agent Template System — parameterized agent bundles with variable resolution.
 
 This package provides:
   - resolver:         {{ variable }} resolution engine for template files

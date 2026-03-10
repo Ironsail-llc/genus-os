@@ -1,4 +1,4 @@
-"""Database connection management for Robothor."""
+"""Database connection management for Genus OS."""
 
 from robothor.db.connection import get_connection, get_pool, release_connection
 

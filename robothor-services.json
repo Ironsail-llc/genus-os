@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Robothor service manifest — single source of truth for all service endpoints",
+  "description": "Genus OS service manifest — single source of truth for all service endpoints",
   "services": {
     "bridge": {
       "name": "Bridge Service",

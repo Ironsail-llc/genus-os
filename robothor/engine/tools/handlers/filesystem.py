@@ -56,7 +56,7 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", ""))
+        path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         try:
@@ -73,7 +73,7 @@ async def _list_directory(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", ""))
+        path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         if not path.exists():
@@ -126,7 +126,7 @@ async def _write_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", ""))
+        path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         try:

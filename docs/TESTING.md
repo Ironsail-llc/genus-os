@@ -1,4 +1,4 @@
-# Robothor Testing Strategy
+# Genus OS Testing Strategy
 
 Deep reference for the testing rules in `CLAUDE.md` (rules 11-15).
 

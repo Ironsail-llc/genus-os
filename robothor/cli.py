@@ -1,5 +1,5 @@
 """
-Robothor CLI — entry point for all operations.
+Genus OS CLI — entry point for all operations.
 
 Usage:
     robothor                # Launch the TUI (terminal chat)
@@ -26,7 +26,7 @@ from typing import Any
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="robothor",
-        description="Robothor — An AI brain with persistent memory, vision, and self-healing.",
+        description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",
     )
     parser.add_argument("--version", action="store_true", help="Show version and exit")
 
@@ -305,7 +305,7 @@ def _find_migration_sql() -> str | None:
     return None
 
 
-# Required tables that must exist for a working Robothor installation
+# Required tables that must exist for a working Genus OS installation
 REQUIRED_TABLES = [
     "memory_facts",
     "memory_entities",
@@ -409,7 +409,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         print("Error: uvicorn is required. Install with: pip install robothor[api]")
         return 1
 
-    print(f"Starting Robothor RAG Orchestrator on {args.host}:{args.port}...")
+    print(f"Starting Genus OS RAG Orchestrator on {args.host}:{args.port}...")
     print("Agent engine runs separately: robothor engine start")
     uvicorn.run("robothor.api.orchestrator:app", host=args.host, port=args.port)
     return 0
@@ -434,7 +434,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     from robothor.config import get_config
 
     cfg = get_config()
-    print(f"Robothor v{__version__}")
+    print(f"Genus OS v{__version__}")
     print()
 
     # PostgreSQL
@@ -1461,7 +1461,7 @@ def _cmd_agent_setup() -> int:
 
     # 1. Check/create instance config
     if not instance.exists:
-        print("=== Robothor Agent Setup ===\n")
+        print("=== Genus OS Agent Setup ===\n")
         print("Setting up instance configuration...\n")
 
         tz = input("  Timezone [America/New_York]: ").strip() or "America/New_York"

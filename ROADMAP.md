@@ -1,6 +1,6 @@
 # Roadmap
 
-Robothor's path from AI brain to AI operating system.
+Genus OS's path from AI brain to AI operating system.
 
 ## v0.1 -- Memory & RAG (current)
 
@@ -129,7 +129,7 @@ The complete operating system. Every capability accessible through one interface
 - [ ] Agent app store (install, update, remove agent packages)
 - [x] Multi-node support (federation — distribute agents across machines)
 - [ ] Snapshot and restore (full system state backup)
-- [ ] SDK for building agent apps against the Robothor API
+- [ ] SDK for building agent apps against the Genus OS API
 - [ ] Comprehensive documentation and tutorials
 
 ---

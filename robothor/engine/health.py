@@ -26,7 +26,7 @@ def create_health_app(
     """Create a lightweight FastAPI health app."""
     from fastapi import FastAPI
 
-    app = FastAPI(title="Robothor Agent Engine", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
     # Mount chat endpoints when runner is available
     if runner is not None:

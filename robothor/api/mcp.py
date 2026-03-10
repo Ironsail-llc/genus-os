@@ -1,5 +1,5 @@
 """
-MCP Server for Robothor Memory System.
+MCP Server for Genus OS Memory System.
 
 Provides a Model Context Protocol (MCP) interface so external models
 (Claude Code, Cursor, etc.) can access the memory system. Runs locally

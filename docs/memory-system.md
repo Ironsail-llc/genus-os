@@ -1,6 +1,6 @@
 # Memory System
 
-The memory system is Robothor's core -- a three-tier architecture where facts are extracted, deduplicated, scored, and organized into a knowledge graph. Memories decay, strengthen, get superseded by newer information, and consolidate over time.
+The memory system is Genus OS's core -- a three-tier architecture where facts are extracted, deduplicated, scored, and organized into a knowledge graph. Memories decay, strengthen, get superseded by newer information, and consolidate over time.
 
 ## Tables
 

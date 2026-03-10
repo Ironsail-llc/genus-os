@@ -1,5 +1,5 @@
 """
-Conflict Resolution & Deduplication for Robothor Memory System.
+Conflict Resolution & Deduplication for Genus OS Memory System.
 
 Detects duplicate, contradictory, or updated facts before storing them.
 Uses semantic similarity search to find related facts, then LLM-based

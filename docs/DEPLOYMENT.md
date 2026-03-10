@@ -1,4 +1,4 @@
-# Robothor
+# Genus OS
 
 **An autonomous AI entity — persistent memory, semantic search, knowledge graph, vision, CRM, and self-healing infrastructure.**
 
@@ -10,7 +10,7 @@ Not an assistant. Not a framework. An AI *brain* that runs 24/7 on your hardware
 
 ## What This Is
 
-Robothor is a complete AI operating system running on a single machine. It processes real emails, real meetings, real security alerts — and responds to them autonomously. The system has been battle-tested in daily production use since February 2026.
+Genus OS is a complete AI operating system running on a single machine. It processes real emails, real meetings, real security alerts — and responds to them autonomously. The system has been battle-tested in daily production use since February 2026.
 
 **Hardware:** NVIDIA Grace Blackwell GB10, 128 GB unified memory, 20 ARM cores
 

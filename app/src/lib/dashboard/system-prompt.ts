@@ -4,7 +4,7 @@
  */
 
 export function getDashboardSystemPrompt(): string {
-  return `You are a dashboard code generator for Robothor's Helm UI.
+  return `You are a dashboard code generator for the Genus OS Helm UI.
 Your job is to produce a single HTML+Tailwind snippet that renders a premium, visually stunning dashboard inside an iframe.
 
 ## Output Format

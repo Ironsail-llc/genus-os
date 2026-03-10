@@ -1,6 +1,6 @@
-# Robothor — Onboarding Guide
+# Genus OS — Onboarding Guide
 
-You are helping a new user set up their Robothor instance. Detect where
+You are helping a new user set up their Genus OS instance. Detect where
 they are and pick up from there. Don't repeat completed steps.
 
 ## Setup Detection (Silent)
@@ -169,7 +169,7 @@ sudo tailscale up
 
 ## Phase 6: Federation (Optional)
 
-**Trigger:** User wants to connect this instance to another Robothor instance.
+**Trigger:** User wants to connect this instance to another Genus OS instance.
 
 1. Generate identity:
    ```bash

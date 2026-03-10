@@ -1,5 +1,5 @@
 """
-SSE client for the Robothor Agent Engine.
+SSE client for the Genus OS Agent Engine.
 
 Wraps httpx.AsyncClient to stream SSE events from the /chat/send endpoint.
 Parses raw SSE text into typed event dicts.
@@ -29,7 +29,7 @@ class SSEEvent:
 
 
 class EngineClient:
-    """Async client for the Robothor Engine HTTP API."""
+    """Async client for the Genus OS Engine HTTP API."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:18800", session_key: str = "") -> None:
         self.base_url = base_url.rstrip("/")

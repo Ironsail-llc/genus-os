@@ -1,5 +1,5 @@
 """
-Entity Graph for Robothor Memory System.
+Entity Graph for Genus OS Memory System.
 
 Maintains a knowledge graph of named entities (people, projects,
 technologies, etc.) and their relationships, extracted from stored facts.
