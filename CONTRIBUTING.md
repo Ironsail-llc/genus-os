@@ -15,8 +15,8 @@ Thank you for your interest in contributing to Robothor! This document covers th
 
 ```bash
 # Clone and install
-git clone https://github.com/Ironsail-llc/robothor.git
-cd robothor
+git clone https://github.com/Ironsail-llc/genus-os.git
+cd genus-os
 pip install -e ".[dev]"
 
 # Set up pre-commit hooks

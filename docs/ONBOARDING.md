@@ -46,8 +46,8 @@ Pick up from the earliest incomplete phase.
    - **macOS:** Docker Desktop, Colima, or OrbStack
 4. Clone and install:
    ```bash
-   git clone https://github.com/Ironsail-llc/robothor.git
-   cd robothor
+   git clone https://github.com/Ironsail-llc/genus-os.git
+   cd genus-os
    python3 -m venv venv && source venv/bin/activate
    pip install -e ".[all]"
    ```

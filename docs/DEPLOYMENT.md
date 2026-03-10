@@ -173,4 +173,4 @@ MIT License. See [LICENSE](LICENSE) (coming soon).
 
 ## Related
 
-- **[robothor (pip package)](https://github.com/Ironsail-llc/robothor)** — Extracted open-source Python package of the core intelligence layer
+- **[robothor (pip package)](https://github.com/Ironsail-llc/genus-os)** — Extracted open-source Python package of the core intelligence layer
