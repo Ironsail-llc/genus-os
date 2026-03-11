@@ -1,7 +1,7 @@
 id: engine-report
 name: Engine Report
 description: Daily summary of agent engine activity and health
-version: "2026-03-09"
+version: "2026-03-11"
 department: operations
 
 reports_to: null
@@ -19,7 +19,7 @@ model:
 schedule:
   cron: "0 23 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
+  timeout_seconds: 720
   session_target: isolated
 
 delivery:
@@ -66,6 +66,8 @@ v2:
   error_feedback: true
 
 changelog:
+  - date: "2026-03-11"
+    change: "Increase timeout 480s→720s — 3 LLM calls consume ~413s leaving no buffer; 33% timeout rate confirmed (run 5b7743ae). Nightwatch self-heal."
   - date: "2026-03-09"
     change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-02-27"
