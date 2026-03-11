@@ -10,6 +10,18 @@ LOG_FILE="$SCRIPT_DIR/maintenance.log"
 VENV="$SCRIPT_DIR/venv/bin/python3"
 STATUS_FILE="$SCRIPT_DIR/../memory/maintenance-status.json"
 
+# Cron does not set USER — pg_hba.conf uses peer auth requiring OS user = PG role
+export USER="${USER:-philip}"
+export ROBOTHOR_DB_USER="${ROBOTHOR_DB_USER:-philip}"
+
+# Source SOPS secrets if available (for LLM API keys, etc.)
+SECRETS_ENV="/run/robothor/secrets.env"
+if [ -f "$SECRETS_ENV" ]; then
+    set -a
+    source "$SECRETS_ENV"
+    set +a
+fi
+
 # Rotate log if >1MB
 if [ -f "$LOG_FILE" ]; then
     LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)

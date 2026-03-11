@@ -21,4 +21,9 @@ if [ -f "$SECRETS_ENV" ]; then
     set +a
 fi
 
+# Cron does not set USER — set it so robothor.config uses the correct DB user.
+# pg_hba.conf uses peer auth on Unix sockets, requiring OS user = PG role.
+export USER="${USER:-philip}"
+export ROBOTHOR_DB_USER="${ROBOTHOR_DB_USER:-philip}"
+
 exec "$@"

@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     decay_score FLOAT DEFAULT 1.0,
     reinforcement_count INTEGER DEFAULT 0,
     -- BM25 full-text search column
-    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', fact_text)) STORED
+    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', fact_text)) STORED,
+    -- Intra-day consolidation tracking
+    consolidated_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_facts_category ON memory_facts (category);
@@ -362,6 +364,26 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_service_metric ON telemetry (service, m
 
 CREATE INDEX IF NOT EXISTS idx_facts_embedding
     ON memory_facts USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=200);
+
+-- ── Cross-Domain Insights ────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS memory_insights (
+    id SERIAL PRIMARY KEY,
+    insight_text TEXT NOT NULL,
+    source_fact_ids INTEGER[] NOT NULL DEFAULT '{}',
+    categories TEXT[] DEFAULT '{}',
+    entities TEXT[] DEFAULT '{}',
+    embedding vector(1024),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    is_active BOOLEAN DEFAULT TRUE,
+    metadata JSONB DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_insights_active ON memory_insights (is_active)
+    WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_insights_created ON memory_insights (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_insights_embedding
+    ON memory_insights USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=200);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- TASK COORDINATION (from migration 005)

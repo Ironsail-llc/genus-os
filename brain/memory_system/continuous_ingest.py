@@ -1007,7 +1007,26 @@ async def main():
             except Exception:
                 pass
 
+        # Intra-day consolidation + insight discovery after new facts
         if total_new > 0:
+            try:
+                from robothor.memory.lifecycle import run_intraday_consolidation
+
+                consolidation_result = await run_intraday_consolidation(threshold=5)
+                metrics["consolidation"] = consolidation_result
+
+                # Run insight discovery if consolidation actually merged something
+                if not consolidation_result.get("skipped"):
+                    try:
+                        from robothor.memory.lifecycle import run_insight_discovery
+
+                        insight_result = await run_insight_discovery(hours_back=12)
+                        metrics["insights"] = insight_result
+                    except Exception as e:
+                        logger.warning("Intra-day insight discovery failed: %s", e)
+            except Exception as e:
+                logger.warning("Intra-day consolidation failed: %s", e)
+
             print(f"Continuous Ingest — {start_time.strftime('%H:%M')}")
             for name, r in results.items():
                 new = r.get("new", 0)

@@ -1,6 +1,6 @@
 # Robothor Memory System
-**Version:** 4.0 (Brain Overhaul — Hybrid Search, Quality Gates, Active Lifecycle)
-**Last Updated:** 2026-03-04
+**Version:** 4.2 (Intra-Day Consolidation + Cross-Domain Insights)
+**Last Updated:** 2026-03-10
 **Hardware:** NVIDIA DGX Spark GB10 — 128GB unified memory, 20-core ARM (Cortex-X925/A725), CUDA 13.0
 
 ---
@@ -10,6 +10,8 @@
 Fact-first memory architecture mapping to cognitive functions. All LLM calls go through `llm_client.py` (local Ollama only). Zero API costs.
 
 **v4.0 changes:** Dropped legacy short_term/long_term tables (dead since Feb). Fixed nightly maintenance (was crashing on non-existent model). Added quality gates on fact extraction. Implemented hybrid search (vector + BM25 keyword). Switched IVFFlat → HNSW index. Wired consolidation and forgetting. Added interactive session warmup with entity-aware context.
+
+**v4.2 changes:** Added intra-day consolidation — after each continuous_ingest run, if >= 5 unconsolidated facts exist, a lightweight consolidation pass merges similar facts (min_group_size=2 vs nightly's 3). New `consolidated_at` column tracks which facts have been processed. Added cross-domain insight discovery — after consolidation, an LLM pass finds non-obvious connections between facts from different categories. Insights stored in `memory_insights` table with vector embeddings. New `search_insights` MCP tool. Nightly maintenance now includes a 72h insight discovery window and sweeps unconsolidated facts as safety net.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -115,11 +117,22 @@ find_similar_facts() — cosine search over memory_facts
 
 ### 4. Lifecycle Maintenance
 ```
-run_lifecycle_maintenance()
+run_lifecycle_maintenance() — nightly (3 AM)
     │
-    ├→ Score importance for unscored facts (LLM-judged, 0.0-1.0)
-    ├→ Compute decay scores (recency × access × reinforcement × importance)
-    └→ Find and consolidate similar fact groups (LLM-merged)
+    ├→ Step 1: Score importance for unscored facts (LLM-judged, 0.0-1.0)
+    ├→ Step 2: Compute decay scores (recency × access × reinforcement × importance)
+    ├→ Step 3: Prune low-quality facts (garbage collection)
+    ├→ Step 4: Find and consolidate similar fact groups (LLM-merged, min_group=3)
+    ├→ Step 5: Sweep remaining unconsolidated facts (safety net)
+    └→ Step 6: Cross-domain insight discovery (72h window)
+
+run_intraday_consolidation() — after each continuous_ingest (threshold >= 5)
+    │
+    ├→ Check unconsolidated count (consolidated_at IS NULL)
+    ├→ Find similar facts (unconsolidated only, min_group=2, LIMIT 100)
+    ├→ Consolidate matches (LLM-merged)
+    ├→ Mark all unconsolidated facts as consolidated
+    └→ Run cross-domain insight discovery (12h window, if merges occurred)
 ```
 
 **Decay formula:**
@@ -128,6 +141,14 @@ run_lifecycle_maintenance()
 - `reinforcement_boost = min(log(1 + reinf_count) / 5, 0.2)`
 - `importance_floor = importance * 0.4`
 - `score = max(importance_floor, recency) + access_boost + reinforcement_boost`
+
+**Cross-domain insights:**
+- Selects recent facts from >= 2 categories (>= 3 facts total)
+- LLM finds non-obvious connections between different domains
+- Validated: >= 20 chars, >= 2 valid fact IDs, cross-category
+- Deduped by cosine similarity (threshold 0.85)
+- Stored in `memory_insights` table with vector embeddings
+- Searchable via `search_insights` MCP tool
 
 ### 5. MCP Interface (for future model connections)
 ```
@@ -140,6 +161,7 @@ mcp_server.py
     ├→ store_memory — ingest + extract facts
     ├→ get_stats — memory statistics
     ├→ get_entity — entity graph lookup
+    ├→ search_insights — cross-domain insight search
     ├→ look — capture snapshot + VLM scene description
     ├→ who_is_here — check who's detected by vision
     └→ enroll_face — enroll a person's face for recognition
@@ -242,7 +264,7 @@ CREATE TABLE memory_relations (
 ├── conflict_resolution.py # Dedup, contradiction, update detection
 ├── entity_graph.py        # Entity + relationship graph
 ├── ingestion.py           # Cross-channel ingestion pipeline
-├── lifecycle.py           # Decay, importance, consolidation
+├── lifecycle.py           # Decay, importance, consolidation, intra-day, insights
 ├── mcp_server.py          # MCP server (stdio transport)
 ├── vision_service.py      # Background vision detection loop (systemd)
 ├── memory_service.py      # Audit logging + vector memory CLI

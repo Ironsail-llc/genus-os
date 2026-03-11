@@ -2,12 +2,15 @@
 Lifecycle Management for Genus OS Memory System.
 
 Handles memory decay, importance scoring, consolidation of similar facts,
-and periodic maintenance. Memories that are accessed frequently, reinforced,
+intra-day consolidation, cross-domain insight discovery, and periodic
+maintenance. Memories that are accessed frequently, reinforced,
 or marked as important resist decay.
 
 Architecture:
     Decay formula considers: recency, access frequency, reinforcement, importance
-    Maintenance: score importance -> compute decay -> prune low-quality -> consolidate
+    Maintenance: score importance -> compute decay -> prune low-quality -> consolidate -> insights
+    Intra-day: lightweight consolidation after each ingest run (threshold >= 5 unconsolidated)
+    Insights: cross-domain connection discovery from recent diverse-category facts
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -32,6 +35,28 @@ IMPORTANCE_SCHEMA = {
         "score": {"type": "number"},
     },
     "required": ["score"],
+}
+
+# JSON schema for cross-domain insight discovery structured output.
+INSIGHT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "insights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "insight_text": {"type": "string"},
+                    "source_fact_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                },
+                "required": ["insight_text", "source_fact_ids"],
+            },
+        },
+    },
+    "required": ["insights"],
 }
 
 
@@ -121,25 +146,32 @@ Fact: "{content}" """
 async def find_consolidation_candidates(
     min_group_size: int = 3,
     similarity_threshold: float = 0.8,
+    unconsolidated_only: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Find groups of similar facts that could be consolidated.
 
     Args:
         min_group_size: Minimum facts in a group to consider consolidation.
         similarity_threshold: Minimum cosine similarity to group facts.
+        unconsolidated_only: When True, only consider facts where
+            consolidated_at IS NULL. Uses smaller LIMIT (100 vs 500).
 
     Returns:
         List of groups, where each group is a list of fact dicts.
     """
+    unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
+    fetch_limit = 100 if unconsolidated_only else 500
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT id, fact_text, category, entities, embedding
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
+              {unconsolidated_filter}
             ORDER BY created_at DESC
-            LIMIT 500
+            LIMIT {fetch_limit}
             """
         )
         facts = [dict(r) for r in cur.fetchall()]
@@ -276,6 +308,338 @@ async def prune_low_quality_facts() -> dict[str, Any]:
     }
 
 
+# ── Intra-Day Consolidation (P0) ─────────────────────────────────────────────
+
+
+def get_unconsolidated_count() -> int:
+    """Count active facts that haven't been consolidated yet."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM memory_facts WHERE is_active = TRUE AND consolidated_at IS NULL"
+        )
+        return cur.fetchone()[0]
+
+
+def _mark_facts_consolidated(fact_ids: list[int] | None = None) -> int:
+    """Mark facts as consolidated by setting consolidated_at = NOW().
+
+    Args:
+        fact_ids: Specific fact IDs to mark. If None, marks all unconsolidated.
+
+    Returns:
+        Number of facts marked.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if fact_ids:
+            cur.execute(
+                """
+                UPDATE memory_facts SET consolidated_at = NOW()
+                WHERE id = ANY(%s) AND consolidated_at IS NULL
+                """,
+                (fact_ids,),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE memory_facts SET consolidated_at = NOW()
+                WHERE is_active = TRUE AND consolidated_at IS NULL
+                """
+            )
+        return cur.rowcount
+
+
+async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
+    """Run lightweight consolidation if enough unconsolidated facts exist.
+
+    Called after each continuous_ingest run. Only merges similar facts —
+    no importance scoring, no decay, no pruning.
+
+    Args:
+        threshold: Minimum unconsolidated facts required to trigger.
+
+    Returns:
+        Dict with consolidation stats, including 'skipped' flag.
+    """
+    count = get_unconsolidated_count()
+    if count < threshold:
+        return {"skipped": True, "unconsolidated_count": count, "threshold": threshold}
+
+    logger.info("Intra-day consolidation triggered: %d unconsolidated facts", count)
+
+    consolidation_groups = 0
+    try:
+        # Use min_group_size=2 for intra-day (smaller window than nightly's 3)
+        groups = await find_consolidation_candidates(
+            min_group_size=2,
+            similarity_threshold=0.8,
+            unconsolidated_only=True,
+        )
+        for group in groups:
+            result = await consolidate_facts(group)
+            if result and result.get("consolidated_text"):
+                from robothor.memory.facts import store_fact
+
+                consolidated_fact = {
+                    "fact_text": result["consolidated_text"],
+                    "category": group[0].get("category", "personal"),
+                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
+                    "confidence": 0.9,
+                }
+                new_id = await store_fact(
+                    consolidated_fact,
+                    source_content="[intra-day consolidation]",
+                    source_type="consolidation",
+                )
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    for source_id in result["source_ids"]:
+                        cur.execute(
+                            """
+                            UPDATE memory_facts
+                            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
+                            WHERE id = %s AND is_active = TRUE
+                            """,
+                            (new_id, source_id),
+                        )
+                consolidation_groups += 1
+    except Exception as e:
+        logger.warning("Intra-day consolidation failed: %s", e)
+
+    # Mark all remaining unconsolidated facts as consolidated
+    marked = _mark_facts_consolidated()
+
+    logger.info(
+        "Intra-day consolidation complete: %d groups merged, %d facts marked",
+        consolidation_groups,
+        marked,
+    )
+
+    return {
+        "skipped": False,
+        "unconsolidated_count": count,
+        "consolidation_groups": consolidation_groups,
+        "facts_marked_consolidated": marked,
+    }
+
+
+# ── Cross-Domain Insight Discovery (P1) ──────────────────────────────────────
+
+
+async def discover_cross_domain_insights(
+    hours_back: int = 24,
+    max_facts: int = 50,
+) -> list[dict[str, Any]]:
+    """Find non-obvious connections between facts from different categories.
+
+    Selects recent facts ensuring category diversity (>= 2 categories,
+    >= 3 facts), then asks the LLM to find cross-domain connections.
+
+    Args:
+        hours_back: How far back to look for recent facts.
+        max_facts: Maximum facts to include in the LLM prompt.
+
+    Returns:
+        List of validated insight dicts with 'insight_text' and 'source_fact_ids'.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=hours_back)
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, fact_text, category, entities
+            FROM memory_facts
+            WHERE is_active = TRUE AND created_at >= %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (cutoff, max_facts),
+        )
+        facts = [dict(r) for r in cur.fetchall()]
+
+    if len(facts) < 3:
+        logger.debug("Insight discovery: only %d facts, need >= 3", len(facts))
+        return []
+
+    categories = {f["category"] for f in facts}
+    if len(categories) < 2:
+        logger.debug("Insight discovery: only %d categories, need >= 2", len(categories))
+        return []
+
+    valid_ids = {f["id"] for f in facts}
+
+    facts_block = "\n".join(f"[{f['id']}] ({f['category']}) {f['fact_text']}" for f in facts)
+
+    prompt = f"""Below are recent facts from different domains. Find non-obvious connections
+between facts from DIFFERENT categories. Look for:
+- Patterns that span multiple topics
+- Cause-effect relationships across domains
+- Recurring themes connecting different areas
+
+Facts:
+{facts_block}
+
+Return up to 3 insights. Each insight must:
+- Reference at least 2 fact IDs from different categories
+- Be a complete, specific observation (not generic)
+- Be at least 20 characters long"""
+
+    try:
+        raw = await llm_client.generate(
+            prompt=prompt,
+            system="Find cross-domain connections between these facts.",
+            max_tokens=512,
+            format=INSIGHT_SCHEMA,
+        )
+
+        parsed = json.loads(raw.strip())
+        raw_insights = parsed.get("insights", [])
+    except Exception as e:
+        logger.warning("Insight discovery LLM call failed: %s", e)
+        return []
+
+    # Validate insights
+    validated = []
+    for item in raw_insights[:3]:
+        text = item.get("insight_text", "").strip()
+        source_ids = item.get("source_fact_ids", [])
+
+        if len(text) < 20:
+            logger.debug("Rejected insight (too short): %s", text[:50])
+            continue
+
+        # Filter to only valid fact IDs
+        valid_source_ids = [fid for fid in source_ids if fid in valid_ids]
+        if len(valid_source_ids) < 2:
+            logger.debug("Rejected insight (< 2 valid fact IDs): %s", text[:50])
+            continue
+
+        # Verify cross-category: source facts must span >= 2 categories
+        source_categories = {f["category"] for f in facts if f["id"] in valid_source_ids}
+        if len(source_categories) < 2:
+            logger.debug("Rejected insight (single category): %s", text[:50])
+            continue
+
+        validated.append(
+            {
+                "insight_text": text,
+                "source_fact_ids": valid_source_ids,
+            }
+        )
+
+    return validated
+
+
+async def _find_similar_insight(text: str, threshold: float = 0.85) -> bool:
+    """Check if a similar insight already exists (cosine dedup).
+
+    Args:
+        text: Insight text to check.
+        threshold: Minimum cosine similarity to consider a duplicate.
+
+    Returns:
+        True if a similar insight exists.
+    """
+    embedding = await llm_client.get_embedding_async(text)
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM memory_insights
+            WHERE is_active = TRUE
+              AND embedding IS NOT NULL
+              AND 1 - (embedding <=> %s::vector) >= %s
+            """,
+            (embedding, threshold),
+        )
+        return cur.fetchone()[0] > 0
+
+
+async def store_insight(insight: dict[str, Any]) -> int | None:
+    """Store a cross-domain insight with its embedding.
+
+    Args:
+        insight: Dict with 'insight_text' and 'source_fact_ids'.
+
+    Returns:
+        The database ID of the stored insight, or None if deduped.
+    """
+    text = insight["insight_text"]
+    source_ids = insight["source_fact_ids"]
+
+    # Dedup check
+    if await _find_similar_insight(text):
+        logger.debug("Insight deduped (similar exists): %s", text[:60])
+        return None
+
+    embedding = await llm_client.get_embedding_async(text)
+
+    # Gather categories and entities from source facts
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT category, entities FROM memory_facts
+            WHERE id = ANY(%s) AND is_active = TRUE
+            """,
+            (source_ids,),
+        )
+        source_facts = cur.fetchall()
+
+    categories = list({r["category"] for r in source_facts})
+    entities = list({e for r in source_facts for e in (r["entities"] or [])})
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO memory_insights
+            (insight_text, source_fact_ids, categories, entities, embedding)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (text, source_ids, categories, entities, embedding),
+        )
+        insight_id: int = cur.fetchone()[0]
+
+    logger.info("Stored insight %d: %s", insight_id, text[:80])
+    return insight_id
+
+
+async def run_insight_discovery(hours_back: int = 24) -> dict[str, Any]:
+    """Orchestrate cross-domain insight discovery: discover, dedup, store.
+
+    Args:
+        hours_back: How far back to look for recent facts.
+
+    Returns:
+        Dict with discovery stats.
+    """
+    insights = await discover_cross_domain_insights(hours_back=hours_back)
+    if not insights:
+        return {"discovered": 0, "stored": 0, "deduped": 0}
+
+    stored = 0
+    deduped = 0
+    for insight in insights:
+        insight_id = await store_insight(insight)
+        if insight_id is not None:
+            stored += 1
+        else:
+            deduped += 1
+
+    logger.info(
+        "Insight discovery: %d discovered, %d stored, %d deduped", len(insights), stored, deduped
+    )
+    return {"discovered": len(insights), "stored": stored, "deduped": deduped}
+
+
+# ── Full Lifecycle Maintenance (Nightly) ──────────────────────────────────────
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
@@ -286,6 +650,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         2. Compute and update decay scores for all active facts
         3. Prune low-quality facts (garbage collection)
         4. Find and consolidate similar fact groups
+        5. Sweep any remaining unconsolidated facts
+        6. Cross-domain insight discovery (72h window)
 
     Returns:
         Dict with maintenance statistics.
@@ -389,10 +755,24 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     except Exception as e:
         logger.warning("Consolidation failed: %s", e)
 
+    # Step 5: Sweep remaining unconsolidated facts (safety net)
+    swept = _mark_facts_consolidated()
+    if swept > 0:
+        logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
+
+    # Step 6: Cross-domain insight discovery (72h window for nightly)
+    insight_result: dict[str, Any] = {"discovered": 0, "stored": 0, "deduped": 0}
+    try:
+        insight_result = await run_insight_discovery(hours_back=72)
+    except Exception as e:
+        logger.warning("Nightly insight discovery failed: %s", e)
+
     return {
         "facts_scored": facts_scored,
         "auto_scored": auto_scored,
         "decay_updated": decay_updated,
         "facts_pruned": prune_result.get("total_pruned", 0),
         "consolidation_groups": consolidation_groups,
+        "unconsolidated_swept": swept,
+        "insights": insight_result,
     }

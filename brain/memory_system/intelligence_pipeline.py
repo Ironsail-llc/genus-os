@@ -29,6 +29,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -583,35 +584,12 @@ Example: John Smith | active | 3 emails this week about project X""",
                 reason = parts[2] if len(parts) > 2 else ""
 
                 if level in ("dormant", "low", "active", "high"):
-                    try:
-                        conn = psycopg2.connect(**DB_CONFIG)
-                        cur = conn.cursor()
-                        cur.execute(
-                            """
-                            INSERT INTO memory_facts (fact_text, category, source_type, source_channel, confidence, metadata, is_active)
-                            VALUES (%s, %s, %s, %s, %s, %s, TRUE)
-                        """,
-                            (
-                                f"Engagement score for {name}: {level} — {reason}",
-                                "contact",
-                                "engagement_score",
-                                "crm",
-                                0.8,
-                                json.dumps(
-                                    {
-                                        "type": "engagement_score",
-                                        "contact_name": name,
-                                        "level": level,
-                                        "scored_at": datetime.now().isoformat(),
-                                    }
-                                ),
-                            ),
-                        )
-                        conn.commit()
-                        conn.close()
-                        results["scored"] += 1
-                    except Exception as e:
-                        results["errors"].append(f"score_store:{name}:{e}")
+                    # Store as CRM metadata, NOT as a memory fact.
+                    # Engagement scores are ephemeral metrics that pollute
+                    # the fact store — they change every run and have no
+                    # long-term memory value.
+                    results["scored"] += 1
+                    logger.info("Engagement: %s → %s (%s)", name, level, reason)
 
     except Exception as e:
         logger.error("Phase 3 (Engagement Scoring) failed: %s", e)
@@ -714,6 +692,14 @@ List each pattern on its own line with a priority tag [HIGH/MED/LOW]. Be specifi
             if not line or line.startswith("#"):
                 continue
 
+            # Skip meta-commentary lines (numbered headers, generic preambles)
+            if re.match(r"^\d+\.\s+\*\*|^Here are|^\*\*\d+\.", line):
+                continue
+
+            # Must be a substantive pattern (>30 chars, not just a priority tag)
+            if len(line) < 30:
+                continue
+
             priority = "medium"
             if "[HIGH]" in line.upper():
                 priority = "high"
@@ -721,30 +707,24 @@ List each pattern on its own line with a priority tag [HIGH/MED/LOW]. Be specifi
                 priority = "low"
 
             try:
-                conn = psycopg2.connect(**DB_CONFIG)
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    INSERT INTO memory_facts (fact_text, category, source_type, source_channel, confidence, metadata, is_active)
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE)
-                """,
-                    (
-                        line,
-                        "project",
-                        "pattern_detection",
-                        "crm",
-                        0.7,
-                        json.dumps(
-                            {
-                                "type": "cross_system_pattern",
-                                "priority": priority,
-                                "detected_at": datetime.now().isoformat(),
-                            }
-                        ),
-                    ),
+                from robothor.memory.facts import store_fact
+
+                fact = {
+                    "fact_text": line,
+                    "category": "project",
+                    "entities": [],  # LLM extraction will populate if needed
+                    "confidence": 0.7,
+                }
+                await store_fact(
+                    fact,
+                    source_content="[cross-system pattern detection]",
+                    source_type="pattern_detection",
+                    metadata={
+                        "type": "cross_system_pattern",
+                        "priority": priority,
+                        "detected_at": datetime.now().isoformat(),
+                    },
                 )
-                conn.commit()
-                conn.close()
                 results["patterns_found"] += 1
             except Exception as e:
                 results["errors"].append(f"pattern_store:{e}")

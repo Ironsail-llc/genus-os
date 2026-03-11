@@ -340,12 +340,50 @@ async def store_facts_batch(
     return ids
 
 
+async def search_insights(
+    query: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Search cross-domain insights by vector similarity.
+
+    Args:
+        query: Search query text.
+        limit: Maximum number of results.
+
+    Returns:
+        List of matching insight dictionaries sorted by similarity.
+    """
+    embedding = await llm_client.get_embedding_async(query)
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, insight_text, source_fact_ids, categories, entities,
+                   created_at, metadata,
+                   1 - (embedding <=> %s::vector) as similarity
+            FROM memory_insights
+            WHERE is_active = TRUE AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (embedding, embedding, limit),
+        )
+        results = [dict(r) for r in cur.fetchall()]
+
+    for r in results:
+        r["source"] = "insight"
+
+    return results
+
+
 async def search_facts(
     query: str,
     limit: int = 10,
     active_only: bool = True,
     use_reranker: bool = False,
     expand_entities: bool = False,
+    include_insights: bool = False,
 ) -> list[dict[str, Any]]:
     """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
 
@@ -481,11 +519,27 @@ async def search_facts(
             for c in candidates:
                 c["content"] = c.get("fact_text", "")
             reranked = await rerank_with_fallback(query, candidates, top_k=limit)
+            if include_insights:
+                try:
+                    insights = await search_insights(query, limit=3)
+                    reranked.extend(insights)
+                except Exception:
+                    pass
             return reranked
         except Exception:
             pass  # Fall through to return without reranker
 
-    return candidates[:limit]
+    result = candidates[:limit]
+
+    # Append cross-domain insights if requested
+    if include_insights:
+        try:
+            insights = await search_insights(query, limit=3)
+            result.extend(insights)
+        except Exception:
+            pass  # Insight search is best-effort
+
+    return result
 
 
 def get_memory_stats() -> dict[str, Any]:

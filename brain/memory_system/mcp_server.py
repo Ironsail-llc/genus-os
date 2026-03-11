@@ -40,7 +40,13 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from robothor.memory.facts import extract_facts, get_memory_stats, search_facts, store_fact
+from robothor.memory.facts import (
+    extract_facts,
+    get_memory_stats,
+    search_facts,
+    search_insights,
+    store_fact,
+)
 
 # Import CRM DAL from bridge directory
 sys.path.insert(0, os.path.expanduser("~/robothor/crm/bridge"))
@@ -134,6 +140,25 @@ def get_tool_definitions() -> list[dict]:
                     },
                 },
                 "required": ["name"],
+            },
+        },
+        {
+            "name": "search_insights",
+            "description": "Search cross-domain insights — connections discovered between facts from different categories.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
             },
         },
         {
@@ -800,6 +825,23 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict:
     elif name == "get_stats":
         stats = get_memory_stats()
         return stats
+
+    elif name == "search_insights":
+        query = arguments.get("query", "")
+        limit = arguments.get("limit", 5)
+        results = await search_insights(query, limit=limit)
+        return {
+            "results": [
+                {
+                    "insight": r["insight_text"],
+                    "categories": r.get("categories", []),
+                    "entities": r.get("entities", []),
+                    "source_fact_ids": r.get("source_fact_ids", []),
+                    "similarity": round(r.get("similarity", 0), 4),
+                }
+                for r in results
+            ]
+        }
 
     elif name == "get_entity":
         entity_name = arguments.get("name", "")
