@@ -115,7 +115,7 @@ class TestVisionModels:
 
 class TestAppConfig:
     def test_app_title(self):
-        assert "Robothor" in app.title
+        assert "Genus OS" in app.title
 
     def test_app_has_routes(self):
         route_paths = [r.path for r in app.routes]
