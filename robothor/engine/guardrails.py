@@ -55,6 +55,7 @@ class GuardrailEngine:
     """Runs pre/post execution checks based on enabled policies."""
 
     enabled_policies: list[str] = field(default_factory=list)
+    workspace: str = ""  # Workspace root for normalizing absolute paths
     _exec_allowlists: dict[str, list[re.Pattern]] = field(default_factory=dict)  # type: ignore[type-arg]
     _write_allowlists: dict[str, list[str]] = field(default_factory=dict)
     _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
@@ -232,6 +233,10 @@ class GuardrailEngine:
         if not patterns:  # No allowlist = no restriction
             return GuardrailResult()
         path = str(tool_args.get("path", ""))
+        # Normalize absolute paths to workspace-relative for matching
+        ws = self.workspace.rstrip("/") + "/" if self.workspace else ""
+        if ws and path.startswith(ws):
+            path = path[len(ws) :]
         from fnmatch import fnmatch
 
         for pattern in patterns:

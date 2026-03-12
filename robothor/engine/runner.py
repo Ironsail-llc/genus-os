@@ -227,6 +227,25 @@ class AgentRunner:
         except Exception as e:
             logger.warning("Failed to record run start: %s", e)
 
+        # Auto-create CRM task if configured (skip for sub-agent runs)
+        if agent_config.auto_task and not spawn_context:
+            try:
+                from robothor.crm.dal import create_task as dal_create_task
+
+                task_id = dal_create_task(
+                    title=f"{agent_config.name}: {trigger_type.value} run",
+                    body=f"run_id: {session.run.id}\ntrigger: {trigger_detail or 'scheduled'}",
+                    status="IN_PROGRESS",
+                    assigned_to_agent=agent_id,
+                    created_by_agent="engine",
+                    priority="normal",
+                    tags=[agent_id, trigger_type.value, "auto"],
+                    tenant_id=self.config.tenant_id,
+                )
+                session.run.task_id = task_id if isinstance(task_id, str) else None
+            except Exception as e:
+                logger.warning("Auto-task creation failed: %s", e)
+
         # Build model list for fallback (model_override takes priority)
         if model_override:
             models = [model_override, agent_config.model_primary] + agent_config.model_fallbacks
@@ -271,7 +290,7 @@ class AgentRunner:
         if resume_from_run_id:
             resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
-        # Execute with timeout
+        # Execute with timeout (covers warmup + session init + run loop)
         timeout = agent_config.timeout_seconds
         try:
             async with asyncio.timeout(timeout):
@@ -1317,7 +1336,10 @@ class AgentRunner:
 
             from robothor.engine.guardrails import GuardrailEngine
 
-            engine = GuardrailEngine(enabled_policies=agent_config.guardrails)
+            engine = GuardrailEngine(
+                enabled_policies=agent_config.guardrails,
+                workspace=str(self.config.workspace) + "/",
+            )
             if agent_config.exec_allowlist:
                 engine._exec_allowlists[agent_config.id] = [
                     _re.compile(p) for p in agent_config.exec_allowlist
@@ -1472,7 +1494,7 @@ class AgentRunner:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": get_output_tokens(model, input_est),
-            "timeout": 120,
+            "timeout": 180 if model.startswith("ollama_chat/") else 120,
         }
         if stream:
             kwargs["stream"] = True
@@ -1522,6 +1544,7 @@ class AgentRunner:
         input_est = await self._prepare_llm_call(messages, models)
         last_error = None
 
+        logger.debug("LLM call with models: %s (broken: %s)", models, broken_models or set())
         for model in models:
             if broken_models and model in broken_models:
                 continue
@@ -1532,7 +1555,12 @@ class AgentRunner:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
 
-        logger.error("All models failed. Last error: %s", last_error)
+        logger.error(
+            "All models failed. Models: %s, broken: %s, last error: %s",
+            models,
+            broken_models or set(),
+            last_error,
+        )
         return None
 
     async def _call_llm_streaming(
@@ -1613,5 +1641,27 @@ class AgentRunner:
                     logger.warning("Failed to record step: %s", e)
         except Exception as e:
             logger.warning("Failed to update run in database: %s", e)
+
+        # Auto-resolve CRM task linked to this run
+        if run.task_id:
+            try:
+                from robothor.crm.dal import resolve_task as dal_resolve_task
+                from robothor.crm.dal import update_task as dal_update_task
+                from robothor.engine.models import RunStatus
+
+                if run.status == RunStatus.COMPLETED:
+                    dal_resolve_task(
+                        run.task_id,
+                        resolution=f"Run completed: {(run.output_text or '')[:200]}",
+                        agent_id=run.agent_id,
+                    )
+                elif run.status in (RunStatus.FAILED, RunStatus.TIMEOUT):
+                    dal_update_task(
+                        run.task_id,
+                        status="TODO",
+                        tags=[run.agent_id, "failed", run.status.value],
+                    )
+            except Exception as e:
+                logger.warning("Auto-task update failed: %s", e)
 
         return run

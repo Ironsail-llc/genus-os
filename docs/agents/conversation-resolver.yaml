@@ -17,7 +17,7 @@ model:
   payload_alias: qwen35
 
 schedule:
-  cron: "0 8,14,20 * * *"
+  cron: "20 8,14,20 * * *"
   timezone: America/New_York
   timeout_seconds: 360
   max_iterations: 5
@@ -40,6 +40,10 @@ tools_allowed:
   - get_inbox
   - ack_notification
   - append_to_block
+  - create_task
+  - list_my_tasks
+  - update_task
+  - resolve_task
 tools_denied:
   - message
 bridge_endpoints:
@@ -62,6 +66,7 @@ sla:
   low: 24h
 
 task_protocol: false
+auto_task: true
 review_workflow: false
 notification_inbox: true
 status_file: brain/memory/conversation-resolver-status.md

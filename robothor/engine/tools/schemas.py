@@ -342,6 +342,15 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["list_tasks_summary"] = {
+        "type": "function",
+        "function": {
+            "name": "list_tasks_summary",
+            "description": "Fleet dashboard: task counts by status, requires_human count, by-agent breakdown, SLA overdue, failed auto-tasks.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
     # ── CRM Merge tools ──
     for merge_name, merge_desc, obj_type in [
         ("merge_people", "Merge two duplicate people.", "person"),

@@ -769,7 +769,7 @@ def delete_note(note_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
 
 # Valid status transitions (from -> set of allowed targets)
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "TODO": {"IN_PROGRESS", "DONE"},
+    "TODO": {"IN_PROGRESS"},
     "IN_PROGRESS": {"REVIEW", "TODO", "DONE"},
     "REVIEW": {"DONE", "IN_PROGRESS", "TODO"},
     "DONE": {"TODO"},
@@ -851,17 +851,17 @@ def _check_subtask_completion(cur: Any, task_id: str) -> str | None:
     return None
 
 
-def find_task_by_thread_id(
-    thread_id: str,
-    assigned_to_agent: str | None = None,
-    include_recently_resolved: bool = False,
+def find_task_by_dedup_key(
+    key_name: str,
+    key_value: str,
+    include_recently_resolved: bool = True,
     tenant_id: str = DEFAULT_TENANT,
 ) -> dict[str, Any] | None:
-    """Find a task containing a threadId in its body.
+    """Find a task containing a dedup key pattern in its body.
 
-    Used for server-side dedup — prevents duplicate tasks for the same email thread.
-    When include_recently_resolved=True, also matches tasks resolved within the last
-    72 hours (prevents re-creation of tasks Philip already resolved).
+    Searches for pattern '{key_name}: {key_value}' in task body.
+    When include_recently_resolved=True (default), also matches tasks resolved
+    within the last 72 hours to prevent recreation of resolved tasks.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -875,17 +875,29 @@ def find_task_by_thread_id(
               AND {resolved_clause}
               AND deleted_at IS NULL
               AND tenant_id = %s
+            LIMIT 1
         """
-        params: list[Any] = [f"%threadId: {thread_id}%", tenant_id]
-        if assigned_to_agent:
-            query += " AND assigned_to_agent = %s"
-            params.append(assigned_to_agent)
-        query += " LIMIT 1"
+        params: list[Any] = [f"%{key_name}: {key_value}%", tenant_id]
         cur.execute(query, params)
         row = cur.fetchone()
         if row:
             return dict(row)
         return None
+
+
+def find_task_by_thread_id(
+    thread_id: str,
+    assigned_to_agent: str | None = None,
+    include_recently_resolved: bool = False,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any] | None:
+    """Find a task containing a threadId in its body (backward compat wrapper)."""
+    return find_task_by_dedup_key(
+        "threadId",
+        thread_id,
+        include_recently_resolved=include_recently_resolved,
+        tenant_id=tenant_id,
+    )
 
 
 def create_task(
@@ -1220,6 +1232,13 @@ def resolve_task(
             )
             row = cur.fetchone()
             from_status = row["status"] if row else None
+
+            # Guard: can only resolve from IN_PROGRESS or REVIEW
+            if from_status and from_status not in ("IN_PROGRESS", "REVIEW"):
+                return {
+                    "error": f"Cannot resolve from {from_status} — must be IN_PROGRESS or REVIEW first",
+                    "id": task_id,
+                }
 
             # Guard: requires_human tasks can only be resolved by Philip
             if (

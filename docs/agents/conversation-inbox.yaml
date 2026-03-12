@@ -10,14 +10,13 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: ollama_chat/qwen3.5:122b
+  primary: openrouter/z-ai/glm-5
   fallbacks:
     - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: qwen35
 
 schedule:
-  cron: "0 6-22 * * *"
+  cron: "5 6-22 * * *"
   timezone: America/New_York
   timeout_seconds: 360
   max_iterations: 5
@@ -40,6 +39,9 @@ tools_allowed:
   - get_inbox
   - ack_notification
   - append_to_block
+  - list_my_tasks
+  - update_task
+  - resolve_task
 tools_denied:
   - message
 bridge_endpoints:
@@ -62,6 +64,7 @@ sla:
   low: 24h
 
 task_protocol: false
+auto_task: true
 review_workflow: false
 notification_inbox: true
 status_file: brain/memory/conversation-inbox-status.md
@@ -87,6 +90,8 @@ v2:
     - "brain/memory/conversation-inbox-status.md"
 
 changelog:
+  - date: "2026-03-10"
+    change: "Revert to GLM-5 — Qwen 3.5 122B caused intermittent timeouts (22% rate)"
   - date: "2026-03-09"
     change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-02-24"

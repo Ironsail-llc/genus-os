@@ -17,7 +17,7 @@ model:
   payload_alias: qwen35
 
 schedule:
-  cron: "0 6-22/6 * * *"
+  cron: "12 6-22/6 * * *"
   timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 5
@@ -71,6 +71,7 @@ sla:
   low: 24h
 
 task_protocol: true
+auto_task: true
 review_workflow: false
 notification_inbox: false
 status_file: brain/memory/vision-monitor-status.md

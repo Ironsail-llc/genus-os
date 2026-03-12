@@ -851,7 +851,7 @@ class TestTaskResolutionFixes:
         from robothor.crm.dal import resolve_task
 
         mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = {"status": "TODO", "requires_human": True}
+        mock_cur.fetchone.return_value = {"status": "IN_PROGRESS", "requires_human": True}
         mock_cur.rowcount = 1
 
         mock_conn = MagicMock()
@@ -875,7 +875,7 @@ class TestCreateTaskDedup:
         """create_task returns existing task when threadId matches."""
         existing = {"id": "task-existing", "title": "Twilio alert", "status": "TODO"}
         with (
-            patch("robothor.crm.dal.find_task_by_thread_id", return_value=existing),
+            patch("robothor.crm.dal.find_task_by_dedup_key", return_value=existing),
             patch("robothor.crm.dal.create_task") as mock_create,
         ):
             result = await _execute_tool(
@@ -893,7 +893,7 @@ class TestCreateTaskDedup:
         """Dedup check uses include_recently_resolved=True."""
         existing = {"id": "task-done", "title": "Resolved alert", "status": "DONE"}
         with (
-            patch("robothor.crm.dal.find_task_by_thread_id", return_value=existing) as mock_find,
+            patch("robothor.crm.dal.find_task_by_dedup_key", return_value=existing) as mock_find,
             patch("robothor.crm.dal.create_task") as mock_create,
         ):
             await _execute_tool(
@@ -903,15 +903,18 @@ class TestCreateTaskDedup:
                 tenant_id="test-tenant",
             )
         mock_find.assert_called_once_with(
-            "xyz789", include_recently_resolved=True, tenant_id="test-tenant"
+            key_name="threadId",
+            key_value="xyz789",
+            include_recently_resolved=True,
+            tenant_id="test-tenant",
         )
         mock_create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_dedup_without_thread_id(self):
-        """Tasks without threadId skip dedup and create normally."""
+        """Tasks without any dedup key skip dedup and create normally."""
         with (
-            patch("robothor.crm.dal.find_task_by_thread_id") as mock_find,
+            patch("robothor.crm.dal.find_task_by_dedup_key") as mock_find,
             patch("robothor.crm.dal.create_task", return_value="new-task-id"),
         ):
             result = await _execute_tool(
@@ -927,7 +930,7 @@ class TestCreateTaskDedup:
     async def test_dedup_miss_creates_task(self):
         """When no existing task matches threadId, create normally."""
         with (
-            patch("robothor.crm.dal.find_task_by_thread_id", return_value=None),
+            patch("robothor.crm.dal.find_task_by_dedup_key", return_value=None),
             patch("robothor.crm.dal.create_task", return_value="new-task-id"),
         ):
             result = await _execute_tool(
@@ -938,3 +941,26 @@ class TestCreateTaskDedup:
             )
         assert result["id"] == "new-task-id"
         assert "deduplicated" not in result
+
+    @pytest.mark.asyncio
+    async def test_dedup_conversation_id(self):
+        """Dedup works with conversationId pattern too."""
+        existing = {"id": "task-conv", "title": "Conversation escalation", "status": "DONE"}
+        with (
+            patch("robothor.crm.dal.find_task_by_dedup_key", return_value=existing) as mock_find,
+            patch("robothor.crm.dal.create_task") as mock_create,
+        ):
+            result = await _execute_tool(
+                "create_task",
+                {"title": "Escalation", "body": "conversationId: conv-456\nUrgent"},
+                agent_id="conversation-inbox",
+                tenant_id="test-tenant",
+            )
+        assert result["deduplicated"] is True
+        mock_find.assert_called_once_with(
+            key_name="conversationId",
+            key_value="conv-456",
+            include_recently_resolved=True,
+            tenant_id="test-tenant",
+        )
+        mock_create.assert_not_called()

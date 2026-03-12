@@ -242,24 +242,28 @@ async def _delete_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     import re as _re
 
-    from robothor.crm.dal import create_task, find_task_by_thread_id
+    from robothor.crm.dal import create_task, find_task_by_dedup_key
 
-    # Server-side dedup: check for existing task with same threadId
+    # Server-side dedup: check for existing task with any known dedup key
     body_text = args.get("body") or ""
-    thread_match = _re.search(r"threadId:\s*([a-zA-Z0-9]+)", body_text)
-    if thread_match:
-        existing = await asyncio.to_thread(
-            find_task_by_thread_id,
-            thread_match.group(1),
-            include_recently_resolved=True,
-            tenant_id=ctx.tenant_id,
-        )
-        if existing:
-            return {
-                "id": existing["id"],
-                "title": existing["title"],
-                "deduplicated": True,
-            }
+    dedup_keys = ["threadId", "conversationId", "eventId", "escalationId"]
+    for key in dedup_keys:
+        match = _re.search(rf"{key}:\s*(\S+)", body_text)
+        if match:
+            existing = await asyncio.to_thread(
+                find_task_by_dedup_key,
+                key_name=key,
+                key_value=match.group(1),
+                include_recently_resolved=True,
+                tenant_id=ctx.tenant_id,
+            )
+            if existing:
+                return {
+                    "id": existing["id"],
+                    "title": existing["title"],
+                    "deduplicated": True,
+                }
+            break  # Only check the first matching key
 
     task_id = await asyncio.to_thread(
         create_task,
@@ -388,6 +392,84 @@ async def _list_my_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         tenant_id=ctx.tenant_id,
     )
     return {"tasks": results, "count": len(results)}
+
+
+# ── Task Summary Dashboard ──
+
+
+@_handler("list_tasks_summary")
+async def _list_tasks_summary(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Dashboard: counts by status, requires_human, by-agent, SLA overdue."""
+    from psycopg2.extras import RealDictCursor
+
+    from robothor.db.connection import get_connection
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            # Status counts
+            cur.execute(
+                """SELECT status, COUNT(*) as count FROM crm_tasks
+                   WHERE deleted_at IS NULL AND tenant_id = %s
+                   GROUP BY status ORDER BY status""",
+                (ctx.tenant_id,),
+            )
+            by_status = {r["status"]: r["count"] for r in cur.fetchall()}
+
+            # Requires human count
+            cur.execute(
+                """SELECT COUNT(*) as count FROM crm_tasks
+                   WHERE requires_human = TRUE AND resolved_at IS NULL
+                     AND deleted_at IS NULL AND tenant_id = %s""",
+                (ctx.tenant_id,),
+            )
+            requires_human = cur.fetchone()["count"]
+
+            # By agent breakdown (top 15)
+            cur.execute(
+                """SELECT COALESCE(assigned_to_agent, 'unassigned') as agent,
+                          status, COUNT(*) as count
+                   FROM crm_tasks
+                   WHERE deleted_at IS NULL AND resolved_at IS NULL AND tenant_id = %s
+                   GROUP BY assigned_to_agent, status
+                   ORDER BY count DESC LIMIT 30""",
+                (ctx.tenant_id,),
+            )
+            by_agent_rows = cur.fetchall()
+            by_agent: dict[str, dict[str, int]] = {}
+            for r in by_agent_rows:
+                agent = r["agent"]
+                if agent not in by_agent:
+                    by_agent[agent] = {}
+                by_agent[agent][r["status"]] = r["count"]
+
+            # SLA overdue count
+            cur.execute(
+                """SELECT COUNT(*) as count FROM crm_tasks
+                   WHERE sla_deadline IS NOT NULL AND sla_deadline < NOW()
+                     AND resolved_at IS NULL AND deleted_at IS NULL AND tenant_id = %s""",
+                (ctx.tenant_id,),
+            )
+            sla_overdue = cur.fetchone()["count"]
+
+            # Recent auto-task failures (tagged "failed")
+            cur.execute(
+                """SELECT COUNT(*) as count FROM crm_tasks
+                   WHERE 'failed' = ANY(tags) AND resolved_at IS NULL
+                     AND deleted_at IS NULL AND tenant_id = %s""",
+                (ctx.tenant_id,),
+            )
+            failed_tasks = cur.fetchone()["count"]
+
+            return {
+                "by_status": by_status,
+                "requires_human": requires_human,
+                "by_agent": by_agent,
+                "sla_overdue": sla_overdue,
+                "failed_auto_tasks": failed_tasks,
+            }
+
+    return await asyncio.to_thread(_query)
 
 
 # ── Task Review Workflow ──

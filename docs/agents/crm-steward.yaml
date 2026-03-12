@@ -74,6 +74,7 @@ sla:
   low: 24h
 
 task_protocol: true
+auto_task: true
 review_workflow: true
 notification_inbox: true
 status_file: brain/memory/crm-steward-status.md

@@ -118,6 +118,46 @@ class TestWritePathRestrict:
         )
         assert result.allowed
 
+    def test_absolute_path_normalized_to_relative(self):
+        """Absolute paths under workspace should match relative allowlist patterns."""
+        engine = GuardrailEngine(
+            enabled_policies=["write_path_restrict"],
+            workspace="/home/user/robothor/",
+        )
+        engine._write_allowlists["test-agent"] = ["docs/agents/*", "robothor/*"]
+        result = engine.check_pre_execution(
+            "write_file",
+            {"path": "/home/user/robothor/docs/agents/new-agent.yaml"},
+            agent_id="test-agent",
+        )
+        assert result.allowed
+
+    def test_absolute_path_outside_workspace_still_blocked(self):
+        """Paths outside workspace should not be normalized and should be blocked."""
+        engine = GuardrailEngine(
+            enabled_policies=["write_path_restrict"],
+            workspace="/home/user/robothor/",
+        )
+        engine._write_allowlists["test-agent"] = ["docs/agents/*"]
+        result = engine.check_pre_execution(
+            "write_file", {"path": "/etc/passwd"}, agent_id="test-agent"
+        )
+        assert not result.allowed
+
+    def test_workspace_without_trailing_slash(self):
+        """Workspace path normalization should work without trailing slash."""
+        engine = GuardrailEngine(
+            enabled_policies=["write_path_restrict"],
+            workspace="/home/user/robothor",
+        )
+        engine._write_allowlists["test-agent"] = ["brain/memory/*"]
+        result = engine.check_pre_execution(
+            "write_file",
+            {"path": "/home/user/robothor/brain/memory/status.md"},
+            agent_id="test-agent",
+        )
+        assert result.allowed
+
 
 # ── Content Tagging ──
 

@@ -36,6 +36,7 @@ tools_allowed:
   - list_tasks
   - list_agent_tasks
   - gws_calendar_list
+  - list_tasks_summary
 tools_denied:
   - create_message
   - make_call
@@ -66,8 +67,6 @@ warmup:
   context_files:
     - brain/memory/garmin-health.md
     - brain/memory/cron-health-status.md
-    - brain/memory/email-classifier-status.md
-    - brain/memory/response-status.md
 
 instruction_file: brain/agents/evening-winddown.md
 bootstrap_files:

@@ -281,21 +281,26 @@ class CronScheduler:
                         dedup_key,
                         errors,
                     )
-                    # Best-effort Telegram alert
+                    # Create a CRM task so heartbeat surfaces it naturally
                     try:
-                        from robothor.engine.delivery import get_telegram_sender
+                        from robothor.crm.dal import create_task as dal_create_task
 
-                        sender = get_telegram_sender()
-                        delivery_to = agent_config.delivery_to
-                        if sender and delivery_to:
-                            asyncio.create_task(
-                                sender(
-                                    delivery_to,
-                                    f"*Circuit Breaker*\n\n{agent_config.name} "
-                                    f"has {errors} consecutive errors. "
-                                    f"Skipping scheduled run. Check logs.",
-                                )
-                            )
+                        dal_create_task(
+                            title=f"{agent_config.name} paused — {errors} consecutive failures",
+                            body=(
+                                f"Agent has been automatically paused after {errors} "
+                                f"consecutive errors.\n"
+                                f"Check agent_runs for {agent_config.id}.\n"
+                                f"To resume: reset consecutive_errors in agent_schedules."
+                            ),
+                            status="TODO",
+                            assigned_to_agent="main",
+                            created_by_agent="engine",
+                            priority="high",
+                            tags=[agent_config.id, "paused", "needs-attention"],
+                            requires_human=True,
+                            tenant_id=self.config.tenant_id,
+                        )
                     except Exception:
                         pass
                     return True

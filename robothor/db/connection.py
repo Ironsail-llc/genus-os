@@ -33,7 +33,10 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 _pool_lock = threading.Lock()
 
 
-def get_pool(minconn: int = 2, maxconn: int = 20) -> psycopg2.pool.ThreadedConnectionPool:
+_POOL_GETCONN_TIMEOUT = 10  # seconds to wait for a connection before raising
+
+
+def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConnectionPool:
     """Get or create the connection pool."""
     global _pool
     if _pool is not None and not _pool.closed:
@@ -81,7 +84,26 @@ def get_connection(
         # On exception, transaction is rolled back.
     """
     pool = get_pool()
-    conn = pool.getconn()
+    # Use a threading timeout to avoid blocking indefinitely when pool is exhausted
+    conn = None
+    acquired = threading.Event()
+
+    def _get() -> None:
+        nonlocal conn
+        try:
+            conn = pool.getconn()
+            acquired.set()
+        except Exception:
+            acquired.set()
+
+    t = threading.Thread(target=_get, daemon=True)
+    t.start()
+    if not acquired.wait(timeout=_POOL_GETCONN_TIMEOUT):
+        raise ConnectionError(
+            f"Could not acquire DB connection within {_POOL_GETCONN_TIMEOUT}s — pool exhausted"
+        )
+    if conn is None:
+        raise ConnectionError("Failed to acquire DB connection from pool")
     try:
         if autocommit:
             conn.autocommit = True

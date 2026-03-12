@@ -59,7 +59,7 @@ create_task(
 )
 ```
 
-Before creating, check for existing tasks: `list_tasks(tags=["conversation","escalation"], status="TODO")`. If a task already mentions this conversation ID, skip.
+Before creating, check for existing tasks: `list_tasks(tags=["conversation","escalation"], excludeResolved=false)`. If a task already mentions this conversation ID (any status including DONE), skip — Philip may have already resolved it.
 
 ---
 

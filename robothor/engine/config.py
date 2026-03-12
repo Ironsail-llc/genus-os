@@ -223,6 +223,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         reports_to=manifest.get("reports_to", ""),
         department=manifest.get("department", ""),
         task_protocol=manifest.get("task_protocol", False),
+        auto_task=manifest.get("auto_task", False),
         review_workflow=manifest.get("review_workflow", False),
         notification_inbox=manifest.get("notification_inbox", False),
         shared_working_state=manifest.get("shared_working_state", False),

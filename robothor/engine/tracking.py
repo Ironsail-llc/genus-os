@@ -58,9 +58,9 @@ def create_run(run: AgentRun) -> str:
                 id, tenant_id, agent_id, trigger_type, trigger_detail,
                 correlation_id, status, started_at, model_used,
                 system_prompt_chars, user_prompt_chars, tools_provided,
-                delivery_mode, parent_run_id, nesting_depth
+                delivery_mode, parent_run_id, nesting_depth, task_id
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -79,6 +79,7 @@ def create_run(run: AgentRun) -> str:
                 run.delivery_mode,
                 run.parent_run_id,
                 run.nesting_depth,
+                run.task_id,
             ),
         )
     return run.id

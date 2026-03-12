@@ -153,6 +153,7 @@ class AgentConfig:
     reports_to: str = ""
     department: str = ""
     task_protocol: bool = False
+    auto_task: bool = False  # Engine auto-creates/manages CRM task per run
     review_workflow: bool = False
     notification_inbox: bool = False
     shared_working_state: bool = False
@@ -288,6 +289,9 @@ class AgentRun:
     # Sub-agent tracking
     parent_run_id: str | None = None
     nesting_depth: int = 0
+
+    # CRM task linkage (auto-task)
+    task_id: str | None = None
 
     steps: list[RunStep] = field(default_factory=list)
 

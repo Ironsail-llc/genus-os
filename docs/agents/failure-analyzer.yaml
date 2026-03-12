@@ -20,7 +20,7 @@ model:
   payload_alias: sonnet
 
 schedule:
-  cron: "0 */2 * * *"
+  cron: "25 */2 * * *"
   timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 15
@@ -55,6 +55,7 @@ streams:
   write: [agent]
 
 task_protocol: true
+auto_task: true
 review_workflow: false
 notification_inbox: false
 status_file: brain/memory/failure-analyzer-status.md

@@ -126,6 +126,10 @@ optional:
     type: boolean
     default: false
     description: Agent must check inbox, process tasks, resolve
+  auto_task:
+    type: boolean
+    default: false
+    description: Engine auto-creates a CRM task per run with proper lifecycle
   review_workflow:
     type: boolean
     default: false

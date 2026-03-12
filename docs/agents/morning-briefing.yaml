@@ -38,6 +38,7 @@ tools_allowed:
   - list_notes
   - create_note
   - gws_calendar_list
+  - list_tasks_summary
 tools_denied:
   - create_message
   - make_call
@@ -68,9 +69,6 @@ warmup:
   context_files:
     - brain/memory/garmin-health.md
     - brain/memory/cron-health-status.md
-    - brain/memory/email-classifier-status.md
-    - brain/memory/response-status.md
-    - brain/memory/overnight-pr-status.md
 
 instruction_file: brain/agents/morning-briefing.md
 bootstrap_files:
