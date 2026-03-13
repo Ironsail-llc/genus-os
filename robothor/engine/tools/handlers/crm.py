@@ -446,7 +446,7 @@ async def _list_tasks_summary(args: dict[str, Any], ctx: ToolContext) -> dict[st
             # SLA overdue count
             cur.execute(
                 """SELECT COUNT(*) as count FROM crm_tasks
-                   WHERE sla_deadline IS NOT NULL AND sla_deadline < NOW()
+                   WHERE sla_deadline_at IS NOT NULL AND sla_deadline_at < NOW()
                      AND resolved_at IS NULL AND deleted_at IS NULL AND tenant_id = %s""",
                 (ctx.tenant_id,),
             )
