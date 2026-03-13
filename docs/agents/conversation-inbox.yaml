@@ -1,7 +1,7 @@
 id: conversation-inbox
 name: Conversation Inbox Monitor
 description: Checks for urgent unread messages in open conversations
-version: "2026-03-09"
+version: "2026-03-13"
 department: communications
 
 reports_to: main
@@ -18,7 +18,7 @@ model:
 schedule:
   cron: "5 6-22 * * *"
   timezone: America/New_York
-  timeout_seconds: 360
+  timeout_seconds: 420  # Corrected from 360 (PR #19 error) — observed peak run was 376s, 420s gives 44s headroom
   max_iterations: 5
   session_target: isolated
 
@@ -90,6 +90,8 @@ v2:
     - "brain/memory/conversation-inbox-status.md"
 
 changelog:
+  - date: "2026-03-13"
+    change: "Correct timeout 360→420s — PR #19 set 360s which is below observed peak (376s); 420s gives safe headroom [nightwatch]"
   - date: "2026-03-10"
     change: "Revert to GLM-5 — Qwen 3.5 122B caused intermittent timeouts (22% rate)"
   - date: "2026-03-09"

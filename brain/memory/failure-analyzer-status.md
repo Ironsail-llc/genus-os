@@ -1,65 +1,62 @@
 # Failure Analyzer Status
 
-Last run: 2026-03-09 18:00 UTC (2026-03-09 2:00 PM EDT)
-Failures analyzed: 17 (in 16:00–18:00 UTC window + carry-forward from 12:00 EDT cron tick)
-Tasks created: 0 (no new tasks — all failures map to existing open tasks)
-Classifications: transient: 0, config: 5 (tilde path, updated d8a53d2b), infrastructure: 12 (zombie wave + model failures, updated 60d7b991 + 8162ebd2), code: 0, unknown: 0
+Last run: 2026-03-13 06:25 UTC (2026-03-13 02:25 AM EDT)
+Failures analyzed: window 04:25–06:25 UTC (00:25–02:25 AM EDT on 2026-03-13)
+Tasks created: 0
+Classifications: transient: 0, config: 0, code: 0, unknown: 0
 
 ## Run Summary
 
-### Scope
-- Window: 2026-03-09 16:00 UTC – 18:00 UTC (12:00 PM – 2:00 PM EDT)
-- Failed runs in window: 0 new "models failed" runs
-- Timeout runs in window: 6 calendar-monitor + 1 email-classifier (d5ea55dd) + 7-agent zombie wave (12:00 EDT cron tick)
+### Analysis Window
+- 2026-03-13 04:25 UTC – 2026-03-13 06:25 UTC (00:25–02:25 AM EDT)
 
-### New Failures Analyzed
+### Failed Runs
+- All `failed` status runs fleet-wide are from 2026-03-08/09 (>48h stale — skipped per rules)
 
-#### 1. calendar-monitor — 4 new timeouts (89c292ce, cf4445f7, 571e76d3, 4d63c1a8)
-- **Classification:** CONFIG (tilde path bug)
-- **Root cause:** Same `~/robothor/brain/memory/triage-inbox.json` path bug (task d8a53d2b)
-- **Run 89c292ce step trail:** 4 consecutive tilde path failures at steps 3/5/7/9 → wasted 243s of 480s budget → timeout
-- **Mapped to:** Task d8a53d2b (updated with new evidence)
-- **calendar-monitor 24h stats:** 43 runs, 31 completed, 12 timeouts = **27.9% timeout rate** (up from 16.7% 2h ago)
+### Timeout Runs in Window
+- **No new timeout runs detected in this 2h window** (04:25–06:25 UTC)
+- Most recent timeout was chat-responder `c70fd4eb` started 2026-03-12 22:30 UTC (18:30 EDT) — prior window, already tracked in task 60d7b991
+- Most recent timeout batch was 2026-03-12 22:00 UTC (18:00 EDT) — 6-agent wave: main, calendar-monitor (×2), email-responder, conversation-inbox, chat-responder
 
-#### 2. email-classifier — 1 new timeout (d5ea55dd)
-- **Classification:** CONFIG (tilde path bug)
-- **Run trail:** Step 5 = tilde path error → extra LLM round-trip (126s) → timeout at step 8 / 779s total
-- **Mapped to:** Task d8a53d2b (updated)
+### Fleet Health (24h stats as of run)
+| Agent           | Runs | OK  | Timeouts | Rate   | Status   |
+|-----------------|------|-----|----------|--------|----------|
+| main            | 21   | 14  | 7        | 33.3%  | 🚨 CRITICAL |
+| email-classifier| 12   | 8   | 4        | 33.3%  | 🚨 CRITICAL |
+| chat-responder  | 35   | 30  | 5        | 14.3%  | 🚨 HIGH   |
+| calendar-monitor| 25   | 20  | 5        | 20.0%  | 🚨 HIGH   |
+| email-responder | 2    | 1   | 1        | 50.0%  | ⚠️ WATCH  |
+| conversation-inbox | 5 | 4   | 1        | 20.0%  | ⚠️ WATCH  |
+| failure-analyzer| 12   | 9   | 2        | 16.7%  | ⚠️ WATCH  |
 
-#### 3. 12:00 EDT mass zombie wave (7 agents, simultaneous)
-- **Agents:** main (09a9e887), email-responder (b75b0e3f), email-classifier (ec201e9d), vision-monitor (70612d02), chat-responder (c416b005), calendar-monitor (8f437a37), conversation-inbox (8372cf07)
-- **Classification:** CODE / INFRASTRUCTURE (zombie pattern)
-- **All share:** 0 steps, 0 tokens, null model, null completed_at — identical zombie signature
-- **New evidence:** First time ALL 7 cron agents at a single tick zombied simultaneously. Strongly points to shared resource pool exhaustion at cron tick boundary.
-- **Mapped to:** Task 60d7b991 (updated with mass event evidence + cron stagger proposal)
+### Overnight Status
+- Fleet currently in quiet overnight period (02:00–06:00 UTC) — low cron activity
+- Last 5 runs for main, email-classifier, chat-responder: ALL COMPLETED SUCCESSFULLY
+- Zombie `c70fd4eb` (chat-responder) still running with null completed_at (8h+ duration) — zombie cleanup still not operational
 
-#### 4. email-analyst — 1 timeout (7e0cabe3, 03:55 EDT)
-- **Classification:** INFRASTRUCTURE (zombie — 0 steps, hook trigger)
-- **Mapped to:** Existing tasks c51a8374 / 740a4a86 (no update needed, pattern already documented)
+### Existing Open Tasks (no duplicates created)
+- `f494392a` — Philip escalation: PRs + write_path guardrail blocker (URGENT, needs-philip)
+- `60d7b991` — Zombie infrastructure crisis (URGENT, code+infrastructure) — updated this run
+- `08d64e1a` — z-ai/glm-5-20260211 second-call LLM hang (HIGH, config+infrastructure)
+- `a25f12b5` — email-responder exec_allowlist block (HIGH, config)
+- `fc1d23bb` — email-responder timeout 600→720s (HIGH, config)
+- `31f31fc9` — failure-analyzer context-bloat LLM hang (HIGH, code+config)
+- `9412c7fd` — conversation-inbox timeout correction PR#19 (HIGH, config)
+- `d66659bc` — chat-responder LLM hang moonshotai model (NORMAL, code+config)
+- `43e41fed` — calendar-monitor leading-space tool name bug (HIGH, code)
+- `c51a8374` — email-analyst zombie cron pattern (HIGH, code+infrastructure)
+- `5891440c` — email-responder zombie hook pattern (HIGH, code+infrastructure)
+- `740a4a86` — email-analyst hook zombie (HIGH, code)
+- `ce4671ce` — email-analyst exec hang (NORMAL, code)
 
-#### 5. Model failures (8162ebd2)
-- **No new "models_attempted: []" failures in this window** — current 2h window is clean
-- Updated task 8162ebd2 with clean status confirmation
+### Root Cause Summary (Ongoing)
+1. **PRIMARY: Zombie runtime crisis** — 16 mass zombie events over 4+ days, cleanup not running
+2. **SECONDARY: z-ai/glm-5-20260211 LLM hang** — second-call hang pattern across main, calendar-monitor, email-responder
+3. **BLOCKER: write_path guardrail** — overnight-pr cannot apply any config fixes (9 PRs pending, DAY 9 unmerged)
+4. **PENDING PHILIP ACTION** — see task f494392a for ordered action list
 
-### Open Nightwatch Tasks (13 total)
-| ID | Title | Priority | Age |
-|----|-------|----------|-----|
-| d8a53d2b | calendar-monitor: tilde path bug causing 27.9% timeout rate | HIGH | 4 days |
-| 60d7b991 | main: zombie runs — 7-agent mass event at 12:00 EDT | HIGH | 3 days |
-| 8162ebd2 | email-classifier: "All models failed" fleet-wide | HIGH | 1 day |
-| c51a8374 | email-analyst: zombie pattern cron + hook | HIGH | 3 days |
-| 5891440c | email-responder: zombie runs on hook trigger | HIGH | 3 days |
-| 43e41fed | calendar-monitor: leading-space tool name bug | HIGH | 3 days |
-| 740a4a86 | email-analyst: hook zombie (parent of c51a8374) | HIGH | 3 days |
-| 1f78c6e4 | main:heartbeat 0 runs for 2 days | HIGH | 3 days |
-| d66659bc | chat-responder: LLM hang after list_my_tasks | NORMAL | 2 days |
-| bd52e6c9 | improvement-analyst: missing memory blocks | NORMAL | 4 days |
-| ce4671ce | email-analyst: exec call hangs | NORMAL | 4 days |
-| 0f2cddb3 | Review Nightwatch PRs 2026-03-09 (6 PRs pending) | HIGH | 11h |
-| bde627f5 | Review Nightwatch PRs 2026-03-07 (3 PRs pending) | HIGH | 2 days |
-
-### Critical Observations
-1. **Tilde path bug (d8a53d2b) is now 4 days old with 27.9% calendar-monitor timeout rate** — this is the single highest-ROI fix. overnight-pr should prioritize this above all other tasks.
-2. **Mass zombie wave at 12:00 EDT** — 7 agents simultaneously zombied at a single cron tick. This is the most severe zombie event recorded. Strongly suggests shared resource pool (DB connections / process slots) is exhausted at high-concurrency cron ticks. Cron staggering + zombie cleanup are the key fixes.
-3. **6 Nightwatch PRs pending review** — zero merges means the overnight-pr loop cannot unlock code-level fixes. Philip review unblocks the entire backlog.
-4. **No new failure modes discovered this window.**
+### No New Tasks Created This Run
+Reason: All timeout events in the current window (04:25–06:25 UTC) are either:
+- Prior to the window (stale, already tracked in existing tasks)
+- Within existing task scope (zombie crisis, z-ai model, write_path blocker)
+Creating duplicate tasks is explicitly prohibited by operating rules.

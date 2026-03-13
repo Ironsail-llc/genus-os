@@ -1,152 +1,6 @@
 {
   "runs": [
     {
-      "timestamp": "2026-02-07T03:30:02.029083",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 23,
-          "ingested": 23,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 159}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 1,
-              "note": "SCORE: 1 - Not relevant to the query, as the results appear to be unrelated to recent decisions."
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 3,
-              "note": "SCORE: 3 - Relevant contacts and a general description of the company, but the information is not sp"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant search results for the query about the status of the e-commerce platform. The "
-            }
-          ],
-          "average_score": 1.6666666666666667
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 518.703826
-    },
-    {
-      "timestamp": "2026-02-08T03:30:01.543553",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 20,
-          "ingested": 20,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 174}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 2,
-              "note": "SCORE: 2 - The results are somewhat relevant, but primarily consist of automated system notification"
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 4,
-              "note": "SCORE: 4 - Relevant search results found, but some appear to be personal emails and not official con"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant search results, as the query asks about the status of an e-commerce platform, "
-            }
-          ],
-          "average_score": 2.3333333333333335
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 500.781812
-    },
-    {
       "timestamp": "2026-02-09T03:30:01.705326",
       "phases": {
         "emails": {
@@ -2875,6 +2729,294 @@
       },
       "success": true,
       "duration_seconds": 89.013639
+    },
+    {
+      "timestamp": "2026-03-10T03:30:01.139762",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 0,
+          "errors": [
+            "contact_analysis:philip@ironsail.ai:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:harry@glorikian.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:consumertrustsupport@twilio.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:olesia@valhallavitality.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:danylo@ironsail.ai:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:DBraun@indhcm.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:ankur@mithai.ai:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:twilio@qualtrics-survey.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:pooleyaccounts@yahoo.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:boladji@squadrasolutions.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:invoice+statements@mail.anthropic.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:daniel@valhallams.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:ddago4@aol.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:concierge@ypo.org:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:cloudplatform-noreply@google.com:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis:fred@fireflies.ai:Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+            "contact_analysis::Server error '500 Internal Server Error' for url 'http://localhost:11434/api/embed'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500"
+          ]
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 24,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": false,
+            "details": "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": [
+            "Cannot connect to PostgreSQL at :5432/robothor_memory: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  Peer authentication failed for user \"robothor\"\n\nCheck ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running."
+          ]
+        }
+      },
+      "stats_before": {
+        "facts_count": 36006,
+        "entities_count": 5554
+      },
+      "stats_after": {
+        "facts_count": 36080,
+        "entities_count": 5554
+      },
+      "success": true,
+      "duration_seconds": 100.827783
+    },
+    {
+      "timestamp": "2026-03-11T03:30:01.845844",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 3,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 8,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 0, 'decay_updated': 8065, 'facts_pruned': 0, 'consolidation_groups': 10, 'unconsolidated_swept': 102, 'insights': {'discovered': 3, 'stored': 3, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 39385,
+        "active_facts": 7978,
+        "superseded_count": 29646,
+        "scored_count": 349,
+        "entity_count": 5975,
+        "relation_count": 15912
+      },
+      "stats_after": {
+        "total_facts": 39521,
+        "active_facts": 8038,
+        "superseded_count": 29722,
+        "scored_count": 526,
+        "entity_count": 5983,
+        "relation_count": 15983
+      },
+      "success": true,
+      "duration_seconds": 815.845599
+    },
+    {
+      "timestamp": "2026-03-12T03:30:02.032641",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 10,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 0, 'decay_updated': 8316, 'facts_pruned': 0, 'consolidation_groups': 11, 'unconsolidated_swept': 100, 'insights': {'discovered': 2, 'stored': 2, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 40460,
+        "active_facts": 8240,
+        "superseded_count": 30459,
+        "scored_count": 692,
+        "entity_count": 6120,
+        "relation_count": 16438
+      },
+      "stats_after": {
+        "total_facts": 40606,
+        "active_facts": 8292,
+        "superseded_count": 30553,
+        "scored_count": 836,
+        "entity_count": 6134,
+        "relation_count": 16533
+      },
+      "success": true,
+      "duration_seconds": 899.771792
     }
   ]
 }

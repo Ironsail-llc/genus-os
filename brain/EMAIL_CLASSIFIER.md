@@ -19,7 +19,7 @@ At the START of your run:
 ## How It Works
 
 1. `list_my_tasks` — check for tasks assigned to you. Process any before continuing.
-2. Read `~/robothor/brain/memory/triage-inbox.json` (via `read_file`)
+2. Read `brain/memory/triage-inbox.json` (via `read_file`)
 3. If `counts.emails` is 0: write the status file and stop immediately
 4. Process ONLY items where `source: "email"` — ignore calendar and jira items
 5. Check `activeEscalationIds` — do NOT re-escalate items already listed there

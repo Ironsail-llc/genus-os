@@ -1,68 +1,61 @@
 # Improvement Analyst Status
 
-Last run: 2026-03-09 02:00 AM EDT
+Last run: 2026-03-13 02:00 AM EDT
 Agents analyzed: 16 (all scheduled agents)
-Improvement tasks created: 0 new
-Top concern: Fleet zombie pattern (tasks 60d7b991, c51a8374, 5891440c, 740a4a86) — code fix, outside config-only scope. PRs #17/#18/#19 pending Philip review (day 2).
+Improvement tasks created: 0 new (task f494392a updated with crm-steward consecutive_errors=3 alert)
+Top concern: Fleet CRITICAL (day 8 zombie crisis) + write_path guardrail blocking ALL config writes (day 2). 9 PRs unmerged (oldest day 9, 0% merge rate). crm-steward consecutive_errors=3 — auto-disable risk if 2 more cron runs fail today (next: 10 AM EDT).
 
 ## Run Summary
 
-### Fleet Health: IMPROVING (slight 7-day dip is outage artifact)
-- Overall success rate: 94.8% (↓ 0.3pp from 95.1% — email-classifier outage skews window)
-- Underlying trend: still improving; outage was isolated 55-min event, self-resolved
-- overnight-pr: HEALTHY — 4/4 runs completed this week (zombie resolved ✅)
+### Fleet Health: CRITICAL (sustained — day 8)
+- Overall success rate: ~90.8% (↓0.4pp from 91.2%)
+- Two systemic blockers: zombie pattern (task 60d7b991) + write_path guardrail (task f494392a)
+- Self-healing loop: FULLY STALLED — 0 new PRs possible until Philip intervenes
 
-### Agents Analyzed
-| Agent             | Success | Timeouts | Trend      | Status     |
-|-------------------|---------|----------|------------|------------|
-| calendar-monitor  | 94.6%   | 9 (5.4%) | ↑ +1.2pp   | Tasks b9d04203, 43e41fed, d8a53d2b pending |
-| chat-monitor      | 90.9%   | 1 (9.1%) | = flat     | Task 1cda59b1 pending |
-| chat-responder    | 96.2%   | 1 (1.3%) | ↑ +1.6pp   | Task d66659bc pending (code) |
-| conversation-inbox| 95.8%   | 4 (3.3%) | = flat     | PR #19 pending Philip |
-| conversation-resolver| 90.5%| 2 (9.5%) | = flat     | PR #18 pending Philip |
-| crm-steward       | 87.5%   | 1 (12.5%)| = flat     | PR #17 pending Philip; avg 353s (74% of ceiling) |
-| email-analyst     | 98.2%   | 19 (1.8%)| ↑ +0.4pp   | Tasks 740a4a86, c51a8374 pending (code) |
-| email-classifier  | 93.4%   | 19 (1.6%)| ↓ -4.6pp ⚠️| ARTIFACT: 60 fails from 19:00 EDT outage; task 8162ebd2 |
-| email-responder   | 98.7%   | 14 (1.3%)| = flat     | Task 5891440c pending (code) |
-| engine-report     | 100%    | 0        | ✅ perfect  | Healthy |
-| evening-winddown  | 85.7%   | 1 (14.3%)| = flat     | Task 6b20bd30 pending |
-| failure-analyzer  | 92.0%   | 4 (8.0%) | ↓ -0.1pp   | Marginal; zombie pattern likely root cause |
-| main:heartbeat    | N/A     | 0        | = flat     | Persistent metrics gap; task 1f78c6e4 pending |
-| morning-briefing  | 100%    | 0        | ✅ perfect  | Healthy |
-| overnight-pr      | 100%    | 0        | ✅ healthy  | 4/4 runs completed; PRs #17-19 awaiting Philip |
-| vision-monitor    | 92.3%   | 2 (7.7%) | = flat     | Task 7e2c9389 pending |
+### Per-Agent Status (7-day, 2026-03-13 02:00 EDT)
+| Agent | Success | Runs | Timeouts | Trend |
+|-------|---------|------|---------|-------|
+| crm-steward | 55.6% | 9 | 3 | = 🚨 consecutive_errors=3 |
+| calendar-monitor | 84.7% | 157 | 24 | ↓2pp ⚠️ |
+| evening-winddown | 85.7% | 7 | 1 | = |
+| conversation-inbox | 86.9% | 99 | 12 | ↓0.5pp |
+| chat-responder | 88.4% | 216 | 23 | ↓0.6pp |
+| failure-analyzer | 88.1% | 84 | 10 | ↓0.5pp ⚠️ |
+| engine-report | 88.9% | 9 | 1 | = |
+| chat-monitor | 90.9% | 11 | 1 | = |
+| vision-monitor | 91.3% | 23 | 2 | ↑4.3pp ✅ |
+| email-classifier | 92.5% | 1083 | 19+62f | = |
+| conversation-resolver | 95.7% | 23 | 1 | ↑0.2pp ✅ |
+| email-analyst | 98.2% | 904 | 16 | ✅ |
+| email-responder | 98.3% | 939 | 16 | ✅ (consecutive_errors reset) |
+| morning-briefing | 100% | 7 | 0 | ✅ |
+| overnight-pr | 100% | 7 | 0 | ✅ |
+| main:heartbeat | N/A | 0 | 0 | (known metrics gap) |
 
-### Why 0 New Tasks
-1. **14 existing TODO tasks** cover every identified issue — no gaps found
-2. **Merge rate 0%** (PRs #17-19 pending day 2) → config-only scope; all config tasks exist
-3. **No new failure patterns** — email-classifier outage covered by task 8162ebd2
-4. **Zombie pattern** (primary systemic risk) requires code fix — outside current scope
-5. Quality over quantity: adding more tasks to an already-full backlog doesn't help
+### New Signals vs Yesterday
+- crm-steward: consecutive_errors=3 (up) — auto-disable risk, flagged in f494392a
+- calendar-monitor: 86.7% → 84.7% (↓2pp) — worsening; z-ai/glm-5 hang driver (task 08d64e1a)
+- email-responder: consecutive_errors=0 (recovered from 5) — no new task needed
+- conversation-inbox: consecutive_errors=0 (recovered) — overnight recovery
+- vision-monitor: ↑4.3pp — bright spot
 
-### Primary Bottleneck
-Philip reviewing PRs #17, #18, #19 (day 2 pending):
-- PR #17: crm-steward max_iterations 8→6 (LOW risk)
-- PR #18: conversation-resolver timeout 480s→360s (LOW risk)
-- PR #19: conversation-inbox timeout 480s→360s (LOW risk)
+### Why 0 New Tasks Created
+All identified improvement opportunities are covered by existing open tasks:
+- Zombie root cause: task 60d7b991 (urgent, overnight-pr assigned)
+- z-ai/glm-5 LLM hang: task 08d64e1a (high, overnight-pr)
+- email-responder exec_allowlist: task a25f12b5 (high, overnight-pr)
+- conversation-inbox timeout: task 9412c7fd (high, overnight-pr — BLOCKED)
+- email-responder timeout: task fc1d23bb (high, overnight-pr — BLOCKED)
+- failure-analyzer timeout: task 31f31fc9 (high, overnight-pr — BLOCKED)
+- chat-responder LLM hang: task d66659bc (normal, overnight-pr)
+- Philip escalation: task f494392a (urgent, requiresHuman=true — UPDATED this run)
 
-Once these merge, the merge rate will rise above 0% and the overnight-pr agent can
-begin tackling the larger backlog of config tasks (evening-winddown, vision-monitor,
-calendar-monitor timeout reductions).
+Creating duplicate tasks would add noise to an already full stalled backlog.
 
-### Open Task Backlog (14 tasks)
-| ID | Title | Priority | Risk |
-|----|-------|----------|------|
-| 8162ebd2 | email-classifier: model pool empty outage | HIGH | CONFIG |
-| b9d04203 | calendar-monitor: timeout 480s→360s | NORMAL | CONFIG |
-| 7e2c9389 | vision-monitor: timeout 480s→300s | NORMAL | CONFIG |
-| 6b20bd30 | evening-winddown: timeout 480s→300s | HIGH | CONFIG |
-| d66659bc | chat-responder: LLM hang after list_my_tasks | NORMAL | CODE |
-| 60d7b991 | main: zombie runs (fleet-wide) | HIGH | CODE |
-| c51a8374 | email-analyst: zombie pattern cron+hook | HIGH | CODE |
-| 5891440c | email-responder: zombie runs on hook | HIGH | CODE |
-| 43e41fed | calendar-monitor: leading-space tool name bug | HIGH | CODE |
-| 740a4a86 | email-analyst: hook-triggered zombie runs | HIGH | CODE |
-| ce4671ce | email-analyst: exec hang on hook trigger | NORMAL | CODE |
-| 1f78c6e4 | main:heartbeat: 0 runs (metrics gap) | HIGH | CONFIG |
-| bd52e6c9 | improvement-analyst: missing memory blocks | NORMAL | CONFIG |
-| d8a53d2b | calendar-monitor: tilde path bug | NORMAL | CONFIG |
+### Self-Healing Loop Status
+- Merge rate: 0% (9 PRs, DAY 9)
+- write_path guardrail: BLOCKING all config writes (day 2)
+- Config backlog fully covered by existing tasks
+- Code tasks: outside overnight-pr scope per config-only rule (merge rate 0%)
+- Primary bottleneck: Philip must (1) restart engine, (2) merge PRs #17–27, (3) edit PR #19 to 420s
+- crm-steward URGENT: consecutive_errors=3, next cron at 10 AM — needs manual fix before then

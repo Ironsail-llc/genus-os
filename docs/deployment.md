@@ -9,7 +9,7 @@ The included `infra/docker-compose.yml` provides PostgreSQL (pgvector), Redis, a
 ```bash
 # Clone and configure
 git clone https://github.com/robothor-ai/robothor.git
-cd robothor
+cd genus-os
 cp infra/robothor.env.example .env
 # Edit .env -- set at minimum: ROBOTHOR_DB_PASSWORD
 

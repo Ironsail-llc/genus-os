@@ -1,0 +1,602 @@
+{
+  "lastCheckedAt": "2026-03-12T22:55:12.983064",
+  "spaces": {
+    "spaces/AAQAUsZVzI0": {
+      "displayName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "type": "SPACE"
+    },
+    "spaces/AAQAUAJ0AzE": {
+      "displayName": "Daily Standup Meeting - Mar 11",
+      "type": "SPACE"
+    },
+    "spaces/AAQA3Sp-diA": {
+      "displayName": "Daily Standup Meeting - Mar 10",
+      "type": "SPACE"
+    },
+    "spaces/upeCoSAAAAE": {
+      "displayName": "",
+      "type": "DIRECT_MESSAGE"
+    },
+    "spaces/AAQA0B2Gy5g": {
+      "displayName": "Daily Standup Meeting - Mar 9",
+      "type": "SPACE"
+    },
+    "spaces/gDYYISAAAAE": {
+      "displayName": "",
+      "type": "DIRECT_MESSAGE"
+    },
+    "spaces/AAQAG7dWEXE": {
+      "displayName": "Demo -- Boladji Agueh / Squadra Solutions - Mar 6",
+      "type": "SPACE"
+    },
+    "spaces/AAQAy4S4Wsw": {
+      "displayName": "Sprint Planning - Mar 6",
+      "type": "SPACE"
+    },
+    "spaces/AAQAhfS7FHw": {
+      "displayName": "Ironsail x Webugol Internal Marketing - Mar 5",
+      "type": "SPACE"
+    },
+    "spaces/AAQA0JCpvAQ": {
+      "displayName": "Daily Standup Meeting - Mar 4",
+      "type": "SPACE"
+    },
+    "spaces/AAQAHD2pHsc": {
+      "displayName": "Daily Standup Meeting - Mar 2",
+      "type": "SPACE"
+    },
+    "spaces/AAQAP8nQ9Qw": {
+      "displayName": "Ironsail x Webugol Internal Marketing - Feb 26",
+      "type": "SPACE"
+    },
+    "spaces/AAQAZ-Rrlzk": {
+      "displayName": "Daily Standup Meeting - Feb 25",
+      "type": "SPACE"
+    },
+    "spaces/AAQAECuwY4U": {
+      "displayName": "Daily Standup Meeting - Feb 24",
+      "type": "SPACE"
+    },
+    "spaces/AAQAQUyPCks": {
+      "displayName": "Daily Standup Meeting - Feb 23",
+      "type": "SPACE"
+    },
+    "spaces/AAQAbrnPBK8": {
+      "displayName": "Debrief & Planning Meeting: AI Session & Future Curriculum - Feb 19",
+      "type": "SPACE"
+    },
+    "spaces/AAQAb0sfNOI": {
+      "displayName": "Ironsail x Webugol Internal Marketing - Feb 19",
+      "type": "SPACE"
+    },
+    "spaces/AAQADoxMYM0": {
+      "displayName": "Daily Standup Meeting - Feb 18",
+      "type": "SPACE"
+    },
+    "spaces/AAQAQY8vCTc": {
+      "displayName": "Daily Standup Meeting - Feb 17",
+      "type": "SPACE"
+    },
+    "spaces/AAQAxWiQYck": {
+      "displayName": "Daily Standup Meeting - Feb 11",
+      "type": "SPACE"
+    },
+    "spaces/AAQA6Stg_CA": {
+      "displayName": "AI Workshop Session   - Feb 11",
+      "type": "SPACE"
+    },
+    "spaces/AAQAMfAoklc": {
+      "displayName": "Daily Standup Meeting - Feb 10",
+      "type": "SPACE"
+    },
+    "spaces/AAQAvZ846YE": {
+      "displayName": "Daily Standup Meeting - Feb 9",
+      "type": "SPACE"
+    },
+    "spaces/AAQADTbSU5Q": {
+      "displayName": "Sprint Planning - Feb 6",
+      "type": "SPACE"
+    },
+    "spaces/AAQA59zqyRw": {
+      "displayName": "Daily Standup Meeting - Feb 4",
+      "type": "SPACE"
+    }
+  },
+  "lastMessageIds": {
+    "spaces/AAQAG7dWEXE": "spaces/AAQAG7dWEXE/messages/UCha6MyPl2k.UCha6MyPl2k",
+    "spaces/AAQAy4S4Wsw": "spaces/AAQAy4S4Wsw/messages/DfhpdW4brl4.DfhpdW4brl4",
+    "spaces/AAQAhfS7FHw": "spaces/AAQAhfS7FHw/messages/O256uE3pm6o.O256uE3pm6o",
+    "spaces/AAQA0JCpvAQ": "spaces/AAQA0JCpvAQ/messages/etYw6mllvDU.etYw6mllvDU",
+    "spaces/AAQAHD2pHsc": "spaces/AAQAHD2pHsc/messages/LuMRRBUC6QE.LuMRRBUC6QE",
+    "spaces/AAQAP8nQ9Qw": "spaces/AAQAP8nQ9Qw/messages/h3z513w-ZuE.h3z513w-ZuE",
+    "spaces/AAQAZ-Rrlzk": "spaces/AAQAZ-Rrlzk/messages/ACT2MtLPH8o.ACT2MtLPH8o",
+    "spaces/AAQAECuwY4U": "spaces/AAQAECuwY4U/messages/cAlKupJoz1A.cAlKupJoz1A",
+    "spaces/AAQAQUyPCks": "spaces/AAQAQUyPCks/messages/TJS6_FrraG0.TJS6_FrraG0",
+    "spaces/AAQAbrnPBK8": "spaces/AAQAbrnPBK8/messages/gDjs3p5E72Q.gDjs3p5E72Q",
+    "spaces/AAQAb0sfNOI": "spaces/AAQAb0sfNOI/messages/dWWd8pancbw.dWWd8pancbw",
+    "spaces/AAQADoxMYM0": "spaces/AAQADoxMYM0/messages/x-KuZf5D_Gk.x-KuZf5D_Gk",
+    "spaces/gDYYISAAAAE": "spaces/gDYYISAAAAE/messages/EE-OA_ColOc.EE-OA_ColOc",
+    "spaces/AAQAQY8vCTc": "spaces/AAQAQY8vCTc/messages/E7h9bt-1U7Q.E7h9bt-1U7Q",
+    "spaces/AAQAxWiQYck": "spaces/AAQAxWiQYck/messages/QkSt5LgW10Q.QkSt5LgW10Q",
+    "spaces/AAQA6Stg_CA": "spaces/AAQA6Stg_CA/messages/Ju63KxyLmXE.Ju63KxyLmXE",
+    "spaces/AAQAMfAoklc": "spaces/AAQAMfAoklc/messages/kyaWJbZ_qqo.kyaWJbZ_qqo",
+    "spaces/AAQAvZ846YE": "spaces/AAQAvZ846YE/messages/CmPT1GO0aQ8.CmPT1GO0aQ8",
+    "spaces/AAQADTbSU5Q": "spaces/AAQADTbSU5Q/messages/sPxnArGfPek.sPxnArGfPek",
+    "spaces/AAQA59zqyRw": "spaces/AAQA59zqyRw/messages/kZg4Zya-1PU.kZg4Zya-1PU",
+    "spaces/upeCoSAAAAE": "spaces/upeCoSAAAAE/messages/mniIGuDIZ6A.mniIGuDIZ6A",
+    "spaces/AAQAlPQ-wII": "spaces/AAQAlPQ-wII/messages/5mc6o5J82xA.5mc6o5J82xA",
+    "spaces/AAQA0B2Gy5g": "spaces/AAQA0B2Gy5g/messages/192YQCaE_nQ.192YQCaE_nQ",
+    "spaces/AAQA3Sp-diA": "spaces/AAQA3Sp-diA/messages/JdR-_VNAdR4.JdR-_VNAdR4",
+    "spaces/AAQAUAJ0AzE": "spaces/AAQAUAJ0AzE/messages/9Oif3fVwg0g.9Oif3fVwg0g",
+    "spaces/AAQAUsZVzI0": "spaces/AAQAUsZVzI0/messages/NK-ts8_ltxU.NK-ts8_ltxU"
+  },
+  "pendingMessages": [
+    {
+      "space": "spaces/AAQA0B2Gy5g",
+      "spaceName": "Daily Standup Meeting - Mar 9",
+      "spaceType": "SPACE",
+      "sender": "users/102441203681985656470",
+      "senderName": "",
+      "text": "Farhan is out sick today",
+      "createTime": "2026-03-09T14:01:58.833771Z",
+      "messageName": "spaces/AAQA0B2Gy5g/messages/192YQCaE_nQ.192YQCaE_nQ",
+      "threadName": "spaces/AAQA0B2Gy5g/threads/192YQCaE_nQ",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAUAJ0AzE",
+      "spaceName": "Daily Standup Meeting - Mar 11",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "4a190f2e-5d47-44f0-a754-8598cc36f995 - here for south lake Guja",
+      "createTime": "2026-03-11T14:14:43.935679Z",
+      "messageName": "spaces/AAQAUAJ0AzE/messages/9Oif3fVwg0g.9Oif3fVwg0g",
+      "threadName": "spaces/AAQAUAJ0AzE/threads/9Oif3fVwg0g",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "spaceType": "SPACE",
+      "sender": "users/112959780955484048269",
+      "senderName": "",
+      "text": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing",
+      "createTime": "2026-03-11T15:31:40.202794Z",
+      "messageName": "spaces/AAQAUsZVzI0/messages/NnwU3M6BiNM.NnwU3M6BiNM",
+      "threadName": "spaces/AAQAUsZVzI0/threads/NnwU3M6BiNM",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "spaceType": "SPACE",
+      "sender": "users/106925029813393883594",
+      "senderName": "",
+      "text": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing",
+      "createTime": "2026-03-11T15:31:40.351487Z",
+      "messageName": "spaces/AAQAUsZVzI0/messages/xl6vfTkhs1A.xl6vfTkhs1A",
+      "threadName": "spaces/AAQAUsZVzI0/threads/xl6vfTkhs1A",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "spaceType": "SPACE",
+      "sender": "users/102694669480597293765",
+      "senderName": "",
+      "text": "sorry I'm away for 2 mins, need to meet courier",
+      "createTime": "2026-03-11T15:53:59.751231Z",
+      "messageName": "spaces/AAQAUsZVzI0/messages/NK-ts8_ltxU.NK-ts8_ltxU",
+      "threadName": "spaces/AAQAUsZVzI0/threads/NK-ts8_ltxU",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    }
+  ],
+  "changes": [
+    {
+      "timestamp": "2026-03-06T22:20:02.526522",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "Hey there! \ud83d\udc4b Robothor here \u2014 Philip's AI partner. How can I help you today?"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:02.812275",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "i am philip"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:02.812309",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "What's my phone number?"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.487906",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Hello I hope you dont mind me creating a \"space\". I was planning to have our daily reports here."
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.487935",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "to not lost in context with other discussions"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.487973",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Report \u2014 February 20, 2026YESTERDAY (What I Did)\n1. Fixed: User Creation 500 Error on Email Failure\n"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.487984",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Happy to be collaborating with you all."
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.487998",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "This morning I am working on hardening RoboThor into an operating system. It is currently a program "
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488013",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Robothor Pre-Fork Hardening \u2014 Complete                \n Shipped all 6 phases tod"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488025",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "I am now working on making it open source and installable.  I hope to complete this phase today."
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488034",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "https://github.com/Ironsail-llc/robothor"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488042",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Hi Philip, what can RoboThor do? It is an operating system and not an application?"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488059",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "well, its an application for now.  Robothor replaces all other apps by connecting to them via api/mc"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488077",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "I need at least another week before i bring anyone in on the robothor project, but I want to keep ev"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488088",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "This sounds interesting. Thanks for sharing this information. I assume this tool is primarily for de"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488100",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "I think I will need to do a demo.  lets plan for later this week I can show you a walk through"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488108",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Sounds good. Who should I bring to that meeting?"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488116",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": ""
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488124",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": ""
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488131",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": ""
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488157",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "wow! this looks great!"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488175",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "you can see that I am chatting with my agent and taking actions. but i dont need to click or type.  "
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488186",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "This is exciting.. I cant wait for the demo. Just let me know when you want it scheduled"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488205",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Lets do it Friday.  If you can please come prepared with questions.  I've done my best to prepare th"
+    },
+    {
+      "timestamp": "2026-03-07T06:00:03.488213",
+      "type": "new_message",
+      "space": "spaces/AAQAlPQ-wII",
+      "spaceName": "Research and Development",
+      "sender": "",
+      "preview": "Okay, will do."
+    },
+    {
+      "timestamp": "2026-03-07T06:35:02.478517",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "Hi Philip \u2014 if this is you, you can reach me (Robothor) at +1 (413) 408-6025. That's my number, not "
+    },
+    {
+      "timestamp": "2026-03-07T06:35:02.478549",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "Got it, Philip! \ud83d\udc4b Good to confirm it's you.\n\nWhat can I help you with today?"
+    },
+    {
+      "timestamp": "2026-03-07T08:05:02.291639",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "Help me find my phone number in the crm and tell me it"
+    },
+    {
+      "timestamp": "2026-03-07T08:35:02.186231",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I checked my memory and the CRM, but I don't have your phone number stored yet. I can see you're in "
+    },
+    {
+      "timestamp": "2026-03-07T09:50:02.004589",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You do have it"
+    },
+    {
+      "timestamp": "2026-03-07T09:50:02.004625",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You've called me before"
+    },
+    {
+      "timestamp": "2026-03-07T10:05:02.825750",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I searched through my memory, the CRM, and email history \u2014 I genuinely can't find your phone number "
+    },
+    {
+      "timestamp": "2026-03-07T10:05:02.825786",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "347-906-1511. Store it in your crm"
+    },
+    {
+      "timestamp": "2026-03-07T10:35:02.333409",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I just did a thorough search \u2014 memory, CRM entities, and Gmail \u2014 and I'm not finding your phone numb"
+    },
+    {
+      "timestamp": "2026-03-07T11:05:02.404408",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I've searched thoroughly \u2014 my memory, CRM entities, and all accessible systems \u2014 but I'm not finding"
+    },
+    {
+      "timestamp": "2026-03-07T11:35:02.300900",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You're right that I *should* have it, Philip \u2014 but I'm not finding it in my memory or CRM. I can see"
+    },
+    {
+      "timestamp": "2026-03-07T11:35:02.300934",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "How are you calling tools?"
+    },
+    {
+      "timestamp": "2026-03-07T12:05:02.579919",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I just searched my memory, CRM, and knowledge graph again \u2014 I'm not finding your phone number stored"
+    },
+    {
+      "timestamp": "2026-03-07T12:05:02.579965",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "347-906-1511 store it"
+    },
+    {
+      "timestamp": "2026-03-07T12:10:02.034454",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I call tools through my function-calling system \u2014 when you ask me something that needs data (like fi"
+    },
+    {
+      "timestamp": "2026-03-07T12:10:02.034580",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "Got it! Your phone number is **347-906-1511**. \n\nI'll store this in my memory and CRM now so I can r"
+    },
+    {
+      "timestamp": "2026-03-07T13:05:01.939004",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "I searched my memory and the CRM, but I'm not finding your phone number stored. It's possible it was"
+    },
+    {
+      "timestamp": "2026-03-07T13:35:02.523680",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You're right \u2014 I do have it! Your phone number is **347-906-1511**.\n\nI apologize for the confusion e"
+    },
+    {
+      "timestamp": "2026-03-07T14:05:02.766899",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You're right \u2014 found it! Your number is **347-906-1511**. Thanks for the nudge. I've got it stored n"
+    },
+    {
+      "timestamp": "2026-03-07T15:05:02.113184",
+      "type": "new_message",
+      "space": "spaces/upeCoSAAAAE",
+      "spaceName": "",
+      "sender": "",
+      "preview": "You're right! I found it \u2014 your phone number is 347-906-1511. I stored it in memory from our earlier"
+    },
+    {
+      "timestamp": "2026-03-09T10:05:02.768009",
+      "type": "new_message",
+      "space": "spaces/AAQA0B2Gy5g",
+      "spaceName": "Daily Standup Meeting - Mar 9",
+      "sender": "",
+      "preview": "Farhan is out sick today"
+    },
+    {
+      "timestamp": "2026-03-11T10:15:02.655533",
+      "type": "new_message",
+      "space": "spaces/AAQAUAJ0AzE",
+      "spaceName": "Daily Standup Meeting - Mar 11",
+      "sender": "",
+      "preview": "4a190f2e-5d47-44f0-a754-8598cc36f995 - here for south lake Guja"
+    },
+    {
+      "timestamp": "2026-03-11T11:35:02.318697",
+      "type": "new_message",
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "sender": "",
+      "preview": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing"
+    },
+    {
+      "timestamp": "2026-03-11T11:35:02.318732",
+      "type": "new_message",
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "sender": "",
+      "preview": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing"
+    },
+    {
+      "timestamp": "2026-03-11T11:55:02.168917",
+      "type": "new_message",
+      "space": "spaces/AAQAUsZVzI0",
+      "spaceName": "Peptide Strategy \u2013 Next Steps & Action Plan - Mar 11",
+      "sender": "",
+      "preview": "sorry I'm away for 2 mins, need to meet courier"
+    }
+  ]
+}
