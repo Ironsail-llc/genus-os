@@ -66,7 +66,9 @@ def _cleanup_stale_runs() -> int:
             cur = conn.cursor()
             cur.execute(
                 "UPDATE agent_runs SET status='timeout', "
-                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000 "
+                "completed_at=NOW(), "
+                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
+                "error_message='Reaped by watchdog: stuck in initialization (no LLM call reached)' "
                 "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes' "
                 "RETURNING id, agent_id"
             )

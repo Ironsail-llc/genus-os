@@ -167,6 +167,8 @@ class AgentRunner:
             system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
 
         # Warmup: prepend context for agent runs
+        # Warmup functions do sync DB calls, so run in executor to avoid blocking event loop
+        loop = asyncio.get_running_loop()
         if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
             # Full warmup for scheduled/event/workflow triggers
             has_warmup = (
@@ -178,8 +180,11 @@ class AgentRunner:
                 try:
                     from robothor.engine.warmup import build_warmth_preamble
 
-                    preamble = build_warmth_preamble(
-                        agent_config, self.config.workspace, self.config.tenant_id
+                    preamble = await loop.run_in_executor(
+                        None,
+                        lambda: build_warmth_preamble(
+                            agent_config, self.config.workspace, self.config.tenant_id
+                        ),
                     )
                     if preamble:
                         message = f"{preamble}\n\n{message}"
@@ -191,8 +196,11 @@ class AgentRunner:
             try:
                 from robothor.engine.warmup import build_interactive_preamble
 
-                preamble = build_interactive_preamble(
-                    agent_id, message, include_blocks=not conversation_history
+                preamble = await loop.run_in_executor(
+                    None,
+                    lambda: build_interactive_preamble(
+                        agent_id, message, include_blocks=not conversation_history
+                    ),
                 )
                 if preamble:
                     message = f"{preamble}\n\n{message}"
@@ -221,79 +229,88 @@ class AgentRunner:
             else:
                 session.run.token_budget = spawn_context.remaining_token_budget
 
-        # Record run in database
-        try:
-            create_run(session.run)
-        except Exception as e:
-            logger.warning("Failed to record run start: %s", e)
-
-        # Auto-create CRM task if configured (skip for sub-agent runs)
-        if agent_config.auto_task and not spawn_context:
-            try:
-                from robothor.crm.dal import create_task as dal_create_task
-
-                task_id = dal_create_task(
-                    title=f"{agent_config.name}: {trigger_type.value} run",
-                    body=f"run_id: {session.run.id}\ntrigger: {trigger_detail or 'scheduled'}",
-                    status="IN_PROGRESS",
-                    assigned_to_agent=agent_id,
-                    created_by_agent="engine",
-                    priority="normal",
-                    tags=[agent_id, trigger_type.value, "auto"],
-                    tenant_id=self.config.tenant_id,
-                )
-                session.run.task_id = task_id if isinstance(task_id, str) else None
-            except Exception as e:
-                logger.warning("Auto-task creation failed: %s", e)
-
-        # Build model list for fallback (model_override takes priority)
-        if model_override:
-            models = [model_override, agent_config.model_primary] + agent_config.model_fallbacks
-        else:
-            models = [agent_config.model_primary] + agent_config.model_fallbacks
-        models = [m for m in models if m]  # filter empty
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        models = [m for m in models if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
-
-        if not models:
-            return self._finish_run(session.fail("No models configured"))
-
-        # ── [ROUTER] Classify difficulty → adjust config ──
-        route = self._apply_routing(agent_config, message, len(tool_names))
-
-        # ── [PLANNER] Generate plan if enabled ──
-        plan_result = None
-        plan_context = ""
-        if self._should_plan(agent_config, route):
-            plan_result = await self._run_planner(agent_config, message, tool_names, models)
-            if plan_result and plan_result.success:
-                from robothor.engine.planner import format_plan_context
-
-                plan_context = format_plan_context(plan_result)
-                if plan_context:
-                    session.messages.append({"role": "user", "content": plan_context})
-
-        # ── [TELEMETRY] Create trace context ──
-        trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
-
-        # Resolve effective max_iterations (route may cap it lower, never raise it)
-        max_iterations = agent_config.max_iterations
-        if route and route.max_iterations_override is not None:
-            max_iterations = min(max_iterations, route.max_iterations_override)
-        # Cap exploration cost in plan mode
-        if readonly_mode:
-            max_iterations = min(max_iterations, 10)
-
-        # ── [CHECKPOINT] Resume from checkpoint if requested ──
-        resumed_scratchpad = None
-        if resume_from_run_id:
-            resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
-
-        # Execute with timeout (covers warmup + session init + run loop)
+        # Execute with timeout — covers EVERYTHING: DB init, warmup, planner, run loop.
+        # Previously only _run_loop was wrapped, so hangs during initialization
+        # (DB pool exhaustion, warmup blocking) bypassed the timeout entirely.
         timeout = agent_config.timeout_seconds
+        trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
             async with asyncio.timeout(timeout):
+                # Record run in database (sync DB call — run in executor to avoid blocking event loop)
+                try:
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                except Exception as e:
+                    logger.warning("Failed to record run start: %s", e)
+
+                # Auto-create CRM task if configured (skip for sub-agent runs)
+                if agent_config.auto_task and not spawn_context:
+                    try:
+                        from robothor.crm.dal import create_task as dal_create_task
+
+                        task_id = await asyncio.get_running_loop().run_in_executor(
+                            None,
+                            lambda: dal_create_task(
+                                title=f"{agent_config.name}: {trigger_type.value} run",
+                                body=f"run_id: {session.run.id}\ntrigger: {trigger_detail or 'scheduled'}",
+                                status="IN_PROGRESS",
+                                assigned_to_agent=agent_id,
+                                created_by_agent="engine",
+                                priority="normal",
+                                tags=[agent_id, trigger_type.value, "auto"],
+                                tenant_id=self.config.tenant_id,
+                            ),
+                        )
+                        session.run.task_id = task_id if isinstance(task_id, str) else None
+                    except Exception as e:
+                        logger.warning("Auto-task creation failed: %s", e)
+
+                # Build model list for fallback (model_override takes priority)
+                if model_override:
+                    models = [
+                        model_override,
+                        agent_config.model_primary,
+                    ] + agent_config.model_fallbacks
+                else:
+                    models = [agent_config.model_primary] + agent_config.model_fallbacks
+                models = [m for m in models if m]  # filter empty
+                # Deduplicate while preserving order
+                seen: set[str] = set()
+                models = [m for m in models if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
+
+                if not models:
+                    return self._finish_run(session.fail("No models configured"))
+
+                # ── [ROUTER] Classify difficulty → adjust config ──
+                route = self._apply_routing(agent_config, message, len(tool_names))
+
+                # ── [PLANNER] Generate plan if enabled ──
+                plan_result = None
+                plan_context = ""
+                if self._should_plan(agent_config, route):
+                    plan_result = await self._run_planner(agent_config, message, tool_names, models)
+                    if plan_result and plan_result.success:
+                        from robothor.engine.planner import format_plan_context
+
+                        plan_context = format_plan_context(plan_result)
+                        if plan_context:
+                            session.messages.append({"role": "user", "content": plan_context})
+
+                # ── [TELEMETRY] Create trace context ──
+                trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
+
+                # Resolve effective max_iterations (route may cap it lower, never raise it)
+                max_iterations = agent_config.max_iterations
+                if route and route.max_iterations_override is not None:
+                    max_iterations = min(max_iterations, route.max_iterations_override)
+                # Cap exploration cost in plan mode
+                if readonly_mode:
+                    max_iterations = min(max_iterations, 10)
+
+                # ── [CHECKPOINT] Resume from checkpoint if requested ──
+                resumed_scratchpad = None
+                if resume_from_run_id:
+                    resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
+
                 await self._run_loop(
                     session,
                     models,
