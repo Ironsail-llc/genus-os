@@ -18,7 +18,7 @@ At the START of your run:
 
 ## How It Works
 
-1. Read `~/robothor/brain/memory/triage-inbox.json` (via `read_file`)
+1. Read `brain/memory/triage-inbox.json` (via `read_file`)
 2. If `counts.calendar` is 0: write the status file and stop immediately
 3. Process ONLY items where `source: "calendar"` — ignore email and jira items
 4. Check `activeEscalationIds` — do NOT re-escalate items already listed there
