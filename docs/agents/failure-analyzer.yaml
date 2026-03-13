@@ -1,7 +1,7 @@
 id: failure-analyzer
 name: Failure Analyzer
 description: Detects agent failures, classifies root causes, creates improvement tasks for overnight PR agent
-version: "2026-03-05"
+version: "2026-03-13"
 department: operations
 
 reports_to: main
@@ -15,14 +15,13 @@ tags_consumed: []
 model:
   primary: openrouter/anthropic/claude-sonnet-4-6
   fallbacks:
-    - openrouter/z-ai/glm-5
-    - gemini/gemini-2.5-pro
+    - gemini/gemini-2.5-pro  # z-ai/glm-5 removed — confirmed second-call LLM hang (task 08d64e1a)
   payload_alias: sonnet
 
 schedule:
   cron: "25 */2 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
+  timeout_seconds: 720  # Increased from 480 — 50% timeout rate; 170k token context causes LLM hang near 480s ceiling
   max_iterations: 15
   session_target: isolated
 
@@ -79,6 +78,10 @@ v2:
     - "brain/memory/failure-analyzer-status.md"
 
 changelog:
+  - date: "2026-03-13"
+    change: "Increase timeout 480→720s — 50% timeout rate (6/12 runs in 24h), 170k token context bloat causing LLM hang before completing analysis [nightwatch]"
+  - date: "2026-03-13"
+    change: "Remove z-ai/glm-5 from fallback — confirmed second-call LLM hang pattern (task 08d64e1a); replaced with gemini-2.5-pro [nightwatch]"
   - date: "2026-03-05"
     change: "Increase timeout 300s→480s — agent averages 190s with 43% timeout rate; 480s matches other analytical agents [nightwatch]"
   - date: "2026-03-05"
