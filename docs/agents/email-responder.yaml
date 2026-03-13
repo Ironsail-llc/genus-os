@@ -1,7 +1,7 @@
 id: email-responder
 name: Email Responder
 description: Composes and sends email replies via gog gmail
-version: "2026-03-09"
+version: "2026-03-13"
 department: email
 
 reports_to: main
@@ -10,15 +10,15 @@ receives_tasks_from: [email-classifier]
 escalates_to: main
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4-6  # Restored: z-ai/glm-5 causes exec_allowlist blocks + LLM hangs (tasks a25f12b5, 08d64e1a)
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
+    - openrouter/z-ai/glm-5
 
 schedule:
   cron: "15 8-20/2 * * *"
   timezone: America/New_York
-  timeout_seconds: 600
+  timeout_seconds: 720  # Increased from 600 — consecutive_errors=5, last run hit 619s (103% of ceiling)
   max_iterations: 15
   session_target: isolated
 
@@ -108,6 +108,10 @@ v2:
     - "brain/memory/response-status.md"
 
 changelog:
+  - date: "2026-03-13"
+    change: "Increase timeout 600→720s — consecutive_errors=5, last run was 619s (103% of ceiling); auto-disable risk [nightwatch]"
+  - date: "2026-03-13"
+    change: "Swap primary model to claude-sonnet-4-6 — z-ai/glm-5 caused exec_allowlist blocks (task a25f12b5) and LLM second-call hangs (task 08d64e1a) [nightwatch]"
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"
