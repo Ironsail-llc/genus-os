@@ -1,7 +1,7 @@
 id: evening-winddown
 name: Evening Wind-Down
 description: Daily evening summary with tomorrow preview and open items
-version: "2026-03-09"
+version: "2026-03-14"
 department: briefings
 
 reports_to: null
@@ -10,10 +10,12 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4-6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
+    # z-ai/glm-5 removed: second-call hang (task 08d64e1a) + exec_allowlist block cascaded
+    #   into full 480s timeout (run 1b49e348, 2026-03-13)
+    # qwen3.5:122b removed: mishandled gws_calendar_list multi-param calls (reverted 2026-03-09)
 
 schedule:
   cron: "0 21 * * *"
@@ -29,6 +31,7 @@ delivery:
 
 tools_allowed:
   - read_file
+  - write_file
   - exec
   - search_memory
   - get_entity
@@ -80,11 +83,17 @@ v2:
   error_feedback: true
   guardrails:
     - exec_allowlist
+    - write_path_restrict
   exec_allowlist:
     - "^gog calendar events"
     - "^gws calendar"
+  write_path_allowlist:
+    - "brain/memory/evening-winddown-status.json"
+    - "brain/memory/evening-winddown-status.md"
 
 changelog:
+  - date: "2026-03-14"
+    change: "Swap primary from z-ai/glm-5 to claude-sonnet-4-6 — z-ai second-call hang cascaded with exec heredoc block caused 100% timeout rate (run 1b49e348). Add write_file to tools_allowed + write_path_restrict guardrail so agent can write status via write_file instead of generating blocked heredoc exec. Qwen already tried+reverted 2026-03-09."
   - date: "2026-03-09"
     change: "Swap to GLM-5 — gws_calendar_list needs reliable multi-param tool calls"
   - date: "2026-03-09"
