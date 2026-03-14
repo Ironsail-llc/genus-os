@@ -1,7 +1,7 @@
 id: calendar-monitor
 name: Calendar Monitor
 description: Detects calendar conflicts, cancellations, and changes
-version: "2026-03-09"
+version: "2026-03-14"
 department: calendar
 
 reports_to: main
@@ -10,10 +10,11 @@ receives_tasks_from: []
 escalates_to: main
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4-6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
+    # z-ai/glm-5 removed: second-call hang causing 26 timeouts/155 runs (16.8% timeout rate)
+    # qwen3.5:122b removed: mishandled gws tool schemas (reverted 2026-03-09)
 
 schedule:
   cron: "8 6-22/6 * * *"
@@ -114,6 +115,8 @@ v2:
     - "brain/memory/calendar-log.json"
 
 changelog:
+  - date: "2026-03-14"
+    change: "Swap primary from z-ai/glm-5 to claude-sonnet-4-6 — z-ai second-call hang causing 26/155 timeouts (16.8% rate, worsening +1.5pp). Qwen already tried+reverted 2026-03-09 due to gws tool schema failures. Sonnet promoted from existing fallback; proven to handle gws_calendar_list tool schemas correctly."
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"
