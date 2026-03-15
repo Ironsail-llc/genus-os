@@ -1,7 +1,7 @@
 id: chat-responder
 name: Chat Responder
 description: Responds to Google Chat messages as Robothor — gathers context and sends replies
-version: "2026-03-09"
+version: "2026-03-15"
 department: communications
 
 reports_to: main
@@ -10,10 +10,10 @@ receives_tasks_from: [chat-monitor]
 escalates_to: main
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4-6  # Swapped from z-ai/glm-5: 22 timeouts/week from second-call hang
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
+    - openrouter/z-ai/glm-5  # Demoted to last-resort fallback
 
 schedule:
   cron: "3,33 6-22 * * *"
@@ -75,6 +75,8 @@ v2:
     - "brain/memory/chat-responder-status.md"
 
 changelog:
+  - date: "2026-03-15"
+    change: "Swap primary z-ai/glm-5→claude-sonnet-4-6 — 22 timeouts/week from z-ai second-call hang (task 08d64e1a). z-ai demoted to last-resort fallback. Nightwatch self-heal [nightwatch]"
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"
