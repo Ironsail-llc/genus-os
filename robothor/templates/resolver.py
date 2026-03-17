@@ -26,6 +26,15 @@ import yaml
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+
+class UnresolvedVariableError(Exception):
+    """Raised when required template variables remain unresolved."""
+
+    def __init__(self, variables: list[str]):
+        self.variables = variables
+        super().__init__(f"Unresolved required variables: {', '.join(variables)}")
+
+
 # Same regex as workflow.py:49
 TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 
@@ -131,6 +140,63 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def find_unresolved(text: str) -> list[str]:
     """Find any {{ variable }} patterns that weren't resolved."""
     return TEMPLATE_RE.findall(text)
+
+
+def check_required_resolved(
+    content: str,
+    setup_yaml: dict[str, Any],
+) -> None:
+    """Raise UnresolvedVariableError if any required variables remain unresolved.
+
+    Scans content for {{ variable }} patterns and cross-references against
+    setup.yaml to determine which are required.
+    """
+    remaining = find_unresolved(content)
+    if not remaining:
+        return
+
+    variables = setup_yaml.get("variables", {})
+    required_missing = []
+    for var_expr in remaining:
+        # Strip filter chains: "var | upper" -> "var"
+        var_name = var_expr.split("|")[0].strip()
+        var_def = variables.get(var_name, {})
+        if isinstance(var_def, dict) and var_def.get("required"):
+            required_missing.append(var_name)
+
+    if required_missing:
+        raise UnresolvedVariableError(required_missing)
+
+
+def validate_variable_types(context: dict[str, Any], setup_yaml: dict[str, Any]) -> None:
+    """Validate resolved variable values match their declared types.
+
+    Raises ValueError with descriptive message on type mismatch.
+    """
+    variables = setup_yaml.get("variables", {})
+    for var_name, var_def in variables.items():
+        if not isinstance(var_def, dict):
+            continue
+        declared_type = var_def.get("type", "string")
+        value = context.get(var_name)
+        if value is None:
+            continue  # Missing values are handled by required check
+
+        if declared_type == "integer":
+            try:
+                int(value)
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Variable '{var_name}' must be an integer, got: {value!r}") from e
+        elif declared_type == "boolean":
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, str) and value.lower() in ("true", "false", "yes", "no"):
+                continue
+            raise ValueError(
+                f"Variable '{var_name}' must be a boolean (true/false/yes/no), got: {value!r}"
+            )
+        elif declared_type == "list" and not isinstance(value, list):
+            raise ValueError(f"Variable '{var_name}' must be a list, got: {type(value).__name__}")
 
 
 class TemplateResolver:
@@ -239,6 +305,13 @@ class TemplateResolver:
         instructions_template = bundle / "instructions.template.md"
         if instructions_template.exists():
             result["instructions.md"] = self.resolve_file(instructions_template, context)
+
+        # Validate types
+        validate_variable_types(context, setup)
+
+        # Check for unresolved required variables
+        for content in result.values():
+            check_required_resolved(content, setup)
 
         return result
 

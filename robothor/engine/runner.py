@@ -1345,16 +1345,21 @@ class AgentRunner:
             return None
 
     def _create_guardrails(self, agent_config: AgentConfig) -> Any:
-        """Create GuardrailEngine if policies are configured."""
-        if not agent_config.guardrails:
-            return None
+        """Create GuardrailEngine with default + agent-specific policies."""
         try:
             import re as _re
 
-            from robothor.engine.guardrails import GuardrailEngine
+            from robothor.engine.guardrails import GuardrailEngine, compute_effective_guardrails
+
+            effective = compute_effective_guardrails(
+                agent_config.guardrails,
+                opt_out=agent_config.guardrails_opt_out,
+            )
+            if not effective:
+                return None
 
             engine = GuardrailEngine(
-                enabled_policies=agent_config.guardrails,
+                enabled_policies=effective,
                 workspace=str(self.config.workspace) + "/",
             )
             if agent_config.exec_allowlist:

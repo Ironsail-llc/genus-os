@@ -7,16 +7,28 @@ agent template bundles.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+logger = logging.getLogger("robothor.hub")
+
 HUB_BASE_URL = os.getenv("PROGRAMMATIC_RESOURCES_URL", "https://programmaticresources.com")
 DEFAULT_TIMEOUT = 30.0
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 1.0  # seconds
+
+
+def _is_retryable(status_code: int) -> bool:
+    """5xx errors and 429 are retryable; 4xx (except 429) are not."""
+    return status_code >= 500 or status_code == 429
 
 
 class HubError(Exception):
@@ -64,15 +76,94 @@ class HubClient:
             )
         return self._client
 
+    def _request_with_retry(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Execute HTTP request with retry logic for transient failures."""
+        last_exc: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                logger.debug("Hub request: %s %s (attempt %d)", method, url, attempt + 1)
+                resp = self.client.request(method, url, **kwargs)
+
+                # Handle rate limiting
+                if resp.status_code == 429:
+                    retry_after = min(
+                        float(resp.headers.get("Retry-After", RETRY_BACKOFF_BASE * 2**attempt)),
+                        60.0,
+                    )
+                    logger.warning("Rate limited, waiting %.1fs", retry_after)
+                    time.sleep(retry_after)
+                    continue
+
+                # Don't retry client errors (except 429)
+                if 400 <= resp.status_code < 500:
+                    return resp
+
+                # Retry server errors
+                if resp.status_code >= 500:
+                    logger.warning(
+                        "Server error %d on %s %s (attempt %d/%d)",
+                        resp.status_code,
+                        method,
+                        url,
+                        attempt + 1,
+                        MAX_RETRIES,
+                    )
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(RETRY_BACKOFF_BASE * 2**attempt)
+                        continue
+
+                return resp
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as e:
+                last_exc = e
+                logger.warning(
+                    "Connection error on %s %s (attempt %d/%d): %s",
+                    method,
+                    url,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    e,
+                )
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_BACKOFF_BASE * 2**attempt)
+
+        raise HubError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")
+
+    def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
+        """Verify file checksum if provided."""
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected_sha256:
+            logger.error(
+                "Checksum mismatch for %s: expected %s, got %s",
+                path.name,
+                expected_sha256,
+                actual,
+            )
+            return False
+        return True
+
     def fetch_registry(self) -> dict[str, Any]:
         """Fetch all bundles from the hub.
 
         Returns dict mapping agent_id -> {slug, name, description, version, ...}
         """
-        resp = self.client.get("/api/bundles")
+        resp = self._request_with_retry("GET", "/api/bundles")
         resp.raise_for_status()
         bundles = resp.json()
-        return {b["slug"]: b for b in bundles}
+
+        # Validate response structure
+        registry: dict[str, Any] = {}
+        for b in bundles:
+            if not isinstance(b, dict):
+                logger.warning("Skipping malformed bundle entry: %s", type(b).__name__)
+                continue
+            slug = b.get("slug")
+            name = b.get("name")
+            if not slug or not name:
+                logger.warning("Skipping bundle missing slug/name: %s", b)
+                continue
+            registry[slug] = b
+
+        return registry
 
     def search(self, query: str, department: str | None = None) -> list[dict[str, Any]]:
         """Search the hub for agents matching a query.
@@ -84,26 +175,29 @@ class HubClient:
             params["q"] = query
         if department:
             params["department"] = department
-        resp = self.client.get("/api/bundles", params=params)
+        resp = self._request_with_retry("GET", "/api/bundles", params=params)
         resp.raise_for_status()
         result: list[dict[str, Any]] = resp.json()
         return result
 
     def get_bundle(self, slug: str) -> dict[str, Any] | None:
         """Get a single bundle by slug."""
-        resp = self.client.get(f"/api/bundles/{slug}")
+        resp = self._request_with_retry("GET", f"/api/bundles/{slug}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
         bundle: dict[str, Any] = resp.json()
         return bundle
 
-    def download_bundle(self, slug: str, dest_dir: str | None = None) -> Path:
+    def download_bundle(
+        self, slug: str, dest_dir: str | None = None, expected_sha256: str | None = None
+    ) -> Path:
         """Download a bundle tarball and extract it.
 
         Returns path to the extracted bundle directory.
         """
-        resp = self.client.get(
+        resp = self._request_with_retry(
+            "GET",
             f"/api/bundles/{slug}/download",
             follow_redirects=True,
         )
@@ -126,6 +220,11 @@ class HubClient:
         tarball_path = dest / f"{slug}.tar.gz"
         tarball_path.write_bytes(resp.content)
 
+        # Verify checksum if provided
+        if expected_sha256 and not self._verify_checksum(tarball_path, expected_sha256):
+            tarball_path.unlink()
+            raise HubError(f"Checksum verification failed for bundle '{slug}'")
+
         if tarfile.is_tarfile(tarball_path):
             with tarfile.open(tarball_path, "r:gz") as tf:
                 tf.extractall(dest, filter="data")
@@ -133,6 +232,12 @@ class HubClient:
 
         # Find the extracted directory (GitHub tarballs have a top-level dir)
         subdirs = [d for d in dest.iterdir() if d.is_dir()]
+
+        # Validate extracted bundle
+        bundle_dir = subdirs[0] if len(subdirs) == 1 else dest
+        if not (bundle_dir / "setup.yaml").exists():
+            logger.warning("Downloaded bundle '%s' missing setup.yaml", slug)
+
         if len(subdirs) == 1:
             return subdirs[0]
         return dest
@@ -142,7 +247,7 @@ class HubClient:
 
         Returns the created bundle metadata.
         """
-        resp = self.client.post("/api/submit", json={"repoUrl": repo_url})
+        resp = self._request_with_retry("POST", "/api/submit", json={"repoUrl": repo_url})
         resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
