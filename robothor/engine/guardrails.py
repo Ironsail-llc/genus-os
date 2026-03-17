@@ -39,6 +39,31 @@ SENSITIVE_PATTERNS = [
 # Default rate limit
 DEFAULT_RATE_LIMIT = 30  # per minute
 
+# Default guardrails applied to all agents unless opted out
+DEFAULT_GUARDRAILS = ["no_destructive_writes", "no_sensitive_data", "rate_limit"]
+
+
+def compute_effective_guardrails(
+    configured: list[str],
+    opt_out: bool = False,
+) -> list[str]:
+    """Compute effective guardrail list by merging defaults with agent config.
+
+    If opt_out is True, only use explicitly configured guardrails.
+    Otherwise, merge DEFAULT_GUARDRAILS with configured (deduplicated).
+    """
+    if opt_out:
+        return configured
+
+    # Merge: defaults + agent-specific, deduplicated, preserving order
+    seen: set[str] = set()
+    result: list[str] = []
+    for policy in DEFAULT_GUARDRAILS + configured:
+        if policy not in seen:
+            seen.add(policy)
+            result.append(policy)
+    return result
+
 
 @dataclass
 class GuardrailResult:

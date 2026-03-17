@@ -22,6 +22,7 @@ import getpass
 import json
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 
 from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
 
@@ -89,6 +91,28 @@ volumes:
 """
 
 
+def _save_init_state(workspace: Path, step: str, status: str) -> None:
+    """Write init progress to .robothor/init_state.yaml for resume support."""
+    state_dir = workspace / ".robothor"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "init_state.yaml"
+
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        state = yaml.safe_load(state_path.read_text()) or {}
+    state[step] = status
+
+    state_path.write_text(yaml.dump(state, default_flow_style=False))
+
+
+def _load_init_state(workspace: Path) -> dict[str, str]:
+    """Load init progress from .robothor/init_state.yaml."""
+    state_path = workspace / ".robothor" / "init_state.yaml"
+    if not state_path.exists():
+        return {}
+    return yaml.safe_load(state_path.read_text()) or {}
+
+
 def run_init(args: Any) -> int:
     """Main orchestrator for the init wizard."""
     print()
@@ -117,6 +141,22 @@ def run_init(args: Any) -> int:
     skip_models = getattr(args, "skip_models", False)
     skip_db = getattr(args, "skip_db", False)
 
+    # Check for existing installation
+    env_exists = (workspace / ".env").exists()
+    config_exists = (workspace / ".robothor" / "config.yaml").exists()
+    if env_exists or config_exists:
+        print("  Existing installation detected.")
+        if not yes:
+            choice = input("  [U]pgrade existing / [F]resh install / [Q]uit? [U]: ").strip().lower()
+            if choice == "q":
+                return 0
+            if choice == "f":
+                pass  # Continue with full setup
+            else:
+                # Upgrade mode: load init_state and skip completed steps
+                pass
+        # In --yes mode, default to upgrade behavior
+
     if yes:
         ai_name = os.environ.get("ROBOTHOR_AI_NAME", "Robothor")
         owner_name = os.environ.get("ROBOTHOR_OWNER_NAME", "")
@@ -129,7 +169,7 @@ def run_init(args: Any) -> int:
     # 3. Docker mode: generate compose and start containers
     db_password = ""
     if docker:
-        db_password = os.environ.get("ROBOTHOR_DB_PASSWORD", "robothor")
+        db_password = os.environ.get("ROBOTHOR_DB_PASSWORD", "") or secrets.token_urlsafe(16)
         if not yes:
             pw = getpass.getpass(f"  Docker DB password [{db_password}]: ")
             if pw:
@@ -152,35 +192,75 @@ def run_init(args: Any) -> int:
     redis_config = _redis_config_from_env()
     ollama_config = _ollama_config_from_env()
 
-    # 5. Create workspace
-    print(f"  Creating workspace {workspace} ...", end=" ", flush=True)
-    create_workspace(workspace)
-    print("done")
+    # Load init state for resume support
+    init_state = _load_init_state(workspace)
+
+    # 5. Create workspace (skip if completed)
+    if init_state.get("workspace") != "completed":
+        print(f"  Creating workspace {workspace} ...", end=" ", flush=True)
+        create_workspace(workspace)
+        print("done")
+        _save_init_state(workspace, "workspace", "completed")
+    else:
+        print(f"  Creating workspace {workspace} ... skipped (exists)")
 
     # 6. Docker mode: generate compose, start, wait
     if docker:
-        compose_path = generate_docker_compose(workspace, db_password)
-        print(f"  Generated {compose_path}")
-        print("  Starting Docker containers ...", end=" ", flush=True)
-        if wait_for_services(workspace, timeout=90):
-            print("done")
+        if init_state.get("docker") != "completed":
+            compose_path = generate_docker_compose(workspace, db_password)
+            print(f"  Generated {compose_path}")
+            print("  Starting Docker containers ...", end=" ", flush=True)
+            if wait_for_services(workspace, timeout=90):
+                print("done")
+            else:
+                print("timed out (containers may still be starting)")
+            _save_init_state(workspace, "docker", "completed")
         else:
-            print("timed out (containers may still be starting)")
+            print("  Docker containers ... skipped (exists)")
 
     # 7. Run migration
     if not skip_db:
-        print("  Running migration ...", end=" ", flush=True)
-        table_count = run_migration(db_config)
-        if table_count >= 0:
-            print(f"{table_count} tables created")
+        if init_state.get("migration") != "completed":
+            print("  Running migration ...", end=" ", flush=True)
+            table_count = run_migration(db_config)
+            if table_count >= 0:
+                print(f"{table_count} tables created")
+                _save_init_state(workspace, "migration", "completed")
+            else:
+                print("FAILED")
+                print("  Error: Database migration failed. Check connection settings:")
+                print(f"    Host: {db_config.host}:{db_config.port}")
+                print(f"    Database: {db_config.name}")
+                print(f"    User: {db_config.user}")
+                return 1
         else:
-            print("failed (check database connection)")
-            if not yes:
-                print("  Continuing with remaining setup steps...")
+            print("  Running migration ... skipped (completed)")
+
+        # Validate database connection
+        if init_state.get("db_validate") != "completed":
+            print("  Validating database ...", end=" ", flush=True)
+            try:
+                import psycopg2
+
+                conn = psycopg2.connect(**db_config.dict, connect_timeout=5)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                conn.close()
+                print("connected")
+                _save_init_state(workspace, "db_validate", "completed")
+            except Exception as e:
+                print(f"FAILED ({e})")
+                return 1
+        else:
+            print("  Validating database ... skipped (verified)")
 
     # 8. Pull Ollama models
     if not skip_models:
-        pull_ollama_models(ollama_config.base_url, REQUIRED_MODELS)
+        if init_state.get("models") != "completed":
+            pull_ollama_models(ollama_config.base_url, REQUIRED_MODELS)
+            _save_init_state(workspace, "models", "completed")
+        else:
+            print("  Pulling models ... skipped (completed)")
 
     # 9. Subsystem selection
     profiles: list[str] = []
@@ -189,24 +269,33 @@ def run_init(args: Any) -> int:
     print()
 
     # 10. Generate vault master key
-    print("  Generating vault master key ...", end=" ", flush=True)
-    setup_vault_key(workspace)
-    print("done")
+    if init_state.get("vault") != "completed":
+        print("  Generating vault master key ...", end=" ", flush=True)
+        setup_vault_key(workspace)
+        print("done")
+        _save_init_state(workspace, "vault", "completed")
+    else:
+        print("  Generating vault master key ... skipped (exists)")
 
     # 11. Write env file
-    env_path = workspace / ".env"
-    wrote = write_env_file(
-        env_path,
-        db_config,
-        redis_config,
-        ollama_config,
-        owner_name=owner_name,
-        ai_name=ai_name,
-        profiles=profiles,
-        yes=yes,
-    )
-    if wrote:
-        print(f"  Saving config to {env_path} ... done")
+    if init_state.get("env_file") != "completed":
+        env_path = workspace / ".env"
+        wrote = write_env_file(
+            env_path,
+            db_config,
+            redis_config,
+            ollama_config,
+            owner_name=owner_name,
+            ai_name=ai_name,
+            profiles=profiles,
+            yes=yes,
+        )
+        if wrote:
+            print(f"  Saving config to {env_path} ... done")
+            _save_init_state(workspace, "env_file", "completed")
+    else:
+        env_path = workspace / ".env"
+        print(f"  Saving config to {env_path} ... skipped (exists)")
 
     # 12. Resolve template variables in CLAUDE.md files
     for fname in ("CLAUDE.md", "AGENT_BUILDER.md"):
@@ -223,13 +312,31 @@ def run_init(args: Any) -> int:
 
     # Summary
     print()
-    print("  Setup complete!")
-    print(f"    source {env_path}")
-    print("    robothor status")
-    print("    robothor serve")
-    if profiles:
-        profile_flag = ",".join(profiles)
-        print(f"    docker compose -f infra/docker-compose.yml --profile {profile_flag} up -d")
+    print("  \u2713 Genus OS initialized")
+    print(f"    AI Name:     {ai_name}")
+    print(f"    Workspace:   {workspace}")
+    print(f"    Database:    postgresql://{db_config.host}:{db_config.port}/{db_config.name}")
+
+    # Show installed models
+    model_names = ", ".join(REQUIRED_MODELS) if not skip_models else "skipped"
+    print(f"    Models:      {model_names}")
+
+    # Count installed agents
+    agent_dir = workspace / "docs" / "agents"
+    agent_count = len(list(agent_dir.glob("*.yaml"))) if agent_dir.exists() else 0
+    print(f"    Agents:      {agent_count} installed", end="")
+    if agent_count == 0:
+        print(" (run: robothor agent install --preset standard)", end="")
+    print()
+
+    # Engine status
+    print("    Engine:      not running (run: sudo systemctl start robothor-engine)")
+
+    print()
+    print("  Next steps:")
+    print("    1. robothor agent install --preset standard")
+    print("    2. sudo systemctl start robothor-engine")
+    print("    3. Open Claude Code for identity setup")
     print()
     return 0
 

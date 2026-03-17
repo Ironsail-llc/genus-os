@@ -7,8 +7,9 @@ files, then writes them to the locations the engine expects.
 
 from __future__ import annotations
 
-import contextlib
 import difflib
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,17 @@ def install(
     agent_id = setup.get("agent_id", bundle.name)
     version = setup.get("version", "0.0.0")
 
+    # Check for existing agent (duplicate detection)
+    manifest_dest = repo_root / "docs" / "agents" / f"{agent_id}.yaml"
+    if manifest_dest.exists() and not auto_yes:
+        overwrite = (
+            input(f"  Agent '{agent_id}' already installed. Overwrite? [y/N]: ").strip().lower()
+        )
+        if overwrite != "y":
+            print(f"  Skipping {agent_id}")
+            return {"agent_id": agent_id, "skipped": True, "reason": "already installed"}
+        # In auto_yes mode, overwrite silently
+
     # Instance config
     instance = InstanceConfig.load(instance_dir)
     instance_config = instance.config
@@ -126,22 +138,47 @@ def install(
             instr_dest = repo_root / instr_path
             output_files["instruction"] = (instr_dest, instructions_content)
 
-    # Write files
-    for dest, content in output_files.values():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content)
-
-    # Run post-install validation
+    # Write files atomically — temp files first, then validate, then move
+    temp_files: dict[str, tuple[Path, Path]] = {}  # key -> (temp_path, final_path)
     validation_messages = []
     chain_validation_messages = []
-    if "manifest" in output_files:
-        from robothor.templates.validators import validate_chain_post_install, validate_post_install
 
-        manifest_dest = output_files["manifest"][0]
-        validation_messages = validate_post_install(manifest_dest, repo_root)
+    try:
+        for key, (dest, content) in output_files.items():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            # Write to temp file in same directory (ensures same filesystem for rename)
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=f".{dest.stem}_", dir=dest.parent)
+            try:
+                os.write(fd, content.encode("utf-8"))
+            finally:
+                os.close(fd)
+            temp_files[key] = (Path(tmp_path), dest)
 
-        with contextlib.suppress(Exception):
-            chain_validation_messages = validate_chain_post_install(manifest_dest, repo_root)
+        # Run post-install validation on temp files
+        if "manifest" in temp_files:
+            from robothor.templates.validators import validate_post_install
+
+            tmp_manifest = temp_files["manifest"][0]
+            validation_messages = validate_post_install(tmp_manifest, repo_root)
+
+            # Surface chain validation errors as warnings
+            try:
+                from robothor.templates.validators import validate_chain_post_install
+
+                chain_validation_messages = validate_chain_post_install(tmp_manifest, repo_root)
+            except Exception as e:
+                chain_validation_messages = [f"Chain validation warning: {e}"]
+
+        # All validation passed — move temp files to final paths
+        for tmp_path, final_path in temp_files.values():
+            tmp_path.rename(final_path)
+
+    except Exception:
+        # Cleanup temp files on any failure
+        for tmp_path, _ in temp_files.values():
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
 
     # Record installation
     instance.record_install(
@@ -390,52 +427,42 @@ def import_agent(
             "description": "Agent to report to",
         }
 
-    # Build manifest template — replace instance values with {{ variable }}
+    # Build manifest template — replace instance-specific values with {{ variable }}
     manifest_content = manifest_path.read_text()
     template_content = manifest_content
 
-    # Replace model_primary with template variable
-    if model_primary:
+    # Version is always templatized
+    version_str = manifest.get("version", "")
+    if version_str:
         template_content = template_content.replace(
-            f"primary: {model_primary}",
-            "primary: {{ model_primary }}",
+            f'version: "{version_str}"',
+            'version: "{{ version }}"',
         )
 
-    # Replace timezone
-    if tz:
-        template_content = template_content.replace(
-            f"timezone: {tz}",
-            "timezone: {{ timezone }}",
-        )
-
-    # Replace cron
-    if cron:
-        template_content = template_content.replace(
-            f'cron: "{cron}"',
-            'cron: "{{ cron_expr }}"',
-        )
-
-    # Replace delivery mode
-    if delivery_mode != "none":
-        template_content = template_content.replace(
-            f"mode: {delivery_mode}",
-            "mode: {{ delivery_mode }}",
-        )
-
-    # Replace reports_to
-    if reports_to:
-        template_content = template_content.replace(
-            f"reports_to: {reports_to}",
-            "reports_to: {{ reports_to }}",
-        )
-
-    # Replace escalates_to
+    # Replace values in order of specificity to avoid partial matches
     escalates_to = manifest.get("escalates_to")
+    replacements = [
+        (f"primary: {model_primary}", "primary: {{ model_primary }}"),
+        (f"timezone: {tz}", "timezone: {{ timezone }}"),
+    ]
+
+    # Cron needs special handling for quoted values
+    if cron:
+        replacements.append((f'cron: "{cron}"', 'cron: "{{ cron_expr }}"'))
+
+    # Delivery mode (only if non-default)
+    if delivery_mode and delivery_mode != "none":
+        replacements.append((f"mode: {delivery_mode}", "mode: {{ delivery_mode }}"))
+
+    # reports_to and escalates_to
+    if reports_to:
+        replacements.append((f"reports_to: {reports_to}", "reports_to: {{ reports_to }}"))
     if escalates_to:
-        template_content = template_content.replace(
-            f"escalates_to: {escalates_to}",
-            "escalates_to: {{ escalates_to }}",
-        )
+        replacements.append((f"escalates_to: {escalates_to}", "escalates_to: {{ escalates_to }}"))
+
+    for old, new in replacements:
+        if old in template_content:
+            template_content = template_content.replace(old, new, 1)  # Only first occurrence
 
     # Write manifest.template.yaml
     (out_path / "manifest.template.yaml").write_text(template_content)

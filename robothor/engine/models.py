@@ -197,6 +197,7 @@ class AgentConfig:
     planning_model: str = ""  # separate cheap model for planning
     scratchpad_enabled: bool = False
     guardrails: list[str] = field(default_factory=list)
+    guardrails_opt_out: bool = False  # Skip default guardrails for this agent
     exec_allowlist: list[str] = field(
         default_factory=list
     )  # regex patterns for allowed exec commands

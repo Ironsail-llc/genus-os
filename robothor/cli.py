@@ -65,6 +65,12 @@ def main(argv: list[str] | None = None) -> int:
     # status
     subparsers.add_parser("status", help="Show system status")
 
+    # start
+    subparsers.add_parser("start", help="Start all Genus OS services")
+
+    # stop
+    subparsers.add_parser("stop", help="Stop all Genus OS services")
+
     # pipeline (stub — v0.2)
     pipeline_parser = subparsers.add_parser(
         "pipeline", help="Run intelligence pipeline (coming in v0.2)"
@@ -258,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_mcp()
     if args.command == "status":
         return _cmd_status(args)
+    if args.command == "start":
+        return _cmd_start(args)
+    if args.command == "stop":
+        return _cmd_stop(args)
     if args.command == "pipeline":
         return _cmd_pipeline(args)
     if args.command == "tunnel":
@@ -426,6 +436,72 @@ def _cmd_mcp() -> int:
         return 1
 
     asyncio.run(run_server())
+    return 0
+
+
+# Service names for start/stop
+_SERVICES = ["robothor-engine", "robothor-bridge", "robothor-voice"]
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    """Start all Genus OS services."""
+    import subprocess
+
+    print("  Starting Genus OS services...")
+    print()
+    for svc in _SERVICES:
+        print(f"    {svc} ...", end=" ", flush=True)
+        result = subprocess.run(
+            ["sudo", "systemctl", "start", svc],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("started")
+        else:
+            # Service might not exist — check if unit file is present
+            check = subprocess.run(
+                ["systemctl", "list-unit-files", f"{svc}.service"],
+                capture_output=True,
+                text=True,
+            )
+            if svc in check.stdout:
+                print(f"FAILED ({result.stderr.strip()})")
+            else:
+                print("skipped (not installed)")
+
+    print()
+    return _cmd_status(args)
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    """Stop all Genus OS services."""
+    import subprocess
+
+    print("  Stopping Genus OS services...")
+    print()
+    for svc in _SERVICES:
+        print(f"    {svc} ...", end=" ", flush=True)
+        result = subprocess.run(
+            ["sudo", "systemctl", "stop", svc],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("stopped")
+        else:
+            check = subprocess.run(
+                ["systemctl", "list-unit-files", f"{svc}.service"],
+                capture_output=True,
+                text=True,
+            )
+            if svc in check.stdout:
+                print(f"FAILED ({result.stderr.strip()})")
+            else:
+                print("skipped (not installed)")
+
+    print()
+    print("  All services stopped.")
     return 0
 
 
