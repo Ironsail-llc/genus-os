@@ -249,6 +249,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         planning_model=v2.get("planning_model", ""),
         scratchpad_enabled=v2.get("scratchpad_enabled", False),
         guardrails=v2.get("guardrails", []),
+        guardrails_opt_out=v2.get("guardrails_opt_out", False),
         exec_allowlist=v2.get("exec_allowlist", []),
         write_path_allowlist=v2.get("write_path_allowlist", []),
         checkpoint_enabled=v2.get("checkpoint_enabled", False),
