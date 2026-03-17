@@ -1,7 +1,7 @@
 id: main
 name: Robothor
 description: Primary agent — interactive Telegram chat + periodic heartbeat (worker oversight, escalation)
-version: "2026-03-09"
+version: "2026-03-17"
 department: core
 
 reports_to: null
@@ -13,9 +13,8 @@ tags_produced: [escalation, needs-philip]
 tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, vision, unknown-person, conversation]
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4-6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
   temperature: 0.5
 
@@ -143,7 +142,7 @@ heartbeat:
   timezone: America/New_York
   instruction_file: brain/HEARTBEAT.md
   session_target: isolated
-  max_iterations: 15
+  max_iterations: 12
   timeout_seconds: 600
   delivery:
     mode: announce
@@ -162,6 +161,8 @@ v2:
   sub_agent_timeout_seconds: 120
 
 changelog:
+  - date: "2026-03-17"
+    change: "Swap primary z-ai/glm-5→claude-sonnet-4-6 (eliminates second-call hang causing 19.4% timeout rate). Reduce heartbeat max_iterations 15→12 (generous cap for coordination agent; caps z-ai/zombie hang blast radius). Remove z-ai from fallbacks. Nightwatch self-heal [nightwatch]"
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"
