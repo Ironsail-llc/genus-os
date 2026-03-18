@@ -1125,13 +1125,24 @@ class AgentRunner:
 
         # Best-effort cost tracking
         try:
-            cost = litellm.completion_cost(completion_response=response)
-            if cost:
+            cost = litellm.completion_cost(completion_response=response, model=models[0])
+            if cost and cost > 0:
+                session.run.total_cost_usd += cost
+            else:
+                cost = self._calculate_cost(models[0], input_tokens, output_tokens)
                 session.run.total_cost_usd += cost
         except Exception:
-            pass
+            cost = self._calculate_cost(models[0], input_tokens, output_tokens)
+            session.run.total_cost_usd += cost
 
         return response, model_used, elapsed_ms, msg_dict
+
+    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost from litellm model registry."""
+        info = litellm.model_cost.get(model, {})
+        return input_tokens * info.get("input_cost_per_token", 0) + output_tokens * info.get(
+            "output_cost_per_token", 0
+        )
 
     async def _do_llm_call(
         self,
