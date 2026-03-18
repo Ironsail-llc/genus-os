@@ -20,7 +20,7 @@ model:
   payload_alias: sonnet
 
 schedule:
-  cron: "25 */2 * * *"
+  cron: ""  # DISABLED 2026-03-17 — was "25 */2 * * *", ~$62/week on Sonnet 4.6
   timezone: America/New_York
   timeout_seconds: 480
   max_iterations: 15
