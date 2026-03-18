@@ -280,7 +280,7 @@ class TestRunInit:
         assert (workspace / "faces").is_dir()
 
         out = capsys.readouterr().out
-        assert "Setup complete!" in out
+        assert "Genus OS initialized" in out
 
     def test_missing_required_prereq_exits(self, capsys, monkeypatch):
         """If a required prerequisite is missing, should exit with code 1."""

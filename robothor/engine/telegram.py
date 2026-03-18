@@ -138,7 +138,6 @@ AVAILABLE_MODELS: dict[str, str] = {
     "GLM-5": "openrouter/z-ai/glm-5",
     "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
     "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
-    "Qwen 3.5 122B": "ollama_chat/qwen3.5:122b",
 }
 
 # Reverse lookup: model id → display name

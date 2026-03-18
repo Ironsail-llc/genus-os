@@ -1,7 +1,7 @@
 id: engine-report
 name: Engine Report
 description: Daily summary of agent engine activity and health
-version: "2026-03-09"
+version: "2026-03-17"
 department: operations
 
 reports_to: null
@@ -10,11 +10,10 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: ollama_chat/qwen3.5:122b
+  primary: openrouter/z-ai/glm-5
   fallbacks:
     - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
-  payload_alias: qwen35
 
 schedule:
   cron: "0 23 * * *"
@@ -66,6 +65,8 @@ v2:
   error_feedback: true
 
 changelog:
+  - date: "2026-03-17"
+    change: "Switch from local Qwen 3.5 to GLM-5 — free ~93 GB RAM, eliminate swap"
   - date: "2026-03-09"
     change: "Swap to local Qwen 3.5 122B for cost savings & privacy"
   - date: "2026-02-27"

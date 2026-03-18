@@ -63,14 +63,6 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_5,  # $0.50/M
         output_cost_per_token=0.000_002,  # $2/M
     ),
-    # Qwen 3.5 122B (local Ollama)
-    "ollama_chat/qwen3.5:122b": ModelLimits(
-        max_input_tokens=131_072,
-        max_output_tokens=8_192,
-        default_output_tokens=8_192,
-        input_cost_per_token=0.0,
-        output_cost_per_token=0.0,
-    ),
     # Gemini 2.5 Pro
     "gemini/gemini-2.5-pro": ModelLimits(
         max_input_tokens=1_048_576,

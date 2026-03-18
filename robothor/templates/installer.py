@@ -170,14 +170,14 @@ def install(
                 chain_validation_messages = [f"Chain validation warning: {e}"]
 
         # All validation passed — move temp files to final paths
-        for tmp_path, final_path in temp_files.values():
-            tmp_path.rename(final_path)
+        for temp_p, final_p in temp_files.values():
+            temp_p.rename(final_p)
 
     except Exception:
         # Cleanup temp files on any failure
-        for tmp_path, _ in temp_files.values():
-            if tmp_path.exists():
-                tmp_path.unlink()
+        for temp_p, _ in temp_files.values():
+            if temp_p.exists():
+                temp_p.unlink()
         raise
 
     # Record installation

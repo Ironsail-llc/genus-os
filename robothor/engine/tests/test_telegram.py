@@ -380,11 +380,10 @@ class TestModelPickerRegistry:
             f"Sonnet should use openrouter/ prefix, got {sonnet_id!r}"
         )
 
-    def test_qwen_in_picker(self):
+    def test_qwen_removed_from_picker(self):
         from robothor.engine.telegram import AVAILABLE_MODELS
 
-        assert "Qwen 3.5 122B" in AVAILABLE_MODELS
-        assert AVAILABLE_MODELS["Qwen 3.5 122B"] == "ollama_chat/qwen3.5:122b"
+        assert "Qwen 3.5 122B" not in AVAILABLE_MODELS
 
 
 class TestStreamingToolVisibility:

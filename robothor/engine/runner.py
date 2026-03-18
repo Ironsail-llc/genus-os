@@ -1140,9 +1140,9 @@ class AgentRunner:
     def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
         """Calculate cost from litellm model registry."""
         info = litellm.model_cost.get(model, {})
-        return input_tokens * info.get("input_cost_per_token", 0) + output_tokens * info.get(
-            "output_cost_per_token", 0
-        )
+        input_cost: float = info.get("input_cost_per_token", 0.0)
+        output_cost: float = info.get("output_cost_per_token", 0.0)
+        return input_tokens * input_cost + output_tokens * output_cost
 
     async def _do_llm_call(
         self,

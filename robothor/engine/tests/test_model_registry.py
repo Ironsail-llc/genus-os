@@ -40,14 +40,10 @@ class TestGetModelLimits:
         assert limits.max_input_tokens == 1_048_576
         assert limits.max_output_tokens == 65_535
 
-    def test_known_model_qwen35(self):
+    def test_qwen35_removed(self):
+        """Qwen 3.5 was removed — should return fallback now."""
         limits = get_model_limits("ollama_chat/qwen3.5:122b")
-        assert limits.max_input_tokens == 131_072
-        assert limits.max_output_tokens == 8_192
-        assert limits.default_output_tokens == 8_192
-        assert limits.input_cost_per_token == 0.0
-        assert limits.output_cost_per_token == 0.0
-        assert limits.supports_thinking is False
+        assert limits == _FALLBACK
 
     def test_unknown_model_returns_fallback(self):
         limits = get_model_limits("unknown/model-xyz")
