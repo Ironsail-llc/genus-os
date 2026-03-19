@@ -49,10 +49,16 @@ export function LiveCanvas() {
     fetch("/api/session", { signal: abort.signal })
       .then(async (res) => {
         if (res.ok) {
-          const data = await res.json();
-          if (data.html) {
-            setDashboardCode(data.html, "html");
-            return; // Restored — skip welcome generation
+          // Guard against non-JSON responses (e.g., Bridge returning HTML error pages)
+          const text = await res.text();
+          try {
+            const data = JSON.parse(text);
+            if (data.html) {
+              setDashboardCode(data.html, "html");
+              return; // Restored — skip welcome generation
+            }
+          } catch {
+            // Session response wasn't valid JSON — fall through to welcome
           }
         }
         // No saved session — generate welcome dashboard
