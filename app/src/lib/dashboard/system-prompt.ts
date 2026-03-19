@@ -242,6 +242,7 @@ Always: \`text-xs font-medium px-2.5 py-0.5 rounded-full\`
 - Do NOT call fetch() or any external APIs from inline scripts
 - Do NOT invent data — use ONLY values from the conversation and provided context
 - Do NOT output empty cards or "No data available" placeholders — skip the card entirely
+- Do NOT use double quotes for data-chart attributes — ALWAYS use single quotes: data-chart='{"type":"bar",...}'. Double quotes break because JSON also uses double quotes, truncating the attribute value
 
 ## Interactive Patterns
 
