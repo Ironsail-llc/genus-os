@@ -343,8 +343,10 @@ class TestBuildSystemPrompt:
             bootstrap_files=["bs1.md", "bs2.md"],
         )
         prompt = build_system_prompt(config, tmp_path)
-        # Should be under total limit (separators add a few chars)
-        assert len(prompt) <= BOOTSTRAP_TOTAL_MAX_CHARS + 100  # separator overhead
+        # Budget covers instruction + bootstrap content; security preamble, separators
+        # (\n\n---\n\n × N), and time context string are added outside the budget.
+        # Allow 500 chars overhead for those fixed additions.
+        assert len(prompt) <= BOOTSTRAP_TOTAL_MAX_CHARS + 500  # preamble + separators + time
 
     def test_no_files(self):
         config = AgentConfig(id="t", name="t")
