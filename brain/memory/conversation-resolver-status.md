@@ -1,14 +1,14 @@
 # Conversation Resolver Status
-Last run: 2026-03-09T18:00:00Z
+Last run: 2026-03-22T00:20:00Z
 Resolved: 0 conversations
-Skipped: 5 (all less than 7 days old)
+Skipped: 5 (all < 7 days old)
 Open remaining: 5
 
 Details:
-- ID 136 (Philip D'Agostino): 3.6 days old - KEY CONTACT
-- ID 135 (Harry Glorikian): 3.7 days old
-- ID 128 (Consumer Trust Support): 4.4 days old
-- ID 123 (Alice Thompson): 5.8 days old
-- ID 115 (Twilio Customer Experience): 6.7 days old
+- ID 156 (Robothor): ~2.1 days old (< 7 days)
+- ID 155 (Konrad Arciszewski): ~2.2 days old (< 7 days)
+- ID 154 (Roberto Saikaly): ~2.3 days old (< 7 days)
+- ID 153 (Team Twilio): ~2.3 days old (< 7 days)
+- ID 151 (Matt Budeir): ~3.0 days old (< 7 days)
 
-No stale conversations to resolve.
+No stale conversations found.
