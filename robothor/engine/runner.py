@@ -75,7 +75,7 @@ litellm.register_model(
             "input_cost_per_token": 0.0000008,  # $0.80/M
             "output_cost_per_token": 0.00000256,  # $2.56/M
         },
-        "openrouter/anthropic/claude-sonnet-4-6": {
+        "openrouter/anthropic/claude-sonnet-4.6": {
             "max_tokens": 200000,
             "input_cost_per_token": 0.000003,  # $3/M
             "output_cost_per_token": 0.000015,  # $15/M
@@ -140,8 +140,60 @@ class AgentRunner:
             session.run.parent_run_id = spawn_context.parent_run_id
             session.run.nesting_depth = spawn_context.nesting_depth + 1
 
-        # Build system prompt
-        system_prompt = build_system_prompt(agent_config, self.config.workspace)
+        # Build system prompt + warmup in parallel where possible.
+        # Both involve sync I/O so we run them concurrently in the executor.
+        loop = asyncio.get_running_loop()
+
+        # Determine what warmup is needed (before launching parallel tasks)
+        warmup_kind: str | None = None  # "cron", "interactive", or None
+        if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
+            has_warmup = (
+                agent_config.warmup_memory_blocks
+                or agent_config.warmup_context_files
+                or agent_config.warmup_peer_agents
+            )
+            if has_warmup:
+                warmup_kind = "cron"
+        elif trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT):
+            # Only warmup on first message of a session — follow-ups already
+            # have memory blocks and entity context in conversation history.
+            if not conversation_history:
+                warmup_kind = "interactive"
+
+        # Launch system prompt build + warmup concurrently
+        sys_prompt_future = loop.run_in_executor(
+            None, build_system_prompt, agent_config, self.config.workspace
+        )
+
+        warmup_future: asyncio.Future[str | None] | None = None
+        if warmup_kind == "cron":
+            from robothor.engine.warmup import build_warmth_preamble
+
+            warmup_future = loop.run_in_executor(
+                None,
+                lambda: build_warmth_preamble(
+                    agent_config, self.config.workspace, self.config.tenant_id
+                ),
+            )
+        elif warmup_kind == "interactive":
+            from robothor.engine.warmup import build_interactive_preamble
+
+            warmup_future = loop.run_in_executor(
+                None,
+                lambda: build_interactive_preamble(agent_id, message, include_blocks=True),
+            )
+
+        # Await both concurrently
+        system_prompt = await sys_prompt_future
+        warmup_preamble: str | None = None
+        if warmup_future is not None:
+            try:
+                warmup_preamble = await warmup_future
+            except Exception as e:
+                logger.debug("Warmup preamble failed for %s: %s", agent_id, e)
+
+        if warmup_preamble:
+            message = f"{warmup_preamble}\n\n{message}"
 
         # Get filtered tools for this agent
         if readonly_mode:
@@ -165,47 +217,6 @@ class AgentRunner:
         # Execution mode: prepend enforcement preamble (full tools already loaded above)
         if execution_mode and not readonly_mode:
             system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
-
-        # Warmup: prepend context for agent runs
-        # Warmup functions do sync DB calls, so run in executor to avoid blocking event loop
-        loop = asyncio.get_running_loop()
-        if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
-            # Full warmup for scheduled/event/workflow triggers
-            has_warmup = (
-                agent_config.warmup_memory_blocks
-                or agent_config.warmup_context_files
-                or agent_config.warmup_peer_agents
-            )
-            if has_warmup:
-                try:
-                    from robothor.engine.warmup import build_warmth_preamble
-
-                    preamble = await loop.run_in_executor(
-                        None,
-                        lambda: build_warmth_preamble(
-                            agent_config, self.config.workspace, self.config.tenant_id
-                        ),
-                    )
-                    if preamble:
-                        message = f"{preamble}\n\n{message}"
-                except Exception as e:
-                    logger.debug("Warmup preamble failed for %s: %s", agent_id, e)
-        elif trigger_type == TriggerType.TELEGRAM:
-            # For new sessions: full warmup (blocks + entity context)
-            # For ongoing sessions: entity context only (blocks already in history)
-            try:
-                from robothor.engine.warmup import build_interactive_preamble
-
-                preamble = await loop.run_in_executor(
-                    None,
-                    lambda: build_interactive_preamble(
-                        agent_id, message, include_blocks=not conversation_history
-                    ),
-                )
-                if preamble:
-                    message = f"{preamble}\n\n{message}"
-            except Exception as e:
-                logger.debug("Interactive warmup failed for %s: %s", agent_id, e)
 
         # Start session
         session.start(
@@ -1616,11 +1627,13 @@ class AgentRunner:
                 kwargs = self._build_llm_kwargs(
                     model, messages, tools, input_est, temperature, stream=True
                 )
+                stream_start = time.monotonic()
                 stream = await litellm.acompletion(**kwargs)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
                 has_tool_calls = False
+                ttft_logged = False
 
                 async for chunk in stream:
                     chunks.append(chunk)
@@ -1628,6 +1641,10 @@ class AgentRunner:
                         continue
                     delta = chunk.choices[0].delta
                     if getattr(delta, "content", None):
+                        if not ttft_logged:
+                            ttft_ms = int((time.monotonic() - stream_start) * 1000)
+                            logger.info("TTFT %dms model=%s", ttft_ms, model)
+                            ttft_logged = True
                         accumulated_content += delta.content
                         if not has_tool_calls:
                             with contextlib.suppress(Exception):

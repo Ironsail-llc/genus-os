@@ -4,6 +4,7 @@ Engine configuration — loads agent configs from YAML manifests and env vars.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -283,62 +284,86 @@ SECURITY_PREAMBLE = (
 )
 
 
+# Cache: agent_id → (max_mtime_of_files, prompt_without_time)
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
 def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
     """Build the full system prompt from instruction + bootstrap files.
 
-    Respects per-file and total char limits.
+    Caches the file-based portion keyed on file mtimes. The time context
+    is always appended fresh (it changes every minute).
     """
-    parts: list[str] = []
-    total_chars = 0
-
-    # Security preamble — always first so it's closest to the system role boundary
-    parts.append(SECURITY_PREAMBLE)
-    total_chars += len(SECURITY_PREAMBLE)
-
-    # Load instruction file first (primary)
+    # Collect all source file paths for mtime checking
+    source_files: list[Path] = []
     if config.instruction_file:
-        instruction_path = workspace / config.instruction_file
-        if instruction_path.exists():
-            content = instruction_path.read_text()
-            if len(content) > BOOTSTRAP_MAX_CHARS_PER_FILE:
-                content = content[:BOOTSTRAP_MAX_CHARS_PER_FILE]
-                logger.warning(
-                    "Instruction file %s truncated to %d chars",
-                    config.instruction_file,
-                    BOOTSTRAP_MAX_CHARS_PER_FILE,
-                )
+        source_files.append(workspace / config.instruction_file)
+    source_files.extend(workspace / bs_file for bs_file in config.bootstrap_files)
+
+    # Check cache: if all files unchanged, reuse cached body
+    cache_key = config.id
+    max_mtime = 0.0
+    for fp in source_files:
+        with contextlib.suppress(OSError):
+            max_mtime = max(max_mtime, fp.stat().st_mtime)
+
+    cached = _prompt_cache.get(cache_key)
+    if cached and cached[0] == max_mtime:
+        body = cached[1]
+    else:
+        # Build from files
+        parts: list[str] = []
+        total_chars = 0
+
+        # Security preamble — always first so it's closest to the system role boundary
+        parts.append(SECURITY_PREAMBLE)
+        total_chars += len(SECURITY_PREAMBLE)
+
+        # Load instruction file first (primary)
+        if config.instruction_file:
+            instruction_path = workspace / config.instruction_file
+            if instruction_path.exists():
+                content = instruction_path.read_text()
+                if len(content) > BOOTSTRAP_MAX_CHARS_PER_FILE:
+                    content = content[:BOOTSTRAP_MAX_CHARS_PER_FILE]
+                    logger.warning(
+                        "Instruction file %s truncated to %d chars",
+                        config.instruction_file,
+                        BOOTSTRAP_MAX_CHARS_PER_FILE,
+                    )
+                parts.append(content)
+                total_chars += len(content)
+            else:
+                logger.warning("Instruction file not found: %s", instruction_path)
+
+        # Load bootstrap files
+        for bs_file in config.bootstrap_files:
+            if total_chars >= BOOTSTRAP_TOTAL_MAX_CHARS:
+                logger.warning("Bootstrap total limit reached, skipping remaining files")
+                break
+
+            bs_path = workspace / bs_file
+            if not bs_path.exists():
+                logger.warning("Bootstrap file not found: %s", bs_path)
+                continue
+
+            content = bs_path.read_text()
+            remaining = BOOTSTRAP_TOTAL_MAX_CHARS - total_chars
+            max_this_file = min(BOOTSTRAP_MAX_CHARS_PER_FILE, remaining)
+            if len(content) > max_this_file:
+                content = content[:max_this_file]
+                logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
             parts.append(content)
             total_chars += len(content)
-        else:
-            logger.warning("Instruction file not found: %s", instruction_path)
 
-    # Load bootstrap files
-    for bs_file in config.bootstrap_files:
-        if total_chars >= BOOTSTRAP_TOTAL_MAX_CHARS:
-            logger.warning("Bootstrap total limit reached, skipping remaining files")
-            break
+        body = "\n\n---\n\n".join(parts)
+        _prompt_cache[cache_key] = (max_mtime, body)
 
-        bs_path = workspace / bs_file
-        if not bs_path.exists():
-            logger.warning("Bootstrap file not found: %s", bs_path)
-            continue
-
-        content = bs_path.read_text()
-        remaining = BOOTSTRAP_TOTAL_MAX_CHARS - total_chars
-        max_this_file = min(BOOTSTRAP_MAX_CHARS_PER_FILE, remaining)
-        if len(content) > max_this_file:
-            content = content[:max_this_file]
-            logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
-        parts.append(content)
-        total_chars += len(content)
-
-    # Inject current time context so agents know the date, time, and UTC offset
+    # Always append fresh time context
     tz = ZoneInfo(config.timezone or "America/New_York")
     now = datetime.now(tz)
     time_context = (
         f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "
         f"(UTC offset: {now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
     )
-    parts.append(time_context)
-
-    return "\n\n---\n\n".join(parts)
+    return f"{body}\n\n---\n\n{time_context}"

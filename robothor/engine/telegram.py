@@ -61,8 +61,8 @@ logger = logging.getLogger(__name__)
 
 MAX_MESSAGE_LENGTH = 4096
 STREAM_CURSOR = " \u258d"  # ▍ block cursor
-STREAM_EDIT_INTERVAL = 0.5  # seconds between message edits
-STREAM_MIN_NEW_CHARS = 20  # min new chars before editing
+STREAM_EDIT_INTERVAL = 0.3  # seconds between message edits
+STREAM_MIN_NEW_CHARS = 15  # min new chars before editing
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
@@ -134,7 +134,7 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
-    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4-6",
+    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
     "GLM-5": "openrouter/z-ai/glm-5",
     "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
     "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",

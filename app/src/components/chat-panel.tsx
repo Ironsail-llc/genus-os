@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
+import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
 interface ChatMessage {
@@ -497,12 +498,28 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let fullResponse = "";
       const collectedAgentData: Record<string, unknown> = {};
 
+      const interceptor = new MarkerInterceptor();
+
       const handleSSEEvent = (eventType: string, data: string) => {
         try {
           const parsed = JSON.parse(data);
           if (eventType === "delta") {
-            fullResponse += parsed.text || "";
-            setStreamingText(fullResponse);
+            // Run through marker interceptor to strip [DASHBOARD:...] / [RENDER:...] markers
+            const result = interceptor.addChunk(parsed.text || "");
+            if (result.text) {
+              fullResponse += result.text;
+              setStreamingText(fullResponse);
+            }
+            for (const marker of result.markers) {
+              if (marker.type === "dashboard" && marker.data && typeof marker.data === "object") {
+                Object.assign(collectedAgentData, marker.data as Record<string, unknown>);
+              } else if (marker.type === "render") {
+                setRender({
+                  component: (marker as { component: string }).component,
+                  props: (marker as { props: Record<string, unknown> }).props,
+                });
+              }
+            }
           } else if (eventType === "dashboard") {
             if (parsed.data && typeof parsed.data === "object") {
               Object.assign(collectedAgentData, parsed.data as Record<string, unknown>);
@@ -529,6 +546,21 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             setCurrentIteration(parsed.iteration || 0);
             setMaxIterations(parsed.max_iterations || 0);
           } else if (eventType === "done") {
+            // Flush any buffered text from marker interceptor
+            const flushed = interceptor.flush();
+            if (flushed.text) {
+              fullResponse += flushed.text;
+            }
+            for (const marker of flushed.markers) {
+              if (marker.type === "dashboard" && marker.data && typeof marker.data === "object") {
+                Object.assign(collectedAgentData, marker.data as Record<string, unknown>);
+              } else if (marker.type === "render") {
+                setRender({
+                  component: (marker as { component: string }).component,
+                  props: (marker as { props: Record<string, unknown> }).props,
+                });
+              }
+            }
             fullResponse = parsed.text || fullResponse;
           }
         } catch {
@@ -597,17 +629,22 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // Trigger dashboard update OUTSIDE the state updater (calling state setters
-      // inside another setState updater can cause React to drop the batched updates)
-      const recentMessages = [
-        { role: userMsg.role, content: userMsg.content },
-        { role: assistantMsg.role, content: assistantMsg.content },
-      ].filter((m) => m.content.trim());
+      // Only trigger dashboard update when there's dashboard-relevant content.
+      // Short conversational replies (< 200 chars, no agent data) skip the
+      // triage+generate pipeline entirely, saving 5-11s of LLM + fetch time.
+      const hasAgentData = Object.keys(collectedAgentData).length > 0;
+      const isSubstantive = assistantMsg.content.length >= 200;
+      if (hasAgentData || isSubstantive) {
+        const recentMessages = [
+          { role: userMsg.role, content: userMsg.content },
+          { role: assistantMsg.role, content: assistantMsg.content },
+        ].filter((m) => m.content.trim());
 
-      notifyConversationUpdate(
-        recentMessages,
-        Object.keys(collectedAgentData).length > 0 ? collectedAgentData : undefined
-      );
+        notifyConversationUpdate(
+          recentMessages,
+          hasAgentData ? collectedAgentData : undefined
+        );
+      }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         const errorMsg: ChatMessage = {

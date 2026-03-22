@@ -216,7 +216,7 @@ describe("ChatPanel", () => {
         return Promise.resolve(
           makeMockSSEResponse([
             { event: "delta", data: { text: "Here are your contacts." } },
-            { event: "dashboard", data: { intent: "contacts", data: {} } },
+            { event: "dashboard", data: { intent: "contacts", data: { contacts: ["Alice"] } } },
             { event: "done", data: { text: "Here are your contacts." } },
           ])
         );
@@ -237,7 +237,7 @@ describe("ChatPanel", () => {
             expect.arrayContaining([
               expect.objectContaining({ role: "user", content: "Show contacts" }),
             ]),
-            undefined // empty dashboard data object is passed as undefined
+            expect.objectContaining({ contacts: ["Alice"] })
           );
         },
         { timeout: 3000 }
@@ -291,7 +291,7 @@ describe("ChatPanel", () => {
       );
     });
 
-    it("notifies conversation update even without dashboard markers", async () => {
+    it("skips dashboard update for short replies without dashboard markers", async () => {
       let callCount = 0;
       mockFetch.mockImplementation(() => {
         callCount++;
@@ -316,12 +316,16 @@ describe("ChatPanel", () => {
       fireEvent.change(input, { target: { value: "Check services" } });
       fireEvent.click(getByTestId("send-button"));
 
+      // Short replies (< 200 chars) without agent data skip dashboard update
       await vi.waitFor(
         () => {
-          expect(mockNotifyConversationUpdate).toHaveBeenCalled();
+          expect(callCount).toBeGreaterThanOrEqual(3); // SSE request completed
         },
         { timeout: 3000 }
       );
+      // Allow React to settle
+      await new Promise((r) => setTimeout(r, 100));
+      expect(mockNotifyConversationUpdate).not.toHaveBeenCalled();
     });
 
     it("handles SSE chunk splitting without duplicating messages", async () => {
