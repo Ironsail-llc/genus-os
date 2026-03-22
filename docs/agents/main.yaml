@@ -15,7 +15,7 @@ tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, visi
 model:
   primary: openrouter/z-ai/glm-5
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
+    - openrouter/anthropic/claude-sonnet-4.6
     - gemini/gemini-2.5-pro
   temperature: 0.5
 

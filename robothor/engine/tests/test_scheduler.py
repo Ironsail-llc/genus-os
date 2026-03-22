@@ -29,7 +29,7 @@ def heartbeat_manifest(tmp_path):
         """id: main
 name: Robothor
 model:
-  primary: anthropic/claude-sonnet-4-6
+  primary: anthropic/claude-sonnet-4.6
 schedule:
   cron: ""
   timezone: America/New_York
@@ -166,7 +166,7 @@ class TestRunHeartbeat:
         parent_config = AgentConfig(
             id="main",
             name="Robothor",
-            model_primary="anthropic/claude-sonnet-4-6",
+            model_primary="anthropic/claude-sonnet-4.6",
             model_fallbacks=["openrouter/z-ai/glm-5"],
             tools_allowed=["exec", "read_file", "list_tasks"],
             instruction_file="brain/SOUL.md",
@@ -206,7 +206,7 @@ class TestRunHeartbeat:
         assert override.delivery_mode == DeliveryMode.ANNOUNCE
         assert override.delivery_to == "99999999"
         # Inherits model + tools from parent
-        assert override.model_primary == "anthropic/claude-sonnet-4-6"
+        assert override.model_primary == "anthropic/claude-sonnet-4.6"
         assert override.tools_allowed == ["exec", "read_file", "list_tasks"]
         # token_budget is auto-derived at runtime, not from heartbeat config
         assert override.token_budget == 0

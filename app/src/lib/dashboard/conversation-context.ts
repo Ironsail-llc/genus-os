@@ -238,16 +238,103 @@ export async function fetchWebSearch(query: string): Promise<Record<string, unkn
  * Fetch data from Impetus One via Bridge proxy.
  * Uses a tight 2s timeout with no retries — Impetus data is supplemental,
  * not worth blocking dashboard generation for.
+ *
+ * Returns slimmed data to fit within the prompt budget — raw JSON-LD is too
+ * bloated (38KB for 23 prescriptions). We strip @context, @type, IRI refs,
+ * and verbose clinical notes, keeping only dashboard-renderable fields.
  */
 const IMPETUS_TIMEOUT = 2000;
 async function fetchImpetusData(resource: string): Promise<Record<string, unknown>> {
   try {
     const res = await fetchJson(`${BRIDGE_URL}/api/impetus/${resource}`, undefined, 0, IMPETUS_TIMEOUT);
-    return { [resource]: res };
+    return { [resource]: slimImpetusResponse(resource, res) };
   } catch {
     return { [resource]: [] };
   }
 }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function slimImpetusResponse(resource: string, raw: any): any {
+  if (!raw) return raw;
+  const members: any[] = raw?.["hydra:member"] ?? raw?.member ?? (Array.isArray(raw) ? raw : []);
+  if (!members.length) return raw;
+
+  switch (resource) {
+    case "prescriptions": {
+      // Summary counts by status
+      const counts: Record<string, number> = {};
+      for (const rx of members) {
+        const s = rx.status ?? "unknown";
+        counts[s] = (counts[s] || 0) + 1;
+      }
+      // Slim per-prescription details
+      const items = members.map((rx: any) => {
+        const med = typeof rx.medication === "object" ? rx.medication : {};
+        const pharm = typeof rx.pharmacy === "object" ? rx.pharmacy : {};
+        const pat = typeof rx.patient === "object" ? rx.patient : {};
+        return {
+          id: rx.id,
+          patient: pat.firstName && pat.lastName ? `${pat.firstName} ${pat.lastName}` : (pat.firstName || rx.patient),
+          medication: med.drugName || "Unknown",
+          strength: med.strength || null,
+          controlled: med.isControlled || false,
+          schedule: med.schedule || null,
+          pharmacy: pharm.name || null,
+          pharmacyCity: pharm.city || null,
+          status: rx.status,
+          quantity: rx.quantity,
+          daysSupply: rx.daysSupply,
+          refills: rx.refills,
+          directions: rx.directions,
+          prescribedAt: rx.prescribedAt || null,
+          transmittedAt: rx.transmittedAt || null,
+          filledAt: rx.filledAt || null,
+          shippedAt: rx.shippedAt || null,
+          trackingNumber: rx.trackingNumber || null,
+          carrier: rx.carrier || null,
+          clinicalNotes: rx.clinicalNotes ? (rx.clinicalNotes as string).slice(0, 120) : null,
+        };
+      });
+      return { totalItems: members.length, statusCounts: counts, prescriptions: items };
+    }
+    case "patients": {
+      const items = members.map((p: any) => ({
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        dob: p.dob,
+        gender: p.gender,
+        allergies: p.allergies || null,
+        medicalConditions: p.medicalConditions || null,
+        phone: p.phone || null,
+        email: p.email || null,
+      }));
+      return { totalItems: members.length, patients: items };
+    }
+    case "appointments": {
+      const items = members.map((a: any) => {
+        const pat = typeof a.patient === "object" ? a.patient : {};
+        const prov = typeof a.provider === "object" ? a.provider : {};
+        return {
+          id: a.id,
+          patient: pat.firstName && pat.lastName ? `${pat.firstName} ${pat.lastName}` : (pat.firstName || a.patient),
+          provider: prov.firstName && prov.lastName ? `Dr. ${prov.firstName} ${prov.lastName}` : a.provider,
+          scheduledAt: a.scheduledAt,
+          type: a.type,
+          status: a.status,
+          reason: a.reason,
+          durationMinutes: a.durationMinutes,
+          patientNotes: a.patientNotes ? (a.patientNotes as string).slice(0, 100) : null,
+        };
+      });
+      return { totalItems: members.length, appointments: items };
+    }
+    default:
+      // For other resources, just extract members from JSON-LD wrapper
+      return Array.isArray(raw) ? raw : members;
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Parse a dataNeeds array from the triage step and fetch all data in parallel.

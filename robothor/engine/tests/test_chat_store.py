@@ -45,10 +45,10 @@ class TestUpsertSession:
         assert "ON CONFLICT" in sql
 
     def test_upsert_with_model_override(self, chat_db):
-        result = upsert_session("telegram:123", model_override="anthropic/claude-sonnet-4-6")
+        result = upsert_session("telegram:123", model_override="anthropic/claude-sonnet-4.6")
         assert result == 42
         params = chat_db["cursor"].execute.call_args[0][1]
-        assert "anthropic/claude-sonnet-4-6" in params
+        assert "anthropic/claude-sonnet-4.6" in params
 
 
 class TestSaveExchange:
@@ -117,7 +117,7 @@ class TestLoadSession:
         # First fetchone = session row
         chat_db["cursor"].fetchone.return_value = {
             "id": 42,
-            "model_override": "anthropic/claude-sonnet-4-6",
+            "model_override": "anthropic/claude-sonnet-4.6",
         }
         # fetchall = messages (in DESC order from DB, reversed in code)
         chat_db["cursor"].fetchall.return_value = [
@@ -126,7 +126,7 @@ class TestLoadSession:
         ]
 
         result = load_session("telegram:123")
-        assert result["model_override"] == "anthropic/claude-sonnet-4-6"
+        assert result["model_override"] == "anthropic/claude-sonnet-4.6"
         # Messages should be reversed to chronological order
         assert result["history"][0]["role"] == "user"
         assert result["history"][1]["role"] == "assistant"
@@ -190,12 +190,12 @@ class TestClearSession:
 
 class TestUpdateModelOverride:
     def test_updates_model(self, chat_db):
-        update_model_override("telegram:123", "anthropic/claude-sonnet-4-6")
+        update_model_override("telegram:123", "anthropic/claude-sonnet-4.6")
         sql = chat_db["cursor"].execute.call_args[0][0]
         assert "UPDATE chat_sessions" in sql
         assert "model_override" in sql
         params = chat_db["cursor"].execute.call_args[0][1]
-        assert params[0] == "anthropic/claude-sonnet-4-6"
+        assert params[0] == "anthropic/claude-sonnet-4.6"
         chat_db["conn"].commit.assert_called_once()
 
     def test_clears_model_with_none(self, chat_db):

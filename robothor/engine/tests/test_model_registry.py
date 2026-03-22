@@ -14,8 +14,8 @@ from robothor.engine.model_registry import (
 
 class TestGetModelLimits:
     def test_known_model_claude(self):
-        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
-        assert limits.max_input_tokens == 200_000
+        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4.6")
+        assert limits.max_input_tokens == 1_000_000
         assert limits.max_output_tokens == 128_000
         assert limits.default_output_tokens == 16_384
 
@@ -52,11 +52,11 @@ class TestGetModelLimits:
         assert limits.max_output_tokens == 8_192
 
     def test_limits_are_frozen(self):
-        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
+        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4.6")
         assert isinstance(limits, ModelLimits)
 
     def test_claude_supports_thinking(self):
-        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4-6")
+        limits = get_model_limits("openrouter/anthropic/claude-sonnet-4.6")
         assert limits.supports_thinking is True
 
     def test_glm5_no_thinking(self):
@@ -73,8 +73,8 @@ class TestGetModelLimits:
 
 class TestComputeTokenBudget:
     def test_sonnet_15_iterations(self):
-        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 15)
-        assert budget == 200_000 * 15  # 3,000,000
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4.6", 15)
+        assert budget == 1_000_000 * 15  # 15,000,000
 
     def test_glm5_10_iterations(self):
         budget = compute_token_budget("openrouter/z-ai/glm-5", 10)
@@ -89,38 +89,38 @@ class TestComputeTokenBudget:
         assert budget == 128_000 * 10  # fallback max_input
 
     def test_zero_iterations_returns_unlimited(self):
-        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 0)
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4.6", 0)
         assert budget == 0
 
     def test_negative_iterations_returns_unlimited(self):
-        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", -1)
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4.6", -1)
         assert budget == 0
 
     def test_single_iteration(self):
-        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4-6", 1)
-        assert budget == 200_000
+        budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4.6", 1)
+        assert budget == 1_000_000
 
 
 class TestGetOutputTokens:
     def test_default_output_when_plenty_of_room(self):
-        # Claude has 200K input, 128K max output, 16K default
+        # Claude has 1M input, 128K max output, 16K default
         # With 10K input, should return default (16K)
-        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 10_000)
+        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4.6", 10_000)
         assert tokens == 16_384
 
     def test_capped_by_remaining_window(self):
         # If input nearly fills the window, output must be capped
-        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 195_000)
-        # remaining = 200K - 195K = 5K, which is < default 16K
+        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4.6", 995_000)
+        # remaining = 1M - 995K = 5K, which is < default 16K
         assert tokens == 5_000
 
     def test_minimum_when_context_full(self):
         # When input exceeds max, return minimum 1024
-        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 250_000)
+        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4.6", 1_100_000)
         assert tokens == 1_024
 
     def test_zero_input(self):
-        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4-6", 0)
+        tokens = get_output_tokens("openrouter/anthropic/claude-sonnet-4.6", 0)
         assert tokens == 16_384  # default
 
     def test_glm5_default_output(self):

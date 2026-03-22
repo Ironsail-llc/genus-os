@@ -244,7 +244,7 @@ class TestConcurrentChannels:
     ):
         """Model override set by one channel is used by the other."""
         # Simulate Telegram setting model override on the shared session
-        bot_session.model_override = "anthropic/claude-sonnet-4-6"
+        bot_session.model_override = "anthropic/claude-sonnet-4.6"
 
         captured_override = None
 
@@ -262,4 +262,4 @@ class TestConcurrentChannels:
 
         await _fire_chat(client, session_key, "helm message")
 
-        assert captured_override == "anthropic/claude-sonnet-4-6"
+        assert captured_override == "anthropic/claude-sonnet-4.6"

@@ -634,11 +634,11 @@ class TestThinkingAPI:
     async def test_thinking_sets_temperature_1(self, runner, sample_agent_config):
         """When thinking is enabled, temperature MUST be 1.0 (Anthropic requirement)."""
         # Use a thinking-capable model
-        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4-6"
+        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4.6"
         sample_agent_config.model_fallbacks = []
 
         response = MagicMock()
-        response.model = "anthropic/claude-sonnet-4-6"
+        response.model = "anthropic/claude-sonnet-4.6"
         response.choices = [MagicMock()]
         response.choices[0].message.content = "Thought about it."
         response.choices[0].message.tool_calls = None
@@ -661,16 +661,16 @@ class TestThinkingAPI:
         assert call_kwargs["thinking"]["type"] == "enabled"
         assert call_kwargs["thinking"]["budget_tokens"] == 10_000
         # Model should stay as OpenRouter path (no prefix stripping)
-        assert call_kwargs["model"] == "openrouter/anthropic/claude-sonnet-4-6"
+        assert call_kwargs["model"] == "openrouter/anthropic/claude-sonnet-4.6"
 
     @pytest.mark.asyncio
     async def test_thinking_blocks_filtered_from_output(self, runner, sample_agent_config):
         """Thinking blocks in response content should be filtered from output text."""
-        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4-6"
+        sample_agent_config.model_primary = "openrouter/anthropic/claude-sonnet-4.6"
         sample_agent_config.model_fallbacks = []
 
         response = MagicMock()
-        response.model = "anthropic/claude-sonnet-4-6"
+        response.model = "anthropic/claude-sonnet-4.6"
         response.choices = [MagicMock()]
         # Simulate content blocks with thinking + text
         response.choices[0].message.content = [

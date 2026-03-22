@@ -72,7 +72,20 @@ memory_block_read("nightwatch_log")
 
 If the Nightwatch system created overnight PRs, summarize them: count, titles, risk levels. Include links if available. This tells Philip what to review on GitHub.
 
-### 8. Week Preview
+### 8. News Digest
+
+```
+web_search(query="health technology healthtech digital health news today")
+web_search(query="technology AI news today")
+```
+
+Run both searches. Focus on:
+- **Health tech / digital health** — new devices, FDA clearances, telehealth, EHR, clinical AI, health data, biotech funding
+- **Technology / AI** — major releases, policy, funding rounds, product launches, infrastructure
+
+Pick 3-5 items total across both searches. One line each with source attribution. Prioritize health tech. Skip celebrity gossip, sports, weather, crypto hype. If web_search fails, try `web_fetch` on a news aggregator. If both fail, skip the section.
+
+### 9. Week Preview
 
 **Preferred**: Use the `gws_calendar_list` tool. Fallback:
 ```
@@ -110,6 +123,9 @@ Single Telegram message. Target: 600-1200 characters. Use this structure:
 
 ❤️ **Health**
 {sleep + body battery, one line}
+
+📰 **News**
+{3-5 headline items, one per line}
 
 🗓️ **This Week**
 {notable upcoming events}
@@ -153,5 +169,6 @@ create_note(title="Morning Briefing — {date}", body="{the briefing text}")
 | Memory blocks | Skip overnight section |
 | Health (garmin) | Skip health line |
 | Email status | Skip email section |
+| News (web_search) | Skip news section |
 
 Never fail the entire briefing because one source is down. Deliver what you have.

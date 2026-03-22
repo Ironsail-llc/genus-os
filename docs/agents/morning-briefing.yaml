@@ -10,16 +10,15 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4.6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
 
 schedule:
   cron: "30 6 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
-  max_iterations: 10
+  timeout_seconds: 600
+  max_iterations: 15
   session_target: isolated
 
 delivery:
@@ -39,6 +38,8 @@ tools_allowed:
   - create_note
   - gws_calendar_list
   - list_tasks_summary
+  - web_search
+  - web_fetch
 tools_denied:
   - create_message
   - make_call
@@ -87,6 +88,8 @@ v2:
     - "^gws calendar"
 
 changelog:
+  - date: "2026-03-20"
+    change: "Switch to Sonnet 4.6 (1M context), add web_search + web_fetch for news, bump timeout to 600s/15 iters"
   - date: "2026-03-09"
     change: "Swap to GLM-5 — gws_calendar_list needs reliable multi-param tool calls"
   - date: "2026-03-09"
