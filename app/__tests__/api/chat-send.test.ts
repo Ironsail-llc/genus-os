@@ -75,7 +75,7 @@ describe("POST /api/chat/send", () => {
     expect(text).toContain("Hello");
   });
 
-  it("intercepts DASHBOARD markers and emits as separate events", async () => {
+  it("passes through engine SSE body as-is (marker interception is client-side)", async () => {
     const engineRes = makeSseResponse([
       { event: "delta", data: { text: 'Here are your contacts. [DASHBOARD:{"intent":"contacts"}] Let me know.' } },
       { event: "done", data: { text: 'Here are your contacts. [DASHBOARD:{"intent":"contacts"}] Let me know.' } },
@@ -91,16 +91,9 @@ describe("POST /api/chat/send", () => {
     const res = await POST(req);
     const text = await res.text();
 
-    // Should have a clean delta with text (no marker)
+    // Passthrough — raw engine events forwarded without interception
     expect(text).toContain("event: delta");
-    expect(text).toContain("Here are your contacts.");
-    expect(text).not.toContain("[DASHBOARD:");
-
-    // Should have a separate dashboard event
-    expect(text).toContain("event: dashboard");
-    expect(text).toContain('"intent":"contacts"');
-
-    // Done event should have clean text
+    expect(text).toContain("[DASHBOARD:");
     expect(text).toContain("event: done");
   });
 

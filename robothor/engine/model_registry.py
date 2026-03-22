@@ -25,19 +25,21 @@ class ModelLimits:
     input_cost_per_token: float
     output_cost_per_token: float
     supports_thinking: bool = False
+    ttft_hint_ms: int = 3000  # estimated p50 time-to-first-token (ms) for interactive routing
 
 
 # ─── Registry ────────────────────────────────────────────────────────
 
 _MODEL_REGISTRY: dict[str, ModelLimits] = {
     # Claude Sonnet 4.6 via OpenRouter
-    "openrouter/anthropic/claude-sonnet-4-6": ModelLimits(
-        max_input_tokens=200_000,
+    "openrouter/anthropic/claude-sonnet-4.6": ModelLimits(
+        max_input_tokens=1_000_000,
         max_output_tokens=128_000,
         default_output_tokens=16_384,
         input_cost_per_token=0.000_003,  # $3/M
         output_cost_per_token=0.000_015,  # $15/M
         supports_thinking=True,
+        ttft_hint_ms=1500,  # Anthropic via OpenRouter — fast
     ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
@@ -46,6 +48,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_8,  # $0.80/M
         output_cost_per_token=0.000_002_56,  # $2.56/M
+        ttft_hint_ms=4000,  # Variable via OpenRouter
     ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
@@ -54,6 +57,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_15,  # $0.15/M
         output_cost_per_token=0.000_000_6,  # $0.60/M
+        ttft_hint_ms=1000,  # Google direct — fast
     ),
     # MiniMax M2.5 via OpenRouter
     "openrouter/minimax/minimax-m2.5": ModelLimits(
@@ -62,6 +66,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_5,  # $0.50/M
         output_cost_per_token=0.000_002,  # $2/M
+        ttft_hint_ms=3000,
     ),
     # Gemini 2.5 Pro
     "gemini/gemini-2.5-pro": ModelLimits(
@@ -70,6 +75,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=8_192,
         input_cost_per_token=0.000_001_25,  # $1.25/M
         output_cost_per_token=0.000_01,  # $10/M
+        ttft_hint_ms=2500,  # Google direct — moderate
     ),
 }
 

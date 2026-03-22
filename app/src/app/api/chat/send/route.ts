@@ -1,6 +1,5 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/engine/session-state";
-import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -16,7 +15,8 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    await ensureCanvasPromptInjected();
+    // Fire-and-forget — cached after first success, no need to block
+    ensureCanvasPromptInjected().catch(() => {});
 
     const engineRes = await client.chatSend(SESSION_KEY, message);
 
@@ -27,139 +27,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const encoder = new TextEncoder();
-    const interceptor = new MarkerInterceptor();
-    let fullCleanText = "";
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        let sentDone = false;
-        try {
-          const reader = engineRes.body!.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-
-            // Parse SSE events from buffer
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-            let eventType = "";
-            for (const line of lines) {
-              if (line.startsWith(":")) {
-                // SSE comment (keepalive) — forward to browser
-                controller.enqueue(encoder.encode(line + "\n\n"));
-              } else if (line.startsWith("event: ")) {
-                eventType = line.slice(7).trim();
-              } else if (line.startsWith("data: ")) {
-                const dataStr = line.slice(6);
-                let data: Record<string, unknown>;
-                try {
-                  data = JSON.parse(dataStr);
-                } catch {
-                  continue;
-                }
-
-                if (eventType === "delta" && data.text) {
-                  const deltaText = data.text as string;
-
-                  // Run delta through marker interceptor
-                  const result = interceptor.addChunk(deltaText);
-
-                  if (result.text) {
-                    fullCleanText += result.text;
-                    controller.enqueue(
-                      encoder.encode(
-                        `event: delta\ndata: ${JSON.stringify({ text: result.text })}\n\n`
-                      )
-                    );
-                  }
-
-                  for (const marker of result.markers) {
-                    controller.enqueue(
-                      encoder.encode(
-                        `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
-                      )
-                    );
-                  }
-                } else if (eventType === "done") {
-                  // Flush any buffered text/markers
-                  const flushed = interceptor.flush();
-                  if (flushed.text) {
-                    fullCleanText += flushed.text;
-                    controller.enqueue(
-                      encoder.encode(
-                        `event: delta\ndata: ${JSON.stringify({ text: flushed.text })}\n\n`
-                      )
-                    );
-                  }
-                  for (const marker of flushed.markers) {
-                    controller.enqueue(
-                      encoder.encode(
-                        `event: ${marker.type}\ndata: ${JSON.stringify(marker)}\n\n`
-                      )
-                    );
-                  }
-
-                  controller.enqueue(
-                    encoder.encode(
-                      `event: done\ndata: ${JSON.stringify({ text: fullCleanText, ...((data.aborted) ? { aborted: true } : {}) })}\n\n`
-                    )
-                  );
-                  sentDone = true;
-                } else if (eventType === "plan") {
-                  // Forward plan events from engine to browser
-                  controller.enqueue(
-                    encoder.encode(
-                      `event: plan\ndata: ${JSON.stringify(data)}\n\n`
-                    )
-                  );
-                } else if (eventType === "error") {
-                  controller.enqueue(
-                    encoder.encode(
-                      `event: error\ndata: ${JSON.stringify({ error: data.error || "Unknown error" })}\n\n`
-                    )
-                  );
-                }
-
-                eventType = "";
-              }
-            }
-          }
-        } catch (err) {
-          controller.enqueue(
-            encoder.encode(
-              `event: error\ndata: ${JSON.stringify({ error: String(err) })}\n\n`
-            )
-          );
-        } finally {
-          if (!sentDone) {
-            const flushed = interceptor.flush();
-            if (flushed.text) {
-              fullCleanText += flushed.text;
-              controller.enqueue(
-                encoder.encode(
-                  `event: delta\ndata: ${JSON.stringify({ text: flushed.text })}\n\n`
-                )
-              );
-            }
-            controller.enqueue(
-              encoder.encode(
-                `event: done\ndata: ${JSON.stringify({ text: fullCleanText })}\n\n`
-              )
-            );
-          }
-          controller.close();
-        }
-      },
-    });
-
-    return new Response(stream, {
+    // Pipe engine SSE directly to browser — marker interception is client-side
+    return new Response(engineRes.body, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
