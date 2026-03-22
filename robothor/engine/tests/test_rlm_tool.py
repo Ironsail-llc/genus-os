@@ -28,7 +28,7 @@ from robothor.engine.rlm_tool import (
 class TestDeepReasonConfig:
     def test_defaults(self):
         config = DeepReasonConfig()
-        assert config.root_model == "openrouter/anthropic/claude-sonnet-4-6"
+        assert config.root_model == "openrouter/anthropic/claude-sonnet-4.6"
         assert config.sub_model == "openrouter/anthropic/claude-haiku-4.5"
         assert config.max_budget == 2.0
         assert config.max_timeout == 240

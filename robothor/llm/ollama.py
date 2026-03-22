@@ -65,10 +65,11 @@ def _embedding_model() -> str:
 
 
 # Default generation model — updated by detect_generation_model()
-GENERATION_MODEL = os.environ.get("ROBOTHOR_GENERATION_MODEL", "llama3.2-vision:11b")
+GENERATION_MODEL = os.environ.get("ROBOTHOR_GENERATION_MODEL", "nemotron-3-super")
 
 # Model preferences for auto-detection (in order)
 GENERATION_MODEL_PREFERENCES = [
+    "nemotron-3-super",
     "llama3.2-vision:11b",
     "llama3.2",
     "llama3.2:3b",

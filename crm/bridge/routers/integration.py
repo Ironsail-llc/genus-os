@@ -198,8 +198,82 @@ async def api_impetus_patient(patient_id: str):
 @router.get("/api/impetus/prescriptions")
 async def api_impetus_prescriptions(status: str | None = Query(None)):
     try:
-        params = {"status": status} if status else None
-        return await _io_get("/api/prescriptions", params)
+        if status:
+            params = {"status": status}
+        else:
+            # Default scope excludes filled/failed/shipped — request all statuses
+            params = {
+                "status[]": ["draft", "signed", "transmitted", "filled", "failed", "shipped"],
+                "itemsPerPage": 100,
+            }
+        data = await _io_get("/api/prescriptions", params)
+        # Enrich: resolve medication/pharmacy IRI refs to objects with names.
+        # API Platform doesn't serialize nested properties, so we query the IO
+        # database directly for the lookup tables.
+        members = data.get("hydra:member", data.get("member", []))
+        med_ids = set()
+        pharm_ids = set()
+        for rx in members:
+            med = rx.get("medication")
+            if isinstance(med, str) and "/medications/" in med:
+                med_ids.add(med.rsplit("/", 1)[-1])
+            pharm = rx.get("pharmacy")
+            if isinstance(pharm, str) and "/pharmacies/" in pharm:
+                pharm_ids.add(pharm.rsplit("/", 1)[-1])
+
+        med_lookup: dict[str, dict] = {}
+        pharm_lookup: dict[str, dict] = {}
+        if med_ids or pharm_ids:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host="localhost",
+                port=5434,
+                dbname="impetus_rx",
+                user="impetus",
+                password="impetus_local_dev",
+            )
+            try:
+                cur = conn.cursor()
+                if med_ids:
+                    cur.execute(
+                        "SELECT id, drug_name, strength, is_controlled, schedule "
+                        "FROM medications WHERE id = ANY(%s::uuid[])",
+                        (list(med_ids),),
+                    )
+                    for row in cur.fetchall():
+                        med_lookup[str(row[0])] = {
+                            "id": str(row[0]),
+                            "drugName": row[1],
+                            "strength": row[2],
+                            "isControlled": row[3],
+                            "schedule": row[4],
+                        }
+                if pharm_ids:
+                    cur.execute(
+                        "SELECT id, name, city, state FROM pharmacies WHERE id = ANY(%s::uuid[])",
+                        (list(pharm_ids),),
+                    )
+                    for row in cur.fetchall():
+                        pharm_lookup[str(row[0])] = {
+                            "id": str(row[0]),
+                            "name": row[1],
+                            "city": row[2],
+                            "state": row[3],
+                        }
+            finally:
+                conn.close()
+
+        for rx in members:
+            med = rx.get("medication")
+            if isinstance(med, str) and "/medications/" in med:
+                mid = med.rsplit("/", 1)[-1]
+                rx["medication"] = med_lookup.get(mid, {"@id": med})
+            pharm = rx.get("pharmacy")
+            if isinstance(pharm, str) and "/pharmacies/" in pharm:
+                pid = pharm.rsplit("/", 1)[-1]
+                rx["pharmacy"] = pharm_lookup.get(pid, {"@id": pharm})
+        return data
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 
@@ -215,7 +289,73 @@ async def api_impetus_prescription(rx_id: str):
 @router.get("/api/impetus/appointments")
 async def api_impetus_appointments():
     try:
-        return await _io_get("/api/appointments")
+        data = await _io_get("/api/appointments")
+        # Enrich: resolve patient/provider IRI refs to objects with names
+        members = data.get("hydra:member", data.get("member", []))
+        patient_ids = set()
+        provider_ids = set()
+        for apt in members:
+            pt = apt.get("patient")
+            if isinstance(pt, str) and "/patients/" in pt:
+                patient_ids.add(pt.rsplit("/", 1)[-1])
+            prov = apt.get("provider")
+            if isinstance(prov, str) and "/providers/" in prov:
+                provider_ids.add(prov.rsplit("/", 1)[-1])
+
+        if patient_ids or provider_ids:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host="localhost",
+                port=5434,
+                dbname="impetus_rx",
+                user="impetus",
+                password="impetus_local_dev",
+            )
+            try:
+                cur = conn.cursor()
+                pt_lookup: dict[str, dict] = {}
+                prov_lookup: dict[str, dict] = {}
+                if patient_ids:
+                    cur.execute(
+                        "SELECT id, first_name, last_name, dob, phone, email "
+                        "FROM patients WHERE id = ANY(%s::uuid[])",
+                        (list(patient_ids),),
+                    )
+                    for row in cur.fetchall():
+                        pt_lookup[str(row[0])] = {
+                            "id": str(row[0]),
+                            "firstName": row[1],
+                            "lastName": row[2],
+                            "dob": str(row[3]) if row[3] else None,
+                            "phone": row[4],
+                            "email": row[5],
+                        }
+                if provider_ids:
+                    cur.execute(
+                        "SELECT id, first_name, last_name "
+                        "FROM providers WHERE id = ANY(%s::uuid[])",
+                        (list(provider_ids),),
+                    )
+                    for row in cur.fetchall():
+                        prov_lookup[str(row[0])] = {
+                            "id": str(row[0]),
+                            "firstName": row[1],
+                            "lastName": row[2],
+                        }
+            finally:
+                conn.close()
+
+            for apt in members:
+                pt = apt.get("patient")
+                if isinstance(pt, str) and "/patients/" in pt:
+                    pid = pt.rsplit("/", 1)[-1]
+                    apt["patient"] = pt_lookup.get(pid, {"@id": pt})
+                prov = apt.get("provider")
+                if isinstance(prov, str) and "/providers/" in prov:
+                    pid = prov.rsplit("/", 1)[-1]
+                    apt["provider"] = prov_lookup.get(pid, {"@id": prov})
+        return data
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 

@@ -80,7 +80,7 @@ class OllamaConfig:
     port: int = 11434
     embedding_model: str = "qwen3-embedding:0.6b"
     reranker_model: str = "Qwen3-Reranker-0.6B:F16"
-    generation_model: str = "qwen3-next:latest"
+    generation_model: str = "nemotron-3-super"
     vision_model: str = "llama3.2-vision:11b"
 
     @property
@@ -189,7 +189,7 @@ def _load_from_env() -> Config:
         port=int(os.environ.get("ROBOTHOR_OLLAMA_PORT", "11434")),
         embedding_model=os.environ.get("ROBOTHOR_EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
         reranker_model=os.environ.get("ROBOTHOR_RERANKER_MODEL", "Qwen3-Reranker-0.6B:F16"),
-        generation_model=os.environ.get("ROBOTHOR_GENERATION_MODEL", "qwen3-next:latest"),
+        generation_model=os.environ.get("ROBOTHOR_GENERATION_MODEL", "nemotron-3-super"),
         vision_model=os.environ.get("ROBOTHOR_VISION_MODEL", "llama3.2-vision:11b"),
     )
 

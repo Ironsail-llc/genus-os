@@ -35,7 +35,7 @@ class DeepReasonConfig:
 
     root_model: str = field(
         default_factory=lambda: os.environ.get(
-            "ROBOTHOR_RLM_ROOT_MODEL", "openrouter/anthropic/claude-sonnet-4-6"
+            "ROBOTHOR_RLM_ROOT_MODEL", "openrouter/anthropic/claude-sonnet-4.6"
         )
     )
     sub_model: str = field(

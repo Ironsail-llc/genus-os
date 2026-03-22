@@ -1,7 +1,7 @@
 id: evening-winddown
 name: Evening Wind-Down
 description: Daily evening summary with tomorrow preview and open items
-version: "2026-03-09"
+version: "2026-03-21"
 department: briefings
 
 reports_to: null
@@ -10,16 +10,15 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4.6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
     - gemini/gemini-2.5-pro
 
 schedule:
   cron: "0 21 * * *"
   timezone: America/New_York
-  timeout_seconds: 480
-  max_iterations: 10
+  timeout_seconds: 600
+  max_iterations: 15
   session_target: isolated
 
 delivery:
@@ -29,6 +28,7 @@ delivery:
 
 tools_allowed:
   - read_file
+  - write_file
   - exec
   - search_memory
   - get_entity
@@ -37,6 +37,10 @@ tools_allowed:
   - list_agent_tasks
   - gws_calendar_list
   - list_tasks_summary
+  - web_search
+  - web_fetch
+  - create_note
+  - append_to_block
 tools_denied:
   - create_message
   - make_call
@@ -81,10 +85,15 @@ v2:
   guardrails:
     - exec_allowlist
   exec_allowlist:
-    - "^gog calendar events"
+    - "^gog calendar"
+    - "^gog telegram send"
     - "^gws calendar"
 
 changelog:
+  - date: "2026-03-21"
+    change: "Add write_file + create_note to tools_allowed, expand exec_allowlist for telegram, fix blocked commands"
+  - date: "2026-03-20"
+    change: "Switch to Sonnet 4.6 (1M context), add web_search + web_fetch for news, bump timeout to 600s/15 iters"
   - date: "2026-03-09"
     change: "Swap to GLM-5 — gws_calendar_list needs reliable multi-param tool calls"
   - date: "2026-03-09"
