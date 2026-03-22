@@ -280,11 +280,21 @@ def sync_steps(client: Garmin, target_date: str) -> int:
 
         stats = client.get_stats(target_date)
         if stats:
+            # Handle None values - use fallback total if totalSteps is None
+            total_steps = stats.get("totalSteps")
+            if total_steps is None:
+                total_steps = total
+
+            # Skip if we still don't have valid steps data
+            if total_steps is None:
+                print(f"  Skipping steps for {target_date}: no data available")
+                return 0
+
             dal.upsert_steps(
                 [
                     (
                         target_date,
-                        stats.get("totalSteps", total),
+                        total_steps,
                         stats.get("dailyStepGoal"),
                         stats.get("totalDistanceMeters"),
                         stats.get("totalKilocalories"),
