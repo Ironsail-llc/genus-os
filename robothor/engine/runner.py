@@ -35,6 +35,7 @@ import litellm
 
 from robothor.engine.config import (
     EngineConfig,
+    _prompt_cache,
     build_system_prompt,
     load_agent_config,
 )
@@ -143,6 +144,7 @@ class AgentRunner:
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.
         loop = asyncio.get_running_loop()
+        t_setup_start = time.monotonic()
 
         # Determine what warmup is needed (before launching parallel tasks)
         warmup_kind: str | None = None  # "cron", "interactive", or None
@@ -194,6 +196,16 @@ class AgentRunner:
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
+
+        t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
+        logger.info(
+            "SETUP %dms agent=%s trigger=%s warmup=%s cached_prompt=%s",
+            t_setup_ms,
+            agent_id,
+            trigger_type.value,
+            warmup_kind or "none",
+            "hit" if _prompt_cache.get(agent_config.id) else "miss",
+        )
 
         # Get filtered tools for this agent
         if readonly_mode:
