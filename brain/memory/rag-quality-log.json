@@ -1,793 +1,6 @@
 {
   "runs": [
     {
-      "timestamp": "2026-02-07T03:30:02.029083",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 23,
-          "ingested": 23,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 159}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 1,
-              "note": "SCORE: 1 - Not relevant to the query, as the results appear to be unrelated to recent decisions."
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 3,
-              "note": "SCORE: 3 - Relevant contacts and a general description of the company, but the information is not sp"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant search results for the query about the status of the e-commerce platform. The "
-            }
-          ],
-          "average_score": 1.6666666666666667
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 518.703826
-    },
-    {
-      "timestamp": "2026-02-08T03:30:01.543553",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 20,
-          "ingested": 20,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 174}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 2,
-              "note": "SCORE: 2 - The results are somewhat relevant, but primarily consist of automated system notification"
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 4,
-              "note": "SCORE: 4 - Relevant search results found, but some appear to be personal emails and not official con"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - Irrelevant search results, as the query asks about the status of an e-commerce platform, "
-            }
-          ],
-          "average_score": 2.3333333333333335
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 500.781812
-    },
-    {
-      "timestamp": "2026-02-09T03:30:01.705326",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 2,
-          "ingested": 2,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 10,
-          "ingested": 10,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 181}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 2,
-              "note": "SCORE: 2 - Recent decisions made by entities are not clearly highlighted in the search results. Rele"
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 2,
-              "note": "SCORE: 2 - Relevant contacts and services are identified, but the results appear to be a mix of pers"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 2,
-              "note": "SCORE: 2 - Results seem to be unrelated to the e-commerce platform status. They appear to be contact"
-            }
-          ],
-          "average_score": 2.0
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 297.722924
-    },
-    {
-      "timestamp": "2026-02-10T03:30:01.918449",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 50, 'decay_updated': 181}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 2,
-              "note": "SCORE: 2 - Recent decisions are not explicitly mentioned in the search results. The results only pro"
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 3,
-              "note": "SCORE: 3 - Relevant contacts are listed, but no clear connection to DRx is established. The relevanc"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 1,
-              "note": "SCORE: 1 - The results seem to be unrelated to the status of the e-commerce platform, and instead ap"
-            }
-          ],
-          "average_score": 2.0
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 32.101961
-    },
-    {
-      "timestamp": "2026-02-11T03:30:01.154838",
-      "phases": {
-        "emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "tasks": {
-          "processed": 1,
-          "ingested": 1,
-          "errors": []
-        },
-        "contacts": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "maintenance": {
-          "success": true,
-          "details": "{'facts_scored': 6, 'decay_updated': 182}"
-        },
-        "quality": {
-          "tests": [
-            {
-              "query": "What decisions were made recently?",
-              "score": 1,
-              "note": "SCORE: 1 - The search results appear to be outdated or irrelevant to recent decisions, as they menti"
-            },
-            {
-              "query": "Who are the key contacts at DRx?",
-              "score": 3,
-              "note": "SCORE: 3 - Some relevant contacts, but mostly personal/organization info. Lack of clear key contacts"
-            },
-            {
-              "query": "What's the status of the e-commerce platform?",
-              "score": 2,
-              "note": "SCORE: 2 - Results are related to Twilio, but the primary search query was about the e-commerce plat"
-            }
-          ],
-          "average_score": 2.0
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 16.111434
-    },
-    {
-      "timestamp": "2026-02-12T03:30:01.422025",
-      "phases": {
-        "p1_emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "p2_tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "p3_contacts": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": [],
-          "source": "contacts_json"
-        },
-        "p4_chatwoot": {
-          "processed": 31,
-          "ingested": 31,
-          "errors": []
-        },
-        "p5_crm": {
-          "notes_ingested": 0,
-          "tasks_ingested": 0,
-          "errors": []
-        },
-        "p6_relationships": {
-          "contacts_analyzed": 28,
-          "briefs_generated": 0,
-          "errors": [
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:philip@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:ddago4@aol.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:phil@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:greg@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jon@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:olesia@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:konrad@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:kwehrhahn@hubspot.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jasmine@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jennifer@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis:sandra@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:farhan@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:daniel@valhallams.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:samantha@ironsailpharma.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:caroline@skyfin.net:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:eugene@webugol.com:argument of type 'NoneType' is not iterable"
-          ]
-        },
-        "p7_engagement": {
-          "scored": 28,
-          "changed": 0,
-          "errors": []
-        },
-        "p8_meetings": {
-          "meetings_found": 0,
-          "briefs_generated": 0,
-          "errors": []
-        },
-        "p9_patterns": {
-          "patterns_found": 21,
-          "errors": []
-        },
-        "p10_blocks": {
-          "blocks_updated": 0,
-          "errors": [
-            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 54: * Nadjib Boumekhiet ()', updated_at = NOW(), write_count = w...\n                                  ^\n",
-            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 33: ... smooth transition and prioritization of tasks.', updated_at...\n                                                              ^\n",
-            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 28: ...everaged for efficient conversation resolution.', updated_at...\n                                                              ^\n"
-          ]
-        },
-        "p11_entities": {
-          "facts_processed": 0,
-          "entities_added": 0,
-          "relations_added": 0,
-          "errors": [
-            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
-          ]
-        },
-        "p12_housekeeping": {
-          "maintenance": {
-            "success": true,
-            "details": "{'facts_scored': 50, 'decay_updated': 322}"
-          },
-          "quality": {
-            "tests": [
-              {
-                "query": "What decisions were made recently?",
-                "score": 1,
-                "note": "SCORE: 1 - reason: The search results are highly specific and relate to a single individual (Robotho"
-              },
-              {
-                "query": "Who are the key contacts?",
-                "score": 5,
-                "note": "SCORE: 5 - reason: all results are highly relevant to the query \"Who are the key contacts?\" as they "
-              },
-              {
-                "query": "What's happening in the CRM?",
-                "score": 2,
-                "note": "SCORE: 2 - reason: While the search results appear to be relevant to the query, they are mostly abou"
-              }
-            ],
-            "average_score": 2.6666666666666665
-          }
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 736.450848
-    },
-    {
-      "timestamp": "2026-02-13T03:30:01.797878",
-      "phases": {
-        "p1_emails": {
-          "processed": 1,
-          "ingested": 1,
-          "skipped": 0,
-          "errors": []
-        },
-        "p2_tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "p3_contacts": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": [],
-          "source": "contacts_json"
-        },
-        "p4_chatwoot": {
-          "processed": 1,
-          "ingested": 1,
-          "errors": []
-        },
-        "p5_crm": {
-          "notes_ingested": 0,
-          "tasks_ingested": 0,
-          "errors": []
-        },
-        "p6_relationships": {
-          "contacts_analyzed": 29,
-          "briefs_generated": 0,
-          "errors": [
-            "contact_analysis:rochelle@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:philip@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:ddago4@aol.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:phil@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:greg@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jon@getdrx.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:olesia@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:konrad@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:kwehrhahn@hubspot.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jasmine@valhallavitality.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:jennifer@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis:sandra@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:farhan@ironsail.ai:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:daniel@valhallams.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:samantha@ironsailpharma.com:argument of type 'NoneType' is not iterable",
-            "contact_analysis:caroline@skyfin.net:argument of type 'NoneType' is not iterable",
-            "contact_analysis::argument of type 'NoneType' is not iterable",
-            "contact_analysis:eugene@webugol.com:argument of type 'NoneType' is not iterable"
-          ]
-        },
-        "p7_engagement": {
-          "scored": 29,
-          "changed": 0,
-          "errors": []
-        },
-        "p8_meetings": {
-          "meetings_found": 0,
-          "briefs_generated": 0,
-          "errors": []
-        },
-        "p9_patterns": {
-          "patterns_found": 14,
-          "errors": []
-        },
-        "p10_blocks": {
-          "blocks_updated": 0,
-          "errors": [
-            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 27: ...nifer (jennifer@ironsail.ai)** (low engagement)', updated_at...\n                                                              ^\n",
-            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 35: ...esign Document (ADD) for AI-Operable E-commerce', updated_at...\n                                                              ^\n",
-            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 32: ...onversations require attention to avoid neglect', updated_at...\n                                                              ^\n"
-          ]
-        },
-        "p11_entities": {
-          "facts_processed": 0,
-          "entities_added": 0,
-          "relations_added": 0,
-          "errors": [
-            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
-          ]
-        },
-        "p12_housekeeping": {
-          "maintenance": {
-            "success": true,
-            "details": "{'facts_scored': 50, 'decay_updated': 377}"
-          },
-          "quality": {
-            "tests": [
-              {
-                "query": "What decisions were made recently?",
-                "score": 1,
-                "note": "SCORE: 1 - reason: Results seem unrelated to the query about recent decisions, instead containing co"
-              },
-              {
-                "query": "Who are the key contacts?",
-                "score": 4,
-                "note": "SCORE: 4 - reason: The results are relevant because they provide specific information about key cont"
-              },
-              {
-                "query": "What's happening in the CRM?",
-                "score": 1,
-                "note": "SCORE: 1 - reason: The search results are about specific contacts (Robothor and Twilio Notifications"
-              }
-            ],
-            "average_score": 2.0
-          }
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 115.027514
-    },
-    {
-      "timestamp": "2026-02-14T03:30:01.528362",
-      "phases": {
-        "p1_emails": {
-          "processed": 0,
-          "ingested": 0,
-          "skipped": 0,
-          "errors": []
-        },
-        "p2_tasks": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": []
-        },
-        "p3_contacts": {
-          "processed": 0,
-          "ingested": 0,
-          "errors": [],
-          "source": "contacts_json"
-        },
-        "p4_chatwoot": {
-          "processed": 6,
-          "ingested": 6,
-          "errors": []
-        },
-        "p5_crm": {
-          "notes_ingested": 0,
-          "tasks_ingested": 0,
-          "errors": []
-        },
-        "p6_relationships": {
-          "contacts_analyzed": 30,
-          "briefs_generated": 30,
-          "errors": []
-        },
-        "p7_engagement": {
-          "scored": 35,
-          "changed": 0,
-          "errors": []
-        },
-        "p8_meetings": {
-          "meetings_found": 0,
-          "briefs_generated": 0,
-          "errors": []
-        },
-        "p9_patterns": {
-          "patterns_found": 19,
-          "errors": []
-        },
-        "p10_blocks": {
-          "blocks_updated": 0,
-          "errors": [
-            "contacts_summary:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 31: ...racts with Philip approximately every 1-2 weeks', updated_at...\n                                                              ^\n",
-            "working_context:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 42: ...ize and tackle outstanding tasks and follow-ups', updated_at...\n                                                              ^\n",
-            "operational_findings:column \"updated_at\" of relation \"agent_memory_blocks\" does not exist\nLINE 42: ...arks may indicate potential dropped follow-ups.', updated_at...\n                                                              ^\n"
-          ]
-        },
-        "p11_entities": {
-          "facts_processed": 0,
-          "entities_added": 0,
-          "relations_added": 0,
-          "errors": [
-            "phase11:relation \"memory_entity_facts\" does not exist\nLINE 3:             LEFT JOIN memory_entity_facts ef ON f.id = ef.fa...\n                              ^\n"
-          ]
-        },
-        "p12_housekeeping": {
-          "maintenance": {
-            "success": true,
-            "details": "{'facts_scored': 50, 'decay_updated': 483}"
-          },
-          "quality": {
-            "tests": [
-              {
-                "query": "What decisions were made recently?",
-                "score": 1,
-                "note": "SCORE: 1 - reason: Results are outdated and not directly related to the query about recent decisions"
-              },
-              {
-                "query": "Who are the key contacts?",
-                "score": 4,
-                "note": "SCORE: 4 - reason: The results provide relevant information about key contacts related to the query,"
-              },
-              {
-                "query": "What's happening in the CRM?",
-                "score": 3,
-                "note": "SCORE: 3 - reason: The results seem to be relevant to the query, as they are contacts related to the"
-              }
-            ],
-            "average_score": 2.6666666666666665
-          }
-        }
-      },
-      "stats_before": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "stats_after": {
-        "short_term_count": 504,
-        "long_term_count": 5,
-        "short_by_type": {
-          "contact": 10,
-          "email": 18,
-          "conversation_assistant": 1,
-          "conversation_user": 1,
-          "task": 3,
-          "transcript_assistant": 221,
-          "transcript_user": 250
-        }
-      },
-      "success": true,
-      "duration_seconds": 920.771727
-    },
-    {
       "timestamp": "2026-02-15T03:30:01.866769",
       "tier": 3,
       "phases": {
@@ -2875,6 +2088,789 @@
       },
       "success": true,
       "duration_seconds": 89.013639
+    },
+    {
+      "timestamp": "2026-03-13T03:30:01.992120",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 1,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 5,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 0, 'decay_updated': 8629, 'facts_pruned': 0, 'consolidation_groups': 14, 'unconsolidated_swept': 92, 'insights': {'discovered': 2, 'stored': 2, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 42187,
+        "active_facts": 8569,
+        "superseded_count": 31857,
+        "scored_count": 960,
+        "entity_count": 6309,
+        "relation_count": 17321
+      },
+      "stats_after": {
+        "total_facts": 42331,
+        "active_facts": 8597,
+        "superseded_count": 31973,
+        "scored_count": 1100,
+        "entity_count": 6316,
+        "relation_count": 17427
+      },
+      "success": true,
+      "duration_seconds": 900.257643
+    },
+    {
+      "timestamp": "2026-03-14T03:30:01.727010",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 11,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 7, 'decay_updated': 8804, 'facts_pruned': 0, 'consolidation_groups': 11, 'unconsolidated_swept': 96, 'insights': {'discovered': 2, 'stored': 2, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 43217,
+        "active_facts": 8735,
+        "superseded_count": 32721,
+        "scored_count": 1253,
+        "entity_count": 6476,
+        "relation_count": 17854
+      },
+      "stats_after": {
+        "total_facts": 43349,
+        "active_facts": 8779,
+        "superseded_count": 32809,
+        "scored_count": 1408,
+        "entity_count": 6478,
+        "relation_count": 17911
+      },
+      "success": true,
+      "duration_seconds": 803.960859
+    },
+    {
+      "timestamp": "2026-03-15T03:30:01.619725",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 71,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 9,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 0, 'decay_updated': 8884, 'facts_pruned': 0, 'consolidation_groups': 15, 'unconsolidated_swept': 93, 'insights': {'discovered': 2, 'stored': 2, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 43484,
+        "active_facts": 8816,
+        "superseded_count": 32907,
+        "scored_count": 1581,
+        "entity_count": 6525,
+        "relation_count": 18000
+      },
+      "stats_after": {
+        "total_facts": 43615,
+        "active_facts": 8846,
+        "superseded_count": 33008,
+        "scored_count": 1708,
+        "entity_count": 6540,
+        "relation_count": 18084
+      },
+      "success": true,
+      "duration_seconds": 807.468818
+    },
+    {
+      "timestamp": "2026-03-16T03:30:01.634281",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 61,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 4,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 2, 'decay_updated': 8930, 'facts_pruned': 0, 'consolidation_groups': 12, 'unconsolidated_swept': 105, 'insights': {'discovered': 3, 'stored': 3, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 43695,
+        "active_facts": 8855,
+        "superseded_count": 33079,
+        "scored_count": 1869,
+        "entity_count": 6559,
+        "relation_count": 18113
+      },
+      "stats_after": {
+        "total_facts": 43831,
+        "active_facts": 8904,
+        "superseded_count": 33166,
+        "scored_count": 2004,
+        "entity_count": 6563,
+        "relation_count": 18199
+      },
+      "success": true,
+      "duration_seconds": 860.778738
+    },
+    {
+      "timestamp": "2026-03-17T03:30:02.050487",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 61,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 7,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 0, 'decay_updated': 9316, 'facts_pruned': 0, 'consolidation_groups': 14, 'unconsolidated_swept': 101, 'insights': {'discovered': 3, 'stored': 3, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 45650,
+        "active_facts": 9238,
+        "superseded_count": 34651,
+        "scored_count": 1868,
+        "entity_count": 6730,
+        "relation_count": 19110
+      },
+      "stats_after": {
+        "total_facts": 45790,
+        "active_facts": 9284,
+        "superseded_count": 34745,
+        "scored_count": 2001,
+        "entity_count": 6736,
+        "relation_count": 19183
+      },
+      "success": true,
+      "duration_seconds": 851.19656
+    },
+    {
+      "timestamp": "2026-03-18T03:30:01.521381",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 61,
+          "fields_updated": 0,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 6,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 4, 'decay_updated': 9788, 'facts_pruned': 0, 'consolidation_groups': 13, 'unconsolidated_swept': 104, 'insights': {'discovered': 3, 'stored': 3, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 48148,
+        "active_facts": 9718,
+        "superseded_count": 36669,
+        "scored_count": 2253,
+        "entity_count": 6937,
+        "relation_count": 20387
+      },
+      "stats_after": {
+        "total_facts": 48289,
+        "active_facts": 9754,
+        "superseded_count": 36774,
+        "scored_count": 2374,
+        "entity_count": 6942,
+        "relation_count": 20484
+      },
+      "success": true,
+      "duration_seconds": 878.615344
+    },
+    {
+      "timestamp": "2026-03-19T03:30:01.420323",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 62,
+          "fields_updated": 1,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 9,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 3, 'decay_updated': 9898, 'facts_pruned': 0, 'consolidation_groups': 17, 'unconsolidated_swept': 102, 'insights': {'discovered': 2, 'stored': 2, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 48935,
+        "active_facts": 9833,
+        "superseded_count": 37341,
+        "scored_count": 2612,
+        "entity_count": 6996,
+        "relation_count": 20725
+      },
+      "stats_after": {
+        "total_facts": 49079,
+        "active_facts": 9854,
+        "superseded_count": 37464,
+        "scored_count": 2722,
+        "entity_count": 7006,
+        "relation_count": 20827
+      },
+      "success": true,
+      "duration_seconds": 875.214368
+    },
+    {
+      "timestamp": "2026-03-20T03:30:01.477253",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 67,
+          "fields_updated": 5,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 14,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 5, 'decay_updated': 10258, 'facts_pruned': 0, 'consolidation_groups': 25, 'unconsolidated_swept': 110, 'insights': {'discovered': 3, 'stored': 3, 'deduped': 0}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 50379,
+        "active_facts": 10182,
+        "superseded_count": 38436,
+        "scored_count": 2919,
+        "entity_count": 7188,
+        "relation_count": 21476
+      },
+      "stats_after": {
+        "total_facts": 50532,
+        "active_facts": 10203,
+        "superseded_count": 38568,
+        "scored_count": 3022,
+        "entity_count": 7202,
+        "relation_count": 21566
+      },
+      "success": true,
+      "duration_seconds": 885.288697
+    },
+    {
+      "timestamp": "2026-03-21T03:30:01.466420",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 65,
+          "fields_updated": 5,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 50,
+          "changed": 0,
+          "errors": []
+        },
+        "p4_patterns": {
+          "patterns_found": 10,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 6, 'decay_updated': 10763, 'facts_pruned': 0, 'consolidation_groups': 29, 'unconsolidated_swept': 127, 'insights': {'discovered': 3, 'stored': 2, 'deduped': 1}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 53478,
+        "active_facts": 10677,
+        "superseded_count": 41025,
+        "scored_count": 3110,
+        "entity_count": 7477,
+        "relation_count": 22946
+      },
+      "stats_after": {
+        "total_facts": 53654,
+        "active_facts": 10677,
+        "superseded_count": 41201,
+        "scored_count": 3199,
+        "entity_count": 7480,
+        "relation_count": 23031
+      },
+      "success": true,
+      "duration_seconds": 969.22738
     }
   ]
 }
