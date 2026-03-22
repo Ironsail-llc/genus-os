@@ -1,9 +1,9 @@
 {
-  "lastSyncAt": "2026-03-09T14:30:01.922754",
+  "lastSyncAt": "2026-03-20T22:30:01.288206",
   "lastSyncStatus": "success",
   "syncHistory": [
     {
-      "timestamp": "2026-03-09T14:30:01.922754",
+      "timestamp": "2026-03-20T22:30:01.288206",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -13,7 +13,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T14:00:01.388076",
+      "timestamp": "2026-03-20T22:00:01.358755",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -23,7 +23,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T13:30:01.845465",
+      "timestamp": "2026-03-20T21:30:01.333974",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -33,7 +33,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T13:00:01.820751",
+      "timestamp": "2026-03-20T21:00:01.577875",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -43,7 +43,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T12:30:01.351380",
+      "timestamp": "2026-03-20T20:30:01.132703",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -53,7 +53,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T12:00:01.868900",
+      "timestamp": "2026-03-20T20:00:01.571960",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -63,7 +63,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T11:30:01.139079",
+      "timestamp": "2026-03-20T19:30:01.879093",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -73,19 +73,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T11:00:01.906065",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [
-        "HTTPSConnectionPool(host='ironsail.atlassian.net', port=443): Max retries exceeded with url: /rest/api/2/serverInfo (Caused by NameResolutionError(\"HTTPSConnection(host='ironsail.atlassian.net', port=443): Failed to resolve 'ironsail.atlassian.net' ([Errno -3] Temporary failure in name resolution)\"))"
-      ],
-      "status": "error"
-    },
-    {
-      "timestamp": "2026-03-09T10:30:01.529328",
+      "timestamp": "2026-03-20T19:00:01.163093",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -95,7 +83,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T10:00:02.087197",
+      "timestamp": "2026-03-20T18:30:01.673826",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -105,7 +93,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T09:30:01.688674",
+      "timestamp": "2026-03-20T18:00:01.819044",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -115,7 +103,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T09:00:02.039721",
+      "timestamp": "2026-03-20T17:30:01.962817",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -125,7 +113,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T08:30:01.402003",
+      "timestamp": "2026-03-20T17:00:02.060975",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -135,7 +123,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T08:00:01.844111",
+      "timestamp": "2026-03-20T16:30:01.941881",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -145,7 +133,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T07:30:01.595434",
+      "timestamp": "2026-03-20T16:00:01.987436",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -155,7 +143,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T07:00:01.748340",
+      "timestamp": "2026-03-20T15:30:01.989948",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -165,7 +153,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T06:30:01.120245",
+      "timestamp": "2026-03-20T15:00:01.732982",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -175,7 +163,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-09T06:00:02.061113",
+      "timestamp": "2026-03-20T14:30:01.178804",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -185,7 +173,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-06T22:30:01.985765",
+      "timestamp": "2026-03-20T14:00:01.314307",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -195,7 +183,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-06T09:00:01.301407",
+      "timestamp": "2026-03-20T13:30:01.265931",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -205,7 +193,7 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-06T08:30:01.905321",
+      "timestamp": "2026-03-20T13:00:01.585431",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
@@ -215,89 +203,18 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-06T08:00:01.775355",
+      "timestamp": "2026-03-20T12:30:01.880503",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
-      "closed": 14,
-      "changes": [
-        {
-          "type": "completed",
-          "ticket": "VV-1195",
-          "summary": "DRX Channel Config Missing Store Slug"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1202",
-          "summary": "Not able to Add User Profile"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1203",
-          "summary": "Address Line 1 and 2 is Not Saved When Creating a Clinic"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1204",
-          "summary": "ScriptSure Setting Reverts to Enabled After Saving"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1210",
-          "summary": "Licensed Number Not Saved When Creating New User"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1212",
-          "summary": "Assigned Clinic Not Displayed"
-        },
-        {
-          "type": "completed",
-          "ticket": "VV-1240",
-          "summary": "Exported Files from Administration Module Display JSON Data Instead of Structured Columns"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-4",
-          "summary": "Validating Data Population in Prescription Form \u2013 Medication Details Section"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-29",
-          "summary": "Unable to Update Channel Settings for ScriptSure"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-30",
-          "summary": "LifeFile Not Yet Available in Staging"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-31",
-          "summary": "Add Rx Compounding API Integrations"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-25",
-          "summary": "Add Multiple Medications in a Single Prescription Order"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-33",
-          "summary": "Create webhook for tracking"
-        },
-        {
-          "type": "completed",
-          "ticket": "RD-32",
-          "summary": "Add Partell Sending Order API Integrations"
-        }
-      ],
+      "closed": 0,
+      "changes": [],
       "errors": [],
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T15:30:01.401681",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T12:00:01.281622",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -306,8 +223,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T15:00:01.567438",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T11:30:02.110828",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -316,31 +233,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T14:30:01.603892",
-      "ticketsFetched": 14,
-      "added": 0,
-      "updated": 2,
-      "closed": 0,
-      "changes": [
-        {
-          "type": "status_change",
-          "ticket": "RD-30",
-          "from": "Backlog",
-          "to": "Testing"
-        },
-        {
-          "type": "status_change",
-          "ticket": "RD-29",
-          "from": "Backlog",
-          "to": "Testing"
-        }
-      ],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-04T14:00:01.808655",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T11:00:02.114460",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -349,25 +243,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T13:30:01.413251",
-      "ticketsFetched": 14,
-      "added": 0,
-      "updated": 1,
-      "closed": 0,
-      "changes": [
-        {
-          "type": "status_change",
-          "ticket": "RD-4",
-          "from": "In Progress",
-          "to": "Testing"
-        }
-      ],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-04T13:00:01.105860",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T10:30:01.644455",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -376,8 +253,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T12:30:01.117717",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T10:00:01.798400",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -386,8 +263,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T12:00:01.772241",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T09:30:01.813478",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -396,8 +273,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T11:30:01.232983",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T09:00:01.828581",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -406,8 +283,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T11:00:02.073253",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T08:30:01.388535",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -416,8 +293,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T10:30:01.791059",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T08:00:01.703258",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -426,8 +303,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T10:00:01.479443",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T07:30:01.943852",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -436,8 +313,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T09:30:02.068135",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T07:00:01.928439",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -446,8 +323,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T09:00:01.178796",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T06:30:01.360552",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -456,8 +333,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T08:30:01.572695",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-20T06:00:02.018112",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -466,8 +343,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T08:00:01.380072",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T22:30:01.731239",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -476,8 +353,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T07:30:01.699536",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T22:00:01.174112",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -486,8 +363,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T07:00:01.329928",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T21:30:01.542297",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -496,8 +373,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T06:30:01.385304",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T21:00:01.248750",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -506,8 +383,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-04T06:00:01.697672",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T20:30:01.284397",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -516,8 +393,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T22:30:01.113081",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T20:00:01.553411",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -526,8 +403,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T22:00:01.164523",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T19:30:02.027465",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -536,8 +413,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T21:30:01.464079",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T19:00:01.916585",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -546,8 +423,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T21:00:01.306621",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T18:30:01.153119",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -556,8 +433,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T20:30:01.600649",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T18:00:01.097415",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -566,8 +443,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T20:00:01.889285",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T17:30:01.176877",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -576,8 +453,8 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T19:30:01.169839",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T17:00:01.674034",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
@@ -586,8 +463,38 @@
       "status": "success"
     },
     {
-      "timestamp": "2026-03-03T19:00:01.576060",
-      "ticketsFetched": 14,
+      "timestamp": "2026-03-19T16:30:01.740856",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-19T16:00:01.985297",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-19T15:30:01.945073",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-19T15:00:01.430000",
+      "ticketsFetched": 0,
       "added": 0,
       "updated": 0,
       "closed": 0,
