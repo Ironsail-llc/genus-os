@@ -14,53 +14,56 @@ Run: python3 scripts/seed-impetus-scenarios.py
 """
 
 import json
+import os
 import subprocess
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-TOKEN = "09748acdcd02a9ea7216d42a8be9efa0eeb794450982b2f3b31e682ec4bebca9"
+TOKEN = os.getenv(
+    "IMPETUS_ONE_API_TOKEN", "695f599f04df5d79196f94fd61a677aa59cbdb1a3440e247d460c2296a7e6ffa"
+)
 BASE = "http://localhost:8000"
 HEADERS = ["-H", f"Authorization: Bearer {TOKEN}", "-H", "Content-Type: application/json"]
 
-# Reference IDs from existing data
+# Reference IDs from existing data (queried 2026-03-18)
 CLINICS = {
-    "downtown": "019c7318-e8b3-7078-8bf5-e5c7c4d0e6bf",
-    "westside": "019c7318-e8b3-7078-8bf5-e5c7c5a8f887",
+    "downtown": "019c73ad-14e8-71c6-a466-053545114e11",
+    "westside": "019c73ad-14e8-71c6-a466-053545fe60d8",
 }
 PROVIDERS = {
-    "sarah_johnson": "019c7318-e8b3-7078-8bf5-e5c7c653cfb4",
-    "michael_chen": "019c7318-e8b3-7078-8bf5-e5c7c763dc49",
-    "emily_martinez": "019c7318-e8b3-7078-8bf5-e5c7c7fec158",
-    "james_wilson": "019c7319-12fd-73f0-8b4e-5636f3bb712f",
-    "lisa_cuddy": "019c7319-146e-702b-b7de-baf2778dba14",
+    "sarah_johnson": "019c73ad-14e8-71c6-a466-053546fd7068",
+    "michael_chen": "019c73ad-14e9-7084-8e8e-eea81e248eb0",
+    "emily_martinez": "019c73ad-14e9-7084-8e8e-eea81ef8ab9b",
+    "james_wilson": "019c73ad-99ce-73d5-8fd4-4624b78eaf38",
+    "lisa_cuddy": "019c73ad-9b41-7012-be21-270dc59f6560",
 }
 MEDICATIONS = {
-    "lisinopril_10": "019c7318-e89a-7268-9619-e25d878f6f00",
-    "lisinopril_20": "019c7318-e89a-7268-9619-e25d88623ce7",
-    "metformin_500": "019c7318-e89a-7268-9619-e25d889903f3",
-    "metformin_1000": "019c7318-e89a-7268-9619-e25d8923857f",
-    "atorvastatin_10": "019c7318-e89a-7268-9619-e25d8a04d14c",
-    "atorvastatin_20": "019c7318-e89a-7268-9619-e25d8a44caa2",
-    "amlodipine_5": "019c7318-e89a-7268-9619-e25d8b26b1bd",
-    "omeprazole_20": "019c7318-e89a-7268-9619-e25d8c17b36f",
-    "levothyroxine_50": "019c7318-e89a-7268-9619-e25d8ceec554",
-    "hydrocodone": "019c7318-e89a-7268-9619-e25d8dcf9186",
-    "alprazolam": "019c7318-e89a-7268-9619-e25d8e0245a2",
-    "gabapentin_300": "019c7318-e89a-7268-9619-e25d8efccbaa",
-    "sertraline_50": "019c7318-e89a-7268-9619-e25d8fe4b910",
-    "losartan_50": "019c7318-e89a-7268-9619-e25d9058d140",
-    "prednisone_10": "019c7318-e89a-7268-9619-e25d90d100f6",
-    "testosterone": "019c7318-eba2-719f-ba59-222f7de2a14f",
-    "semaglutide": "019c7318-eba2-719f-ba59-222f7de5140a",
-    "tirzepatide": "019c7318-eba2-719f-ba59-222f7e6314fa",
-    "sildenafil": "019c7318-eba2-719f-ba59-222f8001781d",
+    "lisinopril_10": "019c73ad-14d4-7383-a058-ab9eaf515132",
+    "lisinopril_20": "019c73ad-14d4-7383-a058-ab9eaff10019",
+    "metformin_500": "019c73ad-14d4-7383-a058-ab9eb061a137",
+    "metformin_1000": "019c73ad-14d4-7383-a058-ab9eb0bc3419",
+    "atorvastatin_10": "019c73ad-14d4-7383-a058-ab9eb1b3b5b6",
+    "atorvastatin_20": "019c73ad-14d4-7383-a058-ab9eb1bf5c57",
+    "amlodipine_5": "019c73ad-14d4-7383-a058-ab9eb2bc3db1",
+    "omeprazole_20": "019c73ad-14d4-7383-a058-ab9eb367d2b8",
+    "levothyroxine_50": "019c73ad-14d4-7383-a058-ab9eb40ab008",
+    "hydrocodone": "019c73ad-14d4-7383-a058-ab9eb4e4ffa5",
+    "alprazolam": "019c73ad-14d4-7383-a058-ab9eb4f170f3",
+    "gabapentin_300": "019c73ad-14d4-7383-a058-ab9eb57510e8",
+    "sertraline_50": "019c73ad-14d4-7383-a058-ab9eb6692b9b",
+    "losartan_50": "019c73ad-14d4-7383-a058-ab9eb730f929",
+    "prednisone_10": "019c73ad-14d4-7383-a058-ab9eb7deecb8",
+    "testosterone": "019c73ad-17d6-7013-b571-bc2b324feac0",
+    "semaglutide": "019c73ad-17d6-7013-b571-bc2b327412fe",
+    "tirzepatide": "019c73ad-17d6-7013-b571-bc2b330867fb",
+    "sildenafil": "019c73ad-17d6-7013-b571-bc2b33dcee6e",
 }
 PHARMACIES = {
-    "medisource": "019c7318-e89a-7268-9619-e25d8675ccb4",
-    "carefirst": "019c7318-e89a-7268-9619-e25d86a40d62",
-    "horizon": "019c7318-e89a-7268-9619-e25d870b1ddb",
-    "scriptsure": "019c7318-eba1-731d-955b-035e786ff84d",
-    "rxvortex": "019c7318-eba1-731d-955b-035e78fa3bd2",
-    "dispensepro": "019c7318-eba1-731d-955b-035e79f74dd3",
+    "medisource": "019c73ad-14d4-7383-a058-ab9eae923d6a",
+    "carefirst": "019c73ad-14d4-7383-a058-ab9eaed67937",
+    "horizon": "019c73ad-14d4-7383-a058-ab9eaf06a46f",
+    "scriptsure": "019c73ad-17d6-7013-b571-bc2b2c148f74",
+    "rxvortex": "019c73ad-17d6-7013-b571-bc2b2cad1d14",
+    "dispensepro": "019c73ad-17d6-7013-b571-bc2b2d50237c",
 }
 
 
@@ -107,19 +110,19 @@ def sql(query):
 
 
 def now_iso():
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def days_ago(n):
-    return (datetime.utcnow() - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return (datetime.now(tz=UTC) - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def days_ahead(n):
-    return (datetime.utcnow() + timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return (datetime.now(tz=UTC) + timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def hours_ahead(n):
-    return (datetime.utcnow() + timedelta(hours=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return (datetime.now(tz=UTC) + timedelta(hours=n)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 # ──────────────────────────────────────────────────────────────────────
