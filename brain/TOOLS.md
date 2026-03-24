@@ -110,21 +110,22 @@ Fetches a URL and returns its content as clean markdown text. Use to read articl
 
 ### browser — Full Browser Automation
 
-Headless Chromium via Playwright. Profile: `openclaw` (isolated, managed). Use for anything that requires interaction: logins, forms, multi-step flows, JavaScript-heavy sites, screenshots, purchases, bookings.
+Chromium via Playwright on virtual display (:99). Use for anything that requires interaction: logins, forms, multi-step flows, JavaScript-heavy sites, screenshots, purchases, bookings.
 
 **Workflow:**
-1. `browser(action="start", profile="robothor")` — launch the browser
-2. `browser(action="navigate", targetUrl="https://site.com")` — go to URL
-3. `browser(action="snapshot")` — read page content (ARIA tree with element refs)
-4. `browser(action="act", request={kind: "click", ref: "e12"})` — click element by ref from snapshot
-5. `browser(action="act", request={kind: "fill", ref: "e15", fields: [{ref: "e15", value: "robothor@ironsail.ai"}]})` — fill form
-6. `browser(action="act", request={kind: "type", ref: "e15", text: "hello"})` — type text
-7. `browser(action="screenshot")` — capture visual state
-8. `browser(action="stop")` — close browser when done
+1. `browser(action="start")` — launch the browser
+2. `browser(action="navigate", url="https://site.com")` — go to URL
+3. `browser(action="snapshot")` — read page content (ARIA accessibility tree with element refs)
+4. `browser(action="act", request={kind: "click", selector: "button.submit"})` — click element by CSS selector
+5. `browser(action="act", request={kind: "fill", selector: "#email", value: "robothor@ironsail.ai"})` — fill form field
+6. `browser(action="act", request={kind: "type", text: "hello"})` — type text via keyboard
+7. `browser(action="act", request={kind: "press", key: "Enter"})` — press key
+8. `browser(action="screenshot")` — capture visual state
+9. `browser(action="stop")` — close browser when done
 
-**Actions:** status, start, stop, profiles, tabs, open, focus, close, snapshot, screenshot, navigate, console, pdf, upload, dialog, act
+**Actions:** status, start, stop, navigate, snapshot, screenshot, act, tabs, pdf, console, evaluate
 
-**Act kinds:** click, type, press, hover, drag, select, fill, resize, wait, evaluate (JS)
+**Act kinds:** click (by selector or x,y), fill, type, press, scroll, select
 
 **When to use which:**
 | Need | Tool |
@@ -134,6 +135,36 @@ Headless Chromium via Playwright. Profile: `openclaw` (isolated, managed). Use f
 | Login, forms, JS-heavy sites | `browser` |
 | Take a screenshot of a page | `browser` |
 | Multi-step web workflow | `browser` |
+
+---
+
+## Desktop Control Tools (Computer Use)
+
+Virtual display (Xvfb :99, 1280x1024) with mouse/keyboard control via xdotool. Use for interacting with any GUI application — LibreOffice, file managers, custom desktop apps, or anything not accessible via API.
+
+**Core loop:** screenshot → decide → act → screenshot → verify
+
+| Tool | Purpose |
+|------|---------|
+| `desktop_screenshot` | Capture display as base64 PNG |
+| `desktop_describe(prompt?)` | Screenshot + VLM description of what's on screen |
+| `desktop_click(x, y)` | Left click at coordinates |
+| `desktop_double_click(x, y)` | Double click |
+| `desktop_right_click(x, y)` | Right click / context menu |
+| `desktop_type(text)` | Type text at cursor |
+| `desktop_key(key)` | Press key combo (e.g. `ctrl+a`, `Return`, `alt+F4`) |
+| `desktop_scroll(direction, clicks)` | Scroll up/down |
+| `desktop_drag(start_x, start_y, end_x, end_y)` | Drag and drop |
+| `desktop_mouse_move(x, y)` | Move cursor without clicking |
+| `desktop_window_list` | List open windows (IDs, titles, positions) |
+| `desktop_window_focus(window_id)` | Bring a window to front |
+| `desktop_launch(app, args?)` | Launch an application |
+
+**Coordinate system:** 1280x1024 pixels, origin (0,0) at top-left.
+
+**Safety:** Terminal emulators are blocked (use `exec` tool). Dangerous key combos (Ctrl+Alt+Delete, TTY switches) are blocked. `file://` and `javascript:` URLs are blocked in browser.
+
+**Monitoring:** VNC on port 5900 (localhost only, via `vnc.robothor.ai` with Cloudflare Access).
 
 ---
 

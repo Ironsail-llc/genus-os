@@ -26,6 +26,9 @@ Logs: `journalctl -u <unit> -f`
 | nmbd.service | 137-138 | — | NetBIOS name service for Samba |
 | robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
 | robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport (config: /etc/nats/nats-server.conf) |
+| robothor-xvfb.service | — | — | Virtual display server (Xvfb :99, 1280x1024) for computer use |
+| robothor-desktop.service | — | — | Openbox window manager on virtual display :99 |
+| robothor-vnc.service | 5900 | — | x11vnc server for monitoring virtual display (localhost only) |
 | cloudflared.service | — | — | Cloudflare tunnel (robothor.ai) |
 | tailscaled.service | — | — | Tailscale VPN (ironsail tailnet) |
 
@@ -210,7 +213,8 @@ All services are system-level, enabled, and start automatically. If anything fai
 for svc in cloudflared tailscaled mediamtx-webcam robothor-orchestrator \
   robothor-vision robothor-status robothor-status-dashboard robothor-voice \
   robothor-dashboard robothor-privacy robothor-transcript \
-  robothor-crm robothor-bridge robothor-app robothor-engine; do
+  robothor-crm robothor-bridge robothor-app robothor-engine \
+  robothor-xvfb robothor-desktop robothor-vnc; do
   printf "%-35s %s\n" "$svc" "$(sudo systemctl is-active $svc)"
 done
 

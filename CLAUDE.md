@@ -53,6 +53,7 @@ Genus OS hosts Robothor, an autonomous AI entity — Philip's partner, not an as
 | Using deep reasoning | `brain/TOOLS.md` (Deep Reasoning + /deep sections) |
 | Engine API endpoints | `SERVICES.md` (Engine API Endpoints section) |
 | Agent scaffold | `robothor agent scaffold <id> [--description "..."]` |
+| Computer use / desktop control | `brain/agents/COMPUTER_USE.md` + `brain/TOOLS.md` (Desktop Control section) |
 | Robothor's identity | `brain/SOUL.md` |
 | Model selection | `brain/TOOLS.md` (Model Selection Guide) |
 | Session startup (as Robothor) | `brain/AGENTS.md` |

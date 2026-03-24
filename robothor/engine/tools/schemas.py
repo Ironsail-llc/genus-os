@@ -943,4 +943,279 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Browser Automation Tool ────────────────────────────────────────
+
+    schemas["browser"] = {
+        "type": "function",
+        "function": {
+            "name": "browser",
+            "description": (
+                "Full browser automation via Playwright. Manages a persistent Chromium session. "
+                "Actions: start (launch browser), stop (close), navigate (go to URL), "
+                "screenshot (capture page), snapshot (ARIA accessibility tree with element refs), "
+                "act (interact: click/fill/type/press/scroll/select using refs or selectors), "
+                "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
+                "console (read console), status (check session)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "start",
+                            "stop",
+                            "status",
+                            "navigate",
+                            "screenshot",
+                            "snapshot",
+                            "act",
+                            "tabs",
+                            "pdf",
+                            "console",
+                            "evaluate",
+                        ],
+                        "description": "Browser action to perform",
+                    },
+                    "targetUrl": {
+                        "type": "string",
+                        "description": "URL for navigate action",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "URL for navigate action (alias for targetUrl)",
+                    },
+                    "fullPage": {
+                        "type": "boolean",
+                        "description": "Capture full page screenshot (default: false)",
+                    },
+                    "js": {
+                        "type": "string",
+                        "description": "JavaScript expression for evaluate action",
+                    },
+                    "request": {
+                        "type": "object",
+                        "description": (
+                            "Interaction request for act action. "
+                            "Fields: kind (click/fill/type/press/scroll/select), "
+                            "ref (element ref from snapshot), selector (CSS selector), "
+                            "value/text/key/fields/x/y as needed."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    }
+
+    # ── Desktop Control Tools ──────────────────────────────────────────
+
+    schemas["desktop_screenshot"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_screenshot",
+            "description": "Capture the virtual desktop display and return a base64-encoded PNG screenshot with dimensions.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    }
+    schemas["desktop_click"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_click",
+            "description": "Left click at (x, y) pixel coordinates on the virtual desktop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "X coordinate (pixels from left)"},
+                    "y": {"type": "integer", "description": "Y coordinate (pixels from top)"},
+                },
+                "required": ["x", "y"],
+            },
+        },
+    }
+    schemas["desktop_double_click"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_double_click",
+            "description": "Double click at (x, y) pixel coordinates on the virtual desktop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"},
+                },
+                "required": ["x", "y"],
+            },
+        },
+    }
+    schemas["desktop_right_click"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_right_click",
+            "description": "Right click at (x, y) pixel coordinates on the virtual desktop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"},
+                },
+                "required": ["x", "y"],
+            },
+        },
+    }
+    schemas["desktop_mouse_move"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_mouse_move",
+            "description": "Move the mouse cursor to (x, y) without clicking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"},
+                },
+                "required": ["x", "y"],
+            },
+        },
+    }
+    schemas["desktop_drag"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_drag",
+            "description": "Click and drag from (start_x, start_y) to (end_x, end_y).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_x": {"type": "integer", "description": "Start X coordinate"},
+                    "start_y": {"type": "integer", "description": "Start Y coordinate"},
+                    "end_x": {"type": "integer", "description": "End X coordinate"},
+                    "end_y": {"type": "integer", "description": "End Y coordinate"},
+                },
+                "required": ["start_x", "start_y", "end_x", "end_y"],
+            },
+        },
+    }
+    schemas["desktop_scroll"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_scroll",
+            "description": "Scroll up or down at the current mouse position.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down"],
+                        "description": "Scroll direction",
+                    },
+                    "clicks": {
+                        "type": "integer",
+                        "description": "Number of scroll steps (default: 3, max: 20)",
+                    },
+                },
+                "required": ["direction"],
+            },
+        },
+    }
+    schemas["desktop_type"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_type",
+            "description": "Type a text string at the current cursor position on the virtual desktop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to type"},
+                },
+                "required": ["text"],
+            },
+        },
+    }
+    schemas["desktop_key"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_key",
+            "description": "Press a key combination (e.g. 'ctrl+a', 'Return', 'alt+F4', 'Tab').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Key or key combination (xdotool syntax)",
+                    },
+                },
+                "required": ["key"],
+            },
+        },
+    }
+    schemas["desktop_window_list"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_window_list",
+            "description": "List all open windows on the virtual desktop with IDs, titles, positions, and sizes.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    }
+    schemas["desktop_window_focus"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_window_focus",
+            "description": "Activate and focus a window by its ID (from desktop_window_list).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "window_id": {
+                        "type": "string",
+                        "description": "Window ID (hex, from desktop_window_list)",
+                    },
+                },
+                "required": ["window_id"],
+            },
+        },
+    }
+    schemas["desktop_launch"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_launch",
+            "description": "Launch an application on the virtual desktop. Returns the PID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app": {
+                        "type": "string",
+                        "description": "Application name or path (e.g. 'firefox', 'libreoffice')",
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional command-line arguments",
+                    },
+                },
+                "required": ["app"],
+            },
+        },
+    }
+    schemas["desktop_describe"] = {
+        "type": "function",
+        "function": {
+            "name": "desktop_describe",
+            "description": "Take a screenshot and describe the screen contents using a vision model (llama3.2-vision). Returns a natural language description of what is visible on screen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Custom prompt for the vision model (optional — defaults to a comprehensive screen description)",
+                    },
+                },
+            },
+        },
+    }
+
     return schemas

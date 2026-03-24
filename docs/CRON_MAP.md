@@ -185,6 +185,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | failure-analyzer | `0 */2 * * *` | Sonnet 4.6 | none (silent) | cron |
 | improvement-analyst | `0 2 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
 | overnight-pr | `0 3 * * *` | Sonnet 4.6 | none (silent) | cron (via nightwatch workflow) |
+| computer-use | — (no cron) | Sonnet 4.6 | none (silent) | spawn_agent only |
 | chat-responder | `*/30 6-22 * * *` | GLM-5 | none (silent) | downstream from chat-monitor |
 
 ## Engine Workflow Crons (APScheduler from `docs/workflows/*.yaml`)
