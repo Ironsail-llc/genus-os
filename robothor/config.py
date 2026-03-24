@@ -130,6 +130,9 @@ class Config:
     voice_port: int = 8765
     searxng_port: int = 8888
 
+    # Desktop / Computer Use
+    desktop_display: str = ":99"
+
     @property
     def bridge_url(self) -> str:
         return f"http://127.0.0.1:{self.bridge_port}"
@@ -209,6 +212,7 @@ def _load_from_env() -> Config:
         tts_port=int(os.environ.get("ROBOTHOR_TTS_PORT", "8880")),
         voice_port=int(os.environ.get("ROBOTHOR_VOICE_PORT", "8765")),
         searxng_port=int(os.environ.get("ROBOTHOR_SEARXNG_PORT", "8888")),
+        desktop_display=os.environ.get("ROBOTHOR_DESKTOP_DISPLAY", ":99"),
     )
 
 
