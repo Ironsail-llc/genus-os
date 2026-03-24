@@ -1,0 +1,111 @@
+id: computer-use
+name: Computer Use Agent
+description: Controls desktop GUI, browser, and applications via virtual display
+version: "2026-03-24"
+department: operations
+
+reports_to: main
+creates_tasks_for: []
+receives_tasks_from: [main]
+escalates_to: main
+
+model:
+  primary: openrouter/anthropic/claude-sonnet-4-6
+  fallbacks:
+    - openrouter/z-ai/glm-5
+    - gemini/gemini-2.5-pro
+
+schedule:
+  cron: ""  # No cron — triggered only via spawn_agent or manual
+  timezone: America/New_York
+  timeout_seconds: 900
+  max_iterations: 50
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  # Desktop control
+  - desktop_screenshot
+  - desktop_click
+  - desktop_double_click
+  - desktop_right_click
+  - desktop_mouse_move
+  - desktop_drag
+  - desktop_scroll
+  - desktop_type
+  - desktop_key
+  - desktop_window_list
+  - desktop_window_focus
+  - desktop_launch
+  - desktop_describe
+  # Browser automation
+  - browser
+  # File system
+  - read_file
+  - write_file
+  - list_directory
+  - exec
+  # Memory
+  - search_memory
+  - store_memory
+  - memory_block_read
+tools_denied:
+  - web_search
+  - web_fetch
+  - create_person
+  - update_person
+  - delete_person
+  - create_note
+  - update_note
+  - delete_note
+bridge_endpoints:
+  - "GET /health"
+streams:
+  read: []
+  write: []
+
+sla:
+  urgent: 15m
+  high: 30m
+  normal: 2h
+  low: 8h
+
+task_protocol: true
+auto_task: false
+review_workflow: false
+notification_inbox: false
+status_file: ""
+shared_working_state: false
+
+warmup:
+  context_files: []
+
+instruction_file: brain/agents/COMPUTER_USE.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+hooks: []
+
+tags_produced: [computer-use, desktop, browser]
+tags_consumed: []
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  scratchpad_enabled: true
+  guardrails:
+    - desktop_safety
+  exec_allowlist:
+    - "^DISPLAY="
+    - "^xdotool\\b"
+    - "^wmctrl\\b"
+    - "^scrot\\b"
+    - "^xdpyinfo\\b"
+    - "^identify\\b"
+
+changelog:
+  - date: "2026-03-24"
+    change: "Initial creation — desktop control + browser automation agent"

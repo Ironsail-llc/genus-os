@@ -130,6 +130,8 @@ class GuardrailEngine:
             return self._check_exec_allowlist(tool_name, tool_args, agent_id)
         if policy == "write_path_restrict":
             return self._check_write_path(tool_name, tool_args, agent_id)
+        if policy == "desktop_safety":
+            return self._check_desktop_safety(tool_name, tool_args)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -273,6 +275,71 @@ class GuardrailEngine:
             reason=f"write_file path not allowed: {path}",
             guardrail_name="write_path_restrict",
         )
+
+    def _check_desktop_safety(self, tool_name: str, tool_args: dict[str, Any]) -> GuardrailResult:
+        """Safety guardrails for desktop control and browser tools."""
+        # Block launching terminal emulators (use exec tool instead)
+        if tool_name == "desktop_launch":
+            app = str(tool_args.get("app", "")).lower()
+            blocked_apps = {
+                "bash",
+                "sh",
+                "zsh",
+                "fish",
+                "xterm",
+                "gnome-terminal",
+                "konsole",
+                "alacritty",
+                "kitty",
+                "terminal",
+                "xfce4-terminal",
+            }
+            app_base = app.rsplit("/", 1)[-1]
+            if app_base in blocked_apps:
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"Cannot launch terminal emulator '{app}' — use the exec tool for shell commands",
+                    guardrail_name="desktop_safety",
+                )
+
+        # Block dangerous key combinations
+        if tool_name == "desktop_key":
+            combo = str(tool_args.get("key", "")).lower().replace(" ", "")
+            dangerous_combos = {
+                "ctrl+alt+delete",
+                "ctrl+alt+del",
+                "ctrl+alt+f1",
+                "ctrl+alt+f2",
+                "ctrl+alt+f3",
+                "ctrl+alt+f4",
+                "ctrl+alt+f5",
+                "ctrl+alt+f6",
+                "ctrl+alt+f7",
+                "ctrl+alt+f8",
+            }
+            if combo in dangerous_combos:
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"Dangerous key combination blocked: {combo}",
+                    guardrail_name="desktop_safety",
+                )
+
+        # Block dangerous URLs in browser navigation
+        if tool_name == "browser":
+            action = tool_args.get("action", "")
+            if action == "navigate":
+                url = str(tool_args.get("targetUrl") or tool_args.get("url", "")).lower()
+                if url.startswith("file://") or url.startswith("javascript:"):
+                    return GuardrailResult(
+                        allowed=False,
+                        action="blocked",
+                        reason=f"Blocked URL scheme: {url[:30]}",
+                        guardrail_name="desktop_safety",
+                    )
+
+        return GuardrailResult()
 
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
         """Warn if tool output contains sensitive data patterns."""

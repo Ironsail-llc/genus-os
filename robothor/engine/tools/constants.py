@@ -45,6 +45,28 @@ GWS_TOOLS = frozenset(
     }
 )
 
+# Browser automation tool
+BROWSER_TOOLS = frozenset({"browser"})
+
+# Desktop control tools (computer use)
+DESKTOP_TOOLS = frozenset(
+    {
+        "desktop_screenshot",
+        "desktop_click",
+        "desktop_double_click",
+        "desktop_right_click",
+        "desktop_mouse_move",
+        "desktop_drag",
+        "desktop_scroll",
+        "desktop_type",
+        "desktop_key",
+        "desktop_window_list",
+        "desktop_window_focus",
+        "desktop_launch",
+        "desktop_describe",
+    }
+)
+
 # Federation tools
 FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federation_sync_status"})
 
@@ -121,5 +143,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "gws_calendar_list",
         "gws_chat_list_spaces",
         "gws_chat_list_messages",
+        # Desktop read-only tools
+        "desktop_screenshot",
+        "desktop_window_list",
+        "desktop_describe",
     }
 )

@@ -152,6 +152,20 @@ Before creating any escalation task (assignedToAgent="main", tags=["needs-philip
 
 ---
 
+## Computer Use Agent
+
+The `computer-use` agent controls a virtual desktop (Xvfb :99, 1280x1024) and browser (Chromium via Playwright). It is spawn-only — no cron schedule. Main agent or other agents can delegate GUI tasks via `spawn_agent(agent_id="computer-use", message="...")`.
+
+**Tools:** 13 desktop_* tools (screenshot, click, type, key, scroll, drag, window management, launch, describe) + browser tool (navigate, snapshot, screenshot, act, evaluate).
+
+**Model:** Sonnet 4.6 (vision-capable) primary, GLM-5 fallback.
+
+**Guardrails:** `desktop_safety` blocks terminal emulators, dangerous key combos, file:///javascript: URLs.
+
+**Monitoring:** VNC on port 5900, accessible via `vnc.robothor.ai` (Cloudflare Access).
+
+**Instruction file:** `brain/agents/COMPUTER_USE.md`
+
 ## Safety
 
 - Don't exfiltrate private data
