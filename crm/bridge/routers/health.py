@@ -30,13 +30,6 @@ async def health():
     except Exception as e:
         services["memory"] = f"error:{e}"
 
-    if _bridge_config.get("impetus_one_token"):
-        try:
-            r = await http_client.get(f"{_bridge_config['impetus_one_url']}/healthz", timeout=5.0)
-            services["impetus_one"] = "ok" if r.status_code == 200 else f"error:{r.status_code}"
-        except Exception as e:
-            services["impetus_one"] = f"error:{e}"
-
     all_ok = all(v == "ok" for v in services.values())
     status = "ok" if all_ok else "degraded"
     status_code = 200 if all_ok else 503

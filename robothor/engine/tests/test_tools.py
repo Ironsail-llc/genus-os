@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from robothor.engine.models import AgentConfig
@@ -490,66 +489,43 @@ class TestImpetusTool:
             assert tool_name in registry._schemas, f"{tool_name} not in registry"
 
     @pytest.mark.asyncio
-    async def test_search_patients_routes_to_bridge(self):
-        """search_patients routes through Bridge MCP passthrough."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"patients": [{"id": "p1", "name": "Smith"}]}
-        mock_response.raise_for_status = MagicMock()
+    async def test_search_patients_calls_mcp_directly(self):
+        """search_patients calls Impetus One MCP directly (no bridge)."""
+        mock_mcp = AsyncMock()
+        mock_mcp.call_tool.return_value = {"patients": [{"id": "p1", "name": "Smith"}]}
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-
-        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
+        with patch(
+            "robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=mock_mcp
+        ):
             result = await _execute_tool("search_patients", {"query": "Smith"})
 
         assert result == {"patients": [{"id": "p1", "name": "Smith"}]}
-        mock_client.post.assert_called_once_with(
-            "http://127.0.0.1:9100/api/impetus/tools/call",
-            json={"name": "search_patients", "arguments": {"query": "Smith"}},
-        )
+        mock_mcp.call_tool.assert_called_once_with("search_patients", {"query": "Smith"})
 
     @pytest.mark.asyncio
-    async def test_transmit_prescription_routes_to_bridge(self):
-        """transmit_prescription (write tool) routes through Bridge."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"status": "pending_confirmation", "confirmationId": "c1"}
-        mock_response.raise_for_status = MagicMock()
+    async def test_transmit_prescription_calls_mcp_directly(self):
+        """transmit_prescription (write tool) calls Impetus One MCP directly."""
+        mock_mcp = AsyncMock()
+        mock_mcp.call_tool.return_value = {"status": "pending_confirmation", "confirmationId": "c1"}
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-
-        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
+        with patch(
+            "robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=mock_mcp
+        ):
             result = await _execute_tool("transmit_prescription", {"prescriptionId": "rx-1"})
 
         assert result["confirmationId"] == "c1"
-        mock_client.post.assert_called_once_with(
-            "http://127.0.0.1:9100/api/impetus/tools/call",
-            json={"name": "transmit_prescription", "arguments": {"prescriptionId": "rx-1"}},
+        mock_mcp.call_tool.assert_called_once_with(
+            "transmit_prescription", {"prescriptionId": "rx-1"}
         )
 
     @pytest.mark.asyncio
-    async def test_bridge_error_returns_error_dict(self):
-        """Bridge HTTP errors are caught and returned as error dicts."""
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = httpx.HTTPStatusError(
-            "502 Bad Gateway",
-            request=MagicMock(),
-            response=MagicMock(status_code=502),
-        )
+    async def test_not_configured_returns_error(self):
+        """When Impetus One env vars are not set, tools return a clear error."""
+        with patch("robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=None):
+            result = await _execute_tool("search_patients", {"query": "test"})
 
-        with patch("robothor.engine.tools.handlers.impetus.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-            # _execute_tool raises, but ToolRegistry.execute catches it
-            with pytest.raises(httpx.HTTPStatusError):
-                await _execute_tool("search_patients", {"query": "test"})
+        assert "error" in result
+        assert "not configured" in result["error"]
 
     def test_impetus_tools_in_main_agent_allowlist(self):
         """Impetus tools are available to the main agent when in tools_allowed."""
