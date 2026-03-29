@@ -23,6 +23,16 @@ import httpx
 RERANKER_MODEL = os.environ.get("ROBOTHOR_RERANKER_MODEL", "dengcao/Qwen3-Reranker-0.6B:F16")
 
 
+def _keep_alive_reranker() -> str:
+    """Get the keep_alive duration for the reranker model."""
+    try:
+        from robothor.config import get_config
+
+        return get_config().ollama.keep_alive_reranker
+    except Exception:
+        return "15m"
+
+
 def _ollama_url() -> str:
     """Get Ollama URL from config or env."""
     url = os.environ.get("ROBOTHOR_OLLAMA_URL") or os.environ.get("OLLAMA_URL")
@@ -96,6 +106,7 @@ async def rerank_pair(
                 "prompt": prompt,
                 "raw": True,
                 "stream": False,
+                "keep_alive": _keep_alive_reranker(),
                 "options": {"temperature": 0.0, "num_predict": 2},
             },
         )

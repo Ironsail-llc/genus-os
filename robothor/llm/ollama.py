@@ -37,6 +37,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _keep_alive_for(model_class: str) -> str:
+    """Get the keep_alive duration for a model class (generation/embedding/vision)."""
+    try:
+        from robothor.config import get_config
+
+        cfg = get_config().ollama
+        return getattr(cfg, f"keep_alive_{model_class}", "5m")
+    except Exception:
+        return "5m"
+
+
 def _ollama_url() -> str:
     """Get Ollama URL from config or env."""
     url = os.environ.get("ROBOTHOR_OLLAMA_URL") or os.environ.get("OLLAMA_URL")
@@ -130,6 +141,7 @@ async def generate_stream(
         "model": model or GENERATION_MODEL,
         "prompt": prompt,
         "stream": True,
+        "keep_alive": _keep_alive_for("generation"),
         "options": {
             "temperature": effective_temp,
             "num_predict": max_tokens,
@@ -190,6 +202,7 @@ async def chat(
         "model": effective_model,
         "messages": messages,
         "stream": False,
+        "keep_alive": _keep_alive_for("generation"),
         "options": {
             "temperature": effective_temp,
             "num_predict": effective_tokens,
@@ -246,6 +259,7 @@ async def chat_stream(
         "messages": messages,
         "stream": True,
         "think": think,
+        "keep_alive": _keep_alive_for("generation"),
         "options": {
             "temperature": effective_temp,
             "num_predict": max_tokens,
@@ -304,6 +318,7 @@ async def analyze_image(
         "model": "llama3.2-vision:11b",
         "messages": messages,
         "stream": False,
+        "keep_alive": _keep_alive_for("vision"),
         "options": {
             "temperature": temperature,
             "num_predict": max_tokens,
@@ -327,6 +342,7 @@ async def get_embedding_async(text: str, model: str | None = None) -> list[float
     payload = {
         "model": model or _embedding_model(),
         "input": text,
+        "keep_alive": _keep_alive_for("embedding"),
     }
     url = _ollama_url()
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -361,6 +377,7 @@ async def get_embeddings_batch_async(
     payload = {
         "model": model or _embedding_model(),
         "input": texts,
+        "keep_alive": _keep_alive_for("embedding"),
     }
     url = _ollama_url()
     try:

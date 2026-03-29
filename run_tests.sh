@@ -101,6 +101,14 @@ run_module() {
     return $rc
 }
 
+# ─── Memory guard: abort if system is under pressure ─────────────────
+AVAIL_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+if [ "$AVAIL_MB" -lt 4096 ]; then
+    echo "ERROR: Only ${AVAIL_MB}MB available memory. Need 4GB+ to run tests safely."
+    echo "Check ollama or other processes: free -h && ps aux --sort=-%mem | head -10"
+    exit 1
+fi
+
 echo ""
 echo "======================================================="
 echo "  Robothor — Unified Test Runner"

@@ -438,6 +438,28 @@ def check_triage_inbox_consistency() -> list[dict]:
     return [check_result("pipeline:triage_consistency", True)]
 
 
+def check_memory_pressure() -> list[dict]:
+    """Check system memory availability. CRITICAL if <8GB available."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    avail_kb = int(line.split()[1])
+                    avail_gb = avail_kb / (1024 * 1024)
+                    ok = avail_gb >= 8.0
+                    audit.log_telemetry("system", "memory_available_gb", round(avail_gb, 1), unit="GB")
+                    return [
+                        check_result(
+                            "system:memory",
+                            ok,
+                            f"Only {avail_gb:.1f}GB available (threshold: 8GB)" if not ok else "",
+                        )
+                    ]
+        return [check_result("system:memory", False, "MemAvailable not found in /proc/meminfo")]
+    except Exception as e:
+        return [check_result("system:memory", False, str(e))]
+
+
 def check_agent_pipeline_health() -> list[dict]:
     """Check agent run outcomes via agent_runs table."""
     results = []
@@ -568,6 +590,7 @@ def main():
     print(f"[{now.isoformat()}] System health check starting...")
 
     all_results = []
+    all_results.extend(check_memory_pressure())
     all_results.extend(check_systemd_services())
     all_results.extend(check_http_endpoints())
     all_results.extend(check_docker_containers())
