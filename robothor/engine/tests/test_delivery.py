@@ -68,3 +68,31 @@ class TestUnexpandedEnvVarGuard:
         result = await _deliver_telegram(config, "test message", run)
         assert result is True
         _register_mock_sender.assert_called_once()
+
+
+class TestFailedRunDelivery:
+    """Tests that failed runs with no output still notify the user."""
+
+    @pytest.mark.asyncio
+    async def test_error_message_generates_fallback_output(self):
+        """A run with error_message but no output_text generates fallback."""
+        from robothor.engine.delivery import deliver
+
+        config = _make_config(delivery_mode=DeliveryMode.ANNOUNCE, delivery_to="12345")
+        run = _make_run(output_text=None, error_message="Safety limit reached (200 iterations).")
+        await deliver(config, run)
+        # output_text should have been set to the fallback
+        assert run.output_text is not None
+        assert "Task incomplete" in run.output_text
+        assert "Safety limit" in run.output_text
+
+    @pytest.mark.asyncio
+    async def test_no_error_no_output_still_skips(self):
+        """A run with no output and no error is still silently skipped."""
+        from robothor.engine.delivery import deliver
+
+        config = _make_config(delivery_mode=DeliveryMode.ANNOUNCE, delivery_to="12345")
+        run = _make_run(output_text=None, error_message=None)
+        result = await deliver(config, run)
+        assert result is True
+        assert run.delivery_status == "no_output"

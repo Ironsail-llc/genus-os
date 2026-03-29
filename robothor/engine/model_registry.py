@@ -99,10 +99,13 @@ def get_model_limits(model_id: str) -> ModelLimits:
 
 
 def compute_token_budget(model_id: str, max_iterations: int) -> int:
-    """Compute cumulative token budget for a run from the model's context window.
+    """Compute estimated token budget for observability/tracking.
 
-    Budget = max_input_tokens × max_iterations. This is the theoretical
-    maximum cumulative tokens if every iteration maxed the context window.
+    This is NOT enforced as a hard limit. Used for:
+    - Soft warnings when approaching 80% usage
+    - Post-run analytics (budget_exhausted flag)
+    - Sub-agent budget cascade (tracking only)
+
     Returns 0 (unlimited) if max_iterations is 0.
     """
     if max_iterations <= 0:

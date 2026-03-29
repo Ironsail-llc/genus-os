@@ -96,7 +96,8 @@ class HeartbeatConfig:
     timezone: str = "America/New_York"
     instruction_file: str = ""
     session_target: str = "isolated"
-    max_iterations: int = 15
+    max_iterations: int = 15  # soft check-in interval (not a hard cap)
+    safety_cap: int = 50  # absolute max iterations for heartbeat runs
     timeout_seconds: int = 600
 
     # Delivery (typically announce for heartbeat)
@@ -173,7 +174,8 @@ class AgentConfig:
 
     # LLM parameters
     temperature: float = 0.3
-    max_iterations: int = 20
+    max_iterations: int = 20  # soft check-in interval (not a hard cap)
+    safety_cap: int = 200  # absolute max iterations (infinite-loop protection only)
 
     # Downstream agents to trigger after successful cron run
     downstream_agents: list[str] = field(default_factory=list)
@@ -192,7 +194,7 @@ class AgentConfig:
     sub_agent_timeout_seconds: int = 120
 
     error_feedback: bool = True
-    token_budget: int = 0  # max tokens per run (0 = unlimited)
+    token_budget: int = 0  # token tracking (observability only, not enforced)
     planning_enabled: bool = False
     planning_model: str = ""  # separate cheap model for planning
     scratchpad_enabled: bool = False

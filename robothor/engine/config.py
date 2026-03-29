@@ -182,6 +182,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             instruction_file=raw_heartbeat.get("instruction_file", ""),
             session_target=raw_heartbeat.get("session_target", "isolated"),
             max_iterations=int(raw_heartbeat.get("max_iterations", 15)),
+            safety_cap=int(raw_heartbeat.get("safety_cap", 50)),
             timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 600)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
@@ -238,6 +239,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         downstream_agents=manifest.get("downstream_agents", []),
         hooks=parsed_hooks,
         heartbeat=heartbeat,
+        # Safety cap — absolute max iterations (infinite-loop protection only)
+        safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         # v2 enhancements — sub-agent spawning
         can_spawn_agents=v2.get("can_spawn_agents", False),
         max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3

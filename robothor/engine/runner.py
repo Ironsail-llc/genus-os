@@ -239,7 +239,7 @@ class AgentRunner:
             conversation_history=conversation_history,
         )
 
-        # Auto-derive token budget from model's context window × max iterations
+        # Auto-derive token budget for TRACKING ONLY (not enforced as a hard limit)
         from robothor.engine.model_registry import compute_token_budget
 
         auto_budget = compute_token_budget(agent_config.model_primary, agent_config.max_iterations)
@@ -635,33 +635,15 @@ class AgentRunner:
         if plan_result and hasattr(plan_result, "estimated_steps"):
             plan_steps = plan_result.estimated_steps
 
-        for _iteration in range(max_iterations):
-            # ── [STATUS] Emit iteration_start lifecycle event ──
-            if on_status:
-                with contextlib.suppress(Exception):
-                    await on_status(
-                        {
-                            "event": "iteration_start",
-                            "iteration": _iteration + 1,
-                            "max_iterations": max_iterations,
-                        }
-                    )
+        # Soft check-in interval (repurposed from old max_iterations hard cap)
+        _checkin_interval = max_iterations
+        _safety_cap = getattr(agent_config, "safety_cap", 200)
+        _iteration = 0
 
-            # ── [BUDGET] Check token/cost budget ──
-            budget_status = session.check_budget(session.run.token_budget)
-            if budget_status == "exhausted":
-                session.run.budget_exhausted = True
-                session.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "[SYSTEM] Budget exhausted. You must wrap up immediately. "
-                            "Summarize your progress and any remaining work."
-                        ),
-                    }
-                )
-                # Allow one more LLM call to wrap up, then break
-                await self._llm_call_and_record(
+        while True:
+            # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
+            if _iteration >= _safety_cap:
+                await self._force_wrapup(
                     session,
                     models,
                     tool_schemas,
@@ -669,16 +651,49 @@ class AgentRunner:
                     broken_models,
                     agent_config.temperature,
                     trace,
+                    reason=f"Safety limit reached ({_safety_cap} iterations).",
                 )
                 return
+
+            # ── [SOFT CHECK-IN] Nudge LLM to self-assess progress ──
+            if _iteration > 0 and _checkin_interval > 0 and _iteration % _checkin_interval == 0:
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM] Progress check-in (iteration {_iteration}): "
+                            "Are you making progress toward the goal? If you are stuck "
+                            "in a loop or have completed the task, provide your final "
+                            "answer and stop calling tools. If making progress, continue."
+                        ),
+                    }
+                )
+
+            # ── [STATUS] Emit iteration_start lifecycle event ──
+            if on_status:
+                with contextlib.suppress(Exception):
+                    await on_status(
+                        {
+                            "event": "iteration_start",
+                            "iteration": _iteration + 1,
+                            "checkin_interval": _checkin_interval,
+                            "safety_cap": _safety_cap,
+                        }
+                    )
+
+            # ── [BUDGET] Token tracking (informational only, not enforced) ──
+            budget_status = session.check_budget(session.run.token_budget)
+            if budget_status == "exhausted" and not session.run.budget_exhausted:
+                session.run.budget_exhausted = True  # track for analytics
             if budget_status == "warning" and not budget_warning_sent:
                 budget_warning_sent = True
                 session.messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "[SYSTEM] You are approaching your budget limit (>80%). "
-                            "Prioritize the most important remaining work."
+                            "[SYSTEM] Token usage note: you have used >80% of the "
+                            "estimated token budget for this run. This is informational "
+                            "only — continue working as needed to complete the task."
                         ),
                     }
                 )
@@ -1012,7 +1027,16 @@ class AgentRunner:
             # ── [ESCALATION] Check thresholds ──
             if escalation:
                 if escalation.should_abort():
-                    session.record_error(f"Hard abort: {escalation.total_errors} total errors")
+                    await self._force_wrapup(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        agent_config.temperature,
+                        trace,
+                        reason=f"Too many errors ({escalation.total_errors} total). Summarize progress.",
+                    )
                     return
                 esc_msg = escalation.get_escalation_message()
                 if esc_msg:
@@ -1063,10 +1087,50 @@ class AgentRunner:
                     plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
                 )
 
-        # Hit max iterations
-        session.record_error(f"Max iterations reached ({max_iterations})")
+            _iteration += 1
 
-    # ─── LLM call helper (shared by main loop and budget wrap-up) ─────
+    # ─── Force wrap-up (used by safety valve and escalation abort) ─────
+
+    async def _force_wrapup(
+        self,
+        session: AgentSession,
+        models: list[str],
+        tool_schemas: list[dict[str, Any]],
+        on_content: Callable[[str], Awaitable[None]] | None,
+        broken_models: set[str],
+        temperature: float,
+        trace: Any = None,
+        *,
+        reason: str = "Run ending.",
+    ) -> None:
+        """Force the agent to produce a final summary before the run exits.
+
+        Injects a system message with the reason, makes one final LLM call
+        (with no tools so it must produce text), and records the error.
+        """
+        session.record_error(reason)
+        session.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"[SYSTEM] {reason} You MUST now produce a final summary for the user. "
+                    "Describe what you accomplished and what remains to be done. "
+                    "Do NOT call any tools."
+                ),
+            }
+        )
+        # Call with empty tool schemas so the LLM can only produce text
+        await self._llm_call_and_record(
+            session,
+            models,
+            [],
+            on_content,
+            broken_models,
+            temperature,
+            trace,
+        )
+
+    # ─── LLM call helper (shared by main loop and wrap-up) ─────
 
     async def _llm_call_and_record(
         self,

@@ -47,9 +47,13 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         return True
 
     if not run.output_text:
-        logger.debug("No output to deliver for %s", config.id)
-        run.delivery_status = "no_output"
-        return True
+        if run.error_message:
+            # Always notify the user when a run failed — never silently swallow errors
+            run.output_text = f"\u26a0\ufe0f Task incomplete \u2014 {run.error_message}"
+        else:
+            logger.debug("No output to deliver for %s", config.id)
+            run.delivery_status = "no_output"
+            return True
 
     # Strip any trailing HEARTBEAT_OK the LLM may hallucinate
     text = run.output_text.strip()

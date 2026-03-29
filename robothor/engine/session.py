@@ -213,13 +213,13 @@ class AgentSession:
         return self.run
 
     def check_budget(self, token_budget: int = 0) -> str:
-        """Check if token budget is exhausted, approaching, or ok.
+        """Check token budget status for observability and soft warnings.
 
         Returns: "exhausted", "warning", or "ok"
 
-        Note: cost budgets were removed — cost is still tracked per run
-        (total_cost_usd) but no longer enforces a spending cap. Token
-        budgets remain as context-window guardrails.
+        Note: This is used for TRACKING and soft LLM nudges only.
+        The engine does NOT enforce budget as a hard stop — runs
+        continue regardless of budget status.
         """
         if token_budget > 0:
             total_tokens = self.run.input_tokens + self.run.output_tokens

@@ -362,18 +362,19 @@ class TestBrokenModelTracking:
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_per_agent_max_iterations_respected(
+    async def test_safety_cap_stops_runaway_loop(
         self, runner, sample_agent_config, mock_litellm_response
     ):
-        """Agent uses its own max_iterations, not the engine default."""
-        sample_agent_config.max_iterations = 3
+        """Safety cap stops infinite loops and forces a wrap-up summary."""
+        sample_agent_config.max_iterations = 3  # check-in interval
+        sample_agent_config.safety_cap = 5  # hard safety valve
 
         tc = MagicMock()
         tc.id = "call_1"
         tc.function.name = "list_tasks"
         tc.function.arguments = "{}"
 
-        # Always return tool calls so the loop keeps going
+        # Always return tool calls so the loop keeps going (simulates runaway)
         async def mock_completion(**kwargs):
             resp = mock_litellm_response(content=None, tool_calls=[tc])
             resp.choices[0].message.content = None
@@ -386,12 +387,11 @@ class TestBrokenModelTracking:
         runner.registry.get_tool_names.return_value = ["list_tasks"]
 
         llm_call_count = 0
-        original_mock = mock_completion
 
         async def counting_mock(**kwargs):
             nonlocal llm_call_count
             llm_call_count += 1
-            return await original_mock(**kwargs)
+            return await mock_completion(**kwargs)
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
@@ -403,14 +403,121 @@ class TestBrokenModelTracking:
                             agent_config=sample_agent_config,
                         )
 
-        # Should hit max iterations (3), not the engine default (5 from conftest)
-        assert llm_call_count == 3
-        # Max iterations error is recorded as a step
+        # 5 iterations of tool calls + 1 wrap-up call = 6 total LLM calls
+        assert llm_call_count == 6
+        # Safety limit error is recorded
         error_steps = [
-            s for s in run.steps if s.error_message and "Max iterations" in s.error_message
+            s for s in run.steps if s.error_message and "Safety limit" in s.error_message
         ]
         assert len(error_steps) == 1
-        assert "(3)" in error_steps[0].error_message
+
+    @pytest.mark.asyncio
+    async def test_checkin_message_injected_at_interval(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Check-in messages are injected every max_iterations iterations."""
+        sample_agent_config.max_iterations = 2  # check-in every 2 iterations
+        sample_agent_config.safety_cap = 10
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        call_count = 0
+        captured_messages = []
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Capture messages to check for check-in injections
+            if "messages" in kwargs:
+                captured_messages.append(list(kwargs["messages"]))
+            # Stop after 5 iterations by returning no tool calls
+            if call_count >= 5:
+                return mock_litellm_response(content="Done")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+
+        # Check that check-in messages were injected at iterations 2 and 4
+        all_messages = [m for msgs in captured_messages for m in msgs]
+        checkin_messages = [
+            m
+            for m in all_messages
+            if m.get("role") == "user" and "Progress check-in" in m.get("content", "")
+        ]
+        assert len(checkin_messages) >= 2
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_does_not_stop_loop(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Token budget exhaustion is tracked but does not stop the run."""
+        sample_agent_config.max_iterations = 50
+        sample_agent_config.safety_cap = 200
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        call_count = 0
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Stop after 3 iterations
+            if call_count >= 3:
+                return mock_litellm_response(content="Done")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            # Simulate high token usage
+            resp.usage = MagicMock()
+            resp.usage.prompt_tokens = 50000
+            resp.usage.completion_tokens = 5000
+            resp.usage.total_tokens = 55000
+            return resp
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        with patch(
+                            "robothor.engine.model_registry.compute_token_budget",
+                            return_value=10000,
+                        ):
+                            run = await runner.execute(
+                                "test-agent",
+                                "hello",
+                                agent_config=sample_agent_config,
+                            )
+
+        # Run completed normally (3 calls) — budget did NOT cut it short
+        assert call_count == 3
+        assert run.output_text == "Done"
 
 
 class TestOnToolCallback:
