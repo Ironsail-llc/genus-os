@@ -140,7 +140,8 @@ async def _browser(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "error": f"Unknown browser action: {action}. Available: {', '.join(sorted(dispatch.keys()))}"
         }
 
-    return await handler(args, ctx)
+    result: dict[str, Any] = await handler(args, ctx)
+    return result
 
 
 # ---------------------------------------------------------------------------

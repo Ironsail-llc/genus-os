@@ -30,7 +30,7 @@ def log_action(
 ) -> None:
     """Log a desktop/browser action to the JSONL audit trail."""
     try:
-        entry = {
+        entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "action": action,
             "tool_name": tool_name,

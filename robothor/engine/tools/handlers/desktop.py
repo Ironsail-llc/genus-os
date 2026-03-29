@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import os
 import subprocess
 import tempfile
 import time
+from pathlib import Path as _Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -92,8 +94,6 @@ async def _screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if proc.returncode != 0:
                 return {"error": f"scrot failed: {proc.stderr.strip()}"}
 
-            from pathlib import Path as _Path
-
             data = base64.b64encode(_Path(path).read_bytes()).decode("ascii")
 
             # Get actual dimensions via identify
@@ -116,8 +116,6 @@ async def _screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "format": "png",
             }
         finally:
-            import contextlib
-
             with contextlib.suppress(OSError):
                 _Path(path).unlink()
 
@@ -393,7 +391,7 @@ async def _describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
     # First, take the screenshot
-    screenshot_result = await _screenshot(args, ctx)
+    screenshot_result: dict[str, Any] = await _screenshot(args, ctx)
     if "error" in screenshot_result:
         return screenshot_result
 
