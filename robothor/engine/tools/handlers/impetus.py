@@ -37,7 +37,7 @@ class ImpetusMCPClient:
         self._request_id += 1
         return self._request_id
 
-    async def _send(self, message: dict) -> dict:
+    async def _send(self, message: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token}",
@@ -57,14 +57,14 @@ class ImpetusMCPClient:
 
         content_type = r.headers.get("content-type", "")
         if "application/json" in content_type or "text/json" in content_type:
-            return r.json()
+            return r.json()  # type: ignore[no-any-return]
         text = r.text
         try:
-            return json.loads(text)
+            return json.loads(text)  # type: ignore[no-any-return]
         except (json.JSONDecodeError, ValueError):
             return {"error": f"Unexpected response ({r.status_code}): {text[:200]}"}
 
-    async def ensure_initialized(self):
+    async def ensure_initialized(self) -> None:
         if self._initialized:
             return
         await self._send(
@@ -82,7 +82,7 @@ class ImpetusMCPClient:
         await self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self._initialized = True
 
-    async def call_tool(self, name: str, arguments: dict | None = None) -> dict:
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         await self.ensure_initialized()
         result = await self._send(
             {
@@ -110,23 +110,23 @@ class ImpetusMCPClient:
         return self._extract_content(result)
 
     @staticmethod
-    def _is_session_error(result: dict) -> bool:
+    def _is_session_error(result: dict[str, Any]) -> bool:
         err = result.get("error", "")
         if isinstance(err, dict):
             err = err.get("message", "")
         return isinstance(err, str) and "session" in err.lower()
 
     @staticmethod
-    def _extract_content(result: dict) -> dict:
+    def _extract_content(result: dict[str, Any]) -> dict[str, Any]:
         content = result.get("result", {}).get("content", [])
         if content and content[0].get("type") == "text":
             try:
-                return json.loads(content[0]["text"])
+                return json.loads(content[0]["text"])  # type: ignore[no-any-return]
             except (json.JSONDecodeError, KeyError):
                 return {"text": content[0].get("text", "")}
-        return result.get("result", {})
+        return result.get("result", {})  # type: ignore[no-any-return]
 
-    def reset(self):
+    def reset(self) -> None:
         self.session_id = None
         self._initialized = False
 
