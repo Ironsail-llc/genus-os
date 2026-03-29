@@ -43,8 +43,6 @@ from routers.tenants import router as tenants_router
 
 _bridge_config: dict = {
     "memory_url": os.getenv("MEMORY_URL", "http://localhost:9099"),
-    "impetus_one_url": os.getenv("IMPETUS_ONE_BASE_URL", "http://localhost:8000"),
-    "impetus_one_token": os.getenv("IMPETUS_ONE_API_TOKEN", ""),
 }
 
 http_client: httpx.AsyncClient | None = None
