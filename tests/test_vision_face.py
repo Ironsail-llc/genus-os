@@ -3,8 +3,11 @@
 import json
 
 import numpy as np
+import pytest
 
 from robothor.vision.face import FACE_MATCH_THRESHOLD, FACE_MODEL, FaceRecognizer
+
+pytestmark = pytest.mark.vision
 
 # ─── Config Defaults ─────────────────────────────────────────────────
 
