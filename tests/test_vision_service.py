@@ -13,6 +13,8 @@ import pytest
 from robothor.vision.alerts import AlertManager
 from robothor.vision.service import VALID_MODES, CameraStream, VisionService
 
+pytestmark = pytest.mark.vision
+
 # ─── Fixtures ────────────────────────────────────────────────────
 
 

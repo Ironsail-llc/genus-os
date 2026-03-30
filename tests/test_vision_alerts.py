@@ -11,6 +11,8 @@ from robothor.vision.alerts import (
     WebhookAlert,
 )
 
+pytestmark = pytest.mark.vision
+
 # ─── TelegramAlert ───────────────────────────────────────────────────
 
 

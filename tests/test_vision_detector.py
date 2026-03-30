@@ -13,6 +13,8 @@ from robothor.vision.detector import (
     detect_motion,
 )
 
+pytestmark = pytest.mark.vision
+
 # ─── Config Defaults ─────────────────────────────────────────────────
 
 
