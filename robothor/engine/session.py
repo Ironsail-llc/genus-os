@@ -9,7 +9,10 @@ Manages the conversation history for a single agent run:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
@@ -43,6 +46,7 @@ class AgentSession:
         trigger_detail: str | None = None,
         tenant_id: str = "robothor-primary",
         correlation_id: str | None = None,
+        tool_offload_threshold: int = 0,
     ) -> None:
         self.run = AgentRun(
             id=str(uuid.uuid4()),
@@ -56,6 +60,7 @@ class AgentSession:
         self.messages: list[dict[str, Any]] = []
         self._step_counter = 0
         self._start_time: float | None = None
+        self._tool_offload_threshold = tool_offload_threshold
 
     @property
     def run_id(self) -> str:
@@ -152,9 +157,11 @@ class AgentSession:
         self.run.steps.append(step)
 
         # Append tool result to conversation
-        import json
-
         content = json.dumps(tool_output, default=str)
+
+        # Offload large results to temp file, keeping summary + path in context
+        if self._tool_offload_threshold and len(content) > self._tool_offload_threshold:
+            content = self._offload_tool_result(content, tool_name)
 
         # Wrap untrusted external data with tags so the LLM sees a boundary
         if tool_name in EXTERNAL_DATA_TOOLS:
@@ -228,6 +235,44 @@ class AgentSession:
             if total_tokens >= token_budget * 0.8:
                 return "warning"
         return "ok"
+
+    # ── Eager tool result compression ──────────────────────────────
+
+    def _offload_tool_result(self, content: str, tool_name: str) -> str:
+        """Write large tool result to temp file, return summary + file path."""
+        from robothor.engine.compaction import extract_tool_summary
+
+        summary = extract_tool_summary(content)
+        fd, path = tempfile.mkstemp(prefix=f"tool_{tool_name}_", suffix=".txt")
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        return f"{summary}\n[Full output: {path} — use read_file to retrieve if needed]"
+
+    def thin_previous_tool_results(self, protect_after_index: int) -> int:
+        """Compress tool results from previous iterations to one-line summaries.
+
+        Args:
+            protect_after_index: Messages at or after this index keep full content.
+
+        Returns:
+            Characters saved.
+        """
+        from robothor.engine.compaction import TOOL_SUMMARY_MIN_CHARS, extract_tool_summary
+
+        chars_saved = 0
+        for i, msg in enumerate(self.messages):
+            if i >= protect_after_index:
+                break
+            if msg.get("role") != "tool":
+                continue
+            content = msg.get("content", "")
+            if len(content) < TOOL_SUMMARY_MIN_CHARS:
+                continue
+            summary = extract_tool_summary(content)
+            if len(summary) < len(content):
+                chars_saved += len(content) - len(summary)
+                msg["content"] = summary
+        return chars_saved
 
     def get_final_text(self) -> str | None:
         """Extract the final assistant text from the conversation.

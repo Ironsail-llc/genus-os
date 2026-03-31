@@ -216,6 +216,8 @@ class AgentConfig:
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
     sandbox: str = "local"  # "local" or "docker"
+    eager_tool_compression: bool = True
+    tool_offload_threshold: int = 5000  # chars; results above this get offloaded to file
 
 
 @dataclass

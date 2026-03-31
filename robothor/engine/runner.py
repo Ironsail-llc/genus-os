@@ -208,6 +208,7 @@ class AgentRunner:
             trigger_detail=trigger_detail,
             tenant_id=self.config.tenant_id,
             correlation_id=correlation_id,
+            tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
         # Sub-agent: link to parent run
@@ -778,6 +779,7 @@ class AgentRunner:
         _checkin_interval = max_iterations
         _safety_cap = getattr(agent_config, "safety_cap", 200)
         _iteration = 0
+        _pre_iteration_msg_idx = len(session.messages)
 
         while True:
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
@@ -855,6 +857,17 @@ class AgentRunner:
                 session.run._budget_exhausted_iters = budget_exhausted_iters  # type: ignore[attr-defined]
                 if budget_exhausted_iters > 2:
                     tool_schemas = []  # force text-only response
+
+            # ── [EAGER COMPRESSION] Thin previous iterations' tool results ──
+            if agent_config.eager_tool_compression and _iteration > 0:
+                chars_saved = session.thin_previous_tool_results(
+                    protect_after_index=_pre_iteration_msg_idx,
+                )
+                if chars_saved > 0:
+                    logger.debug(
+                        "Eager tool compression saved ~%d tokens",
+                        chars_saved // 4,
+                    )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -1295,6 +1308,8 @@ class AgentRunner:
                     plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
                 )
 
+            # Update boundary for next iteration's eager compression
+            _pre_iteration_msg_idx = len(session.messages)
             _iteration += 1
 
     # ─── Force wrap-up (used by safety valve and escalation abort) ─────
