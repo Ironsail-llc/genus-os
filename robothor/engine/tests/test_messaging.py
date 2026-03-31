@@ -42,7 +42,7 @@ class TestAgentMessenger:
     def test_send_no_redis(self):
         m = AgentMessenger(redis_client=None)
         # Patch _get_redis to return None
-        m._get_redis = lambda: None
+        m._get_redis = lambda: None  # type: ignore[method-assign]
         ok = m.send("a", "b", "x")
         assert ok is False
 

@@ -212,7 +212,7 @@ class TestRouter:
     def test_router_has_expected_routes(self):
         from robothor.engine.dashboards.router import router
 
-        paths = {r.path for r in router.routes}
+        paths = {r.path for r in router.routes if hasattr(r, "path")}
         assert "/dashboards/status" in paths
         assert "/dashboards/status/api" in paths
         assert "/dashboards/ops" in paths

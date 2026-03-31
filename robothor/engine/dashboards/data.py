@@ -17,7 +17,8 @@ LOGS_DIR = Path.home() / "robothor" / "brain" / "memory_system" / "logs"
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
         if path.exists():
-            return json.loads(path.read_text())
+            result: dict[str, Any] = json.loads(path.read_text())
+            return result
     except Exception as e:
         logger.warning("Failed to load %s: %s", path, e)
     return None

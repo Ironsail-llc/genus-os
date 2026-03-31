@@ -131,7 +131,7 @@ class TestTeamManager:
 
     def test_no_redis(self):
         tm = TeamManager(redis_client=None)
-        tm._get_redis = lambda: None
+        tm._get_redis = lambda: None  # type: ignore[method-assign]
         assert tm.create_team("x", ["a"]) is None
         assert tm.get_team("x") is None
         assert tm.list_teams() == []
