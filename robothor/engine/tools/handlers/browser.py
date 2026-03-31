@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import os
+import re as re_mod
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from playwright.async_api import Browser, BrowserContext, Page
+    from playwright.async_api import Browser, BrowserContext, Locator, Page
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -29,6 +30,52 @@ _session_lock = asyncio.Lock()
 # Auto-cleanup after 10 minutes of inactivity
 SESSION_TIMEOUT_SECONDS = 600
 
+# ARIA roles that represent interactive elements worth indexing for the LLM
+INTERACTIVE_ROLES = frozenset(
+    {
+        "button",
+        "checkbox",
+        "combobox",
+        "link",
+        "listbox",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "option",
+        "radio",
+        "searchbox",
+        "slider",
+        "spinbutton",
+        "switch",
+        "tab",
+        "textbox",
+        "treeitem",
+    }
+)
+
+# Max indexed elements returned to the LLM to keep context manageable
+_MAX_INDEXED_ELEMENTS = 100
+
+# Regex to parse ARIA snapshot lines like: textbox "First Name" [required]
+_ARIA_LINE_RE = re_mod.compile(
+    r"^(?P<indent>\s*)-\s+"
+    r"(?P<role>\w+)"
+    r'(?:\s+"(?P<name>[^"]*)")?'
+    r"(?:\s+\[(?P<attrs>[^\]]*)\])?"
+    r"(?::\s*(?P<text>.*))?$"
+)
+
+
+@dataclass
+class ElementRef:
+    """A distilled interactive element from the ARIA tree."""
+
+    index: int
+    role: str
+    name: str
+    text: str
+    attributes: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass
 class BrowserSession:
@@ -39,6 +86,7 @@ class BrowserSession:
     page: Page
     created_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
+    element_registry: dict[int, ElementRef] = field(default_factory=dict)
 
     def touch(self) -> None:
         self.last_used = time.time()
@@ -46,6 +94,107 @@ class BrowserSession:
     @property
     def expired(self) -> bool:
         return (time.time() - self.last_used) > SESSION_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# ARIA snapshot distillation
+# ---------------------------------------------------------------------------
+
+
+def _parse_attrs(attrs_str: str) -> dict[str, str]:
+    """Parse attribute string like 'required, checked' into a dict."""
+    result: dict[str, str] = {}
+    if not attrs_str:
+        return result
+    for part in attrs_str.split(","):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+        elif part:
+            result[part] = "true"
+    return result
+
+
+def _distill_snapshot(raw: str) -> tuple[str, dict[int, ElementRef]]:
+    """Parse an ARIA snapshot YAML string into a compact indexed element list.
+
+    Returns (distilled_text, element_registry) where distilled_text is a
+    compact representation with @N refs for interactive elements, and
+    element_registry maps index -> ElementRef for locator resolution.
+    """
+    if not raw or not raw.strip():
+        return "(empty page)", {}
+
+    registry: dict[int, ElementRef] = {}
+    output_lines: list[str] = []
+    next_index = 1
+
+    for line in raw.splitlines():
+        m = _ARIA_LINE_RE.match(line)
+        if not m:
+            # Preserve non-matching lines (plain text content) with indent
+            stripped = line.strip()
+            if stripped and stripped != "-":
+                output_lines.append(line)
+            continue
+
+        indent = m.group("indent") or ""
+        role = m.group("role")
+        name = m.group("name") or ""
+        attrs_str = m.group("attrs") or ""
+        text = m.group("text") or ""
+        attrs = _parse_attrs(attrs_str)
+
+        # Build display parts
+        display_name = f' "{name}"' if name else ""
+        display_attrs = f" [{attrs_str}]" if attrs_str else ""
+        display_text = f": {text}" if text else ""
+
+        if role in INTERACTIVE_ROLES and next_index <= _MAX_INDEXED_ELEMENTS:
+            # Indexed interactive element
+            ref_tag = f"@{next_index}"
+            registry[next_index] = ElementRef(
+                index=next_index,
+                role=role,
+                name=name,
+                text=text.strip() if text else "",
+                attributes=attrs,
+            )
+            output_lines.append(
+                f"{indent}  {ref_tag} {role}{display_name}{display_attrs}{display_text}"
+            )
+            next_index += 1
+        elif role in (
+            "heading",
+            "navigation",
+            "main",
+            "banner",
+            "contentinfo",
+            "complementary",
+            "region",
+            "form",
+            "dialog",
+            "alertdialog",
+            "alert",
+            "status",
+            "img",
+        ):
+            # Structural/landmark elements — keep for context, no index
+            output_lines.append(f"{indent}  {role}{display_name}{display_attrs}{display_text}")
+        elif role == "paragraph" and text:
+            # Keep paragraph text for context
+            output_lines.append(f"{indent}  {text}")
+        # else: skip generic/group/list wrappers to reduce noise
+
+    if next_index > _MAX_INDEXED_ELEMENTS + 1:
+        overflow = next_index - _MAX_INDEXED_ELEMENTS - 1
+        output_lines.append(
+            f"\n... and {overflow} more interactive elements (scroll down or refine scope)"
+        )
+
+    distilled = "\n".join(output_lines)
+    return distilled, registry
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -221,7 +370,24 @@ async def _action_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         return {"error": "No URL provided (use 'targetUrl' or 'url' parameter)"}
 
     try:
-        response = await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # Phase 1: Try networkidle (catches SPAs like Workday that settle)
+        response = None
+        try:
+            response = await session.page.goto(url, wait_until="networkidle", timeout=20000)
+        except Exception:
+            # Phase 2: Fallback for pages that never go idle (streaming, websockets)
+            response = await session.page.goto(url, wait_until="domcontentloaded", timeout=15000)
+
+        # Phase 3: Extra wait for JS framework rendering
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await session.page.wait_for_selector(
+                "button, input, a, select, textarea, "
+                "[role='button'], [role='link'], [role='textbox']",
+                timeout=3000,
+            )
+
         return {
             "url": session.page.url,
             "title": await session.page.title(),
@@ -258,10 +424,12 @@ async def _action_screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str
 
 
 async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Get the accessibility tree (ARIA snapshot) of the current page.
+    """Get a distilled accessibility snapshot with indexed @N element refs.
 
-    Returns a structured tree with element refs that can be used for targeted
-    interactions via the 'act' action.
+    Returns interactive elements with @1, @2, ... refs for use with the
+    'act' action.  Structural context (headings, landmarks) is preserved
+    without indexing.  When few interactive elements are detected, a
+    screenshot is auto-included as a vision fallback.
     """
     agent_id = ctx.agent_id or "default"
     session = await _get_session(agent_id)
@@ -269,14 +437,49 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         return {"error": "Browser not started."}
 
     try:
-        tree = await session.page.locator(":root").aria_snapshot()
-        return {
-            "snapshot": tree,
+        raw = await session.page.locator(":root").aria_snapshot(timeout=15000)
+        distilled, registry = _distill_snapshot(raw)
+        session.element_registry = registry
+
+        result: dict[str, Any] = {
+            "snapshot": distilled,
+            "element_count": len(registry),
             "url": session.page.url,
             "title": await session.page.title(),
         }
+
+        # Vision fallback: auto-include screenshot when few interactive elements
+        if len(registry) <= 2:
+            try:
+                data = await session.page.screenshot()
+                result["screenshot_base64"] = base64.b64encode(data).decode("ascii")
+                result["vision_fallback"] = True
+                result["note"] = (
+                    "Few interactive elements detected in ARIA tree. "
+                    "Screenshot included for visual inspection. "
+                    "Use act(kind='click', x=..., y=...) for coordinate-based interaction."
+                )
+            except Exception:
+                pass  # Screenshot failure is non-fatal
+
+        return result
+
     except Exception as e:
-        return {"error": f"Snapshot failed: {e}"}
+        # ARIA snapshot failed entirely — fall back to screenshot-only
+        logger.warning("ARIA snapshot failed for %s: %s", agent_id, e)
+        try:
+            data = await session.page.screenshot()
+            return {
+                "snapshot": "(ARIA tree unavailable — use screenshot for visual inspection)",
+                "element_count": 0,
+                "screenshot_base64": base64.b64encode(data).decode("ascii"),
+                "vision_fallback": True,
+                "url": session.page.url,
+                "title": await session.page.title(),
+                "error_detail": str(e),
+            }
+        except Exception as e2:
+            return {"error": f"Snapshot failed: {e}; screenshot also failed: {e2}"}
 
 
 async def _action_pdf(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -356,12 +559,78 @@ async def _action_tabs(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         return {"error": f"Failed to list tabs: {e}"}
 
 
+async def _resolve_ref(page: Page, registry: dict[int, ElementRef], ref_str: str) -> Locator | None:
+    """Resolve an @N ref to a Playwright Locator using semantic methods.
+
+    Tries a cascade of strategies from most-specific to least-specific:
+    1. get_by_role(role, name=exact_name)
+    2. get_by_role(role) when only one match exists
+    3. get_by_label / get_by_placeholder for textbox-like roles
+    4. get_by_text for links/buttons
+    5. get_by_role with case-insensitive partial name match
+    """
+    match = re_mod.match(r"@(\d+)", ref_str)
+    if not match:
+        return None
+    index = int(match.group(1))
+    elem = registry.get(index)
+    if elem is None:
+        return None
+
+    # Strategy 1: role + exact name (most reliable)
+    if elem.name:
+        locator = page.get_by_role(elem.role, name=elem.name)
+        if await locator.count() >= 1:
+            return locator.first
+
+    # Strategy 2: role only, if unique on page
+    locator = page.get_by_role(elem.role)
+    if await locator.count() == 1:
+        return locator.first
+
+    # Strategy 3: label/placeholder for input-like roles
+    if elem.role in ("textbox", "searchbox", "combobox", "spinbutton") and elem.name:
+        for method in (page.get_by_label, page.get_by_placeholder):
+            locator = method(elem.name)
+            if await locator.count() >= 1:
+                return locator.first
+
+    # Strategy 4: text match for links/buttons
+    if elem.role in ("link", "button", "tab", "menuitem") and elem.name:
+        locator = page.get_by_text(elem.name, exact=True)
+        if await locator.count() >= 1:
+            return locator.first
+
+    # Strategy 5: case-insensitive partial name match
+    if elem.name:
+        locator = page.get_by_role(
+            elem.role,
+            name=re_mod.compile(re_mod.escape(elem.name), re_mod.IGNORECASE),
+        )
+        if await locator.count() >= 1:
+            return locator.first
+
+    return None
+
+
+async def _resolve_field_ref(
+    page: Page, registry: dict[int, ElementRef], ref_str: str
+) -> Locator | None:
+    """Resolve a ref from a batch fill field — supports @N and CSS selectors."""
+    if ref_str.startswith("@"):
+        return await _resolve_ref(page, registry, ref_str)
+    if ref_str:
+        return page.locator(ref_str).first
+    return None
+
+
 async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Perform an interaction on the page.
 
     request.kind: click, fill, type, press, scroll, select
-    request.ref: element ref from accessibility snapshot
+    request.ref: @N element ref from most recent snapshot (e.g. "@3")
     request.selector: CSS selector (fallback)
+    request.x, request.y: pixel coordinates (for click)
     """
     agent_id = ctx.agent_id or "default"
     session = await _get_session(agent_id)
@@ -375,52 +644,72 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     kind = request.get("kind", "")
     selector = request.get("selector", "")
     ref = request.get("ref", "")
-
-    # Build locator from selector or ref
-    if ref:
-        # ARIA snapshot refs can be used as [data-ref] or role-based selectors
-        # For simplicity, use getByRole or text-based matching
-        locator_str = selector or f'[aria-label*="{ref}"]'
-    elif selector:
-        locator_str = selector
-    else:
-        locator_str = ""
-
     page = session.page
+
+    # Resolve target locator from @ref or CSS selector
+    locator: Locator | None = None
+    target_desc = ""
+
+    if ref and ref.startswith("@"):
+        locator = await _resolve_ref(page, session.element_registry, ref)
+        if locator is None:
+            return {
+                "error": f"Could not resolve {ref}. Run snapshot again to refresh element list."
+            }
+        elem = session.element_registry.get(int(ref[1:]))
+        target_desc = f'{ref} ({elem.role} "{elem.name}")' if elem else ref
+    elif selector:
+        locator = page.locator(selector).first
+        target_desc = selector
 
     try:
         if kind == "click":
             if request.get("x") is not None and request.get("y") is not None:
                 await page.mouse.click(int(request["x"]), int(request["y"]))
-            elif locator_str:
-                await page.locator(locator_str).first.click(timeout=10000)
+                return {"acted": "click", "target": f"({request['x']}, {request['y']})"}
+            elif locator:
+                await locator.click(timeout=10000)
+                return {"acted": "click", "target": target_desc}
             else:
-                return {"error": "click requires (x, y) coordinates or a selector/ref"}
-            return {
-                "acted": "click",
-                "target": locator_str or f"({request.get('x')}, {request.get('y')})",
-            }
+                return {"error": "click requires @ref, (x,y) coordinates, or a selector"}
 
         elif kind == "fill":
+            # Batch fill: [{ref: "@3", value: "Philip"}, {ref: "@4", value: "Doe"}]
             fields = request.get("fields", [])
             if fields:
+                filled = 0
+                errors: list[str] = []
                 for f in fields:
-                    sel = f.get("selector") or f.get("ref", "")
+                    f_ref = f.get("ref", "")
+                    f_sel = f.get("selector", "")
                     val = f.get("value", "")
-                    if sel:
-                        await page.locator(sel).first.fill(val, timeout=10000)
-                return {"acted": "fill", "fields_count": len(fields)}
-            elif locator_str:
+                    f_locator = await _resolve_field_ref(
+                        page, session.element_registry, f_ref or f_sel
+                    )
+                    if f_locator:
+                        await f_locator.fill(val, timeout=10000)
+                        filled += 1
+                    else:
+                        errors.append(f"Could not resolve {f_ref or f_sel}")
+                result: dict[str, Any] = {
+                    "acted": "fill",
+                    "fields_filled": filled,
+                    "fields_requested": len(fields),
+                }
+                if errors:
+                    result["errors"] = errors
+                return result
+            elif locator:
                 value = request.get("value", "")
-                await page.locator(locator_str).first.fill(value, timeout=10000)
-                return {"acted": "fill", "target": locator_str}
+                await locator.fill(value, timeout=10000)
+                return {"acted": "fill", "target": target_desc}
             else:
-                return {"error": "fill requires a selector/ref and value"}
+                return {"error": "fill requires @ref or selector and value"}
 
         elif kind == "type":
             text = request.get("text", "")
-            if locator_str:
-                await page.locator(locator_str).first.type(text, timeout=10000)
+            if locator:
+                await locator.type(text, timeout=10000)
             else:
                 await page.keyboard.type(text)
             return {"acted": "type", "text_length": len(text)}
@@ -440,10 +729,10 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
         elif kind == "select":
             value = request.get("value", "")
-            if locator_str:
-                await page.locator(locator_str).first.select_option(value, timeout=10000)
-                return {"acted": "select", "value": value}
-            return {"error": "select requires a selector/ref"}
+            if locator:
+                await locator.select_option(value, timeout=10000)
+                return {"acted": "select", "value": value, "target": target_desc}
+            return {"error": "select requires @ref or selector"}
 
         else:
             return {

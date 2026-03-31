@@ -38,12 +38,20 @@ For web tasks, prefer the `browser` tool over desktop clicking — it's faster a
 **Workflow:**
 1. `browser(action="start")` — launch Chromium
 2. `browser(action="navigate", url="https://...")` — go to URL
-3. `browser(action="snapshot")` — get ARIA accessibility tree (structured, with element refs)
-4. `browser(action="act", request={kind: "click", selector: "..."})` — interact by selector
-5. `browser(action="screenshot")` — capture visual state if needed
-6. `browser(action="stop")` — close when done
+3. `browser(action="snapshot")` — get distilled page elements with **@N refs**
+4. Scan the returned element list. Each interactive element has an `@N` reference.
+5. `browser(action="act", request={kind: "fill", ref: "@3", value: "Philip"})` — interact by ref
+6. `browser(action="snapshot")` — **re-snapshot** to verify and get updated refs
+7. Repeat steps 4-6 until the task is complete
+8. `browser(action="stop")` — close when done
 
-**Use snapshots over screenshots for browser interaction.** The ARIA tree gives you element selectors that are more reliable than coordinate-based clicking.
+**Key rules:**
+- **Always snapshot before acting.** The `@N` refs are only valid for the most recent snapshot.
+- **Re-snapshot after any page-changing action** (click, fill, navigate) before the next action.
+- **Prefer @N refs over CSS selectors.** Refs use semantic locators (role, label, placeholder) which are far more reliable.
+- **Batch form filling:** `request={kind: "fill", fields: [{ref: "@3", value: "Philip"}, {ref: "@4", value: "Doe"}]}`
+- **Vision fallback:** If snapshot returns few elements and includes a screenshot, the page may use canvas/WebGL. Fall back to coordinate clicking: `request={kind: "click", x: 640, y: 480}`
+- Use `browser(action="screenshot")` when you need to see visual layout that the ARIA tree can't convey (colors, images, spatial arrangement).
 
 ## Guidelines
 
