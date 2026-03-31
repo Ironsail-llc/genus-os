@@ -80,7 +80,7 @@ class OllamaConfig:
     port: int = 11434
     embedding_model: str = "qwen3-embedding:0.6b"
     reranker_model: str = "Qwen3-Reranker-0.6B:F16"
-    generation_model: str = "nemotron-3-super"
+    generation_model: str = "qwen3:32b"
     vision_model: str = "llama3.2-vision:11b"
 
     # Per-model-class keep_alive: how long models stay loaded after last use.
