@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -146,7 +147,8 @@ class TestToolExecution:
     @pytest.mark.asyncio
     async def test_exec_tool_timeout(self):
         """Shell exec respects timeout."""
-        result = await _execute_tool("exec", {"command": "sleep 60"})
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("sleep", 30)):
+            result = await _execute_tool("exec", {"command": "sleep 60"})
         assert "error" in result
         assert "timed out" in result["error"].lower()
 

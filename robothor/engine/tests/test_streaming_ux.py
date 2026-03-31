@@ -59,7 +59,7 @@ class TestOnStatusLifecycle:
         iteration_events = [e for e in events if e["event"] == "iteration_start"]
         assert len(iteration_events) >= 1
         assert iteration_events[0]["iteration"] == 1
-        assert "max_iterations" in iteration_events[0]
+        assert "safety_cap" in iteration_events[0]
 
     @pytest.mark.asyncio
     async def test_on_status_emits_tools_start_and_done(

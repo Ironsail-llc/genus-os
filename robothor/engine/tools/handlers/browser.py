@@ -129,6 +129,7 @@ def _distill_snapshot(raw: str) -> tuple[str, dict[int, ElementRef]]:
     registry: dict[int, ElementRef] = {}
     output_lines: list[str] = []
     next_index = 1
+    overflow_count = 0
 
     for line in raw.splitlines():
         m = _ARIA_LINE_RE.match(line)
@@ -151,20 +152,23 @@ def _distill_snapshot(raw: str) -> tuple[str, dict[int, ElementRef]]:
         display_attrs = f" [{attrs_str}]" if attrs_str else ""
         display_text = f": {text}" if text else ""
 
-        if role in INTERACTIVE_ROLES and next_index <= _MAX_INDEXED_ELEMENTS:
-            # Indexed interactive element
-            ref_tag = f"@{next_index}"
-            registry[next_index] = ElementRef(
-                index=next_index,
-                role=role,
-                name=name,
-                text=text.strip() if text else "",
-                attributes=attrs,
-            )
-            output_lines.append(
-                f"{indent}  {ref_tag} {role}{display_name}{display_attrs}{display_text}"
-            )
-            next_index += 1
+        if role in INTERACTIVE_ROLES:
+            if next_index <= _MAX_INDEXED_ELEMENTS:
+                # Indexed interactive element
+                ref_tag = f"@{next_index}"
+                registry[next_index] = ElementRef(
+                    index=next_index,
+                    role=role,
+                    name=name,
+                    text=text.strip() if text else "",
+                    attributes=attrs,
+                )
+                output_lines.append(
+                    f"{indent}  {ref_tag} {role}{display_name}{display_attrs}{display_text}"
+                )
+                next_index += 1
+            else:
+                overflow_count += 1
         elif role in (
             "heading",
             "navigation",
@@ -187,14 +191,62 @@ def _distill_snapshot(raw: str) -> tuple[str, dict[int, ElementRef]]:
             output_lines.append(f"{indent}  {text}")
         # else: skip generic/group/list wrappers to reduce noise
 
-    if next_index > _MAX_INDEXED_ELEMENTS + 1:
-        overflow = next_index - _MAX_INDEXED_ELEMENTS - 1
+    if overflow_count > 0:
         output_lines.append(
-            f"\n... and {overflow} more interactive elements (scroll down or refine scope)"
+            f"\n... and {overflow_count} more interactive elements (scroll down or refine scope)"
         )
 
     distilled = "\n".join(output_lines)
     return distilled, registry
+
+
+# JS snippet that walks the DOM including shadow roots to find interactive elements
+_SHADOW_DOM_SCAN_JS = """
+() => {
+    const interactive = [];
+    const TAGS = new Set(['input','button','a','select','textarea']);
+    const ROLES = new Set([
+        'button','checkbox','combobox','link','listbox','menuitem',
+        'option','radio','searchbox','slider','spinbutton','switch',
+        'tab','textbox','treeitem'
+    ]);
+    function walk(node) {
+        if (node.shadowRoot) walk(node.shadowRoot);
+        for (const child of (node.children || [])) {
+            const tag = (child.tagName || '').toLowerCase();
+            const role = child.getAttribute && child.getAttribute('role') || '';
+            if (TAGS.has(tag) || ROLES.has(role)) {
+                interactive.push({
+                    role: role || tag,
+                    name: child.getAttribute('aria-label')
+                        || child.getAttribute('placeholder')
+                        || (child.textContent || '').trim().slice(0, 80)
+                        || '',
+                    type: child.getAttribute('type') || '',
+                });
+            }
+            walk(child);
+        }
+    }
+    walk(document);
+    return interactive;
+}
+"""
+
+
+def _build_shadow_distilled(
+    js_elements: list[dict[str, str]],
+) -> tuple[str, dict[int, ElementRef]]:
+    """Build a distilled snapshot from JS-extracted shadow DOM elements."""
+    registry: dict[int, ElementRef] = {}
+    lines: list[str] = ["(extracted via shadow DOM scan)"]
+    for i, el in enumerate(js_elements[:_MAX_INDEXED_ELEMENTS], start=1):
+        role = el.get("role", "unknown")
+        name = el.get("name", "")
+        display = f'  @{i} {role} "{name}"' if name else f"  @{i} {role}"
+        lines.append(display)
+        registry[i] = ElementRef(index=i, role=role, name=name, text="", attributes={})
+    return "\n".join(lines), registry
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -440,6 +492,24 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         raw = await session.page.locator(":root").aria_snapshot(timeout=15000)
         distilled, registry = _distill_snapshot(raw)
         session.element_registry = registry
+
+        # Shadow DOM probe: if ARIA found very few elements but page has
+        # many DOM nodes, scan shadow roots via JS for hidden interactive elements
+        if len(registry) <= 2:
+            try:
+                dom_count = await session.page.evaluate("document.querySelectorAll('*').length")
+                if dom_count and dom_count > 50:
+                    js_elements = await session.page.evaluate(_SHADOW_DOM_SCAN_JS)
+                    if js_elements and len(js_elements) > len(registry):
+                        distilled, registry = _build_shadow_distilled(js_elements)
+                        session.element_registry = registry
+                        logger.info(
+                            "Shadow DOM scan found %d elements (ARIA had %d)",
+                            len(registry),
+                            len(registry),
+                        )
+            except Exception as shadow_err:
+                logger.debug("Shadow DOM scan failed: %s", shadow_err)
 
         result: dict[str, Any] = {
             "snapshot": distilled,
