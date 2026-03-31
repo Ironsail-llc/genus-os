@@ -47,16 +47,19 @@ describe("SrcdocRenderer", () => {
     expect(srcdoc).toContain("resolveColor");
   });
 
-  it("strips dangerous iframe tags via DOMPurify", () => {
+  it("strips dangerous iframe tags via DOMPurify", async () => {
     render(<SrcdocRenderer html='<div>OK</div><iframe src="evil.com"></iframe>' />);
+    // Wait for async DOMPurify import to complete and re-render
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
     const srcdoc = iframe.getAttribute("srcdoc") || "";
     expect(srcdoc).not.toContain("<iframe src=");
     expect(srcdoc).toContain("OK");
   });
 
-  it("strips event handler attributes via DOMPurify", () => {
+  it("strips event handler attributes via DOMPurify", async () => {
     render(<SrcdocRenderer html='<img onerror="alert(1)" src="x">' />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
     const srcdoc = iframe.getAttribute("srcdoc") || "";
     // The malicious onerror attribute on the <img> should be stripped by DOMPurify.
@@ -64,8 +67,9 @@ describe("SrcdocRenderer", () => {
     expect(srcdoc).not.toContain('onerror="alert');
   });
 
-  it("strips iframe tags via DOMPurify", () => {
+  it("strips iframe tags via DOMPurify", async () => {
     render(<SrcdocRenderer html='<div>Safe</div><iframe src="evil.com">inside</iframe>' />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
     const srcdoc = iframe.getAttribute("srcdoc") || "";
     // DOMPurify removes the forbidden <iframe> tag but preserves safe content

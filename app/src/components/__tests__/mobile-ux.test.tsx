@@ -121,6 +121,7 @@ describe("Mobile UX — AppShell", () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [], active: false }),
+      text: () => Promise.resolve(JSON.stringify({ messages: [], active: false })),
     }) as unknown as typeof fetch;
   });
 
@@ -254,6 +255,7 @@ describe("Mobile UX — ChatPanel (mobile mode)", () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [], active: false }),
+      text: () => Promise.resolve(JSON.stringify({ messages: [], active: false })),
     }) as unknown as typeof fetch;
   });
 
@@ -317,18 +319,21 @@ describe("Mobile UX — ChatPanel (mobile mode)", () => {
 
     global.fetch = vi.fn().mockImplementation((url: string) => {
       if (typeof url === "string" && url.includes("/history")) {
+        const data = {
+          messages: [
+            { role: "assistant", content: "Hello! How can I help?" },
+          ],
+        };
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            messages: [
-              { role: "assistant", content: "Hello! How can I help?" },
-            ],
-          }),
+          json: () => Promise.resolve(data),
+          text: () => Promise.resolve(JSON.stringify(data)),
         });
       }
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ active: false }),
+        text: () => Promise.resolve(JSON.stringify({ active: false })),
       });
     }) as unknown as typeof fetch;
 
@@ -343,6 +348,7 @@ describe("Mobile UX — ChatPanel (desktop mode)", () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [], active: false }),
+      text: () => Promise.resolve(JSON.stringify({ messages: [], active: false })),
     }) as unknown as typeof fetch;
   });
 
@@ -392,6 +398,7 @@ describe("Mobile UX — DefaultDashboard", () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ status: "ok", services: [] }),
+      text: () => Promise.resolve(JSON.stringify({ status: "ok", services: [] })),
     }) as unknown as typeof fetch;
   });
 

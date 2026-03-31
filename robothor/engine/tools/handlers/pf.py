@@ -7,6 +7,7 @@ import json
 import logging
 import shutil
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -42,14 +43,11 @@ def _get_battery_voltage() -> float | None:
     """Read battery voltage from Jetson power rail (INA3221 sensor)."""
     try:
         # Jetson Orin NX exposes voltage via sysfs (INA3221 channel 0 = VDD_IN)
-        voltage_path = "/sys/bus/i2c/drivers/ina3221/1-0040/hwmon"
-        import glob
-
-        hwmon_dirs = glob.glob(f"{voltage_path}/hwmon*")
+        voltage_path = Path("/sys/bus/i2c/drivers/ina3221/1-0040/hwmon")
+        hwmon_dirs = list(voltage_path.glob("hwmon*"))
         if hwmon_dirs:
-            with open(f"{hwmon_dirs[0]}/in1_input") as f:
-                mv = int(f.read().strip())
-                return mv / 1000.0
+            mv = int((hwmon_dirs[0] / "in1_input").read_text().strip())
+            return mv / 1000.0
     except (OSError, ValueError):
         pass
     return None
@@ -64,8 +62,7 @@ def _check_connectivity() -> dict[str, bool]:
         out = _run_cmd(["tailscale", "status", "--json"])
         data = json.loads(out)
         checks["tailscale"] = (
-            data.get("BackendState") == "Running"
-            and data.get("Self", {}).get("Online") is True
+            data.get("BackendState") == "Running" and data.get("Self", {}).get("Online") is True
         )
     except (subprocess.SubprocessError, FileNotFoundError, json.JSONDecodeError):
         checks["tailscale"] = False
@@ -109,8 +106,7 @@ async def _pf_system_status(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 
             # Memory
             try:
-                with open("/proc/meminfo") as f:
-                    meminfo = f.read()
+                meminfo = Path("/proc/meminfo").read_text()
                 mem_total = mem_avail = 0
                 for line in meminfo.splitlines():
                     if line.startswith("MemTotal:"):
@@ -129,9 +125,10 @@ async def _pf_system_status(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 
             # CPU temperature (Jetson thermal zone)
             try:
-                with open("/sys/devices/virtual/thermal/thermal_zone0/temp") as f:
-                    temp_mc = int(f.read().strip())
-                    status["cpu_temp_c"] = round(temp_mc / 1000.0, 1)
+                temp_mc = int(
+                    Path("/sys/devices/virtual/thermal/thermal_zone0/temp").read_text().strip()
+                )
+                status["cpu_temp_c"] = round(temp_mc / 1000.0, 1)
             except (OSError, ValueError):
                 status["cpu_temp_c"] = None
 
@@ -146,11 +143,10 @@ async def _pf_system_status(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 
             # Uptime
             try:
-                with open("/proc/uptime") as f:
-                    uptime_secs = float(f.read().split()[0])
-                    hours = int(uptime_secs // 3600)
-                    mins = int((uptime_secs % 3600) // 60)
-                    status["uptime"] = f"{hours}h {mins}m"
+                uptime_secs = float(Path("/proc/uptime").read_text().split()[0])
+                hours = int(uptime_secs // 3600)
+                mins = int((uptime_secs % 3600) // 60)
+                status["uptime"] = f"{hours}h {mins}m"
             except OSError:
                 status["uptime"] = None
 
