@@ -28,6 +28,12 @@ def create_health_app(
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
+    # Mount dashboard endpoints (replaces brain/ Node.js servers)
+    from robothor.engine.dashboards import get_dashboard_router, get_public_router
+
+    app.include_router(get_dashboard_router())
+    app.include_router(get_public_router())
+
     # Mount chat endpoints when runner is available
     if runner is not None:
         from robothor.engine.chat import init_chat

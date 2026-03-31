@@ -1,6 +1,7 @@
 # Vision Monitor Status
-Last run: 2026-03-21T22:12:46.638341+00:00
+Last run: 2026-03-30T22:12:45.742453+00:00
 Persons detected: 0
 Vision mode: disarmed
-Scene: Living room with marina view, empty, dimly lit evening, no activity
+Scene: No persons detected (who_is_here returned empty)
+Note: look tool returned 503 - snapshot service unavailable
 Status: No escalation - no persons detected

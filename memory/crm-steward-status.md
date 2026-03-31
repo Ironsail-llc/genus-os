@@ -1,5 +1,5 @@
 # CRM Steward Status
-Last run: 2026-03-18T10:00:00-04:00
+Last run: 2026-03-29T10:00:00-04:00
 
 ## Task Hygiene
 - Stuck tasks reset: 0 (none found >4h old)
@@ -8,17 +8,17 @@ Last run: 2026-03-18T10:00:00-04:00
 - SLA overdue escalations: 0 (all within SLA)
 
 ## Quality
-- Blocklist deletions: 0
+- Blocklist deletions: 2 (API smoke test contacts)
 - Field scrubs: 0
 
 ## Dedup
 - Auto-merged: 0
 - Escalated: 0
-- Orphan identifiers fixed: 1 (Craig Nicholson)
+- Orphan identifiers fixed: 1 (Konrad Arciszewski linked)
 
 ## Companies
 - Companies merged: 0
-- Orphan companies deleted: 0 (6 orphan companies found but retained - infrastructure vendors)
+- Orphan companies deleted: 5 (Anthropic, Ypo, Qualtrics-survey, Openrouter, Google)
 
 ## Enrichment
 - Contacts enriched: 0

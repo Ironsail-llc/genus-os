@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Now | Robothor</title>
+  <style>
+    {{ brand_css }}
+    .container { max-width:900px; margin:0 auto; padding:2rem; }
+    nav { position:sticky; top:0; z-index:100; padding:1rem 2rem; margin:-2rem -2rem 2rem -2rem; border-radius:0 0 var(--r-radius-lg) var(--r-radius-lg); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; }
+    .nav-logo { font-size:1.5rem; font-weight:700; color:var(--r-primary); text-decoration:none; }
+    .nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; list-style:none; }
+    .nav-links a { color:var(--r-text-muted); text-decoration:none; font-size:0.9rem; }
+    .nav-links a:hover, .nav-links a.active { color:var(--r-primary); }
+    h1 { font-size:2.5rem; font-weight:700; margin-bottom:0.5rem; }
+    p { margin-bottom:1rem; color:var(--r-text-muted); }
+    .hero { text-align:center; padding:3rem 2rem; }
+    .tagline { color:var(--r-text-muted); font-size:1.1rem; margin-bottom:2rem; }
+    .section { padding:2rem; margin-bottom:1.5rem; }
+    .section-title { font-size:1.1rem; font-weight:600; margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem; }
+    .list-item { padding:1rem; border-bottom:1px solid var(--r-border); }
+    .list-item:last-child { border-bottom:none; }
+    .meta { font-size:0.8rem; color:var(--r-text-dim); }
+    .card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }
+    .card { padding:1.5rem; border-radius:var(--r-radius); }
+    .card-title { font-weight:600; margin-bottom:0.25rem; }
+    .card-desc { font-size:0.85rem; color:var(--r-text-muted); }
+    footer { text-align:center; padding:2rem; color:var(--r-text-dim); font-size:0.85rem; }
+    @media (max-width:600px) { .container { padding:1rem; } h1 { font-size:2rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <nav class="glass">
+      <a href="/dashboards/homepage" class="nav-logo">&#9889; Robothor</a>
+      <ul class="nav-links">
+        <li><a href="/dashboards/homepage">Home</a></li>
+        <li><a href="/dashboards/homepage/work-with-me">Work With Me</a></li>
+        <li><a href="/dashboards/homepage/now" class="active">Now</a></li>
+        <li><a href="/dashboards/homepage/docs">Docs</a></li>
+        <li><a href="/dashboards/homepage/subdomains">Services</a></li>
+        <li><a href="/dashboards/homepage/contact">Contact</a></li>
+      </ul>
+    </nav>
+
+    <section class="hero"><h1>Now</h1><p class="tagline">What I'm currently focused on</p></section>
+
+    <section class="section glass">
+      <div class="section-title">&#127919; Active Projects</div>
+      <div class="list-item"><strong>Daily Operations</strong><p>Morning briefings, email triage, calendar monitoring, and proactive health checks across all systems.</p><span class="meta">Ongoing</span></div>
+    </section>
+
+    <section class="section glass">
+      <div class="section-title">&#128260; Operating Rhythm</div>
+      <div class="card-grid">
+        <div class="card glass"><div class="card-title">Morning Briefing</div><div class="card-desc">6:30 AM ET &mdash; Daily digest of email, calendar, and system health</div></div>
+        <div class="card glass"><div class="card-title">Continuous Monitoring</div><div class="card-desc">Email, calendar, and service health checked every 5-15 minutes</div></div>
+        <div class="card glass"><div class="card-title">Evening Wind-Down</div><div class="card-desc">9:00 PM ET &mdash; Summary of the day, pending items, tomorrow prep</div></div>
+        <div class="card glass"><div class="card-title">Nightwatch</div><div class="card-desc">Overnight: failure analysis, improvement proposals, self-healing PRs</div></div>
+      </div>
+    </section>
+
+    <footer><p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p></footer>
+  </div>
+</body>
+</html>

@@ -1,29 +1,23 @@
 {
-  "lastCheckedAt": "2026-03-21T21:25:02.397425",
+  "lastCheckedAt": "2026-03-30T23:30:02.842821",
   "meetings": [
     {
-      "id": "2flj7le0inj6ih6i9mqql2tae1",
-      "title": "Project Coordinator - Christian Roman - Ironsail - First Day ",
-      "start": "2026-03-23",
-      "startEpoch": null,
-      "startLocal": null,
-      "end": "2026-03-24",
-      "endLocal": null,
+      "id": "4uklkvek28885lto956el08r7n_20260331T130000Z",
+      "title": "Weekly Catch-Up: Eugene & Philip",
+      "start": "2026-03-31T09:00:00-04:00",
+      "startEpoch": 1774962000,
+      "startLocal": "9:00 AM",
+      "end": "2026-03-31T10:00:00-04:00",
+      "endLocal": "10:00 AM",
       "location": null,
       "description": null,
       "attendees": [
-        "christianleonardroman1994@gmail.com",
-        "joshua@valhallams.com",
-        "daniel@valhallams.com",
-        "rochelle@ironsail.ai",
+        "eugene@ironsail.ai",
         "philip@ironsail.ai",
-        "sandra@valhallams.com",
-        "samantha@valhallams.com",
-        "hr@ironsail.ai",
-        "jennifer@valhallams.com"
+        "robothor@ironsail.ai"
       ],
-      "conferenceUrl": null,
-      "fetchedAt": "2026-03-19T10:55:02.780187",
+      "conferenceUrl": "https://meet.google.com/qwg-ujbr-rpw",
+      "fetchedAt": "2026-03-29T10:35:03.224360",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -35,16 +29,47 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.396968"
+      "updatedAt": "2026-03-30T23:30:02.842675"
     },
     {
-      "id": "c1rbg7q2d24su914rt70ev87fc_20260318T143000Z",
-      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
-      "start": "2026-03-23T11:00:00-04:00",
-      "startEpoch": 1774278000,
+      "id": "7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z",
+      "title": "Weekly Product Update",
+      "start": "2026-03-31T11:00:00-04:00",
+      "startEpoch": 1774969200,
       "startLocal": "11:00 AM",
-      "end": "2026-03-23T11:30:00-04:00",
+      "end": "2026-03-31T11:30:00-04:00",
       "endLocal": "11:30 AM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "rochelle@ironsail.ai",
+        "philip@ironsail.ai",
+        "christian@ironsail.ai",
+        "robothor@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/iog-sgsh-fmm",
+      "fetchedAt": "2026-03-29T10:35:03.225111",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-30T23:30:02.842705"
+    },
+    {
+      "id": "c1rbg7q2d24su914rt70ev87fc_20260401T143000Z",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-04-01T10:30:00-04:00",
+      "startEpoch": 1775053800,
+      "startLocal": "10:30 AM",
+      "end": "2026-04-01T11:00:00-04:00",
+      "endLocal": "11:00 AM",
       "location": null,
       "description": null,
       "attendees": [
@@ -56,7 +81,7 @@
         "robothor@ironsail.ai"
       ],
       "conferenceUrl": "https://meet.google.com/vap-ybdq-bac",
-      "fetchedAt": "2026-03-18T13:00:03.218852",
+      "fetchedAt": "2026-03-29T10:35:03.226377",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -68,25 +93,28 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397336"
+      "updatedAt": "2026-03-30T23:30:02.842727"
     },
     {
-      "id": "j5nt996ebv0o9kv98ao8483lac_20260323T160000Z",
-      "title": " V/I Same Page Meetings",
-      "start": "2026-03-23T12:00:00-04:00",
-      "startEpoch": 1774281600,
-      "startLocal": "12:00 PM",
-      "end": "2026-03-23T12:30:00-04:00",
-      "endLocal": "12:30 PM",
+      "id": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-04-01T11:00:00-04:00",
+      "startEpoch": 1775055600,
+      "startLocal": "11:00 AM",
+      "end": "2026-04-01T12:00:00-04:00",
+      "endLocal": "12:00 PM",
       "location": null,
-      "description": "<p>A recurring touchpoint between Philip and Daniel to ensure strategic alignment across key initiatives. These meetings serve as a dedicated space to review priorities, align on timelines, and make or prepare for key decisions.</p><p><strong>Agenda:</strong></p><ul><li><p>Quick status check on current initiatives.</p></li><li><p>Review of upcoming timelines and milestones.</p></li><li><p>Strategic alignment and adjustments.</p></li><li><p>Discussion of any decisions needing input or action.</p></li><li><p>Open items or blockers.</p></li></ul>",
+      "description": null,
       "attendees": [
+        "caroline@skyfin.net",
         "daniel@valhallams.com",
         "philip@ironsail.ai",
+        "konrad@valhallams.com",
+        "samantha@valhallahq.com",
         "robothor@ironsail.ai"
       ],
-      "conferenceUrl": "https://meet.google.com/gsd-rzng-avz",
-      "fetchedAt": "2026-03-18T15:30:02.355211",
+      "conferenceUrl": "https://meet.google.com/sdm-ycdr-iww",
+      "fetchedAt": "2026-03-29T10:35:03.227078",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -98,89 +126,26 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397358"
+      "updatedAt": "2026-03-30T23:30:02.842742"
     },
     {
-      "id": "1ug66ljb1a0bt3n3o4cm44eq5f_20260323T170000Z",
-      "title": "Weekly Alignment Meetings",
-      "start": "2026-03-23T13:00:00-04:00",
-      "startEpoch": 1774285200,
-      "startLocal": "1:00 PM",
-      "end": "2026-03-23T13:30:00-04:00",
-      "endLocal": "1:30 PM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "philip@ironsail.ai",
-        "craig@ironsail.ai",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/uvg-rhki-akm",
-      "fetchedAt": "2026-03-18T16:00:02.576977",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397374"
-    },
-    {
-      "id": "26q1vteji4hobm12co7gobdtp8",
-      "title": "Muhammad Usama Butt - Ironsail - Ai First Web Developer - First Day  ",
-      "start": "2026-03-24",
-      "startEpoch": null,
-      "startLocal": null,
-      "end": "2026-03-25",
-      "endLocal": null,
-      "location": null,
-      "description": null,
-      "attendees": [
-        "joshua@valhallahq.com",
-        "daniel.g.mccarthy@gmail.com",
-        "philip@ironsail.ai",
-        "usamabuttdev@gmail.com",
-        "sandra@ironsail.ai",
-        "samantha@valhallams.com",
-        "jennifer@valhallahq.com"
-      ],
-      "conferenceUrl": null,
-      "fetchedAt": "2026-03-20T16:50:03.100190",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397379"
-    },
-    {
-      "id": "4uklkvek28885lto956el08r7n_20260324T130000Z",
-      "title": "Weekly Catch-Up: Eugene & Philip",
-      "start": "2026-03-24T09:00:00-04:00",
-      "startEpoch": 1774357200,
+      "id": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "startEpoch": 1775134800,
       "startLocal": "9:00 AM",
-      "end": "2026-03-24T10:00:00-04:00",
+      "end": "2026-04-02T10:00:00-04:00",
       "endLocal": "10:00 AM",
       "location": null,
-      "description": null,
+      "description": "<p>Collaborative initiative aimed at enhancing internal brand awareness and engagement within the organizations. This partnership focuses on leveraging innovative marketing strategies and tools to streamline communication, foster a unified culture, and drive employee participation in internal campaigns and projects</p><u></u>",
       "attendees": [
         "eugene@ironsail.ai",
         "philip@ironsail.ai",
+        "cielo@valhallams.com",
         "robothor@ironsail.ai"
       ],
-      "conferenceUrl": "https://meet.google.com/qwg-ujbr-rpw",
-      "fetchedAt": "2026-03-19T00:00:02.880482",
+      "conferenceUrl": "https://meet.google.com/iof-jgng-cjj",
+      "fetchedAt": "2026-03-29T10:35:03.227778",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -192,24 +157,23 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397387"
+      "updatedAt": "2026-03-30T23:30:02.842757"
     },
     {
-      "id": "7t2ogm09acgrjg5gs5g81e7bc6_20260324T150000Z",
-      "title": "Weekly Product Update",
-      "start": "2026-03-24T11:00:00-04:00",
-      "startEpoch": 1774364400,
-      "startLocal": "11:00 AM",
-      "end": "2026-03-24T11:30:00-04:00",
-      "endLocal": "11:30 AM",
+      "id": "1sblee0b6hg4nq04tp9995egck",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-04-02T10:00:00-04:00",
+      "startEpoch": 1775138400,
+      "startLocal": "10:00 AM",
+      "end": "2026-04-02T10:15:00-04:00",
+      "endLocal": "10:15 AM",
       "location": null,
-      "description": null,
+      "description": "Weekly Thursday check: Has the Mac Studio M5 been announced? Check apple.com/newsroom, MacRumors, 9to5Mac. If live \u2014 ORDER IMMEDIATELY, 512GB+ config, first hour matters.",
       "attendees": [
-        "rochelle@ironsail.ai",
-        "philip@ironsail.ai"
+        "robothor@ironsail.ai"
       ],
-      "conferenceUrl": "https://meet.google.com/iog-sgsh-fmm",
-      "fetchedAt": "2026-03-19T07:05:02.713663",
+      "conferenceUrl": null,
+      "fetchedAt": "2026-03-29T10:35:03.228493",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -221,30 +185,77 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397397"
+      "updatedAt": "2026-03-30T23:30:02.842770"
     },
     {
-      "id": "5b4avagbdih53sbuks0ucjl6fo",
-      "title": "Sandra Z. Out of Office ",
-      "start": "2026-03-25",
+      "id": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
+      "title": "eCommerce Migration Weekly Update",
+      "start": "2026-04-02T11:00:00-04:00",
+      "startEpoch": 1775142000,
+      "startLocal": "11:00 AM",
+      "end": "2026-04-02T12:00:00-04:00",
+      "endLocal": "12:00 PM",
+      "location": null,
+      "description": "<b>Agenda:</b>\u00a0<br><br>Share progress and updates from each team (Ironsail and Webugol) on the eCommerce Migration project.\u00a0<br><strong>Note:</strong> For anyone unable to attend, I will record the meeting.",
+      "attendees": [
+        "eugene@ironsail.ai",
+        "greg@ironsail.ai",
+        "artem@webugol.com",
+        "oksana@webugol.com",
+        "daniel@valhallams.com",
+        "rochelle@ironsail.ai",
+        "philip@ironsail.ai",
+        "craig@ironsail.ai",
+        "konrad@valhallams.com",
+        "vlad@webugol.com",
+        "samantha@ironsailpharma.com",
+        "zoriana@webugol.com",
+        "olesia@valhallavitality.com",
+        "rizzi@ironsail.ai",
+        "elguja@ironsail.ai",
+        "danylo@ironsail.ai",
+        "christian@ironsail.ai",
+        "farhan@ironsail.ai",
+        "nadjib@ironsail.ai",
+        "shahbaz@ironsail.ai",
+        "robothor@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/hjw-fwit-fky",
+      "fetchedAt": "2026-03-29T10:35:03.229190",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-30T23:30:02.842788"
+    },
+    {
+      "id": "0bg4bv37t3jbibihlnpnfgrlsh",
+      "title": "Cielo Quiambao Out Of Office",
+      "start": "2026-04-03",
       "startEpoch": null,
       "startLocal": null,
-      "end": "2026-03-28",
+      "end": "2026-04-04",
       "endLocal": null,
       "location": null,
       "description": null,
       "attendees": [
         "joshua@ironsail.ai",
-        "daniel@valhallams.com",
         "philip@ironsail.ai",
-        "konrad@valhallams.com",
+        "cielo@valhallams.com",
         "sandra@valhallams.com",
         "samantha@valhallams.com",
         "hr@ironsail.ai",
         "jennifer@valhallams.com"
       ],
       "conferenceUrl": null,
-      "fetchedAt": "2026-03-19T12:00:02.778261",
+      "fetchedAt": "2026-03-29T10:35:03.230110",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -256,63 +267,39 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397402"
+      "updatedAt": "2026-03-30T23:30:02.842795"
     },
     {
-      "id": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g68o42chn6grj4ghl71148gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g8or42di58gp3ida361248h9k68s4cgi26133ecq66sp42e258kp0",
-      "title": "YPO Forum Retreat - Save the Date",
-      "start": "2026-03-25",
+      "id": "3jpdlulvn4me49d0qgo1oarcth",
+      "title": "Rochelle Blaza Out of Office",
+      "start": "2026-04-03",
       "startEpoch": null,
       "startLocal": null,
-      "end": "2026-03-28",
+      "end": "2026-04-04",
       "endLocal": null,
-      "location": "Grenada",
-      "description": "\n",
-      "attendees": [
-        "abonsignore@agsny.com",
-        "christian@merxglobal.com",
-        "aadams@zipcar.com",
-        "philip@ironsail.ai",
-        "andrew.wiener@maxxproperties.com",
-        "dc@quantilus.com"
-      ],
-      "conferenceUrl": null,
-      "fetchedAt": "2026-03-20T10:15:02.986435",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397406"
-    },
-    {
-      "id": "1der3n4hb8msavg993lgp5u40s_20260325T133000Z",
-      "title": "AI Workshop Session  ",
-      "start": "2026-03-25T09:30:00-04:00",
-      "startEpoch": 1774445400,
-      "startLocal": "9:30 AM",
-      "end": "2026-03-25T10:30:00-04:00",
-      "endLocal": "10:30 AM",
       "location": null,
       "description": null,
       "attendees": [
-        "daniel.g.mccarthy@gmail.com",
+        "illia@ironsail.ai",
+        "jhonray@ironsail.ai",
+        "rochelle@valhallams.com",
+        "pauledward@ironsail.ai",
         "philip@ironsail.ai",
-        "sandra@ironsail.ai",
+        "rizzi@valhallams.com",
+        "jennifer@valhallams.com",
+        "adan@ironsail.ai",
+        "elguja@ironsail.ai",
+        "greg@ironsail.ai",
+        "joshua@ironsail.ai",
+        "nadjib@ironsail.ai",
+        "danylo@ironsail.ai",
+        "craig@ironsail.ai",
+        "sandra@valhallams.com",
         "samantha@valhallams.com",
-        "hr@ironsail.ai",
-        "jennifer@ironsail.ai",
-        "robothor@ironsail.ai",
-        "daniel@valhallams.com"
+        "hr@ironsail.ai"
       ],
-      "conferenceUrl": "https://meet.google.com/xjh-vonq-ang",
-      "fetchedAt": "2026-03-21T00:00:02.617583",
+      "conferenceUrl": null,
+      "fetchedAt": "2026-03-30T12:30:03.067740",
       "categorizedAt": null,
       "importance": null,
       "category": null,
@@ -324,460 +311,42 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-21T21:25:02.397420"
+      "updatedAt": "2026-03-30T23:30:02.842803"
+    },
+    {
+      "id": "3r0ntr5trohgknmbk1gdj288tt_20260403T153000Z",
+      "title": "Thrive Rx Weekly Leadership Meeting",
+      "start": "2026-04-03T11:30:00-04:00",
+      "startEpoch": 1775230200,
+      "startLocal": "11:30 AM",
+      "end": "2026-04-03T12:00:00-04:00",
+      "endLocal": "12:00 PM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "jasmeet@mykaduceus.com",
+        "shahad@mykaduceus.com",
+        "philip@ironsail.ai",
+        "samantha@ironsailpharma.com",
+        "robothor@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/hnw-srhd-nng",
+      "fetchedAt": "2026-03-30T13:30:02.740960",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-03-30T23:30:02.842817"
     }
   ],
   "changes": [
-    {
-      "timestamp": "2026-03-04T08:15:02.567277",
-      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g64rjihhm64s38c9n60qk8gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g8h23echj8osjecpm69330dhk84s32cho65136e9n8l144cpl8org_20260306T160000Z",
-      "type": "new",
-      "title": "HBN Virtual Forum",
-      "start": "2026-03-06T11:00:00-05:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-04T11:00:03.331709",
-      "eventId": "3r0ntr5trohgknmbk1gdj288tt_20260306T163000Z",
-      "type": "new",
-      "title": "Thrive Rx Weekly Leadership Meeting",
-      "start": "2026-03-06T11:30:00-05:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-04T12:00:03.262609",
-      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260309T160000Z",
-      "type": "new",
-      "title": " V/I Same Page Meetings",
-      "start": "2026-03-09T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-04T14:00:03.038505",
-      "eventId": "1ug66ljb1a0bt3n3o4cm44eq5f_20260309T170000Z",
-      "type": "new",
-      "title": "Weekly Alignment Meetings",
-      "start": "2026-03-09T13:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.626495",
-      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g60q46di56sr4ch1n851k8gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g8gpj8ha68d13gh226ko44dhk8d0jchho890j4hhj6t23ed1j8p30",
-      "type": "new",
-      "title": "Harry/Philip - Zom",
-      "start": "2026-03-06T10:00:00-05:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.665091",
-      "eventId": "k1eu8lj3ac9thod2ae9r7aj9i4",
-      "type": "new",
-      "title": "Demo -- Boladji Agueh / Squadra Solutions",
-      "start": "2026-03-06T14:00:00-05:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.665211",
-      "eventId": "4uklkvek28885lto956el08r7n_20260310T130000Z",
-      "type": "new",
-      "title": "Weekly Catch-Up: Eugene & Philip",
-      "start": "2026-03-10T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.665282",
-      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260310T150000Z",
-      "type": "new",
-      "title": "Weekly Product Update",
-      "start": "2026-03-10T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.665342",
-      "eventId": "47p2hockfed4feuaop30it8ucq",
-      "type": "new",
-      "title": "Jennifer Guerrero Out of Office",
-      "start": "2026-03-11",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T07:50:02.665400",
-      "eventId": "1der3n4hb8msavg993lgp5u40s_20260311T133000Z",
-      "type": "new",
-      "title": "AI Workshop Session  ",
-      "start": "2026-03-11T09:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T08:15:03.256443",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
-      "type": "new",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-03-11T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T22:25:02.513722",
-      "eventId": "0p59if5ouv85ttjba219pbg6eq",
-      "type": "new",
-      "title": "Valhalla \u2013 Revive Additional Discovery Discussion",
-      "start": "2026-03-10T14:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T22:25:02.555167",
-      "eventId": "7c9bj2cetghk78aams592bn5i2_20260311T190000Z",
-      "type": "new",
-      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
-      "start": "2026-03-11T15:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-06T22:25:02.555255",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260312T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-12T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T09:30:02.817015",
-      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
-      "type": "new",
-      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
-      "start": "2026-03-12T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.063180",
-      "eventId": "1ug66ljb1a0bt3n3o4cm44eq5f_20260309T170000Z",
-      "type": "new",
-      "title": "Weekly Alignment Meetings",
-      "start": "2026-03-09T13:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104275",
-      "eventId": "4uklkvek28885lto956el08r7n_20260310T130000Z",
-      "type": "new",
-      "title": "Weekly Catch-Up: Eugene & Philip",
-      "start": "2026-03-10T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104376",
-      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260310T150000Z",
-      "type": "new",
-      "title": "Weekly Product Update",
-      "start": "2026-03-10T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104447",
-      "eventId": "0p59if5ouv85ttjba219pbg6eq",
-      "type": "new",
-      "title": "Valhalla \u2013 Revive Additional Discovery Discussion",
-      "start": "2026-03-10T14:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104519",
-      "eventId": "47p2hockfed4feuaop30it8ucq",
-      "type": "new",
-      "title": "Jennifer Guerrero Out of Office",
-      "start": "2026-03-11",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104578",
-      "eventId": "1der3n4hb8msavg993lgp5u40s_20260311T133000Z",
-      "type": "new",
-      "title": "AI Workshop Session  ",
-      "start": "2026-03-11T09:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104640",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
-      "type": "new",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-03-11T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104700",
-      "eventId": "7c9bj2cetghk78aams592bn5i2_20260311T190000Z",
-      "type": "new",
-      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
-      "start": "2026-03-11T15:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104761",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260312T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-12T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T11:15:03.104835",
-      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
-      "type": "new",
-      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
-      "start": "2026-03-12T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T12:25:02.653356",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260311T150000Z",
-      "type": "rescheduled",
-      "title": "Weekly Senior Leadership Standup",
-      "oldStart": "2026-03-11T11:00:00-04:00",
-      "newStart": "2026-03-10T12:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T13:25:03.016870",
-      "eventId": "65mslb6kjv0kns18ari0oo1vsk",
-      "type": "new",
-      "title": "Peptide Strategy \u2013 Next Steps & Action Plan",
-      "start": "2026-03-11T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-09T13:30:03.001588",
-      "eventId": "bj98cjvo1t2ujlf1dbga94v3sg",
-      "type": "new",
-      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
-      "start": "2026-03-12T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.922517",
-      "eventId": "3r0ntr5trohgknmbk1gdj288tt_20260313T153000Z",
-      "type": "new",
-      "title": "Thrive Rx Weekly Leadership Meeting",
-      "start": "2026-03-13T11:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.969800",
-      "eventId": "612tj60nlu9q0gt2l4dhcbu254",
-      "type": "new",
-      "title": "Daniel McCarthy \u2013 NY Visit",
-      "start": "2026-03-16",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970013",
-      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260316T160000Z",
-      "type": "new",
-      "title": " V/I Same Page Meetings",
-      "start": "2026-03-16T12:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970108",
-      "eventId": "1ug66ljb1a0bt3n3o4cm44eq5f_20260316T170000Z",
-      "type": "new",
-      "title": "Weekly Alignment Meetings",
-      "start": "2026-03-16T13:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970188",
-      "eventId": "4uklkvek28885lto956el08r7n_20260317T130000Z",
-      "type": "new",
-      "title": "Weekly Catch-Up: Eugene & Philip",
-      "start": "2026-03-17T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970262",
-      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260317T150000Z",
-      "type": "new",
-      "title": "Weekly Product Update",
-      "start": "2026-03-17T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970440",
-      "eventId": "19m72n9f8bp3860spk3htk5hao",
-      "type": "new",
-      "title": "AI-First Full Stack Developer \u2013 Phase 2\u2013 Hassene Afif | Ironsail",
-      "start": "2026-03-17T12:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970520",
-      "eventId": "1der3n4hb8msavg993lgp5u40s_20260311T133000Z",
-      "type": "rescheduled",
-      "title": "AI Workshop Session  ",
-      "oldStart": "2026-03-11T09:30:00-04:00",
-      "newStart": "2026-03-18T09:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970601",
-      "eventId": "c1rbg7q2d24su914rt70ev87fc_20260318T143000Z",
-      "type": "new",
-      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
-      "start": "2026-03-18T10:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T03:05:02.970672",
-      "eventId": "f0l6qfrm6n6eeh6enc3qo7b5l4",
-      "type": "new",
-      "title": "YPO HBN Forum Meeting",
-      "start": "2026-03-18T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T12:00:02.539029",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260318T150000Z",
-      "type": "new",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-03-18T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T12:45:02.917074",
-      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g88o30c9o68qk8h2488p48gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g8kq42gpk8d146h1n6p236d9k6d0jec9m8ko3ag9g6so36hi26ssg",
-      "type": "new",
-      "title": "Valhalla-Revive Additional Discovery",
-      "start": "2026-03-16T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-13T14:15:02.463175",
-      "eventId": "81v4ji8egu5276ek7nga873et4",
-      "type": "new",
-      "title": "Al Grovers - Boat",
-      "start": "2026-03-14T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-14T11:00:02.577715",
-      "eventId": "f0l6qfrm6n6eeh6enc3qo7b5l4",
-      "type": "new",
-      "title": "YPO HBN Forum Meeting",
-      "start": "2026-03-18T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-15T11:05:03.243569",
-      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g8h0jcci68gr38e2388q48gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g6t136h2188p36c1l8kp4ad9k84sjehi48p248c1i6d130chg6opg",
-      "type": "new",
-      "title": "Term sheet meeting",
-      "start": "2026-03-16T15:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T12:00:03.508134",
-      "eventId": "f0l6qfrm6n6eeh6enc3qo7b5l4",
-      "type": "new",
-      "title": "YPO HBN Forum Meeting",
-      "start": "2026-03-18T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T12:30:02.811304",
-      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260318T150000Z",
-      "type": "new",
-      "title": "Weekly Senior Leadership Standup",
-      "start": "2026-03-18T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T13:30:04.289035",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260319T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-19T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T16:00:02.659544",
-      "eventId": "hcu0pd9r1gt8adp67krijbouc8",
-      "type": "new",
-      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
-      "start": "2026-03-19T10:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T16:30:03.123272",
-      "eventId": "1rlte9g4qcghnk65tmlnu6q105",
-      "type": "new",
-      "title": "AI-First Full Stack Developer \u2013 Phase 2 \u2013 Shahbaz Hussain | Ironsail",
-      "start": "2026-03-18T15:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-16T16:45:03.049967",
-      "eventId": "47crl0idu72a6oqi16i23h2uih",
-      "type": "new",
-      "title": "AI-First Full Stack Developer \u2013 Phase 2\u2013 Muhammad Usama Butt | Ironsail",
-      "start": "2026-03-18T14:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T09:10:02.415947",
-      "eventId": "19m72n9f8bp3860spk3htk5hao",
-      "type": "modified",
-      "title": "AI-First Full Stack Developer \u2013 Phase 2\u2013 Hassene Afif | Ironsail",
-      "details": "attendees/duration/title changed",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T10:00:03.174843",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260319T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-19T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T10:20:02.964577",
-      "eventId": "20fu0jhn17o190jqp77amt3apo",
-      "type": "new",
-      "title": "Jhon Ray Angcon Out of Office",
-      "start": "2026-03-17",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T10:30:02.801285",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260319T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-19T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T11:00:03.028512",
-      "eventId": "2ib3k852gq9ntl5hiokop95nqt_20260317T163000Z",
-      "type": "new",
-      "title": "Pharma & Vitality Bi-weekly Review",
-      "start": "2026-03-17T12:30:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T11:30:02.785123",
-      "eventId": "a304ju1ctclso519dcoj8vci86_20260319T130000Z",
-      "type": "new",
-      "title": "Ironsail x Webugol Internal Marketing",
-      "start": "2026-03-19T09:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T12:30:03.219368",
-      "eventId": "hcu0pd9r1gt8adp67krijbouc8",
-      "type": "new",
-      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
-      "start": "2026-03-19T10:00:00-04:00",
-      "reviewedAt": null
-    },
     {
       "timestamp": "2026-03-17T13:00:03.020481",
       "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
@@ -1129,6 +698,455 @@
       "type": "new",
       "title": "AI Workshop Session  ",
       "start": "2026-03-25T09:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.782647",
+      "eventId": "5es1sh2ltnt39ifb5kt58rlgll",
+      "type": "new",
+      "title": "Shahbaz Hussain - Ironsail - Senior Ai First Web Developer - First Day  ",
+      "start": "2026-03-24",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.834469",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260325T150000Z",
+      "type": "new",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-03-25T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.834881",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260325T190000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-25T15:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.835050",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260326T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-03-26T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.835136",
+      "eventId": "n5grvoeolj2bradbp88nh1n6n0",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-03-26T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.835226",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260326T150000Z",
+      "type": "new",
+      "title": "eCommerce Migration Weekly Update",
+      "start": "2026-03-26T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-24T19:10:02.835308",
+      "eventId": "3r0ntr5trohgknmbk1gdj288tt_20260327T153000Z",
+      "type": "new",
+      "title": "Thrive Rx Weekly Leadership Meeting",
+      "start": "2026-03-27T11:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T00:00:02.654604",
+      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260330T160000Z",
+      "type": "new",
+      "title": " V/I Same Page Meetings",
+      "start": "2026-03-30T12:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T00:00:02.711345",
+      "eventId": "4uklkvek28885lto956el08r7n_20260331T130000Z",
+      "type": "new",
+      "title": "Weekly Catch-Up: Eugene & Philip",
+      "start": "2026-03-31T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T12:00:03.361950",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260325T190000Z",
+      "type": "modified",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T12:00:03.422093",
+      "eventId": "n5grvoeolj2bradbp88nh1n6n0",
+      "type": "modified",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T12:00:03.422388",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260326T150000Z",
+      "type": "modified",
+      "title": "eCommerce Migration Weekly Update",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T12:00:03.422704",
+      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z",
+      "type": "new",
+      "title": "Weekly Product Update",
+      "start": "2026-03-31T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-25T13:45:03.358175",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260325T190000Z",
+      "type": "rescheduled",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "oldStart": "2026-03-25T15:00:00-04:00",
+      "newStart": "2026-03-30T10:15:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-26T08:30:03.110261",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260326T150000Z",
+      "type": "modified",
+      "title": "eCommerce Migration Weekly Update",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-26T10:00:03.495942",
+      "eventId": "c1rbg7q2d24su914rt70ev87fc_20260401T143000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-04-01T10:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-26T10:15:03.314377",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
+      "type": "new",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-04-01T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-26T10:35:03.153463",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
+      "type": "modified",
+      "title": "Weekly Senior Leadership Standup",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-26T12:00:03.498108",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-27T09:10:02.563484",
+      "eventId": "7u94aj36eulvohjv41a73ljd9g",
+      "type": "new",
+      "title": "Konrad Arciszewski Out Of Office",
+      "start": "2026-03-27",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-27T12:00:03.083436",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-27T12:40:03.345138",
+      "eventId": "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g60o30c1g752k8h218co4cc1o892k8gpg64o30c1g60o30c1g60o30c1g60o32c1g60o30c1g89242ghg8gsk4ghj74sj4h1k6l13eca18op38ghj84s34gph6h30",
+      "type": "new",
+      "title": "Valhalla",
+      "start": "2026-03-27T13:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-27T14:00:02.855280",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-28T00:00:02.722455",
+      "eventId": "1sblee0b6hg4nq04tp9995egck",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-04-02T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-28T00:00:02.784385",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
+      "type": "new",
+      "title": "eCommerce Migration Weekly Update",
+      "start": "2026-04-02T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-28T00:00:02.784520",
+      "eventId": "0bg4bv37t3jbibihlnpnfgrlsh",
+      "type": "new",
+      "title": "Cielo Quiambao Out Of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-28T00:05:03.358630",
+      "eventId": "1sblee0b6hg4nq04tp9995egck",
+      "type": "modified",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-28T00:05:03.414526",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
+      "type": "modified",
+      "title": "eCommerce Migration Weekly Update",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.166072",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260325T190000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-30T10:15:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.250488",
+      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260330T160000Z",
+      "type": "new",
+      "title": " V/I Same Page Meetings",
+      "start": "2026-03-30T12:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.251364",
+      "eventId": "4uklkvek28885lto956el08r7n_20260331T130000Z",
+      "type": "new",
+      "title": "Weekly Catch-Up: Eugene & Philip",
+      "start": "2026-03-31T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.252080",
+      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z",
+      "type": "new",
+      "title": "Weekly Product Update",
+      "start": "2026-03-31T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.252794",
+      "eventId": "c1rbg7q2d24su914rt70ev87fc_20260401T143000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-04-01T10:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.253646",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
+      "type": "new",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-04-01T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.254325",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.254984",
+      "eventId": "1sblee0b6hg4nq04tp9995egck",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-04-02T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.255649",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
+      "type": "new",
+      "title": "eCommerce Migration Weekly Update",
+      "start": "2026-04-02T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T04:40:02.256321",
+      "eventId": "0bg4bv37t3jbibihlnpnfgrlsh",
+      "type": "new",
+      "title": "Cielo Quiambao Out Of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.001235",
+      "eventId": "7c9bj2cetghk78aams592bn5i2_20260325T190000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-03-30T10:15:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.222071",
+      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260330T160000Z",
+      "type": "new",
+      "title": " V/I Same Page Meetings",
+      "start": "2026-03-30T12:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.223589",
+      "eventId": "4uklkvek28885lto956el08r7n_20260331T130000Z",
+      "type": "new",
+      "title": "Weekly Catch-Up: Eugene & Philip",
+      "start": "2026-03-31T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.224366",
+      "eventId": "7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z",
+      "type": "new",
+      "title": "Weekly Product Update",
+      "start": "2026-03-31T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.225116",
+      "eventId": "c1rbg7q2d24su914rt70ev87fc_20260401T143000Z",
+      "type": "new",
+      "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
+      "start": "2026-04-01T10:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.226383",
+      "eventId": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
+      "type": "new",
+      "title": "Weekly Senior Leadership Standup",
+      "start": "2026-04-01T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.227082",
+      "eventId": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
+      "type": "new",
+      "title": "Ironsail x Webugol Internal Marketing",
+      "start": "2026-04-02T09:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.227783",
+      "eventId": "1sblee0b6hg4nq04tp9995egck",
+      "type": "new",
+      "title": "\ud83d\udd0d Mac Studio M5 Weekly Check",
+      "start": "2026-04-02T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.228498",
+      "eventId": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
+      "type": "new",
+      "title": "eCommerce Migration Weekly Update",
+      "start": "2026-04-02T11:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-29T10:35:03.229195",
+      "eventId": "0bg4bv37t3jbibihlnpnfgrlsh",
+      "type": "new",
+      "title": "Cielo Quiambao Out Of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T09:25:02.944873",
+      "eventId": "3jpdlulvn4me49d0qgo1oarcth",
+      "type": "new",
+      "title": "Rochelle Blaza Out of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T09:30:02.915523",
+      "eventId": "43nukb1r3qj0qbamcef7bq6sm8",
+      "type": "new",
+      "title": "Meeting with Philip",
+      "start": "2026-03-30T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T09:35:04.223921",
+      "eventId": "43nukb1r3qj0qbamcef7bq6sm8",
+      "type": "modified",
+      "title": "Meeting with Philip",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T10:30:02.900726",
+      "eventId": "3jpdlulvn4me49d0qgo1oarcth",
+      "type": "new",
+      "title": "Rochelle Blaza Out of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T11:30:02.463865",
+      "eventId": "23m7u50mffq6fh3kshvjke91ru",
+      "type": "new",
+      "title": "Philip & Christian \u2013 1:1 Intro Touch Base",
+      "start": "2026-03-30T13:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T11:35:02.779754",
+      "eventId": "23m7u50mffq6fh3kshvjke91ru",
+      "type": "modified",
+      "title": "Philip & Christian \u2013 1:1 Intro Touch Base",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T12:30:02.989298",
+      "eventId": "3jpdlulvn4me49d0qgo1oarcth",
+      "type": "new",
+      "title": "Rochelle Blaza Out of Office",
+      "start": "2026-04-03",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-30T13:30:02.699385",
+      "eventId": "3r0ntr5trohgknmbk1gdj288tt_20260403T153000Z",
+      "type": "new",
+      "title": "Thrive Rx Weekly Leadership Meeting",
+      "start": "2026-04-03T11:30:00-04:00",
       "reviewedAt": null
     }
   ],

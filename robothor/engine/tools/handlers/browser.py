@@ -269,7 +269,7 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         return {"error": "Browser not started."}
 
     try:
-        tree = await session.page.accessibility.snapshot()
+        tree = await session.page.locator(":root").aria_snapshot()
         return {
             "snapshot": tree,
             "url": session.page.url,

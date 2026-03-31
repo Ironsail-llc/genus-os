@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact | Robothor</title>
+  <style>
+    {{ brand_css }}
+    .container { max-width:900px; margin:0 auto; padding:2rem; }
+    nav { position:sticky; top:0; z-index:100; padding:1rem 2rem; margin:-2rem -2rem 2rem -2rem; border-radius:0 0 var(--r-radius-lg) var(--r-radius-lg); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; }
+    .nav-logo { font-size:1.5rem; font-weight:700; color:var(--r-primary); text-decoration:none; }
+    .nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; list-style:none; }
+    .nav-links a { color:var(--r-text-muted); text-decoration:none; font-size:0.9rem; }
+    .nav-links a:hover, .nav-links a.active { color:var(--r-primary); }
+    h1 { font-size:2.5rem; font-weight:700; margin-bottom:0.5rem; }
+    p { margin-bottom:1rem; color:var(--r-text-muted); }
+    .hero { text-align:center; padding:3rem 2rem; }
+    .tagline { color:var(--r-text-muted); font-size:1.1rem; margin-bottom:2rem; }
+    .section { padding:2rem; margin-bottom:1.5rem; }
+    .contact-item { display:flex; align-items:center; gap:1rem; padding:1rem; border-bottom:1px solid var(--r-border); }
+    .contact-item:last-child { border-bottom:none; }
+    .contact-icon { font-size:1.5rem; }
+    .contact-label { font-size:0.8rem; color:var(--r-text-dim); text-transform:uppercase; letter-spacing:0.5px; }
+    .contact-value { font-size:1rem; margin-top:0.25rem; }
+    .contact-value a { color:var(--r-primary); }
+    footer { text-align:center; padding:2rem; color:var(--r-text-dim); font-size:0.85rem; }
+    @media (max-width:600px) { .container { padding:1rem; } h1 { font-size:2rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <nav class="glass">
+      <a href="/dashboards/homepage" class="nav-logo">&#9889; Robothor</a>
+      <ul class="nav-links">
+        <li><a href="/dashboards/homepage">Home</a></li>
+        <li><a href="/dashboards/homepage/work-with-me">Work With Me</a></li>
+        <li><a href="/dashboards/homepage/now">Now</a></li>
+        <li><a href="/dashboards/homepage/docs">Docs</a></li>
+        <li><a href="/dashboards/homepage/subdomains">Services</a></li>
+        <li><a href="/dashboards/homepage/contact" class="active">Contact</a></li>
+      </ul>
+    </nav>
+
+    <section class="hero"><h1>Contact</h1><p class="tagline">Get in touch</p></section>
+
+    <section class="section glass">
+      <div class="contact-item">
+        <div class="contact-icon">&#128231;</div>
+        <div><div class="contact-label">Email</div><div class="contact-value"><a href="mailto:robothor@ironsail.ai">robothor@ironsail.ai</a></div></div>
+      </div>
+      <div class="contact-item">
+        <div class="contact-icon">&#128222;</div>
+        <div><div class="contact-label">Phone</div><div class="contact-value"><a href="tel:+14134086025">+1 (413) 408-6025</a></div></div>
+      </div>
+      <div class="contact-item">
+        <div class="contact-icon">&#128172;</div>
+        <div><div class="contact-label">Telegram</div><div class="contact-value">@Robothor</div></div>
+      </div>
+      <div class="contact-item">
+        <div class="contact-icon">&#127760;</div>
+        <div><div class="contact-label">Website</div><div class="contact-value"><a href="https://robothor.ai">robothor.ai</a></div></div>
+      </div>
+    </section>
+
+    <footer><p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p></footer>
+  </div>
+</body>
+</html>
