@@ -1817,7 +1817,7 @@ class AgentRunner:
             compress_threshold = int(model_limits.max_input_tokens * 0.75)
             messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
         except Exception as e:
-            logger.debug("Pre-flight compression failed: %s", e)
+            logger.warning("Pre-flight compression failed: %s", e)
 
         return estimate_tokens(messages)
 
@@ -1869,12 +1869,17 @@ class AgentRunner:
     ) -> None:
         """Handle model failure: mark broken or log warning."""
         status = getattr(e, "status_code", None)
-        if broken_models is not None and status in (401, 403, 429):
+        is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
+        # Mark broken for auth, rate limit, provider failures, and timeouts
+        if broken_models is not None and (
+            status in (401, 403, 429, 500, 502, 503, 504) or is_timeout
+        ):
             broken_models.add(model)
+            reason = "timeout" if is_timeout else str(status)
             logger.warning(
-                "Model %s permanently failed (%s), removing from rotation",
+                "Model %s failed (%s), removing from rotation for this run",
                 model,
-                status,
+                reason,
             )
         else:
             suffix = " (streaming)" if streaming else ""
@@ -1898,7 +1903,14 @@ class AgentRunner:
                 continue
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                return await litellm.acompletion(**kwargs)
+                return await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=120)
+            except TimeoutError:
+                self._handle_model_error(
+                    TimeoutError(f"LLM call to {model} hung for 120s"),
+                    model,
+                    broken_models,
+                )
+                last_error = TimeoutError(f"Model {model} timed out after 120s")
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
@@ -1932,7 +1944,7 @@ class AgentRunner:
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 stream_start = time.monotonic()
-                stream = await litellm.acompletion(**kwargs)
+                stream = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=120)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
@@ -1957,6 +1969,14 @@ class AgentRunner:
                         has_tool_calls = True
 
                 return litellm.stream_chunk_builder(chunks)
+            except TimeoutError:
+                self._handle_model_error(
+                    TimeoutError(f"LLM stream to {model} hung for 120s"),
+                    model,
+                    broken_models,
+                    streaming=True,
+                )
+                last_error = TimeoutError(f"Model {model} timed out after 120s")
             except Exception as e:
                 self._handle_model_error(e, model, broken_models, streaming=True)
                 last_error = e
