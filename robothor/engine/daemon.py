@@ -195,10 +195,10 @@ async def main() -> None:
     agent_hook_count = 0
     for manifest in load_all_manifests(config.manifest_dir):
         agent_id = manifest.get("id", "")
-        hooks = load_hooks_from_manifest(manifest, agent_id)
-        if hooks:
-            hook_registry.register_many(hooks)
-            agent_hook_count += len(hooks)
+        agent_hooks = load_hooks_from_manifest(manifest, agent_id)
+        if agent_hooks:
+            hook_registry.register_many(agent_hooks)
+            agent_hook_count += len(agent_hooks)
     if agent_hook_count:
         logger.info("Loaded %d agent lifecycle hooks", agent_hook_count)
 

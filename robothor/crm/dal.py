@@ -1580,8 +1580,8 @@ def toggle_conversation_status(
 def _compute_next_run(cron_expr: str, tz_name: str = "America/New_York") -> datetime | None:
     """Compute next run time from a cron expression."""
     try:
-        import pytz  # type: ignore[import-untyped]
-        from croniter import croniter  # type: ignore[import-untyped]
+        import pytz  # type: ignore[import-untyped,unused-ignore]
+        from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
         tz = pytz.timezone(tz_name)
         now = datetime.now(tz)

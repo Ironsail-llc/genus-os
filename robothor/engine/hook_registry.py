@@ -104,7 +104,7 @@ class HookRegistry:
 
     def __init__(self) -> None:
         self._hooks: list[LifecycleHook] = []
-        self._python_handlers: dict[str, Callable] = {}
+        self._python_handlers: dict[str, Callable[..., Any]] = {}
 
     def register(self, hook: LifecycleHook) -> None:
         """Register a lifecycle hook."""
@@ -120,7 +120,7 @@ class HookRegistry:
         """Remove all registered hooks."""
         self._hooks.clear()
 
-    def register_python_handler(self, name: str, handler: Callable) -> None:
+    def register_python_handler(self, name: str, handler: Callable[..., Any]) -> None:
         """Register a Python callable for use with handler_type='python'."""
         self._python_handlers[name] = handler
 
@@ -233,9 +233,12 @@ class HookRegistry:
                 logger.error("Failed to import handler %s: %s", hook.handler, e)
                 return HookResult()
 
+        result: HookResult
         if asyncio.iscoroutinefunction(handler):
-            return await handler(context)
-        return handler(context)
+            result = await handler(context)
+        else:
+            result = handler(context)
+        return result
 
     async def _run_command(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Run shell command. Exit 0 = allow, 1 = block."""

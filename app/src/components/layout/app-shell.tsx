@@ -69,7 +69,7 @@ export function AppShell() {
       {!isMobile && (
         <Sidebar
           activeView={sidebarView}
-          onViewChange={(v) => setActiveView(v)}
+          onViewChange={(v) => setActiveView(v as MobileViewId)}
           chatOpen={chatOpen}
           onChatToggle={() => setChatOpen((prev) => !prev)}
           reviewCount={reviewCount}
