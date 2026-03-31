@@ -1,0 +1,58 @@
+id: pf-helm
+name: PF Helm
+description: Primary interactive agent for Princess Freya — handles commands via @RobothorPFBot
+version: "2026-03-09"
+department: operations
+
+reports_to: main
+escalates_to: main
+
+model:
+  primary: openrouter/anthropic/claude-sonnet-4.6
+  fallbacks:
+    - ollama_chat/qwen3:8b
+  payload_alias: sonnet
+
+schedule:
+  cron: ""
+  timezone: America/New_York
+  timeout_seconds: 300
+  max_iterations: 15
+  session_target: interactive
+
+delivery:
+  mode: telegram
+  bot: RobothorPFBot
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - list_directory
+  - web_fetch
+  - web_search
+  - search_memory
+  - store_memory
+  - memory_block_read
+  - memory_block_list
+  - pf_system_status
+  - list_agent_runs
+  - get_agent_run
+  - list_agent_schedules
+  - get_agent_stats
+  - federation_query
+  - federation_sync_status
+
+instruction_file: brain/instructions/PF_HELM.md
+bootstrap_files: []
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  scratchpad_enabled: true
+  can_spawn_agents: false
+  max_nesting_depth: 0
+
+changelog:
+  - date: "2026-03-09"
+    change: "Initial creation"

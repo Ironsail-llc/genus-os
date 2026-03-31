@@ -42,6 +42,7 @@ def _collect_handlers() -> dict[str, Any]:
         memory,
         observability,
         pdf,
+        pf,
         reasoning,
         spawn,
         vault,
@@ -69,6 +70,7 @@ def _collect_handlers() -> dict[str, Any]:
         impetus,
         reasoning,
         federation,
+        pf,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

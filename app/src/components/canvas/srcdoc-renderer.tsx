@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
-import DOMPurify from "dompurify";
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
+
+type DOMPurifyType = typeof import("dompurify").default;
 
 /**
  * Tools that dashboard actions can invoke.
@@ -43,12 +44,18 @@ interface SrcdocRendererProps {
 export function SrcdocRenderer({ html, preSanitized, onAction }: SrcdocRendererProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(400);
+  const [purify, setPurify] = useState<DOMPurifyType | null>(null);
+
+  // Load DOMPurify only on client (avoids "navigator is not defined" during SSR)
+  useEffect(() => {
+    import("dompurify").then((mod) => setPurify(() => mod.default));
+  }, []);
 
   const srcdoc = useMemo(() => {
     // Skip client-side DOMPurify when already sanitized server-side
-    const sanitized = preSanitized
+    const sanitized = preSanitized || !purify
       ? html
-      : DOMPurify.sanitize(html, {
+      : purify.sanitize(html, {
           ADD_TAGS: ["canvas", "svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop", "form", "textarea", "select", "input"],
           ADD_ATTR: ["data-chart", "data-testid", "data-tab", "data-sort-dir", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width", "onclick", "onsubmit", "placeholder", "rows", "required", "disabled"],
           ALLOW_DATA_ATTR: true,
@@ -308,7 +315,7 @@ ${sanitized}
 <\/script>
 </body>
 </html>`;
-  }, [html, preSanitized]);
+  }, [html, preSanitized, purify]);
 
   // Send action result back to iframe
   const sendActionResult = useCallback(

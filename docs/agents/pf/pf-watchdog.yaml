@@ -1,0 +1,46 @@
+id: pf-watchdog
+name: PF Watchdog
+description: System health monitor for Princess Freya — checks vitals every 5 minutes
+version: "2026-03-09"
+department: operations
+
+reports_to: pf-helm
+escalates_to: main
+
+model:
+  primary: ollama_chat/qwen3:8b
+  fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
+  payload_alias: qwen3
+
+schedule:
+  cron: "*/5 * * * *"
+  timezone: America/New_York
+  timeout_seconds: 120
+  max_iterations: 5
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - list_directory
+  - pf_system_status
+  - store_memory
+  - search_memory
+
+instruction_file: brain/instructions/PF_WATCHDOG.md
+bootstrap_files: []
+
+v2:
+  error_feedback: true
+  planning_enabled: false
+  scratchpad_enabled: false
+  can_spawn_agents: false
+  max_nesting_depth: 0
+
+changelog:
+  - date: "2026-03-09"
+    change: "Initial creation"

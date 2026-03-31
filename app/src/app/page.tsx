@@ -1,14 +1,7 @@
-"use client";
+import HomeClient from "@/components/home-client";
 
-import { AppShell } from "@/components/layout/app-shell";
-import { VisualStateProvider } from "@/hooks/use-visual-state";
+export const dynamic = "force-dynamic";
 
 export default function Home() {
-  return (
-    <VisualStateProvider>
-      <main className="h-dvh w-full overflow-hidden">
-        <AppShell />
-      </main>
-    </VisualStateProvider>
-  );
+  return <HomeClient />;
 }

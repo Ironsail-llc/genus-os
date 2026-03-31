@@ -868,6 +868,23 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Princess Freya (PF) vessel tools ──
+    schemas["pf_system_status"] = {
+        "type": "function",
+        "function": {
+            "name": "pf_system_status",
+            "description": (
+                "Get Princess Freya system status: battery voltage, disk/memory usage, "
+                "CPU temperature, connectivity (Tailscale, internet, parent), GPS lock, "
+                "bilge pump, and uptime."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    }
+
     # ── Federation tools ──
     schemas["federation_query"] = {
         "type": "function",

@@ -1577,7 +1577,7 @@ class AgentRunner:
     ) -> None:
         """Handle model failure: mark broken or log warning."""
         status = getattr(e, "status_code", None)
-        if broken_models is not None and status in (401, 403, 429):
+        if broken_models is not None and status in (401, 402, 403, 429):
             broken_models.add(model)
             logger.warning(
                 "Model %s permanently failed (%s), removing from rotation",
