@@ -70,6 +70,9 @@ DESKTOP_TOOLS = frozenset(
 # Federation tools
 FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federation_sync_status"})
 
+# Princess Freya (PF) vessel tools
+PF_TOOLS = frozenset({"pf_system_status"})
+
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
@@ -134,6 +137,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Federation read-only tools
         "federation_query",
         "federation_sync_status",
+        # PF vessel read-only tools
+        "pf_system_status",
         # Git read-only tools
         "git_status",
         "git_diff",

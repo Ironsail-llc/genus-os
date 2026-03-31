@@ -1131,7 +1131,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>Plan mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+P)</p>
+                  <p>Plan mode ({typeof navigator !== "undefined" && navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+P)</p>
                 </TooltipContent>
               </Tooltip>
               <Tooltip>
@@ -1161,7 +1161,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>Deep mode ({navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+D)</p>
+                  <p>Deep mode ({typeof navigator !== "undefined" && navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Shift+D)</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

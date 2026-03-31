@@ -1,0 +1,27 @@
+[Unit]
+Description=Robothor Helm Dashboard — Princess Freya
+After=network-online.target robothor-engine-pf.service redis.service
+Wants=network-online.target
+
+[Service]
+User=philip
+Group=philip
+ExecStartPre=/home/philip/robothor/scripts/decrypt-secrets.sh
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/node /home/philip/robothor/app/.next/standalone/server.js
+WorkingDirectory=/home/philip/robothor/app
+Restart=always
+RestartSec=5
+KillMode=control-group
+Environment=HOME=/home/philip
+Environment=NODE_ENV=production
+Environment=PORT=3004
+Environment=ROBOTHOR_ENGINE_URL=http://127.0.0.1:18800
+Environment=ROBOTHOR_OWNER_NAME=Philip
+Environment=ROBOTHOR_AI_NAME=Robothor
+Environment=AGENT_SESSION_KEY=agent:pf-helm:primary
+Environment=HELM_AGENT_ID=pf-helm
+Environment=REDIS_URL=redis://localhost:6379/0
+
+[Install]
+WantedBy=multi-user.target
