@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robothor Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
+  <style>
+    {{ brand_css }}
+
+    :root {
+      --glass-border: var(--r-border);
+      --accent: var(--r-primary);
+      --accent2: var(--r-accent);
+      --success: oklch(0.696 0.17 162.48);
+      --warning: oklch(0.769 0.188 70.08);
+      --danger: oklch(0.645 0.246 16.439);
+      --text: var(--r-text);
+      --text2: var(--r-text-muted);
+      --text3: var(--r-text-dim);
+    }
+
+    .header {
+      padding: 1rem 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--glass-border);
+      position: sticky; top: 0;
+      background: rgba(10,10,15,0.9);
+      backdrop-filter: blur(10px);
+      z-index: 100;
+    }
+    .logo { display:flex; align-items:center; gap:0.75rem; font-size:1.25rem; font-weight:600; }
+    .logo span { font-size:1.5rem; }
+    .header-right { display:flex; align-items:center; gap:1rem; }
+    .live-indicator { display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; color:var(--text2); }
+    .live-dot { width:8px; height:8px; background:var(--success); border-radius:50%; animation:pulse 2s infinite; }
+    .time { font-size:0.85rem; color:var(--text2); }
+
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 1fr 300px;
+      grid-template-rows: auto auto 1fr;
+      gap: 1rem; padding: 1rem;
+      max-width: 1800px; margin: 0 auto;
+    }
+    @media (max-width: 1400px) { .main { grid-template-columns: 1fr 1fr; } .sidebar { grid-column: span 2; } }
+    @media (max-width: 900px) { .main { grid-template-columns: 1fr; } .sidebar { grid-column: span 1; } }
+
+    .panel { padding:1.25rem; display:flex; flex-direction:column; }
+    .panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+    .panel-title { display:flex; align-items:center; gap:0.5rem; font-weight:600; font-size:0.95rem; }
+    .panel-badge { background:rgba(102,126,234,0.2); color:var(--accent); padding:0.2rem 0.6rem; border-radius:10px; font-size:0.7rem; font-weight:600; }
+    .panel-badge.warning { background:rgba(245,158,11,0.2); color:var(--warning); }
+    .panel-badge.danger { background:rgba(239,68,68,0.2); color:var(--danger); }
+    .panel-badge.success { background:rgba(16,185,129,0.2); color:var(--success); }
+    .panel-content { flex:1; overflow-y:auto; }
+
+    .email-item { padding:0.75rem; border-radius:10px; margin-bottom:0.5rem; background:rgba(255,255,255,0.02); border:1px solid transparent; }
+    .email-item.unread { border-left:3px solid var(--accent); }
+    .email-item.urgent { border-left:3px solid var(--danger); }
+    .email-from { font-weight:500; font-size:0.9rem; margin-bottom:0.25rem; }
+    .email-subject { color:var(--text2); font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .email-meta { display:flex; justify-content:space-between; margin-top:0.5rem; font-size:0.7rem; color:var(--text3); }
+
+    .meeting-item { display:flex; gap:1rem; padding:0.75rem; border-radius:10px; margin-bottom:0.5rem; background:rgba(255,255,255,0.02); }
+    .meeting-time { font-size:0.85rem; font-weight:600; color:var(--accent); min-width:60px; }
+    .meeting-title { font-weight:500; font-size:0.9rem; margin-bottom:0.25rem; }
+    .meeting-attendees { font-size:0.75rem; color:var(--text3); }
+
+    .task-item { display:flex; align-items:flex-start; gap:0.75rem; padding:0.6rem; border-radius:8px; margin-bottom:0.4rem; background:rgba(255,255,255,0.02); }
+    .task-status { width:8px; height:8px; border-radius:50%; margin-top:0.4rem; flex-shrink:0; }
+    .task-status.pending { background:var(--warning); }
+    .task-status.in_progress { background:var(--accent); }
+    .task-text { font-size:0.85rem; color:var(--text2); }
+    .task-meta { font-size:0.7rem; color:var(--text3); margin-top:0.25rem; }
+
+    .services-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:0.5rem; }
+    .service-item { display:flex; align-items:center; gap:0.5rem; padding:0.6rem; border-radius:8px; background:rgba(255,255,255,0.02); font-size:0.85rem; }
+    .service-dot { width:8px; height:8px; border-radius:50%; }
+    .service-dot.up { background:var(--success); }
+    .service-dot.down { background:var(--danger); }
+
+    .cron-item { display:flex; justify-content:space-between; padding:0.5rem; font-size:0.8rem; border-bottom:1px solid var(--glass-border); }
+    .cron-item:last-child { border:none; }
+    .cron-schedule { color:var(--text3); font-family:monospace; }
+
+    .sidebar { grid-row:span 3; }
+    .stats-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:0.75rem; margin-bottom:1rem; }
+    .stat-card { padding:1rem; text-align:center; border-radius:12px; background:rgba(255,255,255,0.03); }
+    .stat-value { font-size:1.5rem; font-weight:700; color:var(--accent); }
+    .stat-label { font-size:0.7rem; color:var(--text3); text-transform:uppercase; }
+
+    .actions { display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem; }
+    .action-btn {
+      display:flex; align-items:center; gap:0.5rem;
+      padding:0.75rem 1rem; background:rgba(102,126,234,0.1);
+      border:1px solid rgba(102,126,234,0.2); border-radius:10px;
+      color:var(--text); font-size:0.85rem; cursor:pointer;
+    }
+    .action-btn:hover { background:rgba(102,126,234,0.2); }
+
+    .empty { text-align:center; padding:2rem; color:var(--text3); font-size:0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <header class="header">
+    <div class="logo"><span>&#9889;</span> Robothor Dashboard</div>
+    <div class="header-right">
+      <div class="live-indicator"><span class="live-dot"></span><span>Live</span></div>
+      <div class="time" id="clock"></div>
+    </div>
+  </header>
+
+  <main class="main">
+    {# Email Panel #}
+    <div class="panel glass">
+      <div class="panel-header">
+        <div class="panel-title">&#128231; Email Queue</div>
+        <span class="panel-badge{% if data.emails.stats.urgent > 0 %} danger{% endif %}">{{ data.emails.stats.unread }}</span>
+      </div>
+      <div class="panel-content">
+        {% if data.emails.emails %}
+          {% for e in data.emails.emails[:10] %}
+          <div class="email-item{% if not e.reviewedAt %} unread{% endif %}{% if e.urgency in ('high', 'critical') %} urgent{% endif %}">
+            <div class="email-from">{{ (e.get('from', 'Unknown') | string)[:30] }}</div>
+            <div class="email-subject">{{ e.get('subject', '(no subject)') }}</div>
+            <div class="email-meta">
+              <span>{{ e.get('urgency', 'low') }}</span>
+              <span>{{ e.get('receivedAt', '')[:10] }}</span>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No emails to display</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Calendar Panel #}
+    <div class="panel glass">
+      <div class="panel-header">
+        <div class="panel-title">&#128197; Today's Schedule</div>
+        <span class="panel-badge success">{{ data.calendar.meetings | length }}</span>
+      </div>
+      <div class="panel-content">
+        {% if data.calendar.meetings %}
+          {% for m in data.calendar.meetings %}
+          <div class="meeting-item">
+            <div class="meeting-time">{{ m.get('start', '')[-8:-3] if m.get('start') else '' }}</div>
+            <div>
+              <div class="meeting-title">{{ m.get('title', 'Untitled') }}</div>
+              <div class="meeting-attendees">{{ (m.get('attendees') or []) | length }} attendees</div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No meetings today</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Sidebar #}
+    <div class="sidebar">
+      <div class="panel glass" style="margin-bottom:1rem;">
+        <div class="panel-header">
+          <div class="panel-title">&#128268; Services</div>
+        </div>
+        <div class="services-grid">
+          {% for s in services %}
+          <div class="service-item">
+            <div class="service-dot {{ s.status }}"></div>
+            <span>{{ s.name }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="panel glass" style="margin-bottom:1rem;">
+        <div class="panel-header">
+          <div class="panel-title">&#128202; Quick Stats</div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value">{{ data.emails.stats.unread }}</div>
+            <div class="stat-label">Unread</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ data.calendar.meetings | length }}</div>
+            <div class="stat-label">Meetings</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ data.tasks.stats.pending }}</div>
+            <div class="stat-label">Tasks</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ data.security.unreviewed }}</div>
+            <div class="stat-label">Alerts</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel glass">
+        <div class="panel-header">
+          <div class="panel-title">&#9889; Quick Actions</div>
+        </div>
+        <div class="actions">
+          <button class="action-btn" onclick="location.reload()">&#128260; Refresh Data</button>
+          <button class="action-btn" onclick="window.open('https://mail.google.com','_blank')">&#128236; Open Gmail</button>
+          <button class="action-btn" onclick="window.open('https://calendar.google.com','_blank')">&#128198; Open Calendar</button>
+        </div>
+      </div>
+    </div>
+
+    {# Tasks Panel #}
+    <div class="panel glass">
+      <div class="panel-header">
+        <div class="panel-title">&#128203; Tasks</div>
+        <span class="panel-badge warning">{{ data.tasks.stats.pending + data.tasks.stats.inProgress }}</span>
+      </div>
+      <div class="panel-content">
+        {% set open_tasks = data.tasks.pending[:5] + data.tasks.inProgress[:5] %}
+        {% if open_tasks %}
+          {% for t in open_tasks[:10] %}
+          <div class="task-item">
+            <div class="task-status {{ t.get('status', 'pending') }}"></div>
+            <div>
+              <div class="task-text">{{ (t.get('description', t.get('id', '')))[:60] }}</div>
+              <div class="task-meta">{{ t.get('owner', '') }} &middot; {{ t.get('source', '') }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No open tasks</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Crons Panel #}
+    <div class="panel glass">
+      <div class="panel-header">
+        <div class="panel-title">&#9200; System Crons</div>
+      </div>
+      <div class="panel-content">
+        {% if data.crons.systemCrons %}
+          {% for c in data.crons.systemCrons[:6] %}
+          <div class="cron-item">
+            <span>{{ c.command }}</span>
+            <span class="cron-schedule">{{ c.schedule }}</span>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No crons found</div>
+        {% endif %}
+      </div>
+    </div>
+  </main>
+
+<script>
+(function updateClock() {
+  const el = document.getElementById('clock');
+  if (el) el.textContent = new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'}) + ' EST';
+  setTimeout(updateClock, 1000);
+})();
+// Auto-refresh every 30s
+setInterval(() => location.reload(), 30000);
+</script>
+</body>
+</html>

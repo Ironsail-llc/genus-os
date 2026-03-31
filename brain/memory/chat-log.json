@@ -1,6 +1,14 @@
 {
-  "lastCheckedAt": "2026-03-21T21:25:15.388690",
+  "lastCheckedAt": "2026-03-30T22:55:15.602684",
   "spaces": {
+    "spaces/AAQA3z-N2IQ": {
+      "displayName": "Daily Standup Meeting - Mar 30",
+      "type": "SPACE"
+    },
+    "spaces/AAQAN0NKDyc": {
+      "displayName": "Weekly Senior Leadership Standup - Mar 25",
+      "type": "SPACE"
+    },
     "spaces/AAQARPvW3mM": {
       "displayName": "Ironsail x Webugol Internal Marketing - Mar 19",
       "type": "SPACE"
@@ -142,7 +150,9 @@
     "spaces/AAQA59zqyRw": "spaces/AAQA59zqyRw/messages/kZg4Zya-1PU.kZg4Zya-1PU",
     "spaces/AAQAUIgbP5c": "spaces/AAQAUIgbP5c/messages/lGXgwEfAM1Y.lGXgwEfAM1Y",
     "spaces/AAQA88F_pYw": "spaces/AAQA88F_pYw/messages/a3QSwgue9fQ.a3QSwgue9fQ",
-    "spaces/AAQARPvW3mM": "spaces/AAQARPvW3mM/messages/0vmkgDjsIDE.0vmkgDjsIDE"
+    "spaces/AAQARPvW3mM": "spaces/AAQARPvW3mM/messages/0vmkgDjsIDE.0vmkgDjsIDE",
+    "spaces/AAQAN0NKDyc": "spaces/AAQAN0NKDyc/messages/7wftWcd3GTc.7wftWcd3GTc",
+    "spaces/AAQA3z-N2IQ": "spaces/AAQA3z-N2IQ/messages/bl3Dd56TJak.bl3Dd56TJak"
   },
   "pendingMessages": [
     {
@@ -976,6 +986,19 @@
       "threadName": "spaces/AAQARPvW3mM/threads/0vmkgDjsIDE",
       "mentionsRobothor": false,
       "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAN0NKDyc",
+      "spaceName": "Weekly Senior Leadership Standup - Mar 25",
+      "spaceType": "SPACE",
+      "sender": "users/101922857813055076554",
+      "senderName": "",
+      "text": "https://www.uspto.gov/trademarks/basics/trademark-process",
+      "createTime": "2026-03-25T15:16:50.584815Z",
+      "messageName": "spaces/AAQAN0NKDyc/messages/7wftWcd3GTc.7wftWcd3GTc",
+      "threadName": "spaces/AAQAN0NKDyc/threads/7wftWcd3GTc",
+      "mentionsRobothor": false,
+      "isQuestion": false
     }
   ],
   "changes": [
@@ -1490,6 +1513,14 @@
       "spaceName": "Ironsail x Webugol Internal Marketing - Mar 19",
       "sender": "",
       "preview": "https://questrx.co/"
+    },
+    {
+      "timestamp": "2026-03-25T12:00:04.737763",
+      "type": "new_message",
+      "space": "spaces/AAQAN0NKDyc",
+      "spaceName": "Weekly Senior Leadership Standup - Mar 25",
+      "sender": "",
+      "preview": "https://www.uspto.gov/trademarks/basics/trademark-process"
     }
   ]
 }

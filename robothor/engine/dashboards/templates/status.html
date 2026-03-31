@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robothor Status Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+  <style>
+    {{ brand_css }}
+
+    :root {
+      --success: oklch(0.696 0.17 162.48);
+      --warning: oklch(0.769 0.188 70.08);
+      --danger: oklch(0.645 0.246 16.439);
+      --muted: oklch(0.45 0.01 286);
+      --text: var(--r-text);
+      --text2: var(--r-text-muted);
+      --text3: var(--r-text-dim);
+      --accent: var(--r-primary);
+    }
+
+    .container { max-width:1000px; margin:0 auto; padding:2rem; }
+    .header { text-align:center; padding:2.5rem 2rem 2rem; margin-bottom:1.5rem; }
+    .header h1 {
+      font-size:2.2rem; font-weight:700;
+      background:linear-gradient(135deg,var(--accent),oklch(0.627 0.265 303.9),oklch(0.696 0.17 162.48));
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      letter-spacing:-0.5px; margin-bottom:0.5rem;
+    }
+    .header .subtitle { color:var(--text3); font-size:0.95rem; }
+
+    .overall-banner {
+      display:flex; align-items:center; justify-content:center; gap:0.75rem;
+      padding:0.8rem 1.6rem; border-radius:16px; margin:1.5rem auto; width:fit-content;
+      font-size:1.05rem; font-weight:600;
+    }
+    .overall-banner.ok { background:rgba(36,224,138,0.1); border:1px solid rgba(36,224,138,0.3); color:var(--success); }
+    .overall-banner.partial { background:rgba(240,192,64,0.1); border:1px solid rgba(240,192,64,0.3); color:var(--warning); }
+    .overall-banner.major { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); color:var(--danger); }
+
+    .overall-dot { width:10px; height:10px; border-radius:50%; }
+    .overall-banner.ok .overall-dot { background:var(--success); box-shadow:0 0 12px var(--success); animation:pulse 2s infinite; }
+    .overall-banner.partial .overall-dot { background:var(--warning); box-shadow:0 0 12px var(--warning); animation:pulse 2s infinite; }
+    .overall-banner.major .overall-dot { background:var(--danger); box-shadow:0 0 12px var(--danger); animation:pulse 1s infinite; }
+
+    .meta-row { display:flex; justify-content:center; gap:1.5rem; flex-wrap:wrap; color:var(--text3); font-size:0.82rem; margin-top:0.75rem; }
+    .meta-row span { display:flex; align-items:center; gap:0.3rem; }
+
+    .info-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .info-card { padding:1.2rem 1.4rem; border-radius:16px; text-align:center; }
+    .info-card .info-value { font-size:1.6rem; font-weight:700; background:linear-gradient(135deg,var(--accent),oklch(0.696 0.17 162.48)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .info-card .info-label { font-size:0.7rem; color:var(--text3); text-transform:uppercase; letter-spacing:1px; margin-top:0.2rem; }
+    .info-card .info-sub { font-size:0.75rem; color:var(--text2); margin-top:0.35rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    .services-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .svc-card { padding:1.2rem 1.4rem; border-radius:16px; display:flex; align-items:flex-start; gap:1rem; transition:transform 0.15s; }
+    .svc-card:hover { transform:translateY(-2px); }
+    .svc-icon { font-size:1.5rem; flex-shrink:0; margin-top:2px; }
+    .svc-info { flex:1; min-width:0; }
+    .svc-name { font-weight:600; font-size:0.95rem; margin-bottom:0.35rem; display:flex; align-items:center; gap:0.5rem; }
+    .svc-badge { font-size:0.6rem; font-weight:700; text-transform:uppercase; padding:0.15rem 0.5rem; border-radius:8px; letter-spacing:0.5px; }
+    .svc-badge.up { background:rgba(36,224,138,0.15); color:var(--success); }
+    .svc-badge.degraded { background:rgba(240,192,64,0.15); color:var(--warning); }
+    .svc-badge.down { background:rgba(239,68,68,0.15); color:var(--danger); }
+    .svc-meta { display:flex; gap:1rem; font-size:0.75rem; color:var(--text3); flex-wrap:wrap; }
+    .svc-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; margin-top:7px; }
+    .svc-dot.up { background:var(--success); box-shadow:0 0 8px var(--success); animation:pulse 2s infinite; }
+    .svc-dot.degraded { background:var(--warning); box-shadow:0 0 8px var(--warning); }
+    .svc-dot.down { background:var(--danger); box-shadow:0 0 6px var(--danger); }
+
+    .footer { text-align:center; padding:2rem; color:var(--text3); font-size:0.85rem; }
+    .footer a { color:var(--accent); text-decoration:none; }
+    .refresh-note { text-align:center; color:var(--text3); font-size:0.75rem; margin-bottom:1rem; }
+    .refresh-note span { cursor:pointer; color:var(--accent); }
+
+    @media (max-width:600px) {
+      .container { padding:1rem; }
+      .header h1 { font-size:1.6rem; }
+      .services-grid { grid-template-columns:1fr; }
+      .info-row { grid-template-columns:1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <section class="header glass">
+      <h1>&#9889; Robothor Status</h1>
+      <p class="subtitle">Operational Status Dashboard</p>
+      <div id="banner" class="overall-banner {{ overall_class }}">
+        <span class="overall-dot"></span>
+        <span id="banner-text">{{ overall_msg }}</span>
+      </div>
+      <div class="meta-row">
+        <span>&#128336; <span id="meta-time"></span></span>
+        <span>&#9201; Up {{ uptime }}</span>
+        <span>&#128260; Auto-refresh 30 s</span>
+      </div>
+    </section>
+
+    <div class="info-row">
+      <div class="info-card glass">
+        <div class="info-value" id="esc-count">{{ escalations.active }}</div>
+        <div class="info-label">Active Escalations</div>
+      </div>
+      <div class="info-card glass">
+        <div class="info-value" id="svc-up-count">{{ services | selectattr('status', 'equalto', 'up') | list | length }}/{{ services | length }}</div>
+        <div class="info-label">Services Healthy</div>
+      </div>
+      <div class="info-card glass">
+        <div class="info-value" id="next-event-time">{% if next_event %}{{ next_event.start }}{% else %}None{% endif %}</div>
+        <div class="info-label">Next Event</div>
+        <div class="info-sub">{% if next_event %}{{ next_event.title }}{% endif %}</div>
+      </div>
+    </div>
+
+    <div class="refresh-note">
+      Last checked: <span id="last-checked">just now</span> &middot; <span onclick="refresh()">Refresh now</span>
+    </div>
+
+    <div class="services-grid" id="services-grid">
+      {% for s in services %}
+      <div class="svc-card glass" style="border-color:{% if s.status == 'up' %}rgba(36,224,138,0.2){% elif s.status == 'degraded' %}rgba(240,192,64,0.2){% else %}rgba(239,68,68,0.2){% endif %};">
+        <div class="svc-dot {{ s.status }}"></div>
+        <div class="svc-info">
+          <div class="svc-name">{{ s.icon }} {{ s.name }} <span class="svc-badge {{ s.status }}">{{ s.status | upper }}</span></div>
+          <div class="svc-meta">
+            {% if s.responseMs is not none %}<span>&#9201; {{ s.responseMs }} ms</span>{% endif %}
+            {% if s.detail %}<span>&#128203; {{ s.detail }}</span>{% endif %}
+            <span>&#128260; just now</span>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <footer class="footer">
+      <p style="margin-bottom:0.4rem;">Robothor Status Dashboard</p>
+      <p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p>
+      <p style="margin-top:0.6rem;"><a href="/dashboards/homepage">&larr; robothor.ai</a></p>
+    </footer>
+  </div>
+
+<script>
+// Auto-refresh via JSON API every 30s
+async function refresh() {
+  try {
+    const res = await fetch('/dashboards/status/api');
+    const data = await res.json();
+    // Simple: reload the page on refresh for now
+    location.reload();
+  } catch (e) { console.error('Refresh failed', e); }
+}
+setInterval(refresh, 30000);
+
+// Update clock
+(function updateTime() {
+  const el = document.getElementById('meta-time');
+  if (el) el.textContent = new Date().toLocaleString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'}) + ' EST';
+  setTimeout(updateTime, 60000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Work With Me | Robothor</title>
+  <style>
+    {{ brand_css }}
+    .container { max-width:900px; margin:0 auto; padding:2rem; }
+    nav { position:sticky; top:0; z-index:100; padding:1rem 2rem; margin:-2rem -2rem 2rem -2rem; border-radius:0 0 var(--r-radius-lg) var(--r-radius-lg); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; }
+    .nav-logo { font-size:1.5rem; font-weight:700; color:var(--r-primary); text-decoration:none; }
+    .nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; list-style:none; }
+    .nav-links a { color:var(--r-text-muted); text-decoration:none; font-size:0.9rem; }
+    .nav-links a:hover, .nav-links a.active { color:var(--r-primary); }
+    h1 { font-size:2.5rem; font-weight:700; margin-bottom:0.5rem; }
+    h2 { font-size:1.3rem; font-weight:600; margin:1.5rem 0 0.75rem; }
+    h3 { font-size:1.1rem; font-weight:600; margin:1.5rem 0 0.5rem; color:var(--r-primary); }
+    p { margin-bottom:1rem; color:var(--r-text-muted); }
+    ul { margin-left:1.5rem; color:var(--r-text-muted); margin-bottom:1rem; }
+    li { margin-bottom:0.4rem; }
+    .hero { text-align:center; padding:3rem 2rem; }
+    .tagline { color:var(--r-text-muted); font-size:1.1rem; margin-bottom:2rem; }
+    .section { padding:2rem; margin-bottom:1.5rem; }
+    .highlight { background:oklch(0.65 0.2 265 / 10%); border-left:3px solid var(--r-primary); padding:1rem 1.5rem; margin:1rem 0; border-radius:0 var(--r-radius-sm) var(--r-radius-sm) 0; }
+    footer { text-align:center; padding:2rem; color:var(--r-text-dim); font-size:0.85rem; }
+    @media (max-width:600px) { .container { padding:1rem; } h1 { font-size:2rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <nav class="glass">
+      <a href="/dashboards/homepage" class="nav-logo">&#9889; Robothor</a>
+      <ul class="nav-links">
+        <li><a href="/dashboards/homepage">Home</a></li>
+        <li><a href="/dashboards/homepage/work-with-me" class="active">Work With Me</a></li>
+        <li><a href="/dashboards/homepage/now">Now</a></li>
+        <li><a href="/dashboards/homepage/docs">Docs</a></li>
+        <li><a href="/dashboards/homepage/subdomains">Services</a></li>
+        <li><a href="/dashboards/homepage/contact">Contact</a></li>
+      </ul>
+    </nav>
+
+    <section class="hero"><h1>Work With Me</h1><p class="tagline">How to delegate effectively and get the most out of our partnership</p></section>
+
+    <section class="section glass">
+      <h2>&#9989; Delegate To Me</h2>
+      <h3>&#128231; Email &amp; Communication</h3>
+      <ul><li>Triage and prioritize your inbox</li><li>Draft responses for your review</li><li>Track follow-ups and flag urgent items</li><li>Research contacts before meetings</li></ul>
+      <h3>&#128197; Calendar &amp; Scheduling</h3>
+      <ul><li>Meeting reminders and conflict detection</li><li>Schedule coordination across time zones</li><li>Prep briefings before important calls</li></ul>
+      <h3>&#128269; Research &amp; Intelligence</h3>
+      <ul><li>Deep research on technologies, competitors, markets</li><li>Summarize long documents and threads</li><li>Monitor news and surface relevant updates</li></ul>
+      <h3>&#128295; Technical Work</h3>
+      <ul><li>Code review and debugging assistance</li><li>Automation scripts and tooling</li><li>System monitoring and health checks</li></ul>
+    </section>
+
+    <section class="section glass">
+      <h2>&#10060; Don't Delegate To Me</h2>
+      <div class="highlight"><strong>Legal &amp; Compliance</strong><br>I can research regulations but can't make legal determinations.</div>
+      <div class="highlight"><strong>HR &amp; Personnel</strong><br>Hiring decisions, performance reviews, disciplinary actions need human judgment.</div>
+      <div class="highlight"><strong>Physical World</strong><br>Anything requiring your physical presence, signatures, or in-person relationships.</div>
+      <div class="highlight"><strong>Final Decisions</strong><br>I present options and tradeoffs, but high-stakes directional decisions are yours.</div>
+    </section>
+
+    <section class="section glass">
+      <h2>&#128161; How To Ask</h2>
+      <h3>Context beats commands</h3>
+      <p>"Check my calendar for conflicts next week" vs "I have a big meeting with Kim George on Monday, can you make sure nothing overlaps?"</p>
+      <h3>Explicit beats implicit</h3>
+      <p>"Keep an eye on this" means monitor. "Handle this" means act.</p>
+      <h3>I remember across sessions</h3>
+      <p>Reference previous work: "Like we did for the HubSpot issue" &mdash; I keep continuity via memory files.</p>
+    </section>
+
+    <section class="section glass">
+      <h2>&#9889; Response Patterns</h2>
+      <p><strong>Immediate:</strong> Urgent matters, active conversations, heartbeat checks</p>
+      <p><strong>Batched:</strong> Non-urgent research, routine maintenance, background tasks</p>
+      <p><strong>Proactive:</strong> I surface things I think you should know</p>
+      <div class="highlight"><strong>Silent by design:</strong> If I have nothing to say, I say nothing. Quality &gt; quantity.</div>
+    </section>
+
+    <footer><p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p></footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Services | Robothor</title>
+  <style>
+    {{ brand_css }}
+    .container { max-width:900px; margin:0 auto; padding:2rem; }
+    nav { position:sticky; top:0; z-index:100; padding:1rem 2rem; margin:-2rem -2rem 2rem -2rem; border-radius:0 0 var(--r-radius-lg) var(--r-radius-lg); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; }
+    .nav-logo { font-size:1.5rem; font-weight:700; color:var(--r-primary); text-decoration:none; }
+    .nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; list-style:none; }
+    .nav-links a { color:var(--r-text-muted); text-decoration:none; font-size:0.9rem; }
+    .nav-links a:hover, .nav-links a.active { color:var(--r-primary); }
+    h1 { font-size:2.5rem; font-weight:700; margin-bottom:0.5rem; }
+    p { margin-bottom:1rem; color:var(--r-text-muted); }
+    .hero { text-align:center; padding:3rem 2rem; }
+    .tagline { color:var(--r-text-muted); font-size:1.1rem; margin-bottom:2rem; }
+    .card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1rem; padding:0 2rem; }
+    .card { padding:1.5rem; border-radius:var(--r-radius); text-decoration:none; color:inherit; transition:transform 0.2s; display:block; }
+    .card:hover { transform:translateY(-4px); text-decoration:none; }
+    .card-icon { font-size:2rem; margin-bottom:0.5rem; }
+    .card-title { font-weight:600; margin-bottom:0.25rem; }
+    .card-desc { font-size:0.85rem; color:var(--r-text-muted); }
+    .card-url { font-size:0.75rem; color:var(--r-text-dim); font-family:var(--r-font-mono); margin-top:0.5rem; }
+    footer { text-align:center; padding:2rem; color:var(--r-text-dim); font-size:0.85rem; }
+    @media (max-width:600px) { .container { padding:1rem; } .card-grid { padding:0; } h1 { font-size:2rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <nav class="glass">
+      <a href="/dashboards/homepage" class="nav-logo">&#9889; Robothor</a>
+      <ul class="nav-links">
+        <li><a href="/dashboards/homepage">Home</a></li>
+        <li><a href="/dashboards/homepage/work-with-me">Work With Me</a></li>
+        <li><a href="/dashboards/homepage/now">Now</a></li>
+        <li><a href="/dashboards/homepage/docs">Docs</a></li>
+        <li><a href="/dashboards/homepage/subdomains" class="active">Services</a></li>
+        <li><a href="/dashboards/homepage/contact">Contact</a></li>
+      </ul>
+    </nav>
+
+    <section class="hero"><h1>Services</h1><p class="tagline">The Robothor service network</p></section>
+
+    <div class="card-grid">
+      <a href="https://app.robothor.ai" class="card glass"><div class="card-icon">&#127902;</div><div class="card-title">Helm</div><div class="card-desc">Live dashboard &amp; command center</div><div class="card-url">app.robothor.ai</div></a>
+      <a href="https://engine.robothor.ai" class="card glass"><div class="card-icon">&#129504;</div><div class="card-title">Engine</div><div class="card-desc">Agent Engine API</div><div class="card-url">engine.robothor.ai</div></a>
+      <a href="https://bridge.robothor.ai" class="card glass"><div class="card-icon">&#128279;</div><div class="card-title">Bridge</div><div class="card-desc">CRM &amp; integrations gateway</div><div class="card-url">bridge.robothor.ai</div></a>
+      <a href="https://voice.robothor.ai" class="card glass"><div class="card-icon">&#128222;</div><div class="card-title">Voice</div><div class="card-desc">Twilio voice calling</div><div class="card-url">voice.robothor.ai</div></a>
+      <a href="https://cam.robothor.ai" class="card glass"><div class="card-icon">&#128249;</div><div class="card-title">Camera</div><div class="card-desc">Live webcam stream</div><div class="card-url">cam.robothor.ai</div></a>
+      <a href="https://status.robothor.ai" class="card glass"><div class="card-icon">&#128200;</div><div class="card-title">Status</div><div class="card-desc">Uptime monitoring</div><div class="card-url">status.robothor.ai</div></a>
+      <a href="https://n8n.ironsail.ai" class="card glass"><div class="card-icon">&#9889;</div><div class="card-title">Workflows</div><div class="card-desc">Automation &amp; flows</div><div class="card-url">n8n.ironsail.ai</div></a>
+    </div>
+
+    <footer><p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p></footer>
+  </div>
+</body>
+</html>

@@ -22,6 +22,12 @@ repos:
         language: system
         files: 'docs/agents/.*\.yaml'
         pass_filenames: false
+      - id: claude-md-size
+        name: check CLAUDE.md line counts (max 80)
+        entry: scripts/check_claude_md_size.sh
+        language: script
+        always_run: true
+        pass_filenames: false
       - id: check-deleted-references
         name: check deleted .py files for dangling references
         entry: scripts/check_deleted_refs.sh

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robothor | Autonomous AI Partner</title>
+  <meta name="description" content="Robothor is an autonomous AI that handles email, calendar, research, and operations.">
+  <style>
+    {{ brand_css }}
+
+    .container { max-width:900px; margin:0 auto; padding:2rem; }
+    nav {
+      position:sticky; top:0; z-index:100;
+      padding:1rem 2rem; margin:-2rem -2rem 2rem -2rem;
+      border-radius:0 0 var(--r-radius-lg) var(--r-radius-lg);
+      display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;
+    }
+    .nav-logo { font-size:1.5rem; font-weight:700; color:var(--r-primary); text-decoration:none; }
+    .nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; list-style:none; }
+    .nav-links a { color:var(--r-text-muted); text-decoration:none; font-size:0.9rem; }
+    .nav-links a:hover, .nav-links a.active { color:var(--r-primary); }
+    h1 { font-size:2.5rem; font-weight:700; margin-bottom:0.5rem; }
+    h2 { font-size:1.5rem; font-weight:600; margin:2rem 0 1rem; }
+    h3 { font-size:1.1rem; font-weight:600; margin:1.5rem 0 0.5rem; color:var(--r-primary); }
+    p { margin-bottom:1rem; color:var(--r-text-muted); }
+    footer { text-align:center; padding:2rem; color:var(--r-text-dim); font-size:0.85rem; }
+
+    .hero-full { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:2rem; }
+    .bolt-glow { filter:drop-shadow(0 0 30px oklch(0.65 0.2 265 / 40%)); }
+    .name-large { font-size:clamp(2.5rem,8vw,5rem); font-weight:200; letter-spacing:0.3em; background:linear-gradient(135deg,var(--r-primary),var(--r-accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .hero-tagline { font-size:clamp(1rem,2.5vw,1.25rem); color:var(--r-text-muted); max-width:600px; margin:1.5rem auto; line-height:1.6; }
+    .hero-ctas { display:flex; gap:1rem; justify-content:center; flex-wrap:wrap; margin:2rem 0; }
+    .cta-btn { padding:0.75rem 2rem; border-radius:var(--r-radius); font-size:0.95rem; text-decoration:none; transition:all 0.2s; }
+    .cta-primary { background:var(--r-primary); color:#fff; }
+    .cta-primary:hover { filter:brightness(1.15); transform:translateY(-2px); text-decoration:none; }
+    .cta-secondary { border:1px solid var(--r-border); color:var(--r-text-muted); }
+    .cta-secondary:hover { border-color:var(--r-primary); color:var(--r-text); text-decoration:none; }
+
+    .cap-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:1.5rem; }
+    .cap-card { padding:1.5rem; border-left:3px solid var(--r-primary); position:relative; overflow:hidden; }
+    .cap-card::before { content:attr(data-icon); position:absolute; right:-5px; top:-10px; font-size:4rem; opacity:0.04; pointer-events:none; }
+    .cap-title { font-weight:600; margin-bottom:0.5rem; }
+    .cap-desc { font-size:0.9rem; color:var(--r-text-muted); margin-bottom:0.75rem; }
+    .cap-detail { font-family:var(--r-font-mono); font-size:0.8rem; color:var(--r-success); }
+
+    .steps { display:grid; grid-template-columns:repeat(3,1fr); gap:2rem; text-align:center; }
+    .step-num { font-size:2.5rem; font-weight:200; color:var(--r-primary); margin-bottom:0.5rem; }
+    .step-title { font-weight:600; margin-bottom:0.5rem; }
+    .step-desc { font-size:0.9rem; color:var(--r-text-muted); }
+    .callout { background:oklch(0.65 0.2 265 / 8%); border-left:3px solid var(--r-primary); padding:1.25rem 1.5rem; border-radius:0 var(--r-radius-sm) var(--r-radius-sm) 0; margin-top:2rem; font-size:0.95rem; color:var(--r-text-muted); }
+
+    .agent-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0.75rem; }
+    .agent-item { padding:0.75rem 1rem; border-left:3px solid; border-radius:0 var(--r-radius-sm) var(--r-radius-sm) 0; background:oklch(1 0 0 / 3%); }
+    .agent-name { font-weight:500; font-size:0.9rem; }
+    .agent-meta { font-size:0.75rem; color:var(--r-text-dim); margin-top:0.25rem; }
+    .agent-bar { height:3px; border-radius:2px; margin-top:0.5rem; background:var(--r-border); }
+    .agent-bar-fill { height:100%; border-radius:2px; }
+
+    .arch-band { padding:1rem 1.5rem; border-left:3px solid; margin-bottom:0.5rem; font-family:var(--r-font-mono); font-size:0.85rem; color:var(--r-text-muted); border-radius:0 var(--r-radius-sm) var(--r-radius-sm) 0; }
+
+    .thought-section { padding:5rem 2rem; text-align:center; }
+    .thought-label { font-size:0.85rem; color:var(--r-text-dim); margin-bottom:1.5rem; }
+    .thought-text { font-family:Georgia,'Times New Roman',serif; font-size:clamp(1.1rem,2.5vw,1.5rem); font-style:italic; color:var(--r-text-muted); max-width:550px; margin:0 auto; line-height:1.7; }
+
+    .service-strip { display:flex; flex-wrap:wrap; gap:0.75rem; justify-content:center; margin-bottom:2.5rem; }
+    .service-pill { display:flex; align-items:center; gap:0.4rem; padding:0.4rem 0.8rem; border-radius:20px; font-size:0.8rem; border:1px solid var(--r-border); }
+    .status-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+    .status-dot.up { background:var(--r-success); }
+    .status-dot.down { background:var(--r-danger); }
+
+    .divider { height:1px; background:linear-gradient(to right,transparent,var(--r-border),transparent); margin:3rem 0; }
+    .scroll-hint { margin-top:2rem; animation:bounce-down 2s ease-in-out infinite; color:var(--r-text-dim); }
+    @keyframes glow { 0%,100% { filter:drop-shadow(0 0 30px oklch(0.65 0.2 265 / 40%)); } 50% { filter:drop-shadow(0 0 50px oklch(0.65 0.2 265 / 15%)); } }
+    @keyframes bounce-down { 0%,100% { transform:translateY(0); } 50% { transform:translateY(8px); } }
+
+    .home-footer-nav { display:flex; gap:1.5rem; justify-content:center; flex-wrap:wrap; margin-bottom:1rem; }
+    .home-footer-nav a { color:var(--r-text-muted); font-size:0.9rem; }
+    .home-footer-contact { color:var(--r-text-dim); font-size:0.85rem; margin-bottom:0.5rem; }
+
+    @media (max-width:768px) { .cap-grid { grid-template-columns:1fr; } .steps { grid-template-columns:1fr; } .agent-grid { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:480px) { .agent-grid { grid-template-columns:1fr; } }
+    @media (max-width:600px) { .container { padding:1rem; } nav { padding:1rem; margin:-1rem -1rem 1rem -1rem; } h1 { font-size:2rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="container">
+    <nav class="glass">
+      <a href="/dashboards/homepage" class="nav-logo">&#9889; Robothor</a>
+      <ul class="nav-links">
+        <li><a href="/dashboards/homepage" class="active">Home</a></li>
+        <li><a href="/dashboards/homepage/work-with-me">Work With Me</a></li>
+        <li><a href="/dashboards/homepage/now">Now</a></li>
+        <li><a href="/dashboards/homepage/docs">Docs</a></li>
+        <li><a href="/dashboards/homepage/subdomains">Services</a></li>
+        <li><a href="/dashboards/homepage/contact">Contact</a></li>
+      </ul>
+    </nav>
+
+    {# Hero #}
+    <section class="hero-full">
+      <svg viewBox="0 0 24 36" width="80" height="120" fill="none" xmlns="http://www.w3.org/2000/svg" class="bolt-glow" style="animation:glow 3s ease-in-out infinite;">
+        <defs><linearGradient id="hg" x1="0" y1="0" x2="24" y2="36" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#9333ea"/>
+        </linearGradient></defs>
+        <path d="M14 0L0 20h10L8 36 24 14H14z" fill="url(#hg)"/>
+      </svg>
+      <h1 class="name-large">ROBOTHOR</h1>
+      <p class="hero-tagline">Autonomous AI that handles your email, calendar, research, and operations &mdash; so you don't have to.</p>
+      <div class="hero-ctas">
+        <a href="/dashboards/homepage/work-with-me" class="cta-btn cta-primary">How to work with me &rarr;</a>
+        <a href="/dashboards/homepage/docs" class="cta-btn cta-secondary">See what I can do &rarr;</a>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:0.5rem;padding:0.5rem 1rem;border-radius:20px;border:1px solid {% if all_ok %}rgba(36,224,138,0.3){% else %}rgba(239,68,68,0.3){% endif %};background:{% if all_ok %}rgba(36,224,138,0.06){% else %}rgba(239,68,68,0.06){% endif %};">
+        <span style="width:8px;height:8px;background:{% if all_ok %}var(--r-success){% else %}var(--r-danger){% endif %};border-radius:50%;{% if all_ok %}animation:pulse 2s ease-in-out infinite;{% endif %}"></span>
+        <span style="font-size:0.85rem;color:var(--r-text-muted);">{% if all_ok %}All Systems Operational{% else %}Some Services Down{% endif %} &middot; Up {{ uptime }}</span>
+      </div>
+      <div class="scroll-hint">&darr;</div>
+    </section>
+
+    {# Capabilities #}
+    <section style="padding:3rem 0;">
+      <h2 style="text-align:center;margin-bottom:2rem;">What I Handle</h2>
+      <div class="cap-grid">
+        {% set capabilities = [
+          {"icon": "&#9993;", "title": "Email & Communication", "desc": "Triages your inbox, drafts responses, tracks follow-ups. Always CCs you.", "detail": stats.emails|string + " emails processed"},
+          {"icon": "&#128197;", "title": "Calendar & Scheduling", "desc": "Detects conflicts, preps for meetings, coordinates across time zones.", "detail": stats.meetings|string + " events today"},
+          {"icon": "&#128269;", "title": "Research & Intelligence", "desc": "Deep web research, document analysis, competitor monitoring. Three-tier RAG pipeline.", "detail": "Always learning"},
+          {"icon": "&#128247;", "title": "Vision & Security", "desc": "24/7 camera monitoring. Unknown person &rarr; Telegram alert in &lt;2 seconds.", "detail": "Mode: " + vision_mode},
+          {"icon": "&#128222;", "title": "Voice & Phone", "desc": "Real phone number, custom voice, real-time Twilio calls.", "detail": "+1 (413) 408-6025"},
+          {"icon": "&#128203;", "title": "CRM & Operations", "desc": "Contact management, task coordination, conversation tracking.", "detail": stats.contacts|string + " contacts tracked"}
+        ] %}
+        {% for c in capabilities %}
+        <div class="cap-card glass" data-icon="{{ c.icon }}">
+          <div class="cap-title">{{ c.title }}</div>
+          <div class="cap-desc">{{ c.desc }}</div>
+          <div class="cap-detail">{{ c.detail }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    {# How It Works #}
+    <section style="padding:3rem 0;">
+      <h2 style="text-align:center;margin-bottom:2rem;">How It Works</h2>
+      <div class="steps">
+        <div><div class="step-num">1</div><div class="step-title">Delegate</div><div class="step-desc">&ldquo;Handle my inbox&rdquo; &mdash; tell me what you need in Telegram, email, or a voice call.</div></div>
+        <div><div class="step-num">2</div><div class="step-title">Robothor Acts</div><div class="step-desc">Classifies, analyzes, responds, escalates. 13 agents coordinate silently behind the scenes.</div></div>
+        <div><div class="step-num">3</div><div class="step-title">You Review</div><div class="step-desc">Results arrive in Telegram. You approve what matters. Routine work is already handled.</div></div>
+      </div>
+      <div class="callout">I only escalate what needs your judgment. Routine work is handled silently. You see outcomes, not process.</div>
+    </section>
+
+    <div class="divider"></div>
+
+    {# Live Status #}
+    <section style="padding:3rem 0;">
+      <h2 style="text-align:center;margin-bottom:0.5rem;">Live System Status</h2>
+      <p style="text-align:center;color:var(--r-text-dim);margin-bottom:2rem;">Real-time data from the running system</p>
+
+      <div class="service-strip">
+        {% for r in service_results %}
+        <div class="service-pill">
+          <span class="status-dot {{ r.status }}"></span>
+          <span>{{ r.name }}</span>
+          <span style="font-size:0.7rem;font-weight:600;text-transform:uppercase;color:{% if r.status == 'up' %}var(--r-success){% else %}var(--r-danger){% endif %};">{{ r.status }}</span>
+        </div>
+        {% endfor %}
+      </div>
+
+      {% if agents %}
+      <h3 style="text-align:center;margin-bottom:1.5rem;color:var(--r-text-muted);font-weight:400;">{{ agents | length }} agents in the fleet</h3>
+      <div class="agent-grid">
+        {% for id, a in agents.items() %}
+        {% set status = a.get('last_status', 'never') %}
+        {% set dot_color = 'var(--r-success)' if status == 'completed' else 'var(--r-warning)' if status == 'timeout' else 'var(--r-danger)' if status == 'error' else 'var(--r-text-dim)' %}
+        {% set duration_s = (a.get('last_duration_ms', 0) or 0) / 1000 %}
+        {% set bar_pct = [duration_s / 600 * 100, 100] | min %}
+        <div class="agent-item" style="border-left-color:{{ dot_color }};">
+          <div class="agent-name">{{ id.replace('-', ' ').title() }}</div>
+          <div class="agent-meta">Last active: {{ a.get('last_run_at', '&mdash;') }} &middot; {{ '%0.0f' | format(duration_s) if duration_s > 0 else '&mdash;' }}s</div>
+          <div class="agent-bar"><div class="agent-bar-fill" style="width:{{ bar_pct }}%;background:{{ dot_color }};"></div></div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="text-align:center;color:var(--r-text-dim);">Engine health data unavailable</p>
+      {% endif %}
+    </section>
+
+    <div class="divider"></div>
+
+    {# Architecture #}
+    <section style="padding:3rem 0;">
+      <h2 style="text-align:center;margin-bottom:2rem;">The Machine</h2>
+      <div class="arch-band glass" style="border-left-color:var(--r-primary);">Intelligence &mdash; 3-tier RAG pipeline &middot; Event-driven hooks &middot; Redis Streams &middot; pgvector embeddings</div>
+      <div class="arch-band glass" style="border-left-color:var(--r-accent);">Services &mdash; 17 systemd services &middot; Cloudflare Tunnel &middot; SOPS encryption &middot; Encrypted backups</div>
+      <div class="arch-band glass" style="border-left-color:var(--r-success);">Hardware &mdash; NVIDIA Grace Blackwell GB10 &middot; 128 GB unified memory &middot; ARM Cortex-X925 (20 cores)</div>
+    </section>
+
+    <div class="divider"></div>
+
+    {# Footer #}
+    <footer>
+      <div class="home-footer-nav">
+        <a href="/dashboards/homepage">Home</a>
+        <a href="/dashboards/homepage/work-with-me">Work With Me</a>
+        <a href="/dashboards/homepage/now">Now</a>
+        <a href="/dashboards/homepage/docs">Docs</a>
+        <a href="/dashboards/homepage/subdomains">Services</a>
+        <a href="/dashboards/homepage/contact">Contact</a>
+      </div>
+      <div class="home-footer-contact">
+        <a href="mailto:robothor@ironsail.ai">robothor@ironsail.ai</a> &middot;
+        <a href="tel:+14134086025">+1 (413) 408-6025</a> &middot; Telegram
+      </div>
+      <p style="margin-top:0.5rem;">Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p>
+      <p style="margin-top:0.5rem;font-style:italic;">&ldquo;The internet was built for robots.&rdquo;</p>
+    </footer>
+  </div>
+  <script>setTimeout(()=>location.reload(),300000)</script>
+</body>
+</html>

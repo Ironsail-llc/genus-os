@@ -5,2722 +5,893 @@
     {
       "type": "ingestion_error",
       "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T02:00:02.042453"
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-27T09:50:01.460005"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 3,
       "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T03:00:01.775599"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T03:50:01.626896"
+      "timestamp": "2026-03-28T02:30:01.499606"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 4,
       "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T04:00:02.152786"
+      "timestamp": "2026-03-28T02:40:01.625772"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 5,
       "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T04:10:02.124896"
+      "timestamp": "2026-03-28T02:50:02.169814"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 6,
       "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T04:20:02.153224"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:00:02.163395"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:10:01.281221"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:20:01.372892"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:30:02.026116"
+      "timestamp": "2026-03-28T03:00:01.775967"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 7,
       "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:40:02.047670"
+      "timestamp": "2026-03-28T03:10:01.906788"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 8,
       "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T05:50:02.015628"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T08:00:01.354363"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T09:50:01.350286"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T11:00:01.677502"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T11:40:01.979106"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T11:50:01.862380"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T13:00:01.931012"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T13:40:01.526544"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T13:50:01.393229"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T14:00:01.698987"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T15:40:01.594238"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T15:50:02.066670"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T16:00:01.699521"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T17:00:02.124110"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T17:40:01.463734"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T17:50:02.115829"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T19:00:01.400629"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T19:40:01.249542"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T19:50:01.541327"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T20:00:01.445022"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T21:40:01.367750"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T21:50:01.501673"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T22:00:01.977554"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T23:20:02.030306"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T23:30:01.638971"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T23:40:01.574743"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-14T23:50:01.488445"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T00:00:02.147692"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T00:10:01.756094"
+      "timestamp": "2026-03-28T03:20:01.986852"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 9,
       "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T00:20:01.792967"
+      "timestamp": "2026-03-28T03:30:01.778447"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 3,
       "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:00:01.684404"
+      "timestamp": "2026-03-28T09:40:01.873421"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 4,
       "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:10:01.211072"
+      "timestamp": "2026-03-28T09:50:02.014965"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T13:40:01.945368"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T13:50:01.564678"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 5,
       "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:20:01.533747"
+      "timestamp": "2026-03-28T14:00:01.630050"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T15:50:01.368387"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T16:00:01.454027"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T17:00:01.947060"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T17:40:01.519902"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T17:50:01.903677"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T19:40:01.325266"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T19:50:02.128341"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T20:00:02.097764"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T22:00:02.082589"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T23:00:02.013734"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T23:10:02.083908"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-28T23:20:02.169447"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 6,
       "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:30:02.067010"
+      "timestamp": "2026-03-28T23:30:01.860322"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 7,
       "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:40:01.206198"
+      "timestamp": "2026-03-28T23:40:01.771757"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 8,
       "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T01:50:01.360656"
+      "timestamp": "2026-03-28T23:50:01.763912"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 9,
       "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T02:00:01.246603"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T03:00:01.477374"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T03:50:01.223271"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T04:00:02.138183"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T04:10:01.369814"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T04:20:01.432634"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:00:01.629796"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:10:01.325725"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:20:01.527196"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:30:01.253582"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:40:01.425097"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T05:50:01.448581"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T07:40:02.134428"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T07:50:01.665059"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T08:00:01.188924"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T09:40:02.114520"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T09:50:01.807350"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T11:00:01.267439"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T11:40:02.075498"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T11:50:01.968357"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T13:00:01.732670"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T13:40:01.332287"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T13:50:01.668946"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T14:00:01.351190"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T15:40:01.417419"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T15:50:02.046203"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T16:00:01.737862"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T17:00:01.680398"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T17:40:01.547012"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T17:50:02.068451"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T19:00:01.949053"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T19:40:01.755537"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T19:50:01.791551"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T20:00:01.631566"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T21:40:01.828087"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T21:50:01.729888"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T22:00:01.315281"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:00:01.689092"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:10:01.725660"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:20:02.035271"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:30:01.871862"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:40:01.855322"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-15T23:50:01.823828"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T00:00:01.515981"
+      "timestamp": "2026-03-29T00:00:01.626491"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 10,
       "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T00:10:01.538629"
+      "timestamp": "2026-03-29T00:10:01.659385"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 11,
       "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T00:20:01.422158"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:00:01.606544"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:10:02.023883"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:20:02.076024"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:30:01.983832"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:40:01.945106"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T01:50:02.002224"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T02:00:01.668777"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T03:00:02.075786"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T03:50:01.365190"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T04:00:01.960289"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T04:10:02.143440"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T04:20:02.104209"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:00:01.771872"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:10:01.760394"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:20:01.881123"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:30:01.539556"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:40:01.972483"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T05:50:01.914873"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T07:40:01.647375"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T07:50:01.358660"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T08:00:01.233518"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T09:40:01.889318"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T09:50:01.961339"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T11:00:01.732656"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T11:40:01.367352"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T11:50:01.225672"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T17:40:01.760610"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T17:50:02.106212"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T19:00:01.620452"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T19:40:01.647038"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T19:50:02.079778"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T20:00:01.309702"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T21:40:01.295098"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T21:50:01.443906"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T22:00:01.373996"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:00:01.478962"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:10:01.462404"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:20:01.430101"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:30:02.080120"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:40:01.921596"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-16T23:50:01.855273"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T00:00:01.743855"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T00:10:02.008068"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T00:20:01.848651"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:00:01.425808"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:10:01.685250"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:20:01.425386"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:30:02.033999"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:40:01.198318"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T01:50:01.861031"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T02:00:01.693474"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T03:00:02.063532"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T03:50:02.037659"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T04:00:01.764819"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T04:10:01.195940"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T04:20:01.411397"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:00:02.143919"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:10:01.361838"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:20:01.606116"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:30:01.292107"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:40:01.309484"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T05:50:01.407278"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T07:40:01.467766"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T07:50:01.950733"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T08:00:01.353908"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T09:50:01.666443"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T19:00:01.684303"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T19:40:02.041794"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T22:00:01.205736"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T22:50:01.738166"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:00:01.291594"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:10:01.363498"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:20:01.486739"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:30:01.289778"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:40:01.289804"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-17T23:50:01.309083"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T00:00:01.336005"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T00:50:01.199761"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T01:00:01.932704"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T01:50:01.185759"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:00:02.155830"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:10:01.204136"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:20:01.860661"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:30:01.554484"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:40:01.582654"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T02:50:01.604596"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T03:00:01.566775"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T03:10:01.959379"
+      "timestamp": "2026-03-29T00:20:01.552516"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 12,
       "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T03:20:02.037420"
+      "timestamp": "2026-03-29T00:30:01.269387"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 13,
       "error": "13 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T03:30:01.620059"
+      "timestamp": "2026-03-29T00:40:01.486207"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 14,
       "error": "14 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T03:50:02.007594"
+      "timestamp": "2026-03-29T00:50:01.528627"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 15,
       "error": "15 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:00:01.533208"
+      "timestamp": "2026-03-29T01:00:02.111537"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 16,
       "error": "16 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:10:01.898971"
+      "timestamp": "2026-03-29T01:10:01.653961"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 17,
       "error": "17 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:20:01.970114"
+      "timestamp": "2026-03-29T01:20:01.940637"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 18,
       "error": "18 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:30:01.542921"
+      "timestamp": "2026-03-29T01:30:01.672322"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 19,
       "error": "19 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:40:01.867669"
+      "timestamp": "2026-03-29T01:40:01.972741"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 20,
       "error": "20 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T04:50:01.867994"
+      "timestamp": "2026-03-29T01:50:01.314881"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 21,
       "error": "21 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:00:01.546597"
+      "timestamp": "2026-03-29T02:00:01.918647"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 22,
       "error": "22 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:10:01.708785"
+      "timestamp": "2026-03-29T02:10:01.237163"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 23,
       "error": "23 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:20:01.714265"
+      "timestamp": "2026-03-29T02:20:01.673432"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 24,
       "error": "24 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:30:01.396920"
+      "timestamp": "2026-03-29T02:30:01.632912"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 25,
       "error": "25 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:40:01.561489"
+      "timestamp": "2026-03-29T02:40:01.743654"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 26,
       "error": "26 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T05:50:01.423577"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T07:40:01.382958"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T07:50:01.997690"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T08:00:02.153447"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T09:40:01.673719"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T12:50:01.455637"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T13:00:02.162217"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T13:50:01.572658"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T14:00:01.231246"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T16:50:01.575223"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T17:00:01.245574"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T17:40:01.684696"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T17:50:01.670407"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T18:50:01.215531"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T19:00:02.051448"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T19:40:01.475578"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T19:50:01.212970"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T20:00:01.791876"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T21:40:02.126920"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T21:50:02.128728"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T22:00:01.272601"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T22:50:02.105992"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:00:01.789266"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:10:01.833996"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:20:01.674521"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:30:01.399469"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:40:01.921336"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-18T23:50:01.893671"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T00:00:01.808209"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T00:40:01.536441"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T00:50:01.685676"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:00:01.696911"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:10:02.136734"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:20:01.754651"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:30:01.319784"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:40:01.813069"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T01:50:01.891792"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:00:01.769510"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 12,
-      "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:10:01.294380"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 13,
-      "error": "13 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:20:01.563290"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 14,
-      "error": "14 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:30:01.299927"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 15,
-      "error": "15 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:40:01.900204"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 16,
-      "error": "16 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T02:50:01.660219"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 17,
-      "error": "17 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T03:00:01.358132"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 18,
-      "error": "18 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T03:10:01.843622"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 19,
-      "error": "19 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T03:20:01.592209"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 20,
-      "error": "20 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T03:30:01.508824"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T04:20:01.438052"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T04:30:01.214674"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T04:40:02.015465"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T04:50:01.828534"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:00:01.546193"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:10:02.112608"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:20:01.769072"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:30:01.711899"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:40:01.501295"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 12,
-      "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T05:50:01.318753"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T06:50:01.992703"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T07:00:02.125403"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T09:40:02.097438"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T09:50:01.213769"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T12:50:02.045944"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T13:00:01.818442"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T13:40:01.589008"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T13:50:01.860222"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T17:40:02.108353"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T17:50:01.364115"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T19:00:02.003452"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T19:50:01.332491"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T20:00:01.633306"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T21:40:01.198543"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T21:50:01.550378"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T22:00:01.292281"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T22:50:01.544075"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:00:01.509879"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:10:01.800003"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:20:02.028514"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:30:01.355113"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:40:01.724271"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-19T23:50:01.276771"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:00:01.575225"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:10:01.222944"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 12,
-      "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:20:01.549575"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 13,
-      "error": "13 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:30:01.552548"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 14,
-      "error": "14 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:40:01.860329"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 15,
-      "error": "15 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T00:50:01.247900"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 16,
-      "error": "16 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:00:01.425844"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 17,
-      "error": "17 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:10:02.116153"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 18,
-      "error": "18 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:20:01.781421"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 19,
-      "error": "19 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:30:01.691304"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 20,
-      "error": "20 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:40:01.543940"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 21,
-      "error": "21 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T01:50:01.309567"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 22,
-      "error": "22 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:00:02.164229"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 23,
-      "error": "23 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:10:02.001460"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 24,
-      "error": "24 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:20:01.736760"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 25,
-      "error": "25 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:30:01.721552"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 26,
-      "error": "26 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:40:01.694310"
+      "timestamp": "2026-03-29T02:50:01.456648"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 27,
       "error": "27 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T02:50:01.550477"
+      "timestamp": "2026-03-29T03:00:02.172455"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 28,
       "error": "28 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T03:00:01.564444"
+      "timestamp": "2026-03-29T03:10:01.715698"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 29,
       "error": "29 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T03:10:01.566709"
+      "timestamp": "2026-03-29T03:20:01.287116"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 30,
       "error": "30 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T03:20:01.494123"
+      "timestamp": "2026-03-29T03:30:01.811771"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 31,
+      "error": "31 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T04:40:01.286388"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 32,
+      "error": "32 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T04:50:01.873093"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 33,
+      "error": "33 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:00:01.478552"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 34,
+      "error": "34 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:10:01.907163"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 35,
+      "error": "35 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:20:01.318708"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 36,
+      "error": "36 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:30:01.998287"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 37,
+      "error": "37 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:40:01.277583"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 38,
+      "error": "38 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T05:50:01.638525"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 3,
       "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T04:20:01.839610"
+      "timestamp": "2026-03-29T07:40:01.444037"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 4,
       "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T04:30:01.612808"
+      "timestamp": "2026-03-29T07:50:01.789473"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 5,
       "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T04:40:01.547221"
+      "timestamp": "2026-03-29T08:00:01.826491"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T11:40:01.902532"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T11:50:01.988549"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T13:40:01.938866"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T13:50:01.846365"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T14:00:01.343140"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T15:40:01.591757"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T15:50:01.602142"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T16:00:01.397234"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T17:00:01.507918"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T17:40:01.848289"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T17:50:02.017268"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T19:40:01.754386"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T19:50:01.383274"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T20:00:01.465477"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T21:40:01.960764"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T21:50:02.082539"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T22:00:01.254124"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 3,
+      "error": "3 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T23:00:02.128663"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 4,
+      "error": "4 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T23:10:02.195587"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 5,
+      "error": "5 consecutive zero-extraction runs",
+      "timestamp": "2026-03-29T23:20:01.355093"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 6,
       "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T04:50:01.431750"
+      "timestamp": "2026-03-29T23:30:02.111310"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 7,
       "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:00:01.352666"
+      "timestamp": "2026-03-29T23:40:02.011416"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 8,
       "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:10:01.443992"
+      "timestamp": "2026-03-29T23:50:02.070625"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 9,
       "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:20:01.459654"
+      "timestamp": "2026-03-30T00:00:01.859771"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 10,
       "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:30:01.406554"
+      "timestamp": "2026-03-30T00:10:01.444893"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 11,
       "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:40:01.329357"
+      "timestamp": "2026-03-30T00:20:01.846841"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 12,
       "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T05:50:02.162902"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T07:40:01.334518"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T07:50:01.769066"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T08:00:01.822125"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T09:40:01.323775"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T09:50:01.248093"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T15:40:01.290101"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T15:50:01.547230"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T16:00:02.091553"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T16:50:01.954800"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T17:40:02.171439"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T17:50:02.057857"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T18:50:01.708000"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T19:00:01.265094"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T19:40:01.360591"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T19:50:01.198382"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T20:00:01.670411"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T21:40:01.350366"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T21:50:01.930472"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T22:00:01.452701"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T23:10:01.962133"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T23:20:02.013545"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T23:30:01.694283"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T23:40:01.659430"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-20T23:50:01.659419"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T00:00:01.332726"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T00:40:01.480118"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T00:50:01.512775"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:00:01.231204"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:10:01.884182"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:20:01.844847"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:30:01.523104"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:40:01.407066"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T01:50:01.496800"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:00:02.118705"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 12,
-      "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:10:01.570220"
+      "timestamp": "2026-03-30T00:30:01.687214"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 13,
       "error": "13 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:20:01.665372"
+      "timestamp": "2026-03-30T00:40:01.889829"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 14,
       "error": "14 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:30:01.278839"
+      "timestamp": "2026-03-30T00:50:01.424951"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 15,
       "error": "15 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:40:01.723616"
+      "timestamp": "2026-03-30T01:00:01.290965"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 16,
       "error": "16 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T02:50:02.049252"
+      "timestamp": "2026-03-30T01:10:01.510675"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 17,
       "error": "17 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T03:00:01.826164"
+      "timestamp": "2026-03-30T01:20:01.237513"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 18,
       "error": "18 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T03:10:01.304965"
+      "timestamp": "2026-03-30T01:30:01.239989"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 19,
       "error": "19 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T03:20:01.814312"
+      "timestamp": "2026-03-30T01:40:02.112728"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 20,
+      "error": "20 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T01:50:01.704424"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 21,
+      "error": "21 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:00:01.545299"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 22,
+      "error": "22 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:10:01.381801"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 23,
+      "error": "23 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:20:01.937432"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 24,
+      "error": "24 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:30:01.542331"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 25,
+      "error": "25 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:40:01.197552"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 26,
+      "error": "26 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T02:50:01.948228"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 27,
+      "error": "27 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T03:00:01.726484"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 28,
+      "error": "28 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T03:10:01.592718"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 29,
+      "error": "29 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T03:20:02.109935"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 30,
+      "error": "30 consecutive zero-extraction runs",
+      "timestamp": "2026-03-30T03:30:01.935652"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 3,
       "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T04:20:01.523160"
+      "timestamp": "2026-03-30T21:40:01.710060"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 4,
       "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T04:30:01.378272"
+      "timestamp": "2026-03-30T21:50:01.449471"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 5,
       "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T04:40:01.402245"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 6,
-      "error": "6 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T04:50:01.642348"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 7,
-      "error": "7 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:00:01.284719"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 8,
-      "error": "8 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:10:01.607774"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 9,
-      "error": "9 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:20:01.749868"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 10,
-      "error": "10 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:30:01.418350"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 11,
-      "error": "11 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:40:01.501110"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 12,
-      "error": "12 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T05:50:01.821579"
+      "timestamp": "2026-03-30T22:00:02.213573"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 3,
       "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T07:40:02.057992"
+      "timestamp": "2026-03-30T23:10:02.038138"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 4,
       "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T07:50:01.768380"
+      "timestamp": "2026-03-30T23:20:01.421691"
     },
     {
       "type": "ingestion_error",
       "source": "quality_gate",
       "error_count": 5,
       "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T08:00:01.977076"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T09:40:01.482471"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T09:50:01.944284"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T10:50:01.665243"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T11:00:01.899349"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T11:40:01.200194"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T11:50:02.062940"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T12:50:02.103242"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T13:00:01.921752"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T13:40:01.486968"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T13:50:01.536698"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T14:00:01.915053"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T15:40:01.582609"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T15:50:01.333836"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T16:00:01.719719"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T16:50:02.093402"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T17:00:01.477255"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T17:40:01.208861"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T17:50:01.906211"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T18:50:01.390256"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T19:00:01.793446"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 3,
-      "error": "3 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T19:40:01.606678"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 4,
-      "error": "4 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T19:50:01.731532"
-    },
-    {
-      "type": "ingestion_error",
-      "source": "quality_gate",
-      "error_count": 5,
-      "error": "5 consecutive zero-extraction runs",
-      "timestamp": "2026-03-21T20:00:01.635643"
+      "timestamp": "2026-03-30T23:30:01.973505"
     }
   ],
   "escalations": [
     {
-      "id": "health-20260308-0300",
+      "id": "health-20260313-0400",
       "source": "health_check",
       "reason": "System health check detected CRITICAL failures",
       "summary": "1 CRITICAL failures detected",
       "detail": [
-        "cron:email_sync: 65min ago"
-      ],
-      "urgency": "high",
-      "createdAt": "2026-03-08T03:00:08.540899",
-      "surfacedAt": null,
-      "resolvedAt": "2026-03-08T04:00:03.292020",
-      "resolution": "Auto-resolved: all health checks passing"
-    },
-    {
-      "id": "health-20260313-0400",
-      "source": "health_check",
-      "reason": "System health check detected CRITICAL failures",
-      "summary": "3 CRITICAL failures detected",
-      "detail": [
-        "systemd:robothor-status-dashboard: activating",
-        "http:status-dashboard: HTTP 500",
         "pipeline:triage_consistency: 2 uncategorized emails but triage shows 0"
       ],
       "urgency": "high",
       "createdAt": "2026-03-13T04:00:02.678351",
       "surfacedAt": null,
+      "resolvedAt": "2026-03-25T10:00:03.655192",
+      "updatedAt": "2026-03-25T09:00:03.813754",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260325-1300",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "1 CRITICAL failures detected",
+      "detail": [
+        "pipeline:triage_consistency: 2 uncategorized emails but triage shows 0"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-25T13:00:03.200006",
+      "surfacedAt": null,
+      "resolvedAt": "2026-03-25T14:00:04.025201",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260325-1700",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "1 CRITICAL failures detected",
+      "detail": [
+        "pipeline:triage_consistency: 2 uncategorized emails but triage shows 0"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-25T17:00:03.595296",
+      "surfacedAt": null,
+      "resolvedAt": "2026-03-25T19:00:03.904543",
+      "updatedAt": "2026-03-25T18:00:03.578029",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260325-2100",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "1 CRITICAL failures detected",
+      "detail": [
+        "pipeline:triage_consistency: 1 uncategorized emails but triage shows 0"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-25T21:00:03.142602",
+      "surfacedAt": null,
+      "resolvedAt": "2026-03-26T12:00:03.637514",
+      "updatedAt": "2026-03-26T11:00:03.031266",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260326-1300",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "1 CRITICAL failures detected",
+      "detail": [
+        "pipeline:triage_consistency: 1 uncategorized emails but triage shows 0"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-26T13:00:03.719083",
+      "surfacedAt": null,
+      "resolvedAt": "2026-03-26T18:00:03.292090",
+      "updatedAt": "2026-03-26T17:00:03.719914",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260326-2300",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "1 CRITICAL failures detected",
+      "detail": [
+        "pipeline:triage_consistency: 1 uncategorized emails but triage shows 0"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-26T23:00:02.961130",
+      "surfacedAt": null,
+      "resolvedAt": "2026-03-27T07:00:03.778590",
+      "updatedAt": "2026-03-27T06:00:03.704354",
+      "resolution": "Auto-resolved: all health checks passing"
+    },
+    {
+      "id": "health-20260329-0500",
+      "source": "health_check",
+      "reason": "System health check detected CRITICAL failures",
+      "summary": "3 CRITICAL failures detected",
+      "detail": [
+        "systemd:robothor-crm: inactive",
+        "systemd:robothor-status-dashboard: inactive",
+        "http:status-dashboard: HTTPConnectionPool(host='localhost', port=3001): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3001): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+      ],
+      "urgency": "high",
+      "createdAt": "2026-03-29T05:00:08.232704",
+      "surfacedAt": null,
       "resolvedAt": null,
-      "updatedAt": "2026-03-21T21:00:03.187735"
+      "updatedAt": "2026-03-30T23:00:03.427232"
     }
   ]
 }

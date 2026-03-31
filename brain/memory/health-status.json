@@ -1,195 +1,200 @@
 {
-  "checkedAt": "2026-03-21T21:00:01.398900",
-  "totalChecks": 30,
-  "okCount": 27,
+  "checkedAt": "2026-03-30T23:00:01.750100",
+  "totalChecks": 31,
+  "okCount": 28,
   "criticalCount": 3,
   "status": "CRITICAL",
   "results": [
     {
+      "name": "system:memory",
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-30T23:00:01.758749"
+    },
+    {
       "name": "systemd:robothor-bridge",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.402286"
+      "checkedAt": "2026-03-30T23:00:01.762501"
     },
     {
       "name": "systemd:robothor-crm",
-      "status": "ok",
-      "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.405654"
+      "status": "CRITICAL",
+      "detail": "inactive",
+      "checkedAt": "2026-03-30T23:00:01.765207"
     },
     {
       "name": "systemd:robothor-dashboard",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.409967"
+      "checkedAt": "2026-03-30T23:00:01.767726"
     },
     {
       "name": "systemd:robothor-orchestrator",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.412404"
+      "checkedAt": "2026-03-30T23:00:01.771344"
     },
     {
       "name": "systemd:robothor-privacy",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.414724"
+      "checkedAt": "2026-03-30T23:00:01.775310"
     },
     {
       "name": "systemd:robothor-sms",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.417677"
+      "checkedAt": "2026-03-30T23:00:01.777724"
     },
     {
       "name": "systemd:robothor-status-dashboard",
       "status": "CRITICAL",
-      "detail": "activating",
-      "checkedAt": "2026-03-21T21:00:01.419683"
+      "detail": "inactive",
+      "checkedAt": "2026-03-30T23:00:01.783644"
     },
     {
       "name": "systemd:robothor-status",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.421573"
+      "checkedAt": "2026-03-30T23:00:01.787226"
     },
     {
       "name": "systemd:robothor-transcript",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.423461"
+      "checkedAt": "2026-03-30T23:00:01.789449"
     },
     {
       "name": "systemd:robothor-vision",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.425710"
+      "checkedAt": "2026-03-30T23:00:01.792925"
     },
     {
       "name": "systemd:robothor-voice",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.428864"
+      "checkedAt": "2026-03-30T23:00:01.794956"
     },
     {
       "name": "systemd:cloudflared",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.431236"
+      "checkedAt": "2026-03-30T23:00:01.798168"
     },
     {
       "name": "systemd:mediamtx-webcam",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.433434"
+      "checkedAt": "2026-03-30T23:00:01.801437"
     },
     {
       "name": "http:bridge",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.584694",
-      "response_time_ms": 151.2
+      "checkedAt": "2026-03-30T23:00:01.988822",
+      "response_time_ms": 187.4
     },
     {
       "name": "http:orchestrator",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.663041",
-      "response_time_ms": 64.7
+      "checkedAt": "2026-03-30T23:00:02.049906",
+      "response_time_ms": 51.2
     },
     {
       "name": "http:vision",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.673496",
-      "response_time_ms": 1.3
+      "checkedAt": "2026-03-30T23:00:02.089709",
+      "response_time_ms": 31.2
     },
     {
       "name": "http:ollama",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.687093",
-      "response_time_ms": 1.3
+      "checkedAt": "2026-03-30T23:00:02.098668",
+      "response_time_ms": 2.3
     },
     {
       "name": "http:status",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:01.871486",
-      "response_time_ms": 174.0
+      "checkedAt": "2026-03-30T23:00:02.306843",
+      "response_time_ms": 201.7
     },
     {
       "name": "http:status-dashboard",
       "status": "CRITICAL",
-      "detail": "HTTP 500",
-      "checkedAt": "2026-03-21T21:00:02.087517",
-      "response_time_ms": 203.5
+      "detail": "HTTPConnectionPool(host='localhost', port=3001): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3001): Failed to establish a new connection: [Errno 111] Connection refused\"))",
+      "checkedAt": "2026-03-30T23:00:02.315929"
     },
     {
       "name": "db:robothor_memory",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:02.159086"
+      "checkedAt": "2026-03-30T23:00:02.434021"
     },
     {
       "name": "crm:native",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:02.214594"
+      "checkedAt": "2026-03-30T23:00:02.491138"
     },
     {
       "name": "redis",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:02.232044"
+      "checkedAt": "2026-03-30T23:00:02.510379"
     },
     {
       "name": "gmail:auth",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.071327"
+      "checkedAt": "2026-03-30T23:00:03.325418"
     },
     {
       "name": "email:data_quality",
       "status": "ok",
-      "detail": "No recent entries",
-      "checkedAt": "2026-03-21T21:00:03.072902"
+      "detail": "",
+      "checkedAt": "2026-03-30T23:00:03.327810"
     },
     {
       "name": "cron:email_sync",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.074179"
+      "checkedAt": "2026-03-30T23:00:03.329379"
     },
     {
       "name": "pipeline:triage_inbox",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.074357"
+      "checkedAt": "2026-03-30T23:00:03.329634"
     },
     {
       "name": "pipeline:triage_consistency",
-      "status": "CRITICAL",
-      "detail": "2 uncategorized emails but triage shows 0",
-      "checkedAt": "2026-03-21T21:00:03.075492"
+      "status": "ok",
+      "detail": "",
+      "checkedAt": "2026-03-30T23:00:03.331058"
     },
     {
       "name": "pipeline:agent:email-classifier",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.144648"
+      "checkedAt": "2026-03-30T23:00:03.384053"
     },
     {
       "name": "pipeline:agent:calendar-monitor",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.167805"
+      "checkedAt": "2026-03-30T23:00:03.406599"
     },
     {
       "name": "pipeline:agent:morning-briefing",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-03-21T21:00:03.187099"
+      "checkedAt": "2026-03-30T23:00:03.426425"
     }
   ]
 }

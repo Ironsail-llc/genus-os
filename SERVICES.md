@@ -12,10 +12,10 @@ Logs: `journalctl -u <unit> -f`
 | robothor-orchestrator.service | 9099 | brain/memory_system | FastAPI RAG orchestrator + vision endpoints |
 | robothor-voice.service | 8765 | brain/voice-server | Twilio voice: inbound ConversationRelay + outbound calling (Gemini Live) |
 | robothor-sms.service | 8766 | brain/sms-server | Twilio SMS webhooks |
-| robothor-status.service | 3000 | brain/robothor-status | robothor.ai homepage |
-| robothor-status-dashboard.service | 3001 | brain/robothor-status-dashboard | status.robothor.ai dashboard |
-| robothor-dashboard.service | 3003 | brain/dashboard | Ops dashboard (ops.robothor.ai) |
-| robothor-privacy.service | 3002 | brain/privacy-policy | Privacy policy (privacy.robothor.ai) |
+| ~~robothor-status.service~~ | ~~3000~~ | ~~brain/robothor-status~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
+| ~~robothor-status-dashboard.service~~ | ~~3001~~ | ~~brain/robothor-status-dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
+| ~~robothor-dashboard.service~~ | ~~3003~~ | ~~brain/dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
+| ~~robothor-privacy.service~~ | ~~3002~~ | ~~brain/privacy-policy~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
 | robothor-transcript.service | — | brain/memory_system | Voice transcript watcher |
 | robothor-crm.service | 3010, 8880 | crm/ | Docker Compose: Uptime Kuma, Kokoro TTS (2 containers) |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
@@ -50,11 +50,11 @@ curl -s http://localhost:8600/health | jq .
 # RAG orchestrator
 curl -s http://localhost:9099/health | jq .
 
-# Status server
-curl -s http://localhost:3000 > /dev/null && echo "OK"
+# Status dashboard (now via engine)
+curl -s http://localhost:18800/dashboards/status > /dev/null && echo "OK"
 
-# Status dashboard
-curl -s http://localhost:3001 > /dev/null && echo "OK"
+# Ops dashboard (now via engine)
+curl -s http://localhost:18800/dashboards/ops > /dev/null && echo "OK"
 
 # MediaMTX RTSP (test frame capture)
 ffmpeg -rtsp_transport tcp -i rtsp://localhost:8554/webcam -frames:v 1 -y /tmp/test.jpg 2>/dev/null && echo "OK"
@@ -65,11 +65,11 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8890/webcam/ && echo " O
 # Webcam via Cloudflare tunnel (requires Cloudflare Access auth)
 # Visit: https://cam.robothor.ai/webcam/
 
-# Ops dashboard
-curl -s http://localhost:3003 > /dev/null && echo "OK"
+# Homepage (now via engine)
+curl -s http://localhost:18800/dashboards/homepage > /dev/null && echo "OK"
 
-# Privacy policy
-curl -s http://localhost:3002 > /dev/null && echo "OK"
+# Privacy policy (now via engine)
+curl -s http://localhost:18800/dashboards/privacy > /dev/null && echo "OK"
 
 # Voice server
 curl -s http://localhost:8765/health
