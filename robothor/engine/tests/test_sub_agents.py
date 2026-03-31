@@ -579,15 +579,16 @@ class TestSpawnAgentsTool:
 
     @pytest.mark.asyncio
     async def test_spawn_agents_max_parallel_cap(self):
-        """More than 5 agents returns error."""
+        """More than max_spawn_batch agents returns error."""
         from robothor.engine.tools import _handle_spawn_agents
 
+        # Default batch limit is 10 (from engine config or DEFAULT_MAX_CONCURRENT_SPAWNS)
         result = await _handle_spawn_agents(
-            {"agents": [{"agent_id": f"a{i}", "message": f"t{i}"} for i in range(6)]},
+            {"agents": [{"agent_id": f"a{i}", "message": f"t{i}"} for i in range(11)]},
             agent_id="main",
         )
         assert "error" in result
-        assert "5" in result["error"]
+        assert "10" in result["error"]
 
 
 # ─── Build-for-Agent Scoping Tests ──────────────────────────────────

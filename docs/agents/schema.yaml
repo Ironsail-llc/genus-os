@@ -104,6 +104,19 @@ optional:
     type: string
   downstream_agents:
     type: list[string]
+  teams:
+    type: list[string]
+    description: Team IDs this agent belongs to
+  messaging:
+    type: object
+    description: Agent messaging capabilities
+    properties:
+      can_send:
+        type: boolean
+        default: false
+      can_receive:
+        type: boolean
+        default: false
   hooks:
     type: list[Hook]
     description: Event triggers — when these fire, this agent runs
@@ -240,6 +253,18 @@ optional:
       type: integer
       default: 120
       description: Timeout in seconds for spawned child agents
+    max_concurrent_spawns:
+      type: integer
+      default: 0
+      description: >
+        Max concurrent sub-agent spawns for this agent (0 = use engine default,
+        which is ROBOTHOR_MAX_CONCURRENT_SPAWNS env var, default 10).
+    max_spawn_batch:
+      type: integer
+      default: 0
+      description: >
+        Max agents per spawn_agents() call (0 = use engine default, which is
+        ROBOTHOR_MAX_SPAWN_BATCH env var, default 10).
 
     error_feedback:
       type: boolean
@@ -303,3 +328,36 @@ optional:
       enum: [simple, moderate, complex, ""]
       default: ""
       description: Manual difficulty override (empty = auto)
+    sandbox:
+      type: string
+      enum: [local, docker]
+      default: local
+      description: >
+        Execution sandbox mode. "local" uses the host Xvfb :99 display.
+        "docker" creates a per-run ephemeral container with isolated
+        Xvfb + Chromium + xdotool.
+    lifecycle_hooks:
+      type: list[LifecycleHook]
+      description: >
+        Hooks that fire during agent lifecycle. Each entry has: event, handler_type,
+        handler, blocking, priority, filter, scope.
+      items:
+        event:
+          type: string
+          enum: [agent_start, agent_end, pre_tool_use, post_tool_use, pre_delivery, post_delivery, error, escalation, stream_event]
+        handler_type:
+          type: string
+          enum: [command, http, agent, python]
+        handler:
+          type: string
+          description: Shell command, URL, agent_id, or dotted.module.path
+        blocking:
+          type: boolean
+          default: false
+        priority:
+          type: integer
+          default: 100
+          description: Lower numbers run first
+        filter:
+          type: object
+          description: "Glob pattern filters, e.g. {tool_name: 'exec*'}"

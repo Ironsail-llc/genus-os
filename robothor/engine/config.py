@@ -48,6 +48,11 @@ class EngineConfig:
     max_concurrent_agents: int = 3
     default_timezone: str = "America/New_York"
 
+    # Sub-agent spawning
+    max_concurrent_spawns: int = 10  # fleet-wide default (per-agent overridable)
+    max_spawn_batch: int = 10  # max agents per spawn_agents() call
+    hourly_cost_cap_usd: float = 5.0  # fleet-wide hourly cost cap (0 = unlimited)
+
     # LLM
     max_iterations: int = 20
 
@@ -85,6 +90,9 @@ class EngineConfig:
             main_session_key=os.environ.get("ROBOTHOR_MAIN_SESSION_KEY", "agent:main:primary"),
             instance_id=os.environ.get("ROBOTHOR_INSTANCE_ID", ""),
             nats_url=os.environ.get("ROBOTHOR_NATS_URL", ""),
+            max_concurrent_spawns=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_SPAWNS", "10")),
+            max_spawn_batch=int(os.environ.get("ROBOTHOR_MAX_SPAWN_BATCH", "10")),
+            hourly_cost_cap_usd=float(os.environ.get("ROBOTHOR_HOURLY_COST_CAP_USD", "5.0")),
         )
 
 
@@ -248,6 +256,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
         sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
         sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 120)),
+        max_concurrent_spawns=int(v2.get("max_concurrent_spawns", 0)),
+        max_spawn_batch=int(v2.get("max_spawn_batch", 0)),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
         # token_budget is auto-derived at runtime from model registry × max_iterations
@@ -262,6 +272,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         verification_enabled=v2.get("verification_enabled", False),
         verification_prompt=v2.get("verification_prompt", ""),
         difficulty_class=v2.get("difficulty_class", ""),
+        lifecycle_hooks=v2.get("lifecycle_hooks", []),
+        sandbox=v2.get("sandbox", "local"),
     )
 
 

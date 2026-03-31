@@ -414,6 +414,19 @@ class AgentRunner:
                 if resume_from_run_id:
                     resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
+                # ── [SANDBOX] Create sandbox for computer-use agents ──
+                sandbox = None
+                if agent_config.sandbox == "docker":
+                    from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
+
+                    sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
+                    try:
+                        await sandbox.start()
+                        set_current_sandbox(sandbox)
+                    except Exception as e:
+                        logger.error("Sandbox start failed for %s: %s", agent_id, e)
+                        sandbox = None
+
                 # Start stall watchdog — monitors current task for inactivity
                 current_task = asyncio.current_task()
                 if current_task:
@@ -438,6 +451,15 @@ class AgentRunner:
                     )
                 finally:
                     watchdog.stop()
+                    # Cleanup sandbox if created
+                    if sandbox:
+                        try:
+                            await sandbox.stop()
+                        except Exception as e:
+                            logger.warning("Sandbox cleanup failed: %s", e)
+                        from robothor.engine.sandbox import set_current_sandbox
+
+                        set_current_sandbox(None)
 
         except (TimeoutError, asyncio.CancelledError):
             if watchdog.was_stall_timeout:
@@ -708,6 +730,7 @@ class AgentRunner:
                 correlation_id=session.run.correlation_id or str(uuid.uuid4()),
                 nesting_depth=0,
                 max_nesting_depth=agent_config.max_nesting_depth,
+                max_spawn_batch=agent_config.max_spawn_batch,
                 remaining_token_budget=session.run.token_budget,
                 parent_trace_id=trace.trace_id if trace else "",
                 parent_span_id="",
@@ -719,6 +742,28 @@ class AgentRunner:
         escalation = self._create_escalation(agent_config)
         checkpoint = self._create_checkpoint(agent_config, route, session.run_id)
         guardrail_engine = self._create_guardrails(agent_config)
+
+        # ── v2: Lifecycle hooks ──
+        from robothor.engine.hook_registry import (
+            HookAction,
+            HookContext,
+            HookEvent,
+            get_hook_registry,
+        )
+
+        hook_registry = get_hook_registry()
+
+        # Dispatch AGENT_START hook
+        if hook_registry:
+            try:
+                start_ctx = HookContext(
+                    event=HookEvent.AGENT_START,
+                    agent_id=agent_config.id,
+                    run_id=session.run.id,
+                )
+                await hook_registry.dispatch(HookEvent.AGENT_START, start_ctx)
+            except Exception as e:
+                logger.warning("AGENT_START hook error: %s", e)
 
         # Wire plan into scratchpad for progress tracking
         if scratchpad and plan_result and hasattr(plan_result, "plan") and plan_result.plan:
@@ -775,10 +820,21 @@ class AgentRunner:
                         }
                     )
 
-            # ── [BUDGET] Token tracking (informational only, not enforced) ──
+            # ── [BUDGET] Token tracking with soft enforcement ──
             budget_status = session.check_budget(session.run.token_budget)
             if budget_status == "exhausted" and not session.run.budget_exhausted:
                 session.run.budget_exhausted = True  # track for analytics
+                # Soft enforcement: tell the agent to wrap up
+                session.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] Budget limit reached. Wrap up your current task "
+                            "in this final response. Do not start new tool calls."
+                        ),
+                    }
+                )
+                budget_exhausted_iters = 0
             if budget_status == "warning" and not budget_warning_sent:
                 budget_warning_sent = True
                 session.messages.append(
@@ -786,11 +842,19 @@ class AgentRunner:
                         "role": "user",
                         "content": (
                             "[SYSTEM] Token usage note: you have used >80% of the "
-                            "estimated token budget for this run. This is informational "
-                            "only — continue working as needed to complete the task."
+                            "estimated token budget for this run. Begin wrapping up "
+                            "and provide your final response soon."
                         ),
                     }
                 )
+
+            # Soft budget enforcement: after 2 iterations past exhaustion,
+            # strip tool schemas to force a text-only response
+            if session.run.budget_exhausted:
+                budget_exhausted_iters = getattr(session.run, "_budget_exhausted_iters", 0) + 1
+                session.run._budget_exhausted_iters = budget_exhausted_iters  # type: ignore[attr-defined]
+                if budget_exhausted_iters > 2:
+                    tool_schemas = []  # force text-only response
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -860,6 +924,37 @@ class AgentRunner:
                     tool_args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     tool_args = {}
+
+                # ── [HOOKS] Pre-tool-use lifecycle hook ──
+                if hook_registry:
+                    try:
+                        pre_tool_ctx = HookContext(
+                            event=HookEvent.PRE_TOOL_USE,
+                            agent_id=agent_config.id,
+                            run_id=session.run.id,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                        )
+                        pre_hr = await hook_registry.dispatch(HookEvent.PRE_TOOL_USE, pre_tool_ctx)
+                        if pre_hr.action == HookAction.BLOCK:
+                            block_msg = f"Blocked by lifecycle hook: {pre_hr.reason}"
+                            session.record_tool_call(
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                                tool_output={"error": block_msg, "hook": "pre_tool_use"},
+                                tool_call_id=tc.id,
+                                error_message=block_msg,
+                            )
+                            iteration_errors.append((tool_name, block_msg, None))
+                            if scratchpad:
+                                scratchpad.record_tool_call(tool_name, error=block_msg)
+                            if escalation:
+                                escalation.record_error()
+                            continue
+                        if pre_hr.action == HookAction.MODIFY and pre_hr.modified_args:
+                            tool_args = pre_hr.modified_args
+                    except Exception as e:
+                        logger.warning("PRE_TOOL_USE hook error for %s: %s", tool_name, e)
 
                 # ── [GUARDRAILS] Pre-execution check ──
                 if guardrail_engine:
@@ -932,6 +1027,21 @@ class AgentRunner:
                     post_gr = guardrail_engine.check_post_execution(tool_name, result)
                     if post_gr.action == "warned":
                         logger.warning("Guardrail warning for %s: %s", tool_name, post_gr.reason)
+
+                # ── [HOOKS] Post-tool-use lifecycle hook ──
+                if hook_registry:
+                    try:
+                        post_tool_ctx = HookContext(
+                            event=HookEvent.POST_TOOL_USE,
+                            agent_id=agent_config.id,
+                            run_id=session.run.id,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            tool_result=result,
+                        )
+                        await hook_registry.dispatch(HookEvent.POST_TOOL_USE, post_tool_ctx)
+                    except Exception as e:
+                        logger.warning("POST_TOOL_USE hook error for %s: %s", tool_name, e)
 
                 # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
                 if isinstance(result, dict) and not error_msg:
@@ -1401,6 +1511,7 @@ class AgentRunner:
                 correlation_id=ctx.correlation_id,
                 nesting_depth=child_depth,
                 max_nesting_depth=ctx.max_nesting_depth,
+                max_spawn_batch=ctx.max_spawn_batch,
                 remaining_token_budget=ctx.remaining_token_budget,
                 remaining_cost_budget_usd=ctx.remaining_cost_budget_usd,
                 parent_trace_id=ctx.parent_trace_id,
@@ -1840,6 +1951,30 @@ class AgentRunner:
 
     def _finish_run(self, run: AgentRun, trace: Any = None) -> AgentRun:
         """Persist the final run state to the database."""
+        # ── [HOOKS] AGENT_END lifecycle hook (fire-and-forget) ──
+        try:
+            from robothor.engine.hook_registry import HookContext, HookEvent, get_hook_registry
+
+            hr = get_hook_registry()
+            if hr:
+                import asyncio
+
+                end_ctx = HookContext(
+                    event=HookEvent.AGENT_END,
+                    agent_id=run.agent_id,
+                    run_id=run.id,
+                    output_text=run.output_text or "",
+                    error=run.error_message or "",
+                )
+                # Dispatch as fire-and-forget if we're in an event loop
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(hr.dispatch(HookEvent.AGENT_END, end_ctx))
+                except RuntimeError:
+                    pass  # No event loop — skip async dispatch
+        except Exception as e:
+            logger.warning("AGENT_END hook error: %s", e)
+
         try:
             update_run(
                 run.id,

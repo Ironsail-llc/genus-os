@@ -1,0 +1,3 @@
+# Global lifecycle hooks — apply to all agents.
+# Agent-specific hooks go in agent manifests under v2.lifecycle_hooks.
+hooks: []

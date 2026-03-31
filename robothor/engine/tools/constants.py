@@ -70,6 +70,17 @@ DESKTOP_TOOLS = frozenset(
 # Federation tools
 FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federation_sync_status"})
 
+# Messaging and team tools
+MESSAGING_TOOLS = frozenset(
+    {
+        "send_agent_message",
+        "receive_agent_messages",
+        "create_team",
+        "team_scratchpad_write",
+        "team_scratchpad_read",
+    }
+)
+
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
@@ -147,5 +158,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "desktop_screenshot",
         "desktop_window_list",
         "desktop_describe",
+        # Messaging read-only tools
+        "receive_agent_messages",
+        "team_scratchpad_read",
     }
 )

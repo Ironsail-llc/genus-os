@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 from middleware import CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agents import router as agents_router
+from routers.audit import router as audit_router
 from routers.conversations import router as conversations_router
 from routers.health import router as health_router
+from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
 from routers.memory import router as memory_router
 from routers.notes_tasks import router as notes_tasks_router
@@ -127,6 +129,8 @@ app.include_router(routines_router)
 app.include_router(notifications_router)
 app.include_router(tenants_router)
 app.include_router(integration_router)
+app.include_router(installed_agents_router)
+app.include_router(audit_router)
 
 
 if __name__ == "__main__":

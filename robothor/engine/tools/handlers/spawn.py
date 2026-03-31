@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from contextvars import ContextVar
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.models import SpawnContext
 
 if TYPE_CHECKING:
+    from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -20,12 +22,14 @@ HANDLERS: dict[str, Any] = {}
 
 # ─── Runner reference (for spawn_agent tool) ─────────────────────────
 _runner_ref: AgentRunner | None = None
+_engine_config: EngineConfig | None = None
 
 
-def set_runner(runner: AgentRunner) -> None:
+def set_runner(runner: AgentRunner, engine_config: EngineConfig | None = None) -> None:
     """Register the runner instance (called by daemon on startup)."""
-    global _runner_ref
+    global _runner_ref, _engine_config
     _runner_ref = runner
+    _engine_config = engine_config
 
 
 def get_runner() -> AgentRunner | None:
@@ -40,14 +44,23 @@ _current_spawn_context: ContextVar[SpawnContext | None] = ContextVar(
 
 # ─── Concurrency semaphore for sub-agent spawns ──────────────────────
 _spawn_semaphore: asyncio.Semaphore | None = None
-MAX_CONCURRENT_SPAWNS = 3
+_spawn_semaphore_size: int = 0
+DEFAULT_MAX_CONCURRENT_SPAWNS = 10
 
 
 def _get_spawn_semaphore() -> asyncio.Semaphore:
-    """Get or create the spawn concurrency semaphore."""
-    global _spawn_semaphore
-    if _spawn_semaphore is None:
-        _spawn_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SPAWNS)
+    """Get or create the spawn concurrency semaphore.
+
+    Uses the engine config's max_concurrent_spawns if available,
+    otherwise falls back to DEFAULT_MAX_CONCURRENT_SPAWNS.
+    """
+    global _spawn_semaphore, _spawn_semaphore_size
+    target = (
+        _engine_config.max_concurrent_spawns if _engine_config else DEFAULT_MAX_CONCURRENT_SPAWNS
+    )
+    if _spawn_semaphore is None or _spawn_semaphore_size != target:
+        _spawn_semaphore = asyncio.Semaphore(target)
+        _spawn_semaphore_size = target
     return _spawn_semaphore
 
 
@@ -125,18 +138,23 @@ async def _handle_spawn_agent(
         correlation_id=spawn_ctx.correlation_id,
         nesting_depth=child_depth,
         max_nesting_depth=spawn_ctx.max_nesting_depth,
+        max_spawn_batch=spawn_ctx.max_spawn_batch,
         remaining_token_budget=spawn_ctx.remaining_token_budget,
         remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
         parent_trace_id=spawn_ctx.parent_trace_id,
         parent_span_id=spawn_ctx.parent_span_id,
     )
 
-    # Namespaced dedup key
-    dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}"
+    # Namespaced dedup key — includes message hash so the same agent can be
+    # spawned multiple times with different messages (wide research pattern)
+    msg_hash = hashlib.md5(message.encode()).hexdigest()[:8]
+    dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}:{msg_hash}"
     from robothor.engine.dedup import release, try_acquire
 
     if not try_acquire(dedup_key):
-        return {"error": f"Agent {child_agent_id} is already running as a sub-agent of this run"}
+        return {
+            "error": f"Agent {child_agent_id} with this exact message is already running as a sub-agent"
+        }
 
     start_time = time.monotonic()
     try:
@@ -197,8 +215,17 @@ async def _handle_spawn_agents(
     if not agents_list:
         return {"error": "agents list is required and must not be empty"}
 
-    if len(agents_list) > 5:
-        return {"error": f"Max 5 parallel sub-agents allowed, got {len(agents_list)}"}
+    # Batch limit: per-agent config > engine config > default 10
+    spawn_ctx = _current_spawn_context.get()
+    max_batch = DEFAULT_MAX_CONCURRENT_SPAWNS
+    if _engine_config:
+        max_batch = _engine_config.max_spawn_batch
+    # Per-agent override (if caller's agent config specifies it)
+    if spawn_ctx and spawn_ctx.max_spawn_batch > 0:
+        max_batch = spawn_ctx.max_spawn_batch
+
+    if len(agents_list) > max_batch:
+        return {"error": f"Max {max_batch} parallel sub-agents allowed, got {len(agents_list)}"}
 
     coros = []
     for spec in agents_list:

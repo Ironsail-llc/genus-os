@@ -163,10 +163,49 @@ async def main() -> None:
     # Create subsystems
     runner = AgentRunner(config)
 
+    # Initialize fleet pool for admission control
+    from robothor.engine.pool import init_fleet_pool
+
+    init_fleet_pool(
+        max_concurrent=config.max_concurrent_agents,
+        hourly_cost_cap_usd=config.hourly_cost_cap_usd,
+    )
+    logger.info(
+        "Fleet pool: max_concurrent=%d, hourly_cost_cap=$%.2f",
+        config.max_concurrent_agents,
+        config.hourly_cost_cap_usd,
+    )
+
+    # Initialize lifecycle hook registry
+    from robothor.engine.hook_registry import (
+        init_hook_registry,
+        load_global_hooks,
+        load_hooks_from_manifest,
+    )
+
+    hook_registry = init_hook_registry()
+    global_hooks = load_global_hooks(config.workspace / "docs" / "hooks")
+    if global_hooks:
+        hook_registry.register_many(global_hooks)
+        logger.info("Loaded %d global lifecycle hooks", len(global_hooks))
+
+    # Load per-agent lifecycle hooks from manifests
+    from robothor.engine.config import load_all_manifests
+
+    agent_hook_count = 0
+    for manifest in load_all_manifests(config.manifest_dir):
+        agent_id = manifest.get("id", "")
+        hooks = load_hooks_from_manifest(manifest, agent_id)
+        if hooks:
+            hook_registry.register_many(hooks)
+            agent_hook_count += len(hooks)
+    if agent_hook_count:
+        logger.info("Loaded %d agent lifecycle hooks", agent_hook_count)
+
     # Register runner for sub-agent spawning
     from robothor.engine.tools import set_runner
 
-    set_runner(runner)
+    set_runner(runner, config)
 
     workflow_engine = WorkflowEngine(config, runner)
     wf_count = workflow_engine.load_workflows(config.workflow_dir)

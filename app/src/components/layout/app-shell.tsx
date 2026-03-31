@@ -7,6 +7,7 @@ import { ChatPanel } from "@/components/chat-panel";
 import { DashboardView } from "@/components/views/dashboard-view";
 import { TasksView } from "@/components/views/tasks-view";
 import { AgentsView } from "@/components/views/agents-view";
+import { MarketplaceView } from "@/components/views/marketplace-view";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
 import { useScreenSize } from "@/hooks/use-mobile";
@@ -16,6 +17,7 @@ const viewTitles: Record<ViewId, string> = {
   dashboard: "Dashboard",
   tasks: "Tasks",
   agents: "Agents",
+  marketplace: "Marketplace",
 };
 
 function HeaderClock() {
@@ -123,6 +125,7 @@ export function AppShell() {
               summary={agentSummary}
               isLoading={agentsLoading}
             />
+            <MarketplaceView visible={sidebarView === "marketplace"} />
           </div>
         </div>
       )}

@@ -46,6 +46,31 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         run.delivery_status = "suppressed_sub_agent"
         return True
 
+    # ── [HOOKS] PRE_DELIVERY lifecycle hook ──
+    try:
+        from robothor.engine.hook_registry import (
+            HookAction,
+            HookContext,
+            HookEvent,
+            get_hook_registry,
+        )
+
+        hr = get_hook_registry()
+        if hr and run.output_text:
+            pre_ctx = HookContext(
+                event=HookEvent.PRE_DELIVERY,
+                agent_id=config.id,
+                run_id=run.id,
+                output_text=run.output_text or "",
+            )
+            pre_result = await hr.dispatch(HookEvent.PRE_DELIVERY, pre_ctx)
+            if pre_result.action == HookAction.BLOCK:
+                logger.info("Delivery blocked by hook for %s: %s", config.id, pre_result.reason)
+                run.delivery_status = f"blocked_by_hook:{pre_result.reason}"
+                return True
+    except Exception as e:
+        logger.warning("PRE_DELIVERY hook error: %s", e)
+
     if not run.output_text:
         if run.error_message:
             # Always notify the user when a run failed — never silently swallow errors

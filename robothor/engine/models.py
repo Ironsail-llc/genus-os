@@ -194,6 +194,8 @@ class AgentConfig:
     max_nesting_depth: int = 2  # absolute cap: 3
     sub_agent_max_iterations: int = 10
     sub_agent_timeout_seconds: int = 120
+    max_concurrent_spawns: int = 0  # 0 = use engine default
+    max_spawn_batch: int = 0  # 0 = use engine default
 
     error_feedback: bool = True
     token_budget: int = 0  # token tracking (observability only, not enforced)
@@ -212,6 +214,8 @@ class AgentConfig:
     verification_enabled: bool = False
     verification_prompt: str = ""
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
+    lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
+    sandbox: str = "local"  # "local" or "docker"
 
 
 @dataclass
@@ -314,6 +318,7 @@ class SpawnContext:
     correlation_id: str
     nesting_depth: int  # parent's depth (child = +1)
     max_nesting_depth: int = 2  # absolute cap: 3
+    max_spawn_batch: int = 0  # 0 = use engine default
     remaining_token_budget: int = 0
     remaining_cost_budget_usd: float = 0.0
     parent_trace_id: str = ""

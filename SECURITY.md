@@ -15,13 +15,30 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 ## Security Measures
 
-Genus OS employs the following security practices:
+Genus OS employs defense-in-depth security across secrets management, agent execution, and access control. For detailed inventories and compliance mappings, see:
+
+- **[Security Controls Inventory](docs/compliance/SECURITY_CONTROLS.md)** — 20+ controls across 6 categories
+- **[SOC 2 Mapping](docs/compliance/SOC2_MAPPING.md)** — controls mapped to Trust Service Criteria
+- **[HIPAA Mapping](docs/compliance/HIPAA_MAPPING.md)** — generic platform safeguards for healthcare deployments
+
+### Audit API
+
+Programmatic audit access is available via the Bridge API:
+- `GET /api/audit/events` — query audit log with time/type/actor filters
+- `GET /api/audit/guardrails` — query guardrail events (blocked/warned/allowed)
+- `GET /api/audit/stats` — aggregated statistics for rolling time windows
+
+### Summary of Controls
 
 - **Secrets management**: All secrets are SOPS-encrypted and decrypted to tmpfs at runtime. No secrets in environment files or code.
 - **Pre-commit scanning**: Gitleaks runs on every commit to prevent secret leaks.
 - **Dependency scanning**: Dependabot monitors for known vulnerabilities.
 - **Secret scanning**: GitHub push protection blocks commits containing detected secrets.
 - **Access control**: Branch protection requires reviewed PRs with passing CI for all changes to `main`.
+- **Agent guardrails**: 8 execution safety policies (destructive writes, external HTTP, sensitive data, rate limiting, branch protection, exec allowlists, write path restrictions, desktop safety).
+- **Docker sandbox**: Per-run ephemeral containers isolate computer-use agents.
+- **Lifecycle hooks**: Blocking pre-tool-use hooks can prevent tool execution.
+- **Budget enforcement**: Soft token caps with tool schema stripping after exhaustion.
 
 ## Scope
 

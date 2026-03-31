@@ -24,7 +24,7 @@ from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.handlers.gws import _handle_gws_tool, _run_gws
 from robothor.engine.tools.handlers.pdf import _handle_analyze_pdf, _parse_page_range
 from robothor.engine.tools.handlers.spawn import (
-    MAX_CONCURRENT_SPAWNS,
+    DEFAULT_MAX_CONCURRENT_SPAWNS,
     _current_spawn_context,
     _get_spawn_semaphore,
     _handle_spawn_agent,
@@ -33,6 +33,9 @@ from robothor.engine.tools.handlers.spawn import (
     set_runner,
 )
 from robothor.engine.tools.registry import ToolRegistry, get_registry
+
+# Backward compatibility alias
+MAX_CONCURRENT_SPAWNS = DEFAULT_MAX_CONCURRENT_SPAWNS
 
 __all__ = [
     # Constants
