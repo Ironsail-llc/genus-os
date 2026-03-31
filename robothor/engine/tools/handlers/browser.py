@@ -647,14 +647,16 @@ async def _resolve_ref(page: Page, registry: dict[int, ElementRef], ref_str: str
     if elem is None:
         return None
 
+    role: Any = elem.role  # Cast: role is a runtime string, mypy expects AriaRole literal
+
     # Strategy 1: role + exact name (most reliable)
     if elem.name:
-        locator = page.get_by_role(elem.role, name=elem.name)
+        locator = page.get_by_role(role, name=elem.name)
         if await locator.count() >= 1:
             return locator.first
 
     # Strategy 2: role only, if unique on page
-    locator = page.get_by_role(elem.role)
+    locator = page.get_by_role(role)
     if await locator.count() == 1:
         return locator.first
 
@@ -674,7 +676,7 @@ async def _resolve_ref(page: Page, registry: dict[int, ElementRef], ref_str: str
     # Strategy 5: case-insensitive partial name match
     if elem.name:
         locator = page.get_by_role(
-            elem.role,
+            role,
             name=re_mod.compile(re_mod.escape(elem.name), re_mod.IGNORECASE),
         )
         if await locator.count() >= 1:
