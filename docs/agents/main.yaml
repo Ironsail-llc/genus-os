@@ -13,9 +13,9 @@ tags_produced: [escalation, needs-philip]
 tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, vision, unknown-person, conversation]
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/anthropic/claude-sonnet-4.6
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/z-ai/glm-5
     - gemini/gemini-2.5-pro
   temperature: 0.5
 

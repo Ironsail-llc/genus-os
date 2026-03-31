@@ -55,7 +55,8 @@ def _load_state(experiment_id: str) -> dict[str, Any] | None:
     if result.get("error"):
         return None
     try:
-        return json.loads(result["content"])
+        parsed: dict[str, Any] = json.loads(result["content"])
+        return parsed
     except (json.JSONDecodeError, KeyError):
         return None
 

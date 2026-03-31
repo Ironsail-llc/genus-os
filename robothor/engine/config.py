@@ -274,8 +274,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         difficulty_class=v2.get("difficulty_class", ""),
         lifecycle_hooks=v2.get("lifecycle_hooks", []),
         sandbox=v2.get("sandbox", "local"),
-        eager_tool_compression=v2.get("eager_tool_compression", True),
-        tool_offload_threshold=v2.get("tool_offload_threshold", 5000),
+        eager_tool_compression=v2.get("eager_tool_compression", False),
+        tool_offload_threshold=v2.get("tool_offload_threshold", 0),
     )
 
 
