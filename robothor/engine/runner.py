@@ -1895,7 +1895,7 @@ class AgentRunner:
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
         input_est = await self._prepare_llm_call(messages, models)
-        last_error = None
+        last_error: Exception | None = None
 
         logger.debug("LLM call with models: %s (broken: %s)", models, broken_models or set())
         for model in models:
@@ -1934,7 +1934,7 @@ class AgentRunner:
     ) -> Any:
         """Call LLM with streaming. Returns reconstructed ModelResponse."""
         input_est = await self._prepare_llm_call(messages, models)
-        last_error = None
+        last_error: Exception | None = None
 
         for model in models:
             if broken_models and model in broken_models:
