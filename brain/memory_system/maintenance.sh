@@ -39,6 +39,13 @@ echo "========================================" >> "$LOG_FILE"
 
 cd "$SCRIPT_DIR"
 
+# Pre-flight: check Ollama is responding (maintenance depends on LLM + embeddings)
+if ! timeout 10 curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+    echo "Ollama not responding, skipping maintenance" >> "$LOG_FILE"
+    echo '{"status":"skipped","reason":"ollama_down","timestamp":"'"$(date -Iseconds)"'"}' > "$STATUS_FILE"
+    exit 0
+fi
+
 # Step 1: Lifecycle maintenance (importance scoring, decay, consolidation, pruning)
 echo "--- Lifecycle maintenance ---" >> "$LOG_FILE"
 timeout 900 $VENV -c "

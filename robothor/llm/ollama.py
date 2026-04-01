@@ -221,28 +221,55 @@ async def chat(
         payload["format"] = format
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        resp = await client.post(f"{url}/api/chat", json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        content: str = data["message"]["content"]
-        done_reason = data.get("done_reason", "unknown")
-        eval_count = data.get("eval_count", 0)
-        thinking = data["message"].get("thinking", "")
-        logger.info(
-            "chat: %d thinking chars, %d content chars, %d eval tokens, done=%s",
-            len(thinking) if thinking else 0,
-            len(content),
-            eval_count,
-            done_reason,
-        )
-        if done_reason == "length" and not content.strip():
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(f"{url}/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                content: str = data["message"]["content"]
+                done_reason = data.get("done_reason", "unknown")
+                eval_count = data.get("eval_count", 0)
+                thinking = data["message"].get("thinking", "")
+                logger.info(
+                    "chat: %d thinking chars, %d content chars, %d eval tokens, done=%s",
+                    len(thinking) if thinking else 0,
+                    len(content),
+                    eval_count,
+                    done_reason,
+                )
+                if done_reason == "length" and not content.strip():
+                    logger.warning(
+                        "Thinking exhausted token budget (eval=%d, num_predict=%d)",
+                        eval_count,
+                        payload["options"]["num_predict"],
+                    )
+                return content
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            wait = 3 * (attempt + 1)
             logger.warning(
-                "Thinking exhausted token budget (eval=%d, num_predict=%d)",
-                eval_count,
-                payload["options"]["num_predict"],
+                "Chat attempt %d/2 failed (transient): %s (retrying in %ds)",
+                attempt + 1,
+                e,
+                wait,
             )
-        return content
+            await asyncio.sleep(wait)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                last_error = e
+                wait = 3 * (attempt + 1)
+                logger.warning(
+                    "Chat attempt %d/2 failed (5xx): %s (retrying in %ds)",
+                    attempt + 1,
+                    e,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise  # 4xx errors are not transient
+    raise last_error  # type: ignore[misc]
 
 
 async def chat_stream(
@@ -337,19 +364,36 @@ async def analyze_image(
         return content
 
 
-async def get_embedding_async(text: str, model: str | None = None) -> list[float]:
-    """Get embedding vector via Ollama (async version)."""
+async def get_embedding_async(
+    text: str, model: str | None = None, max_retries: int = 3
+) -> list[float]:
+    """Get embedding vector via Ollama (async version) with retry."""
     payload = {
         "model": model or _embedding_model(),
         "input": text,
         "keep_alive": _keep_alive_for("embedding"),
     }
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(f"{url}/api/embed", json=payload)
-        resp.raise_for_status()
-        embeddings: list[float] = resp.json()["embeddings"][0]
-        return embeddings
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(f"{url}/api/embed", json=payload)
+                resp.raise_for_status()
+                embeddings: list[float] = resp.json()["embeddings"][0]
+                return embeddings
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            wait = 2**attempt
+            logger.warning(
+                "Embedding attempt %d/%d failed: %s (retrying in %ds)",
+                attempt + 1,
+                max_retries,
+                e,
+                wait,
+            )
+            await asyncio.sleep(wait)
+    raise last_error  # type: ignore[misc]
 
 
 async def get_embeddings_batch_async(
@@ -380,21 +424,39 @@ async def get_embeddings_batch_async(
         "keep_alive": _keep_alive_for("embedding"),
     }
     url = _ollama_url()
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(f"{url}/api/embed", json=payload)
-            resp.raise_for_status()
-            embeddings: list[list[float]] = resp.json()["embeddings"]
-            if len(embeddings) == len(texts):
-                logger.info("batch embed: %d texts in one call", len(texts))
-                return embeddings
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(f"{url}/api/embed", json=payload)
+                resp.raise_for_status()
+                embeddings: list[list[float]] = resp.json()["embeddings"]
+                if len(embeddings) == len(texts):
+                    logger.info("batch embed: %d texts in one call", len(texts))
+                    return embeddings
+                logger.warning(
+                    "batch embed returned %d embeddings for %d texts, falling back",
+                    len(embeddings),
+                    len(texts),
+                )
+                break  # Wrong count — fall through to sequential
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            wait = 2**attempt
             logger.warning(
-                "batch embed returned %d embeddings for %d texts, falling back",
-                len(embeddings),
-                len(texts),
+                "Batch embed attempt %d/3 failed: %s (retrying in %ds)",
+                attempt + 1,
+                e,
+                wait,
             )
-    except Exception as e:
-        logger.warning("batch embed failed (%s), falling back to sequential", e)
+            await asyncio.sleep(wait)
+        except Exception as e:
+            logger.warning("batch embed failed (%s), falling back to sequential", e)
+            break
+    else:
+        logger.warning(
+            "batch embed failed after 3 attempts (%s), falling back to sequential", last_error
+        )
 
     # Fallback: sequential single-text calls
     results = []

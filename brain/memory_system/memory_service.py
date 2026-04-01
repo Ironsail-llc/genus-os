@@ -19,7 +19,6 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta
 
@@ -41,28 +40,29 @@ def get_conn():
 
 
 def get_embedding(text: str) -> list[float] | None:
-    """Get embedding from Ollama qwen3-embedding:0.6b."""
-    try:
-        result = subprocess.run(
-            [
-                "curl",
-                "-s",
-                "http://localhost:11434/api/embed",
-                "-d",
-                json.dumps({"model": "qwen3-embedding:0.6b", "input": text}),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        data = json.loads(result.stdout)
-        embeddings = data.get("embeddings")
-        if embeddings and len(embeddings) > 0:
-            return embeddings[0]
-        return None
-    except Exception as e:
-        print(f"Embedding error: {e}", file=sys.stderr)
-        return None
+    """Get embedding from Ollama qwen3-embedding:0.6b with retry."""
+    import httpx
+
+    payload = {"model": "qwen3-embedding:0.6b", "input": text}
+    last_error = None
+    for attempt in range(3):
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post("http://localhost:11434/api/embed", json=payload)
+                resp.raise_for_status()
+                embeddings = resp.json().get("embeddings")
+                if embeddings and len(embeddings) > 0:
+                    return embeddings[0]
+                return None
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            import time
+
+            wait = 2**attempt
+            print(f"Embedding attempt {attempt + 1}/3 failed: {e} (retrying in {wait}s)", file=sys.stderr)
+            time.sleep(wait)
+    print(f"Embedding failed after 3 attempts: {last_error}", file=sys.stderr)
+    return None
 
 
 # ============ AUDIT LOG ============

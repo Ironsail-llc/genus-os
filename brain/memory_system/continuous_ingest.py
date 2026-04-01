@@ -27,6 +27,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 # Paths
 MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
 MEMORY_SYSTEM_DIR = Path("/home/philip/robothor/brain/memory_system")
@@ -50,7 +52,22 @@ LOCK_FILE.parent.mkdir(exist_ok=True)
 
 
 def acquire_lock() -> Any:
-    """Acquire exclusive file lock. Returns file handle or None."""
+    """Acquire exclusive file lock. Returns file handle or None.
+
+    Detects stale locks older than 30 minutes (from crashed processes).
+    """
+    # Stale lock detection: if timestamp in lock file is >30 min old, remove it
+    if LOCK_FILE.exists():
+        try:
+            content = LOCK_FILE.read_text().strip()
+            if content:
+                lock_time = datetime.fromisoformat(content)
+                if (datetime.now() - lock_time).total_seconds() > 1800:
+                    logger.warning("Stale lock detected (from %s), removing", content)
+                    LOCK_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     try:
         fh = open(LOCK_FILE, "w")
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -905,6 +922,16 @@ Attendees: {attendees}
 # ═══════════════════════════════════════════════════════════════════
 
 
+async def _check_ollama_health() -> bool:
+    """Check if Ollama is responsive (needed for embeddings during ingestion)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("http://localhost:11434/api/tags")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 async def run_continuous_ingest() -> dict[str, Any]:
     """Run all source ingestions. Returns combined results."""
     results = {}
@@ -922,10 +949,13 @@ async def run_continuous_ingest() -> dict[str, Any]:
 
     for name, func in sources:
         try:
-            results[name] = await func()
+            results[name] = await asyncio.wait_for(func(), timeout=300)
             new = results[name].get("new", 0)
             if new > 0:
                 logger.info("  %s: %d new items ingested", name, new)
+        except asyncio.TimeoutError:
+            logger.error("  %s: TIMED OUT after 300s", name)
+            results[name] = {"new": 0, "errors": 1, "error": "timeout after 300s"}
         except Exception as e:
             logger.error("  %s: FAILED — %s", name, e)
             results[name] = {"new": 0, "errors": 1, "error": str(e)}
@@ -946,6 +976,12 @@ async def main():
     # Check nightly pipeline
     if is_nightly_running():
         logger.info("Nightly pipeline is running, skipping.")
+        lock_fh.close()
+        return
+
+    # Check Ollama health (needed for fact extraction embeddings)
+    if not await _check_ollama_health():
+        logger.warning("Ollama not responding, skipping ingest run.")
         lock_fh.close()
         return
 
