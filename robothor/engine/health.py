@@ -42,6 +42,13 @@ def create_health_app(
         init_chat(runner, config)
         app.include_router(chat_router)
 
+        # IDE WebSocket integration
+        from robothor.engine.ide import init_ide
+        from robothor.engine.ide import router as ide_router
+
+        init_ide(runner, config)
+        app.include_router(ide_router)
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         """Health check endpoint."""

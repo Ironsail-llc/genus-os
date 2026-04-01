@@ -73,6 +73,14 @@ FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federat
 # Princess Freya (PF) vessel tools
 PF_TOOLS = frozenset({"pf_system_status"})
 
+# Skill tools
+SKILL_TOOLS = frozenset({"invoke_skill", "list_skills"})
+
+# MCP client tools (call external MCP servers)
+MCP_CLIENT_TOOLS = frozenset(
+    {"mcp_list_servers", "mcp_list_tools", "mcp_call_tool", "mcp_read_resource"}
+)
+
 # Messaging and team tools
 MESSAGING_TOOLS = frozenset(
     {
@@ -173,5 +181,11 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "team_scratchpad_read",
         # Experiment read-only tools
         "experiment_status",
+        # Skill tools (read-only — skills are just instructions)
+        "invoke_skill",
+        "list_skills",
+        # MCP client read-only tools
+        "mcp_list_servers",
+        "mcp_list_tools",
     }
 )

@@ -217,6 +217,31 @@ def main(argv: list[str] | None = None) -> int:
     fed_remove.add_argument("connection", help="Connection ID")
 
     # engine
+    # run — quick single-shot agent execution
+    run_parser = subparsers.add_parser("run", help="Run agent with a message (non-interactive)")
+    run_parser.add_argument(
+        "message", nargs="?", default=None, help="Task description (reads stdin if omitted)"
+    )
+    run_parser.add_argument("--agent", "-a", default=None, help="Agent ID (default: main)")
+    run_parser.add_argument("--model", "-m", default=None, help="Model override")
+    run_parser.add_argument(
+        "--print", dest="print_only", action="store_true", help="Print final output only"
+    )
+    run_parser.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output as JSON"
+    )
+    run_parser.add_argument("--timeout", type=int, default=600, help="Timeout in seconds")
+
+    # chat — alias for tui
+    subparsers.add_parser("chat", help="Interactive chat (launches TUI)")
+
+    # agents — shortcut to list agents
+    subparsers.add_parser("agents", help="List configured agents (shortcut)")
+
+    # costs — shortcut to show costs
+    costs_parser = subparsers.add_parser("costs", help="Show cost breakdown")
+    costs_parser.add_argument("--hours", type=int, default=24, help="Lookback hours")
+
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
@@ -278,6 +303,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_agent(args)
     if args.command == "federation":
         return _cmd_federation(args)
+    if args.command == "run":
+        return _cmd_run(args)
+    if args.command == "chat":
+        return _cmd_tui(args)
+    if args.command == "agents":
+        return _cmd_agents()
+    if args.command == "costs":
+        return _cmd_costs(args)
     if args.command == "engine":
         return _cmd_engine(args)
     if args.command == "config":
@@ -1775,6 +1808,148 @@ def _cmd_agent_unbind(args: argparse.Namespace) -> int:
     print(f"Unbound {args.agent_id}: cron cleared, delivery=none")
     print(f"Manifest: {manifest_path}")
     print("Restart the engine to apply: sudo systemctl restart robothor-engine")
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Non-interactive single-shot agent execution with pipe support."""
+    import asyncio
+    import json as json_mod
+
+    from robothor.engine.config import EngineConfig, load_agent_config
+    from robothor.engine.models import TriggerType
+
+    config = EngineConfig.from_env()
+    agent_id = args.agent or config.default_chat_agent
+
+    # Read message from args or stdin
+    message = args.message
+    if message is None:
+        if not sys.stdin.isatty():
+            message = sys.stdin.read().strip()
+        else:
+            print("Error: No message provided.", file=sys.stderr)
+            print('Usage: robothor run "task description"', file=sys.stderr)
+            print('  Or pipe: echo "task" | robothor run', file=sys.stderr)
+            return 1
+
+    if not message:
+        print("Error: Empty message.", file=sys.stderr)
+        return 1
+
+    agent_config = load_agent_config(agent_id, config.manifest_dir)
+    if not agent_config:
+        print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}", file=sys.stderr)
+        return 1
+
+    if not args.print_only and not args.json_output:
+        print(f"Agent: {agent_config.name} ({agent_id})", file=sys.stderr)
+        print(f"Model: {agent_config.model_primary}", file=sys.stderr)
+
+    async def _run() -> Any:
+        from robothor.engine.runner import AgentRunner
+
+        runner = AgentRunner(config)
+        return await runner.execute(
+            agent_id=agent_id,
+            message=message,
+            trigger_type=TriggerType.MANUAL,
+            agent_config=agent_config,
+            model_override=args.model,
+        )
+
+    run = asyncio.run(_run())
+
+    if args.json_output:
+        result = {
+            "status": run.status.value,
+            "output": run.output_text,
+            "error": run.error_message,
+            "duration_ms": run.duration_ms,
+            "tokens": {"input": run.input_tokens, "output": run.output_tokens},
+            "cost_usd": run.total_cost_usd,
+            "model": run.model_used,
+        }
+        print(json_mod.dumps(result, indent=2))
+    elif args.print_only:
+        if run.output_text:
+            print(run.output_text)
+        if run.error_message:
+            print(run.error_message, file=sys.stderr)
+    else:
+        print(f"\nStatus: {run.status.value}")
+        if run.duration_ms is not None:
+            print(f"Duration: {run.duration_ms}ms")
+        if run.model_used:
+            print(f"Model used: {run.model_used}")
+        print(f"Tokens: {run.input_tokens} in / {run.output_tokens} out")
+        if run.total_cost_usd:
+            print(f"Cost: ${run.total_cost_usd:.4f}")
+        if run.output_text:
+            print(f"\n{run.output_text}")
+        if run.error_message:
+            print(f"\nError: {run.error_message}", file=sys.stderr)
+
+    return 0 if run.status.value == "completed" else 1
+
+
+def _cmd_agents() -> int:
+    """List configured agents (shortcut for engine list)."""
+    from robothor.engine.config import EngineConfig
+
+    config = EngineConfig.from_env()
+    manifest_dir = config.manifest_dir
+
+    yamls = sorted(manifest_dir.glob("*.yaml"))
+    yamls = [y for y in yamls if not y.name.startswith("_")]
+
+    if not yamls:
+        print(f"No agent manifests found in {manifest_dir}")
+        return 0
+
+    print(f"{'ID':<25} {'Name':<30} {'Model':<35}")
+    print("-" * 90)
+    for yp in yamls:
+        try:
+            import yaml
+
+            with yp.open() as f:
+                data = yaml.safe_load(f) or {}
+            agent_id = yp.stem
+            name = data.get("name", agent_id)
+            model = data.get("model", {}).get("primary", "default")
+            print(f"{agent_id:<25} {name:<30} {model:<35}")
+        except Exception as e:
+            print(f"{yp.stem:<25} {'(error)':<30} {e}")
+
+    return 0
+
+
+def _cmd_costs(args: argparse.Namespace) -> int:
+    """Show cost breakdown by querying the running engine."""
+    import json as json_mod
+    import urllib.request
+
+    hours = getattr(args, "hours", 24)
+    url = f"http://127.0.0.1:18800/costs?hours={hours}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json_mod.loads(resp.read())
+    except Exception as e:
+        print(f"Error: Could not reach engine at {url}: {e}", file=sys.stderr)
+        print("Is the engine running? (robothor engine start)", file=sys.stderr)
+        return 1
+
+    print(f"Cost breakdown (last {hours}h):")
+    print(f"{'Agent':<25} {'Runs':<8} {'Cost':<12}")
+    print("-" * 45)
+    total = 0.0
+    for agent in data.get("agents", []):
+        cost = agent.get("total_cost_usd", 0)
+        total += cost
+        print(f"{agent.get('agent_id', '?'):<25} {agent.get('run_count', 0):<8} ${cost:.4f}")
+    print("-" * 45)
+    print(f"{'Total':<25} {'':<8} ${total:.4f}")
     return 0
 
 

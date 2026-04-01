@@ -26,6 +26,7 @@ class TriggerType(StrEnum):
     WORKFLOW = "workflow"
     SUB_AGENT = "sub_agent"
     FEDERATION = "federation"
+    IDE = "ide"
 
 
 class RunStatus(StrEnum):
@@ -196,6 +197,9 @@ class AgentConfig:
     sub_agent_timeout_seconds: int = 120
     max_concurrent_spawns: int = 0  # 0 = use engine default
     max_spawn_batch: int = 0  # 0 = use engine default
+
+    # MCP client — external MCP servers agents can call
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
 
     error_feedback: bool = True
     token_budget: int = 0  # token tracking (observability only, not enforced)

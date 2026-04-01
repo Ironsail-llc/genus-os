@@ -40,12 +40,14 @@ def _collect_handlers() -> dict[str, Any]:
         git,
         gws,
         impetus,
+        mcp_client,
         memory,
         messaging,
         observability,
         pdf,
         pf,
         reasoning,
+        skills,
         spawn,
         vault,
         vision,
@@ -75,6 +77,8 @@ def _collect_handlers() -> dict[str, Any]:
         federation,
         pf,
         messaging,
+        skills,
+        mcp_client,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

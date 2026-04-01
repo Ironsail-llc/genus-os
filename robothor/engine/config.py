@@ -258,6 +258,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 120)),
         max_concurrent_spawns=int(v2.get("max_concurrent_spawns", 0)),
         max_spawn_batch=int(v2.get("max_spawn_batch", 0)),
+        mcp_servers=v2.get("mcp_servers", []),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
         # token_budget is auto-derived at runtime from model registry × max_iterations
@@ -448,6 +449,17 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
                 logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
             parts.append(content)
             total_chars += len(content)
+
+        # Skill catalog (if skills exist)
+        try:
+            from robothor.engine.skills import build_skill_catalog
+
+            skill_section = build_skill_catalog()
+            if skill_section:
+                parts.append(skill_section)
+                total_chars += len(skill_section)
+        except Exception as e:
+            logger.debug("Skill catalog failed: %s", e)
 
         body = "\n\n---\n\n".join(parts)
         _prompt_cache[cache_key] = (max_mtime, body)

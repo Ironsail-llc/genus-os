@@ -1421,4 +1421,110 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── MCP Client ────────────────────────────────────────────────────
+    schemas["mcp_list_servers"] = {
+        "type": "function",
+        "function": {
+            "name": "mcp_list_servers",
+            "description": "List configured external MCP servers and their connection status.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    schemas["mcp_list_tools"] = {
+        "type": "function",
+        "function": {
+            "name": "mcp_list_tools",
+            "description": "List tools available on a specific external MCP server.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_name": {
+                        "type": "string",
+                        "description": "Name of the MCP server",
+                    },
+                },
+                "required": ["server_name"],
+            },
+        },
+    }
+    schemas["mcp_call_tool"] = {
+        "type": "function",
+        "function": {
+            "name": "mcp_call_tool",
+            "description": "Call a tool on an external MCP server.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_name": {
+                        "type": "string",
+                        "description": "Name of the MCP server",
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the tool to call",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments to pass to the tool",
+                    },
+                },
+                "required": ["server_name", "tool_name"],
+            },
+        },
+    }
+    schemas["mcp_read_resource"] = {
+        "type": "function",
+        "function": {
+            "name": "mcp_read_resource",
+            "description": "Read a resource from an external MCP server.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_name": {
+                        "type": "string",
+                        "description": "Name of the MCP server",
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "URI of the resource to read",
+                    },
+                },
+                "required": ["server_name", "uri"],
+            },
+        },
+    }
+
+    # ── Skills ────────────────────────────────────────────────────────
+    schemas["invoke_skill"] = {
+        "type": "function",
+        "function": {
+            "name": "invoke_skill",
+            "description": (
+                "Invoke a named skill to get step-by-step instructions. "
+                "Skills are pre-built recipes for common multi-step operations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the skill to invoke (e.g. 'send-email', 'crm-lookup')",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    }
+    schemas["list_skills"] = {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "List all available skills with their names and descriptions.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    }
+
     return schemas
