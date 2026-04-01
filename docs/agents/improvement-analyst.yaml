@@ -82,6 +82,8 @@ v2:
     - "brain/memory/improvement-analyst-status.md"
 
 changelog:
+  - date: "2026-04-01"
+    change: "Superseded by consolidated brain/scripts/nightwatch.py — fleet analysis now inline Python"
   - date: "2026-03-15"
     change: "Increase timeout 300s→480s — synthesis LLM call takes 129–156s alone; 300s too tight (33% timeout rate). Nightwatch self-heal [nightwatch]"
   - date: "2026-03-05"

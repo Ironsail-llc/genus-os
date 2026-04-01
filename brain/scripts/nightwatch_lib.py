@@ -133,8 +133,13 @@ def invoke_claude_code(
         "--system-prompt", system_prompt,
     ]
 
-    # Strip CLAUDE_* env vars to avoid session conflicts
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    # Strip CLAUDE_* and ANTHROPIC_API_KEY env vars — the CLI uses its own
+    # stored credentials (~/.claude/.credentials.json). Session env vars
+    # (e.g. from a parent Claude Code process) would override and break auth.
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("CLAUDE") and k != "ANTHROPIC_API_KEY"
+    }
     env["PATH"] = os.environ.get("PATH", "/usr/bin:/usr/local/bin")
 
     logger.info(
@@ -334,3 +339,156 @@ def setup_logging(name: str) -> logging.Logger:
 def today_str() -> str:
     """Return today's date as YYYY-MM-DD."""
     return datetime.now().strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Slugify
+# ---------------------------------------------------------------------------
+
+def slugify(title: str, max_length: int = 50) -> str:
+    """Convert a title to a branch-safe slug."""
+    slug = title.lower()
+    for prefix in ("[p1] ", "[p2] ", "[p3] ", "[feature] ", "[fix] ", "[test] ", "[cleanup] "):
+        slug = slug.removeprefix(prefix)
+    slug = "".join(c if c.isalnum() or c == "-" else "-" for c in slug)
+    slug = "-".join(part for part in slug.split("-") if part)
+    return slug[:max_length]
+
+
+# ---------------------------------------------------------------------------
+# Backlog parsing
+# ---------------------------------------------------------------------------
+
+_BACKLOG_RE = re.compile(r"^- \[ \]\s*(?:\[(P[123])\]\s*)?(.*)", re.MULTILINE)
+_PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
+
+
+def parse_backlog(backlog_path: Path) -> list[dict]:
+    """Parse the nightwatch backlog file.
+
+    Returns unchecked items sorted by priority (P1 > P2 > P3), then position.
+    Each item: {line_number, priority, text, raw_line}.
+    """
+    if not backlog_path.exists():
+        logger.warning("Backlog file not found: %s", backlog_path)
+        return []
+
+    items = []
+    for i, line in enumerate(backlog_path.read_text().splitlines(), start=1):
+        m = _BACKLOG_RE.match(line)
+        if m:
+            priority = m.group(1) or "P2"
+            text = m.group(2).strip()
+            if text:
+                items.append({
+                    "line_number": i,
+                    "priority": priority,
+                    "text": text,
+                    "raw_line": line,
+                })
+
+    items.sort(key=lambda x: (_PRIORITY_ORDER.get(x["priority"], 1), x["line_number"]))
+    return items
+
+
+def check_off_backlog_item(backlog_path: Path, line_number: int, pr_url: str | None = None) -> None:
+    """Mark a backlog item as done by checking its checkbox and appending PR URL."""
+    lines = backlog_path.read_text().splitlines()
+    idx = line_number - 1
+    if 0 <= idx < len(lines) and lines[idx].startswith("- [ ]"):
+        suffix = f" — {pr_url}" if pr_url else ""
+        lines[idx] = lines[idx].replace("- [ ]", "- [x]", 1) + suffix
+        backlog_path.write_text("\n".join(lines) + "\n")
+        logger.info("Checked off backlog item at line %d", line_number)
+
+
+# ---------------------------------------------------------------------------
+# Self-improvement heuristics (no LLM, no DB required)
+# ---------------------------------------------------------------------------
+
+def find_self_improvements(repo_root: Path) -> list[dict]:
+    """Scan for lightweight improvement opportunities.
+
+    Checks:
+    1. Python files in robothor/engine/ with no corresponding test file
+    2. TODO/FIXME/HACK counts by file in engine code
+    3. Agent manifests referencing nonexistent instruction files
+
+    Returns list of dicts: {title, description, category, priority}.
+    """
+    improvements: list[dict] = []
+
+    engine_dir = repo_root / "robothor" / "engine"
+    tests_dir = engine_dir / "tests"
+
+    # 1. Untested engine modules
+    if engine_dir.exists() and tests_dir.exists():
+        test_files = {f.name for f in tests_dir.glob("test_*.py")}
+        for py_file in sorted(engine_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            expected_test = f"test_{py_file.name}"
+            if expected_test not in test_files:
+                improvements.append({
+                    "title": f"Add tests for robothor/engine/{py_file.name}",
+                    "description": (
+                        f"The engine module `robothor/engine/{py_file.name}` has no "
+                        f"corresponding test file `robothor/engine/tests/{expected_test}`. "
+                        f"Read the module, understand its public API, and write focused "
+                        f"unit tests with mocked dependencies."
+                    ),
+                    "category": "test",
+                    "priority": "P2",
+                })
+
+    # 2. TODO/FIXME/HACK hotspots in engine code
+    if engine_dir.exists():
+        marker_re = re.compile(r"#\s*(TODO|FIXME|HACK)\b", re.IGNORECASE)
+        file_counts: list[tuple[int, Path]] = []
+        for py_file in engine_dir.glob("*.py"):
+            try:
+                count = len(marker_re.findall(py_file.read_text()))
+                if count >= 3:
+                    file_counts.append((count, py_file))
+            except OSError:
+                continue
+        file_counts.sort(reverse=True)
+        if file_counts:
+            count, top_file = file_counts[0]
+            improvements.append({
+                "title": f"Address {count} TODO/FIXME markers in {top_file.name}",
+                "description": (
+                    f"`robothor/engine/{top_file.name}` has {count} TODO/FIXME/HACK "
+                    f"markers. Read each one, determine if it's still relevant, and "
+                    f"either implement the fix or remove the stale marker with a "
+                    f"comment explaining why."
+                ),
+                "category": "quality",
+                "priority": "P3",
+            })
+
+    # 3. Manifests referencing nonexistent instruction files
+    agents_dir = repo_root / "docs" / "agents"
+    if agents_dir.exists():
+        import yaml  # noqa: delayed import — only needed for this check
+
+        for manifest in sorted(agents_dir.glob("*.yaml")):
+            try:
+                data = yaml.safe_load(manifest.read_text()) or {}
+                inst_file = data.get("instruction_file")
+                if inst_file and not (repo_root / inst_file).exists():
+                    improvements.append({
+                        "title": f"Fix broken instruction_file in {manifest.name}",
+                        "description": (
+                            f"Agent manifest `docs/agents/{manifest.name}` references "
+                            f"instruction_file `{inst_file}` which does not exist. "
+                            f"Either create the missing file or update the manifest "
+                            f"to point to the correct path."
+                        ),
+                        "category": "bugfix",
+                        "priority": "P1",
+                    })
+            except Exception:
+                continue
+
+    return improvements
