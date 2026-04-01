@@ -15,6 +15,8 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
 from robothor.engine.models import TriggerType
@@ -95,6 +97,29 @@ def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
                 "message": hook.message,
             }
             triggers.setdefault(hook.stream, []).append(entry)
+
+    # Also register streams from workflow hook triggers so the consumer
+    # subscribes to them. Workflow dispatch (line ~293) handles execution.
+    workflow_dir = manifest_dir.parent / "workflows"
+    if workflow_dir.is_dir():
+        for wf_path in sorted(workflow_dir.glob("*.yaml")):
+            try:
+                with wf_path.open() as f:
+                    wf_data = yaml.safe_load(f)
+                if not wf_data or "triggers" not in wf_data:
+                    continue
+                for t in wf_data["triggers"]:
+                    if t.get("type") == "hook" and t.get("stream"):
+                        stream = t["stream"]
+                        if stream not in triggers:
+                            logger.info(
+                                "Registered stream '%s' from workflow %s",
+                                stream,
+                                wf_data.get("id", wf_path.name),
+                            )
+                        triggers.setdefault(stream, [])
+            except Exception as e:
+                logger.warning("Failed to scan workflow %s: %s", wf_path, e)
 
     if triggers:
         total = sum(len(v) for v in triggers.values())

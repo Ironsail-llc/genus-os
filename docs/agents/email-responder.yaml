@@ -108,6 +108,8 @@ v2:
     - "brain/memory/response-status.md"
 
 changelog:
+  - date: "2026-04-01"
+    change: "Cron is now safety-net only — primary trigger is email-pipeline workflow via email.new hook (24/7)"
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"

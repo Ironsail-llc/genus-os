@@ -61,6 +61,50 @@ def run_gog(args: list[str]) -> str:
     return result.stdout
 
 
+def run_gws(args: list[str]) -> str:
+    """Run gws command and return output."""
+    result = subprocess.run(["gws"] + args, capture_output=True, text=True)
+    return result.stdout
+
+
+def fetch_message_metadata(message_id: str) -> dict | None:
+    """Fetch metadata for a single message by ID using gws Gmail API.
+
+    Returns dict with from, subject, date, labels, threadId keys, or None on failure.
+    """
+    output = run_gws([
+        "gmail", "users", "messages", "get",
+        "--params", json.dumps({
+            "userId": "me",
+            "id": message_id,
+            "format": "metadata",
+        }),
+    ])
+    if not output.strip():
+        return None
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+
+    headers = {
+        h["name"]: h["value"]
+        for h in data.get("payload", {}).get("headers", [])
+        if h.get("name") in ("From", "Subject", "Date")
+    }
+
+    if not headers.get("From"):
+        return None
+
+    return {
+        "from": headers.get("From"),
+        "subject": headers.get("Subject"),
+        "date": headers.get("Date"),
+        "labels": data.get("labelIds", []),
+        "threadId": data.get("threadId"),
+    }
+
+
 def load_log(path: Path = None) -> dict:
     """Load existing log or create new one. Survives corrupted JSON."""
     path = path or LOG_PATH
@@ -235,13 +279,11 @@ def validate_entries(log: dict) -> int:
 def backfill_null_metadata(log: dict) -> int:
     """Re-fetch metadata for entries with null from AND null subject.
 
-    Calls gog gmail search to get metadata, matches by ID, and populates
-    from/subject/date/labels. Resets processing fields so the worker
-    re-processes with real content.
+    Uses gws Gmail API to fetch individual messages by ID, avoiding the
+    search-result limits that made the old gog-search approach unreliable.
 
     Returns count of entries backfilled.
     """
-    # Find entries needing backfill
     needs_backfill = [
         eid
         for eid, entry in log.get("entries", {}).items()
@@ -251,44 +293,34 @@ def backfill_null_metadata(log: dict) -> int:
     if not needs_backfill:
         return 0
 
-    # Fetch recent emails with metadata
-    output = run_gog(
-        ["gmail", "search", "in:anywhere", "--account", ACCOUNT, "--max", "50", "--json"]
-    )
-
-    if not output.strip():
-        return 0
-
-    try:
-        data = json.loads(output)
-        emails = data.get("threads", data.get("messages", [])) if isinstance(data, dict) else data
-    except json.JSONDecodeError:
-        return 0
-
-    # Build lookup by ID
-    email_by_id = {e.get("id"): e for e in emails if e.get("id")}
-
     backfill_count = 0
     for eid in needs_backfill:
-        if eid in email_by_id:
-            email = email_by_id[eid]
-            entry = log["entries"][eid]
-            entry["from"] = email.get("from")
-            entry["subject"] = email.get("subject")
-            entry["date"] = email.get("date")
-            entry["labels"] = email.get("labels", [])
-            # Reset processing fields for re-processing
-            entry["categorizedAt"] = None
-            entry["urgency"] = None
-            entry["category"] = None
-            entry["actionRequired"] = None
-            entry["actionCompletedAt"] = None
-            entry["pendingReviewAt"] = None
-            entry["reviewedAt"] = None
-            entry["readAt"] = None
-            entry["summary"] = None
-            entry["backfilledAt"] = datetime.now().isoformat()
-            backfill_count += 1
+        metadata = fetch_message_metadata(eid)
+        if not metadata:
+            print(f"  Backfill: could not fetch metadata for {eid}, skipping")
+            continue
+
+        entry = log["entries"][eid]
+        entry["from"] = metadata["from"]
+        entry["subject"] = metadata["subject"]
+        entry["date"] = metadata["date"]
+        entry["labels"] = metadata["labels"]
+        if metadata.get("threadId"):
+            entry["threadId"] = metadata["threadId"]
+        entry["id"] = eid
+        # Reset processing fields for re-processing
+        entry["categorizedAt"] = None
+        entry["urgency"] = None
+        entry["category"] = None
+        entry["actionRequired"] = None
+        entry["actionCompletedAt"] = None
+        entry["pendingReviewAt"] = None
+        entry["reviewedAt"] = None
+        entry["readAt"] = None
+        entry["summary"] = None
+        entry["backfilledAt"] = datetime.now().isoformat()
+        entry["backfilledVia"] = "gws-api"
+        backfill_count += 1
 
     return backfill_count
 
@@ -379,10 +411,8 @@ def _get_pending_emails(email_log: dict) -> list[dict]:
     for eid, entry in entries.items():
         if not isinstance(entry, dict):
             continue
-        if not entry.get("from"):
-            continue
         if not entry.get("categorizedAt"):
-            pending.append({
+            item = {
                 "source": "email",
                 "type": "new",
                 "id": eid,
@@ -392,8 +422,11 @@ def _get_pending_emails(email_log: dict) -> list[dict]:
                 "labels": entry.get("labels", []),
                 "snippet": entry.get("snippet"),
                 "messageCount": entry.get("messageCount", 1),
-            })
-        elif entry.get("pendingReviewAt") and not entry.get("reviewedAt"):
+            }
+            if not entry.get("from"):
+                item["needsBackfill"] = True
+            pending.append(item)
+        elif entry.get("from") and entry.get("pendingReviewAt") and not entry.get("reviewedAt"):
             try:
                 if entry["pendingReviewAt"] <= now:
                     pending.append({

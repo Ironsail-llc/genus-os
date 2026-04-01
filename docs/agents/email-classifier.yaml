@@ -94,6 +94,8 @@ v2:
     - "brain/memory/email-log.json"
 
 changelog:
+  - date: "2026-04-01"
+    change: "Cron is now safety-net only — primary trigger is email-pipeline workflow via email.new hook (24/7)"
   - date: "2026-03-10"
     change: "Revert to GLM-5 — Qwen 3.5 122B caused timeouts and circuit breaker trips"
   - date: "2026-03-09"
