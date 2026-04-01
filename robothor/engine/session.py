@@ -162,7 +162,34 @@ class AgentSession:
         )
         self.run.steps.append(step)
 
-        # Append tool result to conversation
+        # Append tool result to conversation.
+        # Screenshots get image content blocks so vision models can see the screen.
+        screenshot_tools = {"desktop_screenshot", "browser"}
+        if tool_name in screenshot_tools and isinstance(tool_output, dict):
+            b64_data = tool_output.get("screenshot_base64")
+            if b64_data and isinstance(b64_data, str):
+                w = tool_output.get("width", "?")
+                h = tool_output.get("height", "?")
+                self.messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{b64_data}",
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": f"Screenshot captured ({w}x{h})",
+                            },
+                        ],
+                    }
+                )
+                return step
+
         content = json.dumps(tool_output, default=str)
 
         # Offload large results to temp file, keeping summary + path in context

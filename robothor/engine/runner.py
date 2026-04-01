@@ -1916,6 +1916,42 @@ class AgentRunner:
         return estimate_tokens(messages)
 
     @staticmethod
+    def _validate_tool_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop orphaned tool messages whose tool_call_id has no matching tool_use.
+
+        This is a defense-in-depth measure: if compaction, checkpoint restore,
+        or format conversion ever corrupts the message history, this prevents
+        cryptic "unexpected tool_use_id in tool_result blocks" API errors.
+        """
+        valid_ids: set[str] = set()
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls", []):
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    if tc_id:
+                        valid_ids.add(tc_id)
+
+        if not valid_ids:
+            return messages  # no tool calls at all — nothing to validate
+
+        cleaned: list[dict[str, Any]] = []
+        dropped = 0
+        for msg in messages:
+            if msg.get("role") == "tool" and msg.get("tool_call_id") not in valid_ids:
+                dropped += 1
+                continue
+            cleaned.append(msg)
+
+        if dropped:
+            logger.warning(
+                "Dropped %d orphaned tool_result message(s) — "
+                "no matching tool_use in assistant messages",
+                dropped,
+            )
+
+        return cleaned if dropped else messages
+
+    @staticmethod
     def _build_llm_kwargs(
         model: str,
         messages: list[dict[str, Any]],
@@ -1931,20 +1967,29 @@ class AgentRunner:
         limits = get_model_limits(model)
         actual_model = model
 
-        # For Anthropic models, enable prompt caching on the system message
-        # by converting it to content-block format with cache_control markers.
-        is_anthropic = "anthropic" in model or "claude" in model
-        if is_anthropic and messages and messages[0].get("role") == "system":
+        # For direct Anthropic API models, enable prompt caching on the system
+        # message by converting it to content-block format with cache_control.
+        # OpenRouter models (e.g. "openrouter/anthropic/claude-sonnet-4-6") must
+        # NOT get this conversion — litellm sends them via the OpenAI-compatible
+        # path and the mixed format causes tool_use/tool_result pairing failures.
+        is_direct_anthropic = model.startswith("anthropic/")
+        if is_direct_anthropic and messages and messages[0].get("role") == "system":
             messages = list(messages)  # shallow copy to avoid mutating original
-            sys_msg = dict(messages[0])
-            sys_msg["content"] = [
-                {
-                    "type": "text",
-                    "text": sys_msg["content"],
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
-            messages[0] = sys_msg
+            sys_content = messages[0].get("content")
+            if isinstance(sys_content, str):
+                sys_msg = dict(messages[0])
+                sys_msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": sys_content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+                messages[0] = sys_msg
+
+        # Defense in depth: drop orphaned tool_result messages that would
+        # cause "unexpected tool_use_id" API errors.
+        messages = AgentRunner._validate_tool_pairs(messages)
 
         kwargs: dict[str, Any] = {
             "model": actual_model,
