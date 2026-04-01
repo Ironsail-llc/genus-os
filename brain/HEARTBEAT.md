@@ -114,7 +114,7 @@ You have `spawn_agent` and `spawn_agents`. Use them to parallelize work:
 ```
 spawn_agents(tasks=[
     {"agent_id": "email-responder", "task": "Draft reply to Samantha about marketing ROI"},
-    {"agent_id": "crm-steward", "task": "Update contact records for new people who emailed this week"}
+    {"agent_id": "crm-enrichment", "task": "Update contact records for new people who emailed this week"}
 ])
 ```
 

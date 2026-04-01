@@ -1,0 +1,96 @@
+id: crm-hygiene
+name: CRM Hygiene
+description: Task system health + CRM data quality sweeps (blocklist, field scrubbing)
+version: "2026-04-01"
+department: crm
+
+reports_to: main
+creates_tasks_for: []
+receives_tasks_from: []
+escalates_to: main
+
+model:
+  primary: openrouter/z-ai/glm-5
+  fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
+    - gemini/gemini-2.5-pro
+
+schedule:
+  cron: "0 10 * * *"
+  timezone: America/New_York
+  timeout_seconds: 300
+  max_iterations: 10
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - list_people
+  - update_person
+  - delete_person
+  - create_task
+  - list_tasks
+  - list_my_tasks
+  - update_task
+  - resolve_task
+  - get_inbox
+  - ack_notification
+  - append_to_block
+tools_denied:
+  - message
+bridge_endpoints:
+  - "GET /health"
+  - "GET /api/people"
+  - "PATCH /api/people/*"
+  - "POST /api/tasks"
+  - "GET /api/tasks"
+  - "PATCH /api/tasks/*"
+  - "GET /api/tasks/agent/*"
+  - "POST /api/tasks/*/resolve"
+  - "GET /api/notifications/inbox/*"
+  - "POST /api/notifications/*/ack"
+  - "POST /api/memory/blocks/*/append"
+streams:
+  read: [crm]
+  write: [crm]
+
+sla:
+  urgent: 30m
+  high: 2h
+  normal: 8h
+  low: 24h
+
+task_protocol: true
+auto_task: true
+notification_inbox: true
+status_file: brain/memory/crm-hygiene-status.md
+shared_working_state: true
+
+warmup:
+  memory_blocks:
+    - contacts_summary
+  context_files:
+    - brain/memory/crm-hygiene-status.md
+
+instruction_file: brain/agents/CRM_HYGIENE.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+tags_produced: [crm-hygiene]
+tags_consumed: [crm-hygiene]
+
+v2:
+  error_feedback: true
+  guardrails:
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/crm-hygiene-status.md"
+
+changelog:
+  - date: "2026-04-01"
+    change: "Split from crm-steward — owns task hygiene + quality sweep phases"

@@ -5,8 +5,8 @@ Memory, agent instructions, scripts, voice server, vision pipeline, and dashboar
 ## Agent Instruction Files
 
 Instruction files live in three locations:
-- `brain/agents/` — most agents (CHAT_RESPONDER, FAILURE_ANALYZER, IMPROVEMENT_ANALYST, OVERNIGHT_PR, morning-briefing, evening-winddown)
-- `brain/` — core agents (HEARTBEAT, RESPONDER, EMAIL_ANALYST, EMAIL_CLASSIFIER, CALENDAR_MONITOR, CONVERSATION_INBOX, CONVERSATION_RESOLVER, CRM_STEWARD, VISION_MONITOR, ENGINE_REPORT)
+- `brain/agents/` — most agents (CHAT_RESPONDER, FAILURE_ANALYZER, IMPROVEMENT_ANALYST, OVERNIGHT_PR, CRM_HYGIENE, CRM_DEDUP, CRM_ENRICHMENT, morning-briefing, evening-winddown)
+- `brain/` — core agents (HEARTBEAT, RESPONDER, EMAIL_ANALYST, EMAIL_CLASSIFIER, CALENDAR_MONITOR, CONVERSATION_INBOX, CONVERSATION_RESOLVER, VISION_MONITOR, ENGINE_REPORT). CRM_STEWARD.md is deprecated — see agents/ for replacements.
 - `brain/instructions/` — CANARY
 
 All instruction files follow the contract at `docs/agents/INSTRUCTION_CONTRACT.md`. Manifests in `docs/agents/*.yaml` are always edited first.
