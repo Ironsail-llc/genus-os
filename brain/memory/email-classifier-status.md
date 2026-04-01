@@ -1,5 +1,6 @@
 # Email Classifier Status
-Last run: 2026-03-31T02:10:15.000000+00:00
-Items: 0
+Last run: 2026-04-01T02:10:02.000000+00:00
+Items: 1
 
-No emails to process.
+## Summary
+Processed 1 email: booking confirmation from Philip's calendar (Matt Budeir appointment). Dismissed as routine automated notification. Calendar items: 4, Jira items: 6 (not processed by email-classifier).

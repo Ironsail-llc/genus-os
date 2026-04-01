@@ -17,7 +17,7 @@ import html
 import logging
 import re
 import time
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -346,6 +346,30 @@ class TelegramBot:
                 await message.answer("\n".join(lines))
             except Exception as e:
                 await message.answer(f"Failed to fetch status: {html.escape(str(e))}")
+
+        @self.dp.message(Command("export"))
+        async def cmd_export(message: Message) -> None:
+            """Export current session as a markdown file attachment."""
+
+            from aiogram.types import BufferedInputFile
+
+            from robothor.engine.export import chat_session_to_markdown
+
+            chat_id = str(message.chat.id)
+            session_key = self._session_key(chat_id)
+            session = get_shared_session(session_key)
+
+            if not session.history:
+                await message.reply("No messages in current session.")
+                return
+
+            md = chat_session_to_markdown(session, session_key=session_key)
+            now_str = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+            filename = f"session-{now_str}.md"
+            file = BufferedInputFile(md.encode(), filename=filename)
+            await message.reply_document(
+                file, caption=f"Session export ({len(session.history)} messages)"
+            )
 
         @self.dp.message(Command("plan"))
         async def cmd_plan(message: Message) -> None:
@@ -1177,6 +1201,15 @@ class TelegramBot:
             await self.send_message(chat_id, "No pending plan to execute.")
             return
 
+        # Check expiration before executing
+        if _plan_is_expired(plan):
+            plan.status = "expired"
+            session.active_plan = None
+            await self.send_message(
+                chat_id, "Plan has expired. Please start a new plan with /plan."
+            )
+            return
+
         plan.status = "approved"
 
         # Deep plan: route to RLM with rich context instead of agent execution
@@ -1477,6 +1510,15 @@ class TelegramBot:
         plan = session.active_plan
         if not plan:
             await self.send_message(chat_id, "No pending plan to revise.")
+            return
+
+        # Check expiration before iterating
+        if _plan_is_expired(plan):
+            plan.status = "expired"
+            session.active_plan = None
+            await self.send_message(
+                chat_id, "Plan has expired. Please start a new plan with /plan."
+            )
             return
 
         # Save current plan text to revision history

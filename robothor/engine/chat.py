@@ -395,6 +395,33 @@ async def chat_clear(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@router.get("/export")
+async def chat_export(request: Request) -> JSONResponse:
+    """Export session as markdown or JSON."""
+    session_key = request.query_params.get("session_key", "")
+    format_ = request.query_params.get("format", "markdown")
+
+    if not session_key:
+        return JSONResponse({"error": "session_key required"}, status_code=400)
+
+    session = _get_session(session_key)
+
+    if format_ == "json":
+        return JSONResponse(
+            {
+                "session_key": session_key,
+                "message_count": len(session.history),
+                "history": session.history,
+                "model_override": session.model_override,
+            }
+        )
+
+    from robothor.engine.export import chat_session_to_markdown
+
+    md = chat_session_to_markdown(session, session_key=session_key)
+    return JSONResponse({"markdown": md, "session_key": session_key})
+
+
 # ─── Plan Mode Helpers ────────────────────────────────────────────────
 
 
@@ -435,6 +462,7 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
         "deep_plan": plan.deep_plan,
+        "plan_hash": plan.plan_hash,
     }
 
 
@@ -501,7 +529,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 on_tool=on_tool,
                 on_status=on_status,
                 model_override=session.model_override,
-                conversation_history=list(session.history),
+                # Limit history for plan exploration to avoid anchoring on
+                # rejected plans. Keep only the last 4 messages for context.
+                conversation_history=list(session.history[-4:]) if session.history else None,
                 readonly_mode=True,
                 deep_plan=deep_plan,
             )
@@ -528,6 +558,8 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 )
 
             if plan_text:
+                import hashlib
+
                 plan = PlanState(
                     plan_id=str(uuid.uuid4()),
                     plan_text=plan_text,
@@ -536,18 +568,20 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     created_at=datetime.now(UTC).isoformat(),
                     exploration_run_id=run.id,
                     deep_plan=deep_plan,
+                    plan_hash=hashlib.sha256(plan_text.encode()).hexdigest()[:16],
                 )
                 session.active_plan = plan
 
-                # Persist plan state to DB
+                # Persist plan state to DB (awaited — plan state is critical)
                 if _config:
-                    asyncio.create_task(
-                        save_plan_state_async(
+                    try:
+                        await save_plan_state_async(
                             session_key,
                             _plan_to_dict(plan),
                             tenant_id=_config.tenant_id,
                         )
-                    )
+                    except Exception as e:
+                        logger.warning("Failed to persist plan state: %s", e)
 
                 # Send plan event
                 await queue.put(
@@ -633,6 +667,14 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
         session.active_plan.status = "expired"
         session.active_plan = None
         return JSONResponse({"error": "Plan expired"}, status_code=410)
+
+    # Verify plan integrity — ensure plan wasn't modified between proposal and approval
+    if session.active_plan.plan_hash:
+        import hashlib
+
+        current_hash = hashlib.sha256(session.active_plan.plan_text.encode()).hexdigest()[:16]
+        if current_hash != session.active_plan.plan_hash:
+            return JSONResponse({"error": "Plan integrity check failed"}, status_code=409)
 
     plan = session.active_plan
     plan.status = "approved"

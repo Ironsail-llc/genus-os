@@ -1,7 +1,197 @@
 {
-  "lastSyncAt": "2026-03-30T22:30:01.469176",
+  "lastSyncAt": "2026-03-31T22:30:01.489998",
   "lastSyncStatus": "success",
   "syncHistory": [
+    {
+      "timestamp": "2026-03-31T22:30:01.489998",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T22:00:01.753391",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T21:30:01.848236",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T21:00:02.094094",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T20:30:01.967824",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T20:00:01.575576",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T19:30:02.010153",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T19:00:01.400142",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T18:30:01.385079",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T18:00:01.919025",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T17:30:01.991414",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T17:00:01.949036",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T16:30:01.986158",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T16:00:01.604620",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T15:30:01.568822",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T15:00:01.752891",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T14:30:01.874697",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T14:00:01.169116",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
+    {
+      "timestamp": "2026-03-31T13:30:01.246475",
+      "ticketsFetched": 0,
+      "added": 0,
+      "updated": 0,
+      "closed": 0,
+      "changes": [],
+      "errors": [],
+      "status": "success"
+    },
     {
       "timestamp": "2026-03-30T22:30:01.469176",
       "ticketsFetched": 0,
@@ -304,196 +494,6 @@
     },
     {
       "timestamp": "2026-03-30T07:30:01.166866",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-30T07:00:01.606340",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-30T06:30:01.235380",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-30T06:00:01.262273",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T22:30:01.619818",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T22:00:01.472071",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T21:30:01.261331",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T21:00:01.590415",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T20:30:01.271049",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T20:00:01.375829",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T19:30:01.677464",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T19:00:01.522300",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T18:30:01.551975",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T18:00:02.076713",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T17:30:01.598233",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T17:00:01.240264",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T16:30:01.925634",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T16:00:01.522826",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T15:30:01.289632",
-      "ticketsFetched": 0,
-      "added": 0,
-      "updated": 0,
-      "closed": 0,
-      "changes": [],
-      "errors": [],
-      "status": "success"
-    },
-    {
-      "timestamp": "2026-03-27T15:00:01.584537",
       "ticketsFetched": 0,
       "added": 0,
       "updated": 0,

@@ -1,67 +1,6 @@
 {
-  "lastCheckedAt": "2026-03-30T23:40:02.915718",
+  "lastCheckedAt": "2026-04-01T00:15:02.589121",
   "meetings": [
-    {
-      "id": "4uklkvek28885lto956el08r7n_20260331T130000Z",
-      "title": "Weekly Catch-Up: Eugene & Philip",
-      "start": "2026-03-31T09:00:00-04:00",
-      "startEpoch": 1774962000,
-      "startLocal": "9:00 AM",
-      "end": "2026-03-31T10:00:00-04:00",
-      "endLocal": "10:00 AM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "eugene@ironsail.ai",
-        "philip@ironsail.ai",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/qwg-ujbr-rpw",
-      "fetchedAt": "2026-03-29T10:35:03.224360",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915639"
-    },
-    {
-      "id": "7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z",
-      "title": "Weekly Product Update",
-      "start": "2026-03-31T11:00:00-04:00",
-      "startEpoch": 1774969200,
-      "startLocal": "11:00 AM",
-      "end": "2026-03-31T11:30:00-04:00",
-      "endLocal": "11:30 AM",
-      "location": null,
-      "description": null,
-      "attendees": [
-        "rochelle@ironsail.ai",
-        "philip@ironsail.ai",
-        "christian@ironsail.ai",
-        "robothor@ironsail.ai"
-      ],
-      "conferenceUrl": "https://meet.google.com/iog-sgsh-fmm",
-      "fetchedAt": "2026-03-29T10:35:03.225111",
-      "categorizedAt": null,
-      "importance": null,
-      "category": null,
-      "notifyAt": null,
-      "notifiedAt": null,
-      "pendingReviewAt": null,
-      "reviewedAt": null,
-      "changeDetectedAt": null,
-      "changeType": null,
-      "previousStart": null,
-      "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915655"
-    },
     {
       "id": "c1rbg7q2d24su914rt70ev87fc_20260401T143000Z",
       "title": "Debrief & Planning Meeting: AI Session & Future Curriculum",
@@ -93,7 +32,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915665"
+      "updatedAt": "2026-04-01T00:15:02.588985"
     },
     {
       "id": "jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z",
@@ -126,7 +65,37 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915673"
+      "updatedAt": "2026-04-01T00:15:02.589016"
+    },
+    {
+      "id": "b3etv6gdd9gso323j1hvnt0a7s",
+      "title": "30 min with Philip (Matt Budeir)",
+      "start": "2026-04-01T12:00:00-04:00",
+      "startEpoch": 1775059200,
+      "startLocal": "12:00 PM",
+      "end": "2026-04-01T12:30:00-04:00",
+      "endLocal": "12:30 PM",
+      "location": null,
+      "description": "<b>Booked by</b>\nMatt Budeir\nmattb@supermicro.com",
+      "attendees": [
+        "robothor@ironsail.ai",
+        "mattb@supermicro.com",
+        "philip@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/rvm-wzfs-bom",
+      "fetchedAt": "2026-03-31T21:35:02.654632",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-04-01T00:15:02.589029"
     },
     {
       "id": "a304ju1ctclso519dcoj8vci86_20260402T130000Z",
@@ -157,7 +126,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915681"
+      "updatedAt": "2026-04-01T00:15:02.589042"
     },
     {
       "id": "1sblee0b6hg4nq04tp9995egck",
@@ -185,7 +154,43 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915689"
+      "updatedAt": "2026-04-01T00:15:02.589052"
+    },
+    {
+      "id": "5u1vso2l6r394r20on7jimfhde",
+      "title": "R&D Backlog Refinement",
+      "start": "2026-04-02T10:00:00-04:00",
+      "startEpoch": 1775138400,
+      "startLocal": "10:00 AM",
+      "end": "2026-04-02T11:00:00-04:00",
+      "endLocal": "11:00 AM",
+      "location": null,
+      "description": null,
+      "attendees": [
+        "lorenz@ironsail.ai",
+        "shahbaz@ironsail.ai",
+        "christian@ironsail.ai",
+        "rochelle@ironsail.ai",
+        "danylo@ironsail.ai",
+        "philip@ironsail.ai",
+        "rizzi@ironsail.ai",
+        "adan@ironsail.ai",
+        "robothor@ironsail.ai"
+      ],
+      "conferenceUrl": "https://meet.google.com/ims-rqtv-aju",
+      "fetchedAt": "2026-03-31T14:05:02.661503",
+      "categorizedAt": null,
+      "importance": null,
+      "category": null,
+      "notifyAt": null,
+      "notifiedAt": null,
+      "pendingReviewAt": null,
+      "reviewedAt": null,
+      "changeDetectedAt": null,
+      "changeType": null,
+      "previousStart": null,
+      "previousEnd": null,
+      "updatedAt": "2026-04-01T00:15:02.589070"
     },
     {
       "id": "2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z",
@@ -233,7 +238,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915699"
+      "updatedAt": "2026-04-01T00:15:02.589087"
     },
     {
       "id": "0bg4bv37t3jbibihlnpnfgrlsh",
@@ -267,7 +272,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915702"
+      "updatedAt": "2026-04-01T00:15:02.589094"
     },
     {
       "id": "3jpdlulvn4me49d0qgo1oarcth",
@@ -311,7 +316,7 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915707"
+      "updatedAt": "2026-04-01T00:15:02.589103"
     },
     {
       "id": "3r0ntr5trohgknmbk1gdj288tt_20260403T153000Z",
@@ -343,50 +348,10 @@
       "changeType": null,
       "previousStart": null,
       "previousEnd": null,
-      "updatedAt": "2026-03-30T23:40:02.915716"
+      "updatedAt": "2026-04-01T00:15:02.589116"
     }
   ],
   "changes": [
-    {
-      "timestamp": "2026-03-17T13:00:03.020481",
-      "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
-      "type": "new",
-      "title": "YPO AI/ML - Share you AI",
-      "start": "2026-03-19T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T16:35:03.092204",
-      "eventId": "1nut03hujcqh0ift1utnkfigml",
-      "type": "new",
-      "title": "Phillip, Caroline, Jem - Pharma AI billing workflow session 1",
-      "start": "2026-03-19T11:00:00-04:00",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T17:35:02.760352",
-      "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
-      "type": "modified",
-      "title": "YPO AI/ML - Share you AI",
-      "details": "attendees/duration/title changed",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T17:40:02.539666",
-      "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
-      "type": "modified",
-      "title": "YPO AI/ML - Share you AI",
-      "details": "attendees/duration/title changed",
-      "reviewedAt": null
-    },
-    {
-      "timestamp": "2026-03-17T17:45:02.894389",
-      "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
-      "type": "modified",
-      "title": "YPO AI/ML - Share you AI",
-      "details": "attendees/duration/title changed",
-      "reviewedAt": null
-    },
     {
       "timestamp": "2026-03-17T18:00:02.939808",
       "eventId": "0m7mkt37gm02hfa6r1cbntusk8",
@@ -1147,6 +1112,46 @@
       "type": "new",
       "title": "Thrive Rx Weekly Leadership Meeting",
       "start": "2026-04-03T11:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-31T13:30:02.428010",
+      "eventId": "7o3lhd0kngmj0v6a4rk18uqvsu",
+      "type": "new",
+      "title": "Rochelle Blaza Out of Office",
+      "start": "2026-04-06",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-31T13:30:02.486979",
+      "eventId": "j5nt996ebv0o9kv98ao8483lac_20260406T160000Z",
+      "type": "new",
+      "title": " V/I Same Page Meetings",
+      "start": "2026-04-06T12:30:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-31T14:05:02.606480",
+      "eventId": "5u1vso2l6r394r20on7jimfhde",
+      "type": "new",
+      "title": "R&D Backlog Refinement",
+      "start": "2026-04-02T10:00:00-04:00",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-31T14:35:02.719337",
+      "eventId": "5u1vso2l6r394r20on7jimfhde",
+      "type": "modified",
+      "title": "R&D Backlog Refinement",
+      "details": "attendees/duration/title changed",
+      "reviewedAt": null
+    },
+    {
+      "timestamp": "2026-03-31T21:35:02.575987",
+      "eventId": "b3etv6gdd9gso323j1hvnt0a7s",
+      "type": "new",
+      "title": "30 min with Philip (Matt Budeir)",
+      "start": "2026-04-01T12:00:00-04:00",
       "reviewedAt": null
     }
   ],

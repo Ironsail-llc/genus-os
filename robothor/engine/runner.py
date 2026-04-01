@@ -753,6 +753,14 @@ class AgentRunner:
         checkpoint = self._create_checkpoint(agent_config, route, session.run_id)
         guardrail_engine = self._create_guardrails(agent_config)
 
+        # Inject guardrail awareness into system prompt so LLM self-regulates
+        if guardrail_engine and guardrail_engine.enabled_policies:
+            from robothor.engine.guardrails import guardrail_summary
+
+            gr_text = guardrail_summary(guardrail_engine.enabled_policies)
+            if gr_text and session.messages and session.messages[0].get("role") == "system":
+                session.messages[0]["content"] += f"\n\n---\n\n{gr_text}"
+
         # ── v2: Lifecycle hooks ──
         from robothor.engine.hook_registry import (
             HookAction,

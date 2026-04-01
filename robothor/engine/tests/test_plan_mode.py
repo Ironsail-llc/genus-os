@@ -820,7 +820,7 @@ class TestExecutionModePreamble:
         base_prompt = "You are Robothor."
         system_msg = EXECUTION_MODE_PREAMBLE + base_prompt
         assert "EXECUTION MODE" in system_msg
-        assert "Do NOT discuss, re-plan" in system_msg
+        assert "Do NOT re-plan" in system_msg
 
     def test_execution_mode_off_no_preamble(self):
         """Without execution mode, the preamble is absent."""

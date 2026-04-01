@@ -792,6 +792,41 @@
       "error_count": 6,
       "error": "6 consecutive zero-extraction runs",
       "timestamp": "2026-03-30T23:40:01.899633"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 32,
+      "error": "32 consecutive zero-extraction runs",
+      "timestamp": "2026-03-31T15:09:53.702136"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 33,
+      "error": "33 consecutive zero-extraction runs",
+      "timestamp": "2026-03-31T15:18:01.166593"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 34,
+      "error": "34 consecutive zero-extraction runs",
+      "timestamp": "2026-03-31T18:19:57.765212"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 35,
+      "error": "35 consecutive zero-extraction runs",
+      "timestamp": "2026-03-31T19:17:19.838139"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 36,
+      "error": "36 consecutive zero-extraction runs",
+      "timestamp": "2026-03-31T19:25:59.708996"
     }
   ],
   "escalations": [
@@ -888,17 +923,21 @@
       "id": "health-20260329-0500",
       "source": "health_check",
       "reason": "System health check detected CRITICAL failures",
-      "summary": "3 CRITICAL failures detected",
+      "summary": "7 CRITICAL failures detected",
       "detail": [
         "systemd:robothor-crm: inactive",
+        "systemd:robothor-dashboard: inactive",
+        "systemd:robothor-privacy: inactive",
         "systemd:robothor-status-dashboard: inactive",
+        "systemd:robothor-status: inactive",
+        "http:status: HTTPConnectionPool(host='localhost', port=3000): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3000): Failed to establish a new connection: [Errno 111] Connection refused\"))",
         "http:status-dashboard: HTTPConnectionPool(host='localhost', port=3001): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3001): Failed to establish a new connection: [Errno 111] Connection refused\"))"
       ],
       "urgency": "high",
       "createdAt": "2026-03-29T05:00:08.232704",
       "surfacedAt": null,
       "resolvedAt": null,
-      "updatedAt": "2026-03-30T23:00:03.427232"
+      "updatedAt": "2026-04-01T00:00:03.151307"
     }
   ]
 }

@@ -326,3 +326,9 @@ class AgentSession:
                 return "\n".join(text_parts) if text_parts else None
             return str(content)
         return None
+
+    def to_markdown(self) -> str:
+        """Export this session as structured markdown."""
+        from robothor.engine.export import agent_session_to_markdown
+
+        return agent_session_to_markdown(self)
