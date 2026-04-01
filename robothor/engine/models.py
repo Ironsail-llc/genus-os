@@ -362,6 +362,7 @@ class PlanState:
     created_at: str = ""  # ISO timestamp
     exploration_run_id: str = ""  # Run ID of the read-only phase
     rejection_feedback: str = ""  # Why Philip rejected (fed back to agent on re-plan)
+    plan_hash: str = ""  # SHA-256 of plan_text for integrity verification on approval
 
     # Deep plan mode — when True, approval routes to execute_deep() instead of execute()
     deep_plan: bool = False

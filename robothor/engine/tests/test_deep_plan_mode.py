@@ -16,11 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from robothor.engine.config import SystemPromptParts
 from robothor.engine.models import (
     AgentRun,
     PlanState,
     RunStatus,
 )
+
+_MOCK_PROMPT = SystemPromptParts(static_body="SYSTEM", dynamic_tail="Current time: now")
 
 # ─── Model Tests ──────────────────────────────────────────────────────
 
@@ -86,7 +89,7 @@ class TestDeepPlanPreamble:
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
     @patch("robothor.engine.runner.create_step")
-    @patch("robothor.engine.runner.build_system_prompt", return_value="SYSTEM")
+    @patch("robothor.engine.runner.build_system_prompt", return_value=_MOCK_PROMPT)
     async def test_execute_uses_deep_plan_preamble(
         self, mock_build, mock_step, mock_update, mock_create, runner
     ):
@@ -132,7 +135,7 @@ class TestDeepPlanPreamble:
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
     @patch("robothor.engine.runner.create_step")
-    @patch("robothor.engine.runner.build_system_prompt", return_value="SYSTEM")
+    @patch("robothor.engine.runner.build_system_prompt", return_value=_MOCK_PROMPT)
     async def test_execute_uses_normal_preamble_without_deep_plan(
         self, mock_build, mock_step, mock_update, mock_create, runner
     ):

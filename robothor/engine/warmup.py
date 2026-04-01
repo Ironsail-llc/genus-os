@@ -34,11 +34,17 @@ MAX_FILE_CHARS = 600
 # preamble construction. Each hook has a 100ms timeout.
 
 _CONTEXT_HOOKS: list[Callable[[], str | None]] = []
+_AGENT_CONTEXT_HOOKS: list[Callable[[AgentConfig], str | None]] = []
 
 
 def register_context_hook(fn: Callable[[], str | None]) -> None:
     """Register a dynamic context hook for warmup preambles."""
     _CONTEXT_HOOKS.append(fn)
+
+
+def register_agent_context_hook(fn: Callable[[AgentConfig], str | None]) -> None:
+    """Register an agent-aware context hook (receives AgentConfig)."""
+    _AGENT_CONTEXT_HOOKS.append(fn)
 
 
 def _run_context_hooks() -> str:
@@ -114,6 +120,14 @@ def build_warmth_preamble(
             sections.append(situational)
     except Exception as e:
         logger.debug("Warmup context hooks failed for %s: %s", config.id, e)
+
+    # 6. Agent-aware context hooks (git status, etc.)
+    try:
+        agent_ctx = _run_agent_context_hooks(config)
+        if agent_ctx:
+            sections.append(agent_ctx)
+    except Exception as e:
+        logger.debug("Warmup agent hooks failed for %s: %s", config.id, e)
 
     if not sections:
         return ""
@@ -485,7 +499,64 @@ def _weather_context() -> str | None:
     return None
 
 
+def _run_agent_context_hooks(config: AgentConfig) -> str:
+    """Run agent-aware context hooks, collecting results."""
+    results: list[str] = []
+    for hook in _AGENT_CONTEXT_HOOKS:
+        try:
+            start = time.monotonic()
+            result = hook(config)
+            elapsed = time.monotonic() - start
+            if elapsed > 0.1:
+                logger.debug("Agent hook %s took %.0fms", hook.__name__, elapsed * 1000)
+            if result:
+                results.append(result)
+        except Exception as e:
+            logger.debug("Agent context hook %s failed: %s", hook.__name__, e)
+    return "\n".join(results) if results else ""
+
+
+def _git_status_context(config: AgentConfig) -> str | None:
+    """Git repo status for agents with git tools."""
+    from robothor.engine.tools.constants import GIT_TOOLS
+
+    agent_tools = set(config.tools_allowed) if config.tools_allowed else set()
+    if not agent_tools & GIT_TOOLS:
+        return None
+
+    import subprocess
+
+    workspace = Path.home() / "robothor"
+    parts: list[str] = []
+    try:
+        status = subprocess.run(
+            ["git", "status", "--short", "--branch"],
+            capture_output=True,
+            text=True,
+            timeout=0.08,
+            cwd=str(workspace),
+        )
+        if status.stdout.strip():
+            parts.append(f"Branch & status:\n{status.stdout.strip()}")
+    except Exception:
+        pass
+    try:
+        log = subprocess.run(
+            ["git", "log", "--oneline", "-5"],
+            capture_output=True,
+            text=True,
+            timeout=0.08,
+            cwd=str(workspace),
+        )
+        if log.stdout.strip():
+            parts.append(f"Recent commits:\n{log.stdout.strip()}")
+    except Exception:
+        pass
+    return "Git:\n" + "\n".join(parts) if parts else None
+
+
 # Register built-in hooks on import
 register_context_hook(_date_context)
 register_context_hook(_travel_status)
 register_context_hook(_weather_context)
+register_agent_context_hook(_git_status_context)

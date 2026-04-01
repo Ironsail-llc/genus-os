@@ -239,7 +239,8 @@ class TestContentTagging:
         from robothor.engine.models import AgentConfig
 
         config = AgentConfig(id="test", name="test")
-        prompt = build_system_prompt(config, workspace=__import__("pathlib").Path("/nonexistent"))
+        parts = build_system_prompt(config, workspace=__import__("pathlib").Path("/nonexistent"))
+        prompt = parts.full_text()
         assert SECURITY_PREAMBLE in prompt
 
     def test_all_external_tools_covered(self):

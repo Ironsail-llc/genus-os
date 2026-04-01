@@ -42,6 +42,37 @@ DEFAULT_RATE_LIMIT = 30  # per minute
 # Default guardrails applied to all agents unless opted out
 DEFAULT_GUARDRAILS = ["no_destructive_writes", "no_sensitive_data", "rate_limit"]
 
+# Human-readable descriptions for LLM prompt injection
+POLICY_DESCRIPTIONS: dict[str, str] = {
+    "no_destructive_writes": "Destructive shell commands (rm -rf, DROP TABLE, DELETE FROM, TRUNCATE) are blocked.",
+    "no_sensitive_data": "Tool outputs are scanned for exposed API keys and secrets.",
+    "rate_limit": f"Tool calls are rate-limited to {DEFAULT_RATE_LIMIT}/minute.",
+    "no_external_http": "Web fetch and web search tools are blocked.",
+    "no_main_branch_push": "Git push/commit to main/master branches is blocked.",
+    "exec_allowlist": "Shell commands are restricted to an explicit allowlist.",
+    "write_path_restrict": "File writes are restricted to specific paths.",
+    "desktop_safety": "Desktop automation has additional safety checks (no terminal emulators, no dangerous key combos).",
+}
+
+
+def guardrail_summary(policies: list[str]) -> str:
+    """Return a concise system prompt section describing active guardrails.
+
+    Helps the LLM self-regulate and avoid hitting guardrails blindly.
+    Returns empty string if no policies are active.
+    """
+    if not policies:
+        return ""
+    lines = ["## Active Safety Guardrails"]
+    for policy in policies:
+        desc = POLICY_DESCRIPTIONS.get(policy, f"{policy} (custom policy)")
+        lines.append(f"- {desc}")
+    lines.append(
+        "\nIf a tool call is blocked by a guardrail, you will receive an error. "
+        "Do not attempt to work around guardrail restrictions."
+    )
+    return "\n".join(lines)
+
 
 def compute_effective_guardrails(
     configured: list[str],
