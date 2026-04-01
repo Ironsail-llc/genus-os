@@ -58,6 +58,11 @@ from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
 
+# Max seconds to wait for the next streaming chunk before aborting and
+# falling back to the next model.  Prevents stalled streams from hanging
+# the entire run (the stream *creation* timeout is separate — 120 s).
+STREAM_CHUNK_TIMEOUT = 60
+
 
 class _StallWatchdog:
     """Kills a run if no activity occurs for stall_timeout seconds.
@@ -2184,8 +2189,32 @@ class AgentRunner:
                 ttft_logged = False
                 seen_tool_ids: set[str] = set()
 
-                async for chunk in stream:
+                # Consume stream with per-chunk timeout so stalled streams
+                # fall back to the next model instead of hanging the run.
+                chunk_iter = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        logger.warning(
+                            "Stream stalled for %ds, aborting model=%s",
+                            STREAM_CHUNK_TIMEOUT,
+                            model,
+                        )
+                        raise TimeoutError(
+                            f"Stream stalled after {STREAM_CHUNK_TIMEOUT}s of no chunks"
+                        ) from None
+
                     chunks.append(chunk)
+
+                    # Touch watchdog on each chunk so active streams stay alive
+                    if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                        self._active_watchdog.touch()
+
                     if not chunk.choices:
                         # Check for usage in non-choice chunks (some providers)
                         usage = getattr(chunk, "usage", None)
@@ -2240,14 +2269,14 @@ class AgentRunner:
 
                 await _emit({"type": "message_stop"})
                 return litellm.stream_chunk_builder(chunks)
-            except TimeoutError:
+            except TimeoutError as te:
                 self._handle_model_error(
-                    TimeoutError(f"LLM stream to {model} hung for 120s"),
+                    te,
                     model,
                     broken_models,
                     streaming=True,
                 )
-                last_error = TimeoutError(f"Model {model} timed out after 120s")
+                last_error = te
             except Exception as e:
                 self._handle_model_error(e, model, broken_models, streaming=True)
                 last_error = e
