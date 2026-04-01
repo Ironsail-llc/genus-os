@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""supervisor_relay.py — Mechanical relay for meetings and system health.
+"""supervisor_relay.py — Mechanical relay for meetings, emails, and system health.
 
 Writes stale-worker and CRM-health alerts to worker-handoff.json for the
-supervisor to investigate and surface. Only sends directly to Telegram for
-time-critical meeting alerts (within 20 min).
+supervisor to investigate and surface. Sends directly to Telegram for
+time-critical meeting alerts, new Jira tickets, and important emails.
 """
 
 import json
@@ -29,9 +29,10 @@ HANDOFF_PATH = os.path.join(MEMORY_DIR, "worker-handoff.json")
 CALENDAR_PATH = os.path.join(MEMORY_DIR, "calendar-log.json")
 JIRA_LOG_PATH = os.path.join(MEMORY_DIR, "jira-log.json")
 RELAY_STATE_PATH = os.path.join(MEMORY_DIR, "relay-state.json")
+EMAIL_LOG_PATH = os.path.join(MEMORY_DIR, "email-log.json")
 TRIAGE_STATUS_PATH = os.path.join(MEMORY_DIR, "triage-status.md")
 
-# Telegram config (only used for meeting alerts)
+# Telegram config
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PHILIP_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7636850023")
 
@@ -40,6 +41,9 @@ STALE_WORKER_MINUTES = 35
 MEETING_ALERT_MINUTES = 20
 STALE_COOLDOWN_MINUTES = 60
 CRM_COOLDOWN_MINUTES = 30
+EMAIL_ALERT_MAX_PER_CYCLE = 3
+EMAIL_ALERT_RECENCY_MINUTES = 60
+KEY_CONTACT_DOMAINS = {"ironsailpharma.com", "skyfin.net"}
 
 
 def load_json(path):
@@ -283,6 +287,78 @@ def check_new_jira():
     return sent
 
 
+def check_email_alerts():
+    """Send Telegram alerts for important newly-classified emails."""
+    email_log = load_json(EMAIL_LOG_PATH)
+    entries = email_log.get("entries", {})
+    if not entries:
+        return 0
+
+    now = datetime.now(UTC)
+    candidates = []
+
+    for eid, entry in entries.items():
+        # Skip already-alerted
+        if entry.get("telegramAlertedAt"):
+            continue
+        # Skip uncategorized (classifier hasn't run yet)
+        cat_at = entry.get("categorizedAt")
+        if not cat_at:
+            continue
+        # Skip if classified too long ago (avoid alerting on old backlog)
+        try:
+            classified = datetime.fromisoformat(cat_at)
+            if (now - classified).total_seconds() > EMAIL_ALERT_RECENCY_MINUTES * 60:
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        # Check alert criteria
+        importance = entry.get("importance") or 0
+        urgency = entry.get("urgency", "")
+        sender = entry.get("from", "")
+        sender_domain = sender.split("@")[-1].strip(">").lower() if "@" in sender else ""
+
+        should_alert = (
+            importance >= 4
+            or urgency in ("critical", "high")
+            or sender_domain in KEY_CONTACT_DOMAINS
+        )
+        if not should_alert:
+            continue
+
+        candidates.append((importance, eid, entry))
+
+    if not candidates:
+        return 0
+
+    # Sort by importance descending — most critical first if we hit the cap
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    now_iso = now.isoformat()
+    sent = 0
+    for importance, eid, entry in candidates[:EMAIL_ALERT_MAX_PER_CYCLE]:
+        sender = entry.get("from", "Unknown")
+        subject = entry.get("subject", "(no subject)")
+        snippet = entry.get("snippet", "")
+        if len(snippet) > 150:
+            snippet = snippet[:147] + "..."
+
+        msg = f"\U0001f4e7 {sender}: {subject}"
+        if snippet:
+            msg += f"\n{snippet}"
+
+        send_telegram(msg)
+        entry["telegramAlertedAt"] = now_iso
+        sent += 1
+
+    if sent:
+        save_json(EMAIL_LOG_PATH, email_log)
+        print(f"relay: sent {sent} email alert(s) to Telegram")
+
+    return sent
+
+
 def main():
     handoff = load_json(HANDOFF_PATH)
     calendar_data = load_json(CALENDAR_PATH)
@@ -297,6 +373,9 @@ def main():
 
     # 1b. New Jira tickets — go DIRECTLY to Telegram
     jira_alerts = check_new_jira()
+
+    # 1c. Important emails — go DIRECTLY to Telegram
+    email_alerts = check_email_alerts()
 
     # 2. Stale worker — write to handoff (only during waking hours)
     if is_waking_hours():
@@ -315,7 +394,7 @@ def main():
     if wrote_handoff:
         save_json(HANDOFF_PATH, handoff)
         print("relay: wrote escalations to handoff")
-    elif not meeting_alerts and not jira_alerts:
+    elif not meeting_alerts and not jira_alerts and not email_alerts:
         print("relay: nothing to surface")
 
 
