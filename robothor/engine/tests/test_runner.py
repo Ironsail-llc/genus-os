@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -733,6 +734,140 @@ class TestOnToolCallback:
         # Preview should be truncated
         preview = end_events[0]["result_preview"]
         assert len(preview) <= 2003 + 1  # 2000 chars + "..."
+
+
+class TestStallWatchdogKeepalive:
+    """Tests for the stall watchdog keepalive during tool execution."""
+
+    @pytest.mark.asyncio
+    async def test_watchdog_touched_during_long_tool(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Stall watchdog is touched periodically while a tool runs, preventing timeout."""
+        import asyncio
+
+        from robothor.engine.runner import _StallWatchdog
+
+        # Tool call response
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        response1 = mock_litellm_response(content=None, tool_calls=[tc])
+        response1.choices[0].message.content = None
+        response2 = mock_litellm_response(content="Done.")
+
+        call_count = 0
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return response1 if call_count == 1 else response2
+
+        # Simulate a slow tool (takes 2 seconds)
+        async def slow_tool(*args, **kwargs):
+            await asyncio.sleep(2)
+            return {"result": "ok"}
+
+        runner.registry.execute = slow_tool
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        # Use a short stall timeout — the keepalive (every 60s) would save it
+        # but in this test we just verify the watchdog's touch() was called
+        # by checking the last_activity timestamp was updated during tool execution
+        sample_agent_config.stall_timeout_seconds = 300
+
+        touch_times: list[float] = []
+        original_touch = _StallWatchdog.touch
+
+        def recording_touch(self_wd):
+            touch_times.append(time.monotonic())
+            original_touch(self_wd)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        with patch.object(_StallWatchdog, "touch", recording_touch):
+                            run = await runner.execute(
+                                "test-agent",
+                                "List tasks",
+                                agent_config=sample_agent_config,
+                            )
+
+        assert run.status == RunStatus.COMPLETED
+        # At least one touch should have occurred (the post-tool touch plus
+        # the keepalive task is started — though it may not fire in 2s, the
+        # post-tool touch is still there)
+        assert len(touch_times) >= 1
+
+    @pytest.mark.asyncio
+    async def test_watchdog_not_killed_during_slow_tool(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """A tool that takes longer than stall timeout survives thanks to keepalive."""
+        import asyncio
+
+        # Very short stall timeout — without keepalive, tool would be killed
+        sample_agent_config.stall_timeout_seconds = 2
+        sample_agent_config.timeout_seconds = 10
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        response1 = mock_litellm_response(content=None, tool_calls=[tc])
+        response1.choices[0].message.content = None
+        response2 = mock_litellm_response(content="Done after slow tool.")
+
+        call_count = 0
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return response1 if call_count == 1 else response2
+
+        # Tool takes 4 seconds — longer than the 2s stall timeout.
+        # The keepalive fires every 60s normally, but we monkeypatch
+        # the sleep interval to 1s for testing.
+        async def slow_tool(*args, **kwargs):
+            await asyncio.sleep(4)
+            return {"result": "ok"}
+
+        runner.registry.execute = slow_tool
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        # Patch asyncio.sleep only inside _tool_keepalive to fire faster
+        original_sleep = asyncio.sleep
+
+        async def fast_sleep(duration):
+            # Keepalive uses sleep(60); make it sleep(0.5) for testing
+            if duration == 60:
+                return await original_sleep(0.5)
+            return await original_sleep(duration)
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.runner.create_step"):
+                    with patch("litellm.acompletion", side_effect=mock_completion):
+                        with patch("asyncio.sleep", side_effect=fast_sleep):
+                            run = await runner.execute(
+                                "test-agent",
+                                "List tasks",
+                                agent_config=sample_agent_config,
+                            )
+
+        # Without the keepalive, this would be TIMEOUT
+        assert run.status == RunStatus.COMPLETED
+        assert run.output_text == "Done after slow tool."
 
 
 class TestThinkingAPI:

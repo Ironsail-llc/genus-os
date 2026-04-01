@@ -1098,8 +1098,36 @@ class AgentRunner:
 
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
-                if trace:
-                    with trace.span("tool_call", tool=tool_name) as _span:
+
+                # Keep stall watchdog alive during long-running tool calls
+                # (e.g., spawn_agent can take up to 900s).  A background task
+                # touches the watchdog every 60s so the parent run is not
+                # killed while a tool is legitimately working.
+                _keepalive_task: asyncio.Task[None] | None = None
+                _wd = self._active_watchdog if hasattr(self, "_active_watchdog") else None
+                if _wd:
+
+                    async def _tool_keepalive(wd: _StallWatchdog = _wd) -> None:
+                        try:
+                            while True:
+                                await asyncio.sleep(60)
+                                wd.touch()
+                        except asyncio.CancelledError:
+                            pass
+
+                    _keepalive_task = asyncio.create_task(_tool_keepalive())
+
+                try:
+                    if trace:
+                        with trace.span("tool_call", tool=tool_name) as _span:
+                            result = await self.registry.execute(
+                                tool_name,
+                                tool_args,
+                                agent_id=agent_config.id,
+                                tenant_id=session.run.tenant_id,
+                                workspace=str(self.config.workspace),
+                            )
+                    else:
                         result = await self.registry.execute(
                             tool_name,
                             tool_args,
@@ -1107,14 +1135,12 @@ class AgentRunner:
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
                         )
-                else:
-                    result = await self.registry.execute(
-                        tool_name,
-                        tool_args,
-                        agent_id=agent_config.id,
-                        tenant_id=session.run.tenant_id,
-                        workspace=str(self.config.workspace),
-                    )
+                finally:
+                    if _keepalive_task and not _keepalive_task.done():
+                        _keepalive_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await _keepalive_task
+
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
                 error_msg: str | None = result.get("error") if isinstance(result, dict) else None
