@@ -128,6 +128,8 @@ class TraceContext:
                     "status": run_data.get("status", ""),
                     "input_tokens": str(run_data.get("input_tokens", 0)),
                     "output_tokens": str(run_data.get("output_tokens", 0)),
+                    "cache_creation_tokens": str(run_data.get("cache_creation_tokens", 0)),
+                    "cache_read_tokens": str(run_data.get("cache_read_tokens", 0)),
                 },
                 maxlen=5000,
             )

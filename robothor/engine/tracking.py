@@ -95,6 +95,8 @@ def update_run(
     models_attempted: list[str] | None = None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
     total_cost_usd: float | None = None,
     output_text: str | None = None,
     error_message: str | None = None,
@@ -118,6 +120,8 @@ def update_run(
         "models_attempted": models_attempted,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "cache_read_tokens": cache_read_tokens,
         "total_cost_usd": total_cost_usd,
         "output_text": output_text,
         "error_message": error_message,
@@ -259,10 +263,11 @@ def create_step(step: RunStep) -> str:
                 id, run_id, step_number, step_type,
                 tool_name, tool_input, tool_output,
                 model, input_tokens, output_tokens,
+                cache_creation_tokens, cache_read_tokens,
                 started_at, completed_at, duration_ms,
                 error_message
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -278,6 +283,8 @@ def create_step(step: RunStep) -> str:
                 step.model,
                 step.input_tokens,
                 step.output_tokens,
+                step.cache_creation_tokens,
+                step.cache_read_tokens,
                 step.started_at,
                 step.completed_at,
                 step.duration_ms,

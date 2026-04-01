@@ -24,6 +24,8 @@ class ModelLimits:
     default_output_tokens: int  # what we request by default
     input_cost_per_token: float
     output_cost_per_token: float
+    cache_write_cost_per_token: float = 0.0  # prompt caching: write (Anthropic: 1.25x input)
+    cache_read_cost_per_token: float = 0.0  # prompt caching: read (Anthropic: 0.1x input)
     supports_thinking: bool = False
     ttft_hint_ms: int = 3000  # estimated p50 time-to-first-token (ms) for interactive routing
 
@@ -38,6 +40,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         default_output_tokens=16_384,
         input_cost_per_token=0.000_003,  # $3/M
         output_cost_per_token=0.000_015,  # $15/M
+        cache_write_cost_per_token=0.000_003_75,  # $3.75/M (1.25x input)
+        cache_read_cost_per_token=0.000_000_3,  # $0.30/M (0.1x input)
         supports_thinking=True,
         ttft_hint_ms=1500,  # Anthropic via OpenRouter — fast
     ),
