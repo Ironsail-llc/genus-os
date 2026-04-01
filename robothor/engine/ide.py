@@ -49,7 +49,7 @@ class IdeSession:
         self.history: list[dict[str, Any]] = []
         self.active_task: asyncio.Task[Any] | None = None
 
-    async def send_result(self, request_id: str | int, result: Any) -> None:
+    async def send_result(self, request_id: str | int | None, result: Any) -> None:
         """Send JSON-RPC 2.0 success response."""
         await self.ws.send_json(
             {

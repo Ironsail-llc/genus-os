@@ -113,11 +113,12 @@ class McpClientSession:
             raise RuntimeError("Invalid Content-Length in MCP response")
 
         data = await self._process.stdout.readexactly(content_length)
-        return json.loads(data)
+        result: dict[str, Any] = json.loads(data)
+        return result
 
     async def initialize(self) -> dict[str, Any]:
         """Send the initialize handshake."""
-        result = await self._send_request(
+        result: dict[str, Any] = await self._send_request(
             "initialize",
             {
                 "protocolVersion": "2024-11-05",
