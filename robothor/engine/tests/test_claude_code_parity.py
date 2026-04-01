@@ -227,9 +227,9 @@ class TestFleetDefaults:
 
 
 class TestPromptCachingOptimization:
-    """_build_llm_kwargs adds cache_control for Anthropic models."""
+    """_build_llm_kwargs adds cache_control for direct Anthropic API models only."""
 
-    def test_anthropic_model_gets_cache_control(self):
+    def test_direct_anthropic_model_gets_cache_control(self):
         from robothor.engine.runner import AgentRunner
 
         messages = [
@@ -237,7 +237,7 @@ class TestPromptCachingOptimization:
             {"role": "user", "content": "Hello"},
         ]
         kwargs = AgentRunner._build_llm_kwargs(
-            "openrouter/anthropic/claude-sonnet-4.6",
+            "anthropic/claude-sonnet-4-6",
             messages,
             [],
             1000,
@@ -247,6 +247,25 @@ class TestPromptCachingOptimization:
         assert isinstance(sys_msg["content"], list)
         assert sys_msg["content"][0]["type"] == "text"
         assert sys_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_openrouter_anthropic_no_cache_control(self):
+        """OpenRouter models must NOT get Anthropic content-block system messages."""
+        from robothor.engine.runner import AgentRunner
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+        ]
+        kwargs = AgentRunner._build_llm_kwargs(
+            "openrouter/anthropic/claude-sonnet-4-6",
+            messages,
+            [],
+            1000,
+            0.3,
+        )
+        sys_msg = kwargs["messages"][0]
+        # Must stay as string — OpenRouter handles caching via its own mechanism
+        assert isinstance(sys_msg["content"], str)
 
     def test_non_anthropic_model_no_cache_control(self):
         from robothor.engine.runner import AgentRunner
@@ -263,7 +282,6 @@ class TestPromptCachingOptimization:
             0.3,
         )
         sys_msg = kwargs["messages"][0]
-        # Content stays as string for non-Anthropic
         assert isinstance(sys_msg["content"], str)
 
     def test_cache_control_does_not_mutate_original(self):
@@ -274,7 +292,7 @@ class TestPromptCachingOptimization:
             {"role": "user", "content": "Hello"},
         ]
         AgentRunner._build_llm_kwargs(
-            "openrouter/anthropic/claude-sonnet-4.6",
+            "anthropic/claude-sonnet-4-6",
             original_messages,
             [],
             1000,
@@ -282,6 +300,67 @@ class TestPromptCachingOptimization:
         )
         # Original should be unchanged
         assert isinstance(original_messages[0]["content"], str)
+
+
+class TestValidateToolPairs:
+    """_validate_tool_pairs drops orphaned tool_result messages."""
+
+    def test_valid_pairs_unchanged(self):
+        from robothor.engine.runner import AgentRunner
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [
+                    {"id": "t1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "result"},
+        ]
+        result = AgentRunner._validate_tool_pairs(messages)
+        assert result is messages  # same object — no changes needed
+
+    def test_orphaned_tool_dropped(self):
+        from robothor.engine.runner import AgentRunner
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [{"id": "real_id"}]},
+            {"role": "tool", "tool_call_id": "real_id", "content": "valid"},
+            {"role": "tool", "tool_call_id": "nonexistent", "content": "orphan"},
+            {"role": "user", "content": "follow-up"},
+        ]
+        result = AgentRunner._validate_tool_pairs(messages)
+        assert len(result) == 5
+        assert not any(m.get("tool_call_id") == "nonexistent" for m in result)
+
+    def test_no_tool_messages_unchanged(self):
+        from robothor.engine.runner import AgentRunner
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "ok"},
+        ]
+        result = AgentRunner._validate_tool_pairs(messages)
+        assert result is messages
+
+    def test_mixed_valid_and_orphan(self):
+        from robothor.engine.runner import AgentRunner
+
+        messages = [
+            {"role": "assistant", "tool_calls": [{"id": "t1"}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "valid"},
+            {"role": "tool", "tool_call_id": "gone", "content": "orphan"},
+            {"role": "user", "content": "next"},
+        ]
+        result = AgentRunner._validate_tool_pairs(messages)
+        assert len(result) == 3
+        assert result[1]["tool_call_id"] == "t1"
 
 
 # ── Gap 5: Structured Streaming Events ───────────────────────────────

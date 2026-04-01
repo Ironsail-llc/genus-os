@@ -382,3 +382,62 @@ class TestCompact:
         for msg in result.messages:
             assert isinstance(msg, dict)
             assert "role" in msg
+
+
+# ── TestFindSafeSplitIndex ────────────────────────────────────────────
+
+
+class TestFindSafeSplitIndex:
+    """_find_safe_split_index never orphans tool_call/tool_result pairs."""
+
+    def test_split_at_user_message(self):
+        from robothor.engine.compaction import _find_safe_split_index
+
+        msgs = [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "c"},
+            {"role": "assistant", "content": "d"},
+        ]
+        assert _find_safe_split_index(msgs, 2) == 2
+
+    def test_avoids_splitting_inside_tool_group(self):
+        from robothor.engine.compaction import _find_safe_split_index
+
+        msgs = [
+            {"role": "user", "content": "start"},
+            {"role": "assistant", "content": "ok", "tool_calls": [{"id": "t1"}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "result"},
+            {"role": "user", "content": "next"},
+        ]
+        # Target=2 (tool) backs up past assistant+tool_calls to user at 0
+        assert _find_safe_split_index(msgs, 2) == 0
+        # Target=1 is the assistant with tool_calls → backs up to 0
+        assert _find_safe_split_index(msgs, 1) == 0
+        # Target=3 is a user msg after the group → safe
+        assert _find_safe_split_index(msgs, 3) == 3
+
+    def test_boundary_values(self):
+        from robothor.engine.compaction import _find_safe_split_index
+
+        msgs = [{"role": "user", "content": "x"}]
+        assert _find_safe_split_index(msgs, 0) == 0
+        assert _find_safe_split_index(msgs, 1) == 1
+        assert _find_safe_split_index([], 0) == 0
+
+    def test_consecutive_tool_groups(self):
+        from robothor.engine.compaction import _find_safe_split_index
+
+        msgs = [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b", "tool_calls": [{"id": "t1"}, {"id": "t2"}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "r1"},
+            {"role": "tool", "tool_call_id": "t2", "content": "r2"},
+            {"role": "assistant", "content": "c", "tool_calls": [{"id": "t3"}]},
+            {"role": "tool", "tool_call_id": "t3", "content": "r3"},
+            {"role": "user", "content": "d"},
+        ]
+        # Target=3 is inside first group (tool) → back up past assistant → idx 1 → then 0
+        assert _find_safe_split_index(msgs, 3) == 0
+        # Target=6 is safe (user message)
+        assert _find_safe_split_index(msgs, 6) == 6

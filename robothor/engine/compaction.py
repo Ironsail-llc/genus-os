@@ -242,6 +242,31 @@ def _is_retained_context(msg: dict[str, Any]) -> bool:
     return isinstance(content, str) and RETAINED_CONTEXT_MARKER in content
 
 
+def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> int:
+    """Find a split point that never orphans tool_call/tool_result pairs.
+
+    Walks backward from *target_idx* until the boundary sits between two
+    independent message groups (not inside an assistant→tool sequence).
+    """
+    if target_idx <= 0 or target_idx >= len(messages):
+        return target_idx
+
+    idx = target_idx
+    while idx > 0:
+        msg = messages[idx]
+        # tool result must stay with its preceding assistant message
+        if msg.get("role") == "tool":
+            idx -= 1
+            continue
+        # assistant with tool_calls must stay with the tool results that follow
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            idx -= 1
+            continue
+        break
+
+    return idx
+
+
 async def compact(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -312,10 +337,12 @@ async def compact(
     retained_msgs = [m for m in working[1:] if _is_retained_context(m)]
     non_retained = [m for m in working[1:] if not _is_retained_context(m)]
 
-    # Split into old and recent (from non-retained messages)
+    # Split into old and recent (from non-retained messages).
+    # Use a safe split point that never orphans tool_call/tool_result pairs.
     if len(non_retained) > KEEP_RECENT:
-        old_messages = non_retained[:-KEEP_RECENT]
-        recent_messages = non_retained[-KEEP_RECENT:]
+        split_idx = _find_safe_split_index(non_retained, len(non_retained) - KEEP_RECENT)
+        old_messages = non_retained[:split_idx]
+        recent_messages = non_retained[split_idx:]
     else:
         old_messages = []
         recent_messages = non_retained
