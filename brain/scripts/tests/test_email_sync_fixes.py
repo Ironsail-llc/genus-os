@@ -239,20 +239,15 @@ class TestLogEmailToCrm:
 class TestBackfillNullMetadata:
     """Test backfill of broken entries."""
 
-    @patch("email_sync.run_gog")
-    def test_backfills_matching_entries(self, mock_gog):
-        mock_gog.return_value = json.dumps(
-            {
-                "threads": [
-                    {
-                        "id": "broken1",
-                        "from": "real@sender.com",
-                        "subject": "Real subject",
-                        "date": "2026-02-13",
-                    },
-                ]
-            }
-        )
+    @patch("email_sync.fetch_message_metadata")
+    def test_backfills_matching_entries(self, mock_fetch):
+        mock_fetch.return_value = {
+            "from": "real@sender.com",
+            "subject": "Real subject",
+            "date": "2026-02-13",
+            "labels": ["INBOX"],
+            "threadId": "broken1",
+        }
         log = {
             "entries": {
                 "broken1": {
@@ -276,9 +271,11 @@ class TestBackfillNullMetadata:
         assert entry["from"] == "real@sender.com"
         assert entry["subject"] == "Real subject"
         assert entry["categorizedAt"] is None  # Reset for re-processing
+        assert entry["backfilledVia"] == "gws-api"
+        mock_fetch.assert_called_once_with("broken1")
 
-    @patch("email_sync.run_gog")
-    def test_no_op_when_all_entries_have_metadata(self, mock_gog):
+    @patch("email_sync.fetch_message_metadata")
+    def test_no_op_when_all_entries_have_metadata(self, mock_fetch):
         log = {
             "entries": {
                 "good1": {"id": "good1", "from": "a@b.com", "subject": "Hi"},
@@ -286,7 +283,7 @@ class TestBackfillNullMetadata:
         }
         count = backfill_null_metadata(log)
         assert count == 0
-        mock_gog.assert_not_called()
+        mock_fetch.assert_not_called()
 
 
 class TestShouldSkipReset:

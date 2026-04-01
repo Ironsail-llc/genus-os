@@ -114,8 +114,8 @@ class TestTriageInboxReflectsEmailLog:
         pending_ids = {item["id"] for item in pending}
         assert pending_ids == {"msg1", "msg2"}
 
-    def test_entries_without_from_skipped(self, sync_module):
-        """Entries missing a from field should not appear in pending."""
+    def test_entries_without_from_flagged_needs_backfill(self, sync_module):
+        """Entries missing a from field should appear with needsBackfill flag."""
         email_log = {
             "entries": {
                 "msg1": {"subject": "No sender", "categorizedAt": None},
@@ -127,8 +127,10 @@ class TestTriageInboxReflectsEmailLog:
             }
         }
         pending = sync_module._get_pending_emails(email_log)
-        assert len(pending) == 1
-        assert pending[0]["id"] == "msg2"
+        assert len(pending) == 2
+        by_id = {p["id"]: p for p in pending}
+        assert by_id["msg1"].get("needsBackfill") is True
+        assert "needsBackfill" not in by_id["msg2"]
 
     def test_empty_log_returns_empty(self, sync_module):
         """An empty entries dict should yield no pending emails."""
