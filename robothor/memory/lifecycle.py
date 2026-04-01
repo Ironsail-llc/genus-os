@@ -15,12 +15,15 @@ Architecture:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
@@ -109,11 +112,12 @@ def compute_decay_score(
     return max(0.0, min(1.0, score))
 
 
-async def judge_importance(content: str) -> float:
+async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
     """Use the LLM to judge the importance of a fact.
 
     Args:
         content: The fact text to evaluate.
+        timeout_s: Maximum seconds to wait for LLM response.
 
     Returns:
         Importance score between 0.0 and 1.0.
@@ -128,17 +132,24 @@ async def judge_importance(content: str) -> float:
 
 Fact: "{content}" """
 
-        raw = await llm_client.generate(
-            prompt=prompt,
-            system="Rate the importance of this fact.",
-            max_tokens=64,
-            format=IMPORTANCE_SCHEMA,
+        raw = await asyncio.wait_for(
+            llm_client.generate(
+                prompt=prompt,
+                system="Rate the importance of this fact.",
+                max_tokens=64,
+                format=IMPORTANCE_SCHEMA,
+                think=False,
+            ),
+            timeout=timeout_s,
         )
 
         parsed = json.loads(raw.strip())
         score = float(parsed.get("score", 0.5))
         return max(0.0, min(1.0, score))
 
+    except TimeoutError:
+        logger.warning("judge_importance timed out after %.0fs", timeout_s)
+        return 0.5
     except Exception:
         return 0.5
 
@@ -240,6 +251,7 @@ Return ONLY the consolidated statement, nothing else."""
             prompt=prompt,
             system="Combine these facts into a single statement.",
             max_tokens=256,
+            think=False,
         )
         return {
             "consolidated_text": consolidated.strip(),
@@ -493,6 +505,7 @@ Return up to 3 insights. Each insight must:
             system="Find cross-domain connections between these facts.",
             max_tokens=512,
             format=INSIGHT_SCHEMA,
+            think=False,
         )
 
         parsed = json.loads(raw.strip())
@@ -646,9 +659,9 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
     Steps:
-        1. Score importance for unscored facts (200 per run)
+        1. Score importance for unscored facts (200 per run, 600s budget)
            - Fast-path: events older than 30 days auto-score 0.3
-           - Each judge_importance() wrapped in try/except
+           - Each judge_importance() wrapped in try/except with 30s timeout
         2. Compute and update decay scores for all active facts
         3. Prune low-quality facts (garbage collection)
         4. Find and consolidate similar fact groups
@@ -658,10 +671,15 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     Returns:
         Dict with maintenance statistics.
     """
+    step_timings: dict[str, float] = {}
+
+    # Step 1: Score importance
+    t0 = time.monotonic()
+    scoring_budget_s = 600.0  # Wall-clock budget for importance scoring
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Step 1: Score importance for facts with default importance (0.5)
         # Fast-path: events older than 30 days auto-score 0.3 (skip LLM call)
         cur.execute(
             """
@@ -683,8 +701,20 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         )
         unscored = cur.fetchall()
         facts_scored = 0
+        facts_skipped_budget = 0
 
         for fact in unscored:
+            # Check wall-clock budget
+            elapsed = time.monotonic() - t0
+            if elapsed > scoring_budget_s:
+                facts_skipped_budget = len(unscored) - facts_scored
+                logger.warning(
+                    "Importance scoring budget exhausted (%.0fs): scored %d, skipping %d",
+                    elapsed,
+                    facts_scored,
+                    facts_skipped_budget,
+                )
+                break
             try:
                 score = await judge_importance(fact["fact_text"])
                 cur.execute(
@@ -695,7 +725,30 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             except Exception as e:
                 logger.warning("Failed to score fact %d: %s", fact["id"], e)
 
-        # Step 2: Update decay scores
+    step_timings["importance_scoring"] = time.monotonic() - t0
+    logger.info(
+        "Step 1 (importance): %d scored, %d auto, %d skipped (%.1fs)",
+        facts_scored,
+        auto_scored,
+        facts_skipped_budget,
+        step_timings["importance_scoring"],
+    )
+
+    # Unload generation model to free GPU for embedding model (used by later steps)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{llm_client._ollama_url()}/api/generate",
+                json={"model": llm_client.GENERATION_MODEL, "keep_alive": 0},
+            )
+        logger.info("Unloaded generation model to free GPU for embeddings")
+    except Exception as e:
+        logger.warning("Failed to unload generation model: %s", e)
+
+    # Step 2: Update decay scores
+    t1 = time.monotonic()
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """
             SELECT id, last_accessed, access_count, reinforcement_count, importance_score
@@ -718,63 +771,127 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             )
             decay_updated += 1
 
-    # Step 3: Prune low-quality facts
-    prune_result = await prune_low_quality_facts()
+    step_timings["decay"] = time.monotonic() - t1
+    logger.info("Step 2 (decay): %d updated (%.1fs)", decay_updated, step_timings["decay"])
 
-    # Step 4: Consolidation — merge groups of 3+ similar facts
+    # Step 3: Prune low-quality facts
+    t2 = time.monotonic()
+    prune_result = await prune_low_quality_facts()
+    step_timings["prune"] = time.monotonic() - t2
+    logger.info(
+        "Step 3 (prune): %d pruned (%.1fs)",
+        prune_result.get("total_pruned", 0),
+        step_timings["prune"],
+    )
+
+    # Step 4: Consolidation — two-phase to avoid model contention
+    # Phase A: Find candidates (DB only) + generate consolidated text (LLM/chat)
+    # Phase B: Unload generation model, then store with embeddings
+    t3 = time.monotonic()
     consolidation_groups = 0
+    pending_consolidations: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     try:
         groups = await find_consolidation_candidates(min_group_size=3, similarity_threshold=0.8)
         for group in groups:
             result = await consolidate_facts(group)
             if result and result.get("consolidated_text"):
-                from robothor.memory.facts import store_fact
-
-                consolidated_fact = {
-                    "fact_text": result["consolidated_text"],
-                    "category": group[0].get("category", "personal"),
-                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                    "confidence": 0.9,
-                }
-                new_id = await store_fact(
-                    consolidated_fact,
-                    source_content="[consolidated from similar facts]",
-                    source_type="consolidation",
-                )
-                # Supersede originals
-                with get_connection() as conn:
-                    cur = conn.cursor()
-                    for source_id in result["source_ids"]:
-                        cur.execute(
-                            """
-                            UPDATE memory_facts
-                            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                            WHERE id = %s AND is_active = TRUE
-                            """,
-                            (new_id, source_id),
-                        )
-                consolidation_groups += 1
+                pending_consolidations.append((result, group))
     except Exception as e:
-        logger.warning("Consolidation failed: %s", e)
+        logger.warning("Consolidation text generation failed: %s", e)
+
+    # Step 4 + 6: Discover insights via LLM (also needs chat, do before model unload)
+    t4 = time.monotonic()
+    discovered_insights: list[dict[str, Any]] = []
+    try:
+        discovered_insights = await discover_cross_domain_insights(hours_back=72)
+    except Exception as e:
+        logger.warning("Insight discovery LLM phase failed: %s", e)
+
+    # Unload generation model to free GPU for embedding-heavy storage
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{llm_client._ollama_url()}/api/generate",
+                json={"model": llm_client.GENERATION_MODEL, "keep_alive": 0},
+            )
+        logger.info("Unloaded generation model for embedding phase")
+        await asyncio.sleep(2)  # Brief pause for Ollama to release GPU
+    except Exception as e:
+        logger.warning("Failed to unload generation model: %s", e)
+
+    # Phase B: Store consolidated facts (needs embeddings)
+    for result, group in pending_consolidations:
+        try:
+            from robothor.memory.facts import store_fact
+
+            consolidated_fact = {
+                "fact_text": result["consolidated_text"],
+                "category": group[0].get("category", "personal"),
+                "entities": list({e for f in group for e in (f.get("entities") or [])}),
+                "confidence": 0.9,
+            }
+            new_id = await store_fact(
+                consolidated_fact,
+                source_content="[consolidated from similar facts]",
+                source_type="consolidation",
+            )
+            # Supersede originals
+            with get_connection() as conn:
+                cur = conn.cursor()
+                for source_id in result["source_ids"]:
+                    cur.execute(
+                        """
+                        UPDATE memory_facts
+                        SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
+                        WHERE id = %s AND is_active = TRUE
+                        """,
+                        (new_id, source_id),
+                    )
+            consolidation_groups += 1
+        except Exception as e:
+            logger.warning("Failed to store consolidated fact: %s", e)
+
+    step_timings["consolidation"] = time.monotonic() - t3
+    logger.info(
+        "Step 4 (consolidation): %d groups (%.1fs)",
+        consolidation_groups,
+        step_timings["consolidation"],
+    )
 
     # Step 5: Sweep remaining unconsolidated facts (safety net)
     swept = _mark_facts_consolidated()
     if swept > 0:
         logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
 
-    # Step 6: Cross-domain insight discovery (72h window for nightly)
-    insight_result: dict[str, Any] = {"discovered": 0, "stored": 0, "deduped": 0}
-    try:
-        insight_result = await run_insight_discovery(hours_back=72)
-    except Exception as e:
-        logger.warning("Nightly insight discovery failed: %s", e)
+    # Step 6: Store discovered insights (needs embeddings, model already unloaded)
+    insight_result: dict[str, Any] = {
+        "discovered": len(discovered_insights),
+        "stored": 0,
+        "deduped": 0,
+    }
+    for insight in discovered_insights:
+        try:
+            insight_id = await store_insight(insight)
+            if insight_id is not None:
+                insight_result["stored"] += 1
+            else:
+                insight_result["deduped"] += 1
+        except Exception as e:
+            logger.warning("Failed to store insight: %s", e)
+    step_timings["insights"] = time.monotonic() - t4
+    logger.info("Step 6 (insights): %s (%.1fs)", insight_result, step_timings["insights"])
+
+    total_time = time.monotonic() - t0
+    logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
     return {
         "facts_scored": facts_scored,
         "auto_scored": auto_scored,
+        "facts_skipped_budget": facts_skipped_budget,
         "decay_updated": decay_updated,
         "facts_pruned": prune_result.get("total_pruned", 0),
         "consolidation_groups": consolidation_groups,
         "unconsolidated_swept": swept,
         "insights": insight_result,
+        "step_timings": step_timings,
     }
