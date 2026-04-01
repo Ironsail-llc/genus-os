@@ -92,6 +92,7 @@ Check:
 - **New activity**: Who sent emails, what was routed vs dismissed
 - **Key contacts**: If Samantha, Caroline, or other key contacts appear, ALWAYS surface to Philip — even if routed elsewhere
 - **Unhandled emails**: If an email was classified but has no responder task, flag it
+- **Mid-tier digest**: If any emails were classified importance 3, mention them in one line each: "[sender] emailed about [subject] — routed to [responder/analyst]". These don't need Philip's action but he should know they exist. (Importance 4-5 emails are already fast-tracked to Telegram via the relay — don't duplicate those here.)
 
 ### 7. Prescriptions
 

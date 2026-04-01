@@ -248,16 +248,18 @@ One line. No per-item breakdown, no reasoning, no narration. The status file has
 
 After processing each batch of emails, mark them as categorized in `email-log.json` so they are NOT re-processed on the next run.
 
-**Build a classifications dict** as you triage each email, mapping each entry ID to its urgency and category:
+**Build a classifications dict** as you triage each email, mapping each entry ID to its urgency, category, importance, and actionRequired:
 
 ```python
 # Example — build this as you process each email:
 classifications = {
-    '19c6879e9126c65e': {'urgency': 'low', 'category': 'informational'},
-    '19c75b3efd71d6ed': {'urgency': 'high', 'category': 'escalation'},
+    '19c6879e9126c65e': {'urgency': 'low', 'category': 'informational', 'importance': 2, 'actionRequired': 'none'},
+    '19c75b3efd71d6ed': {'urgency': 'high', 'category': 'escalation', 'importance': 4, 'actionRequired': 'respond'},
 }
 # urgency: low | medium | high | critical
 # category: operational | informational | escalation | noise
+# importance: 1 (noise) – 5 (critical)  ← REQUIRED for fast Telegram alerts
+# actionRequired: respond | forward | escalate | note | none
 ```
 
 Then use `exec` with this pattern to write ALL fields back:
@@ -271,12 +273,14 @@ path = os.path.expanduser('~/robothor/brain/memory/email-log.json')
 with open(path) as f:
     data = json.load(f)
 now = datetime.now(timezone.utc).isoformat()
-classifications = {<dict mapping each processed eid to {'urgency': '...', 'category': '...'}>}
+classifications = {<dict mapping each processed eid to {'urgency': '...', 'category': '...', 'importance': 1-5, 'actionRequired': '...'}>}
 for eid, cls in classifications.items():
     if eid in data.get('entries', {}):
         data['entries'][eid]['categorizedAt'] = now
         data['entries'][eid]['urgency'] = cls['urgency']
         data['entries'][eid]['category'] = cls['category']
+        data['entries'][eid]['importance'] = cls.get('importance')
+        data['entries'][eid]['actionRequired'] = cls.get('actionRequired')
 with open(path, 'w') as f:
     json.dump(data, f, indent=2)
 print(f'Marked {len(classifications)} emails as categorized')
