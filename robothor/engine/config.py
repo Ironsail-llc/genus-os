@@ -279,17 +279,62 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     )
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base* (override wins).
+
+    Lists are replaced, not appended. Returns a new dict.
+    """
+    merged = dict(base)
+    for key, val in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(val, dict):
+            merged[key] = _deep_merge(merged[key], val)
+        else:
+            merged[key] = val
+    return merged
+
+
+# Cache for _defaults.yaml: (mtime, parsed_dict)
+_defaults_cache: tuple[float, dict[str, Any]] = (0.0, {})
+
+
+def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
+    """Load fleet-wide defaults from _defaults.yaml (cached by mtime)."""
+    global _defaults_cache  # noqa: PLW0603
+    defaults_path = manifest_dir / "_defaults.yaml"
+    if not defaults_path.exists():
+        return {}
+    mtime = defaults_path.stat().st_mtime
+    if _defaults_cache[0] == mtime:
+        return _defaults_cache[1]
+    try:
+        with defaults_path.open() as f:
+            data = yaml.safe_load(f) or {}
+        _defaults_cache = (mtime, data)
+        return data
+    except Exception as e:
+        logger.warning("Failed to load _defaults.yaml: %s", e)
+        return {}
+
+
 def load_agent_config(agent_id: str, manifest_dir: Path) -> AgentConfig | None:
-    """Load a single agent config by ID from the manifest directory."""
+    """Load a single agent config by ID from the manifest directory.
+
+    If ``_defaults.yaml`` exists in the manifest dir, its values are used
+    as fleet-wide defaults — agent-specific values win on merge.
+    """
+    defaults = _load_defaults(manifest_dir)
+
     manifest_path = manifest_dir / f"{agent_id}.yaml"
     if manifest_path.exists():
         data = load_manifest(manifest_path)
         if data:
-            return manifest_to_agent_config(data)
+            merged = _deep_merge(defaults, data) if defaults else data
+            return manifest_to_agent_config(merged)
     # Fallback: scan all manifests for matching ID
     for m in load_all_manifests(manifest_dir):
         if m["id"] == agent_id:
-            return manifest_to_agent_config(m)
+            merged = _deep_merge(defaults, m) if defaults else m
+            return manifest_to_agent_config(merged)
     return None
 
 

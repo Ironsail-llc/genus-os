@@ -99,6 +99,8 @@ class AgentSession:
         model: str,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
         duration_ms: int = 0,
         assistant_message: dict[str, Any] | None = None,
     ) -> RunStep:
@@ -111,6 +113,8 @@ class AgentSession:
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens or None,
+            cache_read_tokens=cache_read_tokens or None,
             started_at=datetime.now(UTC),
             completed_at=datetime.now(UTC),
             duration_ms=duration_ms,
@@ -118,6 +122,8 @@ class AgentSession:
         self.run.steps.append(step)
         self.run.input_tokens += input_tokens
         self.run.output_tokens += output_tokens
+        self.run.cache_creation_tokens += cache_creation_tokens
+        self.run.cache_read_tokens += cache_read_tokens
 
         # Track model used
         if model and model not in self.run.models_attempted:

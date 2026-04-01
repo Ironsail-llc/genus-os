@@ -153,6 +153,8 @@ def create_health_app(
                         "model_used": r.get("model_used"),
                         "input_tokens": r.get("input_tokens"),
                         "output_tokens": r.get("output_tokens"),
+                        "cache_creation_tokens": r.get("cache_creation_tokens", 0),
+                        "cache_read_tokens": r.get("cache_read_tokens", 0),
                         "parent_run_id": str(r["parent_run_id"])
                         if r.get("parent_run_id")
                         else None,

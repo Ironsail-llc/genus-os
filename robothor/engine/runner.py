@@ -177,6 +177,7 @@ class AgentRunner:
         on_content: Callable[[str], Awaitable[None]] | None = None,
         on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         on_status: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         model_override: str | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         resume_from_run_id: str | None = None,
@@ -449,6 +450,7 @@ class AgentRunner:
                         spawn_context=spawn_context,
                         readonly_mode=readonly_mode,
                         on_status=on_status,
+                        on_stream_event=on_stream_event,
                     )
                 finally:
                     watchdog.stop()
@@ -493,6 +495,7 @@ class AgentRunner:
                 plan_result=plan_result,
                 trace=trace,
                 on_status=on_status,
+                on_stream_event=on_stream_event,
             )
 
         # ── [TELEMETRY] Publish run metrics ──
@@ -504,6 +507,8 @@ class AgentRunner:
                         "duration_ms": session.run.duration_ms or 0,
                         "input_tokens": session.run.input_tokens,
                         "output_tokens": session.run.output_tokens,
+                        "cache_creation_tokens": session.run.cache_creation_tokens,
+                        "cache_read_tokens": session.run.cache_read_tokens,
                     }
                 )
 
@@ -704,6 +709,7 @@ class AgentRunner:
         spawn_context: SpawnContext | None = None,
         readonly_mode: bool = False,
         on_status: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
         # Track models that hit permanent errors (401/403/429) across iterations
@@ -869,6 +875,34 @@ class AgentRunner:
                         chars_saved // 4,
                     )
 
+            # ── [PROACTIVE COMPACTION] Compress before hitting the 75% cliff ──
+            if _iteration > 0 and _iteration % 5 == 0:
+                try:
+                    from robothor.engine.context import estimate_tokens, maybe_compress
+                    from robothor.engine.model_registry import get_model_limits
+
+                    est_tokens = estimate_tokens(session.messages)
+                    model_limits = get_model_limits(models[0])
+                    proactive_threshold = int(model_limits.max_input_tokens * 0.50)
+                    if est_tokens > proactive_threshold:
+                        pre_len = len(session.messages)
+                        session.messages[:] = await maybe_compress(
+                            session.messages,
+                            models,
+                            threshold=proactive_threshold,
+                        )
+                        logger.info(
+                            "Proactive compaction at iter %d: %d→%d messages "
+                            "(est %d tokens, threshold %d)",
+                            _iteration,
+                            pre_len,
+                            len(session.messages),
+                            est_tokens,
+                            proactive_threshold,
+                        )
+                except Exception as e:
+                    logger.warning("Proactive compaction failed: %s", e)
+
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
                 summary = scratchpad.format_summary(plan_steps=plan_steps)
@@ -883,6 +917,7 @@ class AgentRunner:
                 broken_models,
                 agent_config.temperature,
                 trace,
+                on_stream_event=on_stream_event,
             )
 
             if response is None:
@@ -1364,6 +1399,7 @@ class AgentRunner:
         broken_models: set[str],
         temperature: float,
         trace: Any = None,
+        on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[Any, str, int, dict[str, Any]]:
         """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
         start = time.monotonic()
@@ -1377,6 +1413,7 @@ class AgentRunner:
                     on_content,
                     broken_models,
                     temperature,
+                    on_stream_event=on_stream_event,
                 )
         else:
             response = await self._do_llm_call(
@@ -1386,6 +1423,7 @@ class AgentRunner:
                 on_content,
                 broken_models,
                 temperature,
+                on_stream_event=on_stream_event,
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1425,38 +1463,92 @@ class AgentRunner:
                 for tc in assistant_msg.tool_calls
             ]
 
-        # Record LLM call
+        # Record LLM call — extract standard + cache token counts
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
         output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+
+        # Cache tokens: Anthropic exposes these directly; other providers
+        # may use prompt_tokens_details.cached_tokens instead
+        cache_creation_tokens = (
+            (getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+        )
+        cache_read_tokens = (getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
+        if usage and not cache_read_tokens:
+            details = getattr(usage, "prompt_tokens_details", None)
+            if details:
+                cache_read_tokens = getattr(details, "cached_tokens", 0) or 0
+
         session.record_llm_call(
             model=model_used,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
             duration_ms=elapsed_ms,
             assistant_message=msg_dict,
         )
 
-        # Best-effort cost tracking
+        # Best-effort cost tracking (cache-aware fallback)
         try:
             cost = litellm.completion_cost(completion_response=response, model=models[0])
             if cost and cost > 0:
                 session.run.total_cost_usd += cost
             else:
-                cost = self._calculate_cost(models[0], input_tokens, output_tokens)
+                cost = self._calculate_cost(
+                    models[0],
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_tokens,
+                    cache_read_tokens,
+                )
                 session.run.total_cost_usd += cost
         except Exception:
-            cost = self._calculate_cost(models[0], input_tokens, output_tokens)
+            cost = self._calculate_cost(
+                models[0],
+                input_tokens,
+                output_tokens,
+                cache_creation_tokens,
+                cache_read_tokens,
+            )
             session.run.total_cost_usd += cost
 
         return response, model_used, elapsed_ms, msg_dict
 
-    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Calculate cost from litellm model registry."""
+    def _calculate_cost(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+    ) -> float:
+        """Calculate cost from litellm model registry, with cache-aware pricing."""
         info = litellm.model_cost.get(model, {})
-        input_cost: float = info.get("input_cost_per_token", 0.0)
-        output_cost: float = info.get("output_cost_per_token", 0.0)
-        return input_tokens * input_cost + output_tokens * output_cost
+        input_rate: float = info.get("input_cost_per_token", 0.0)
+        output_rate: float = info.get("output_cost_per_token", 0.0)
+
+        # Use our registry for cache pricing (litellm doesn't expose these yet)
+        from robothor.engine.model_registry import get_model_limits
+
+        limits = get_model_limits(model)
+        cache_write_rate = limits.cache_write_cost_per_token or input_rate
+        cache_read_rate = limits.cache_read_cost_per_token or (input_rate * 0.1)
+
+        # Coerce to int to guard against MagicMock or None from test mocks
+        input_tokens = int(input_tokens or 0)
+        output_tokens = int(output_tokens or 0)
+        cache_creation_tokens = int(cache_creation_tokens or 0)
+        cache_read_tokens = int(cache_read_tokens or 0)
+
+        # Non-cached input = total input minus tokens that were cache hits
+        regular_input = max(0, input_tokens - cache_read_tokens)
+        return (
+            regular_input * input_rate
+            + output_tokens * output_rate
+            + cache_creation_tokens * cache_write_rate
+            + cache_read_tokens * cache_read_rate
+        )
 
     async def _do_llm_call(
         self,
@@ -1466,9 +1558,10 @@ class AgentRunner:
         on_content: Callable[[str], Awaitable[None]] | None,
         broken_models: set[str],
         temperature: float,
+        on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
         """Dispatch to streaming or non-streaming LLM call."""
-        if on_content:
+        if on_content or on_stream_event:
             return await self._call_llm_streaming(
                 session.messages,
                 models,
@@ -1476,6 +1569,7 @@ class AgentRunner:
                 on_content,
                 broken_models=broken_models,
                 temperature=temperature,
+                on_stream_event=on_stream_event,
             )
         return await self._call_llm(
             session.messages,
@@ -1837,6 +1931,21 @@ class AgentRunner:
         limits = get_model_limits(model)
         actual_model = model
 
+        # For Anthropic models, enable prompt caching on the system message
+        # by converting it to content-block format with cache_control markers.
+        is_anthropic = "anthropic" in model or "claude" in model
+        if is_anthropic and messages and messages[0].get("role") == "system":
+            messages = list(messages)  # shallow copy to avoid mutating original
+            sys_msg = dict(messages[0])
+            sys_msg["content"] = [
+                {
+                    "type": "text",
+                    "text": sys_msg["content"],
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            messages[0] = sys_msg
+
         kwargs: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
@@ -1928,13 +2037,27 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         models: list[str],
         tools: list[dict[str, Any]],
-        on_content: Callable[[str], Awaitable[None]],
+        on_content: Callable[[str], Awaitable[None]] | None = None,
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
+        on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
-        """Call LLM with streaming. Returns reconstructed ModelResponse."""
+        """Call LLM with streaming. Returns reconstructed ModelResponse.
+
+        Emits structured events to ``on_stream_event`` if provided:
+        - ``{"type": "text_delta", "delta": "...", "accumulated": "..."}``
+        - ``{"type": "tool_use_start", "tool_name": "...", "call_id": "..."}``
+        - ``{"type": "tool_use_delta", "delta": "...", "call_id": "..."}``
+        - ``{"type": "usage", "input_tokens": N, "output_tokens": N}``
+        - ``{"type": "message_stop"}``
+        """
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
+
+        async def _emit(event: dict[str, Any]) -> None:
+            if on_stream_event:
+                with contextlib.suppress(Exception):
+                    await on_stream_event(event)
 
         for model in models:
             if broken_models and model in broken_models:
@@ -1950,10 +2073,21 @@ class AgentRunner:
                 accumulated_content = ""
                 has_tool_calls = False
                 ttft_logged = False
+                seen_tool_ids: set[str] = set()
 
                 async for chunk in stream:
                     chunks.append(chunk)
                     if not chunk.choices:
+                        # Check for usage in non-choice chunks (some providers)
+                        usage = getattr(chunk, "usage", None)
+                        if usage:
+                            await _emit(
+                                {
+                                    "type": "usage",
+                                    "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                                    "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                                }
+                            )
                         continue
                     delta = chunk.choices[0].delta
                     if getattr(delta, "content", None):
@@ -1962,12 +2096,40 @@ class AgentRunner:
                             logger.info("TTFT %dms model=%s", ttft_ms, model)
                             ttft_logged = True
                         accumulated_content += delta.content
-                        if not has_tool_calls:
+                        await _emit(
+                            {
+                                "type": "text_delta",
+                                "delta": delta.content,
+                                "accumulated": accumulated_content,
+                            }
+                        )
+                        if not has_tool_calls and on_content:
                             with contextlib.suppress(Exception):
                                 await on_content(accumulated_content)
                     if getattr(delta, "tool_calls", None):
                         has_tool_calls = True
+                        for tc in delta.tool_calls:
+                            tc_id = getattr(tc, "id", None)
+                            tc_fn = getattr(tc, "function", None)
+                            if tc_id and tc_id not in seen_tool_ids:
+                                seen_tool_ids.add(tc_id)
+                                await _emit(
+                                    {
+                                        "type": "tool_use_start",
+                                        "tool_name": getattr(tc_fn, "name", "") if tc_fn else "",
+                                        "call_id": tc_id,
+                                    }
+                                )
+                            if tc_fn and getattr(tc_fn, "arguments", None):
+                                await _emit(
+                                    {
+                                        "type": "tool_use_delta",
+                                        "delta": tc_fn.arguments,
+                                        "call_id": tc_id or "",
+                                    }
+                                )
 
+                await _emit({"type": "message_stop"})
                 return litellm.stream_chunk_builder(chunks)
             except TimeoutError:
                 self._handle_model_error(
@@ -2020,6 +2182,8 @@ class AgentRunner:
                 models_attempted=run.models_attempted,
                 input_tokens=run.input_tokens,
                 output_tokens=run.output_tokens,
+                cache_creation_tokens=run.cache_creation_tokens or None,
+                cache_read_tokens=run.cache_read_tokens or None,
                 total_cost_usd=run.total_cost_usd,
                 output_text=run.output_text,
                 error_message=run.error_message,
