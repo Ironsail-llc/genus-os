@@ -102,6 +102,8 @@ v2:
     - "brain/memory/overnight-pr-status.md"
 
 changelog:
+  - date: "2026-04-01"
+    change: "Superseded by consolidated brain/scripts/nightwatch.py (Opus 4.6, single nightly run, 1 PR max)"
   - date: "2026-03-10"
     change: "Add brain/*.md to write_path_allowlist so instruction file fixes can be applied directly"
   - date: "2026-03-05"

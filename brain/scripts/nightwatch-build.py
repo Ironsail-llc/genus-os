@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+DEPRECATED — replaced by brain/scripts/nightwatch.py (consolidated nightwatch agent).
+This file is kept for git history. Use nightwatch.py instead.
+
+---
 Nightwatch Self-Improving — Phase B: Build.
 
 Runs weekly (Monday 3 AM). Takes feature tasks from research phase,

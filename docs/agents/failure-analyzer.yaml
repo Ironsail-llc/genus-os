@@ -79,6 +79,8 @@ v2:
     - "brain/memory/failure-analyzer-status.md"
 
 changelog:
+  - date: "2026-04-01"
+    change: "Superseded by consolidated brain/scripts/nightwatch.py — failure analysis now inline Python"
   - date: "2026-03-05"
     change: "Increase timeout 300s→480s — agent averages 190s with 43% timeout rate; 480s matches other analytical agents [nightwatch]"
   - date: "2026-03-05"

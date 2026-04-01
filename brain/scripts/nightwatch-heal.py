@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+DEPRECATED — replaced by brain/scripts/nightwatch.py (consolidated nightwatch agent).
+This file is kept for git history. Use nightwatch.py instead.
+
+---
 Nightwatch Self-Healing — fix tracked failures via Claude Code in worktrees.
 
 Runs nightly at 3 AM. Queries CRM for failure tasks tagged nightwatch+self-improve,
