@@ -298,7 +298,8 @@ class TestBuildSystemPrompt:
     def test_instruction_only(self, tmp_path):
         (tmp_path / "instructions.md").write_text("You are a test agent.")
         config = AgentConfig(id="t", name="t", instruction_file="instructions.md")
-        prompt = build_system_prompt(config, tmp_path)
+        parts = build_system_prompt(config, tmp_path)
+        prompt = parts.full_text()
         assert "You are a test agent." in prompt
 
     def test_instruction_plus_bootstrap(self, tmp_path):
@@ -310,14 +311,16 @@ class TestBuildSystemPrompt:
             instruction_file="instr.md",
             bootstrap_files=["shared.md"],
         )
-        prompt = build_system_prompt(config, tmp_path)
+        parts = build_system_prompt(config, tmp_path)
+        prompt = parts.full_text()
         assert "Main instructions." in prompt
         assert "Shared context." in prompt
         assert "---" in prompt  # separator
 
     def test_missing_instruction_file(self, tmp_path):
         config = AgentConfig(id="t", name="t", instruction_file="missing.md")
-        prompt = build_system_prompt(config, tmp_path)
+        parts = build_system_prompt(config, tmp_path)
+        prompt = parts.full_text()
         # Only the time context is present when instruction file is missing
         assert "Current time:" in prompt
 
@@ -325,7 +328,8 @@ class TestBuildSystemPrompt:
         big_content = "x" * (BOOTSTRAP_MAX_CHARS_PER_FILE + 1000)
         (tmp_path / "big.md").write_text(big_content)
         config = AgentConfig(id="t", name="t", instruction_file="big.md")
-        prompt = build_system_prompt(config, tmp_path)
+        parts = build_system_prompt(config, tmp_path)
+        prompt = parts.full_text()
         # Instruction content is truncated; time context is appended after
         assert "x" * 100 in prompt
         assert "Current time:" in prompt
@@ -342,15 +346,17 @@ class TestBuildSystemPrompt:
             instruction_file="instr.md",
             bootstrap_files=["bs1.md", "bs2.md"],
         )
-        prompt = build_system_prompt(config, tmp_path)
-        # Budget covers instruction + bootstrap content; security preamble, separators
-        # (\n\n---\n\n × N), and time context string are added outside the budget.
-        # Allow 500 chars overhead for those fixed additions.
-        assert len(prompt) <= BOOTSTRAP_TOTAL_MAX_CHARS + 500  # preamble + separators + time
+        parts = build_system_prompt(config, tmp_path)
+        prompt = parts.full_text()
+        # Budget covers instruction + bootstrap content; security preamble, behavioral
+        # rules, separators (\n\n---\n\n × N), and time context string are outside budget.
+        # Allow 2500 chars overhead for those fixed additions.
+        assert len(prompt) <= BOOTSTRAP_TOTAL_MAX_CHARS + 2500
 
     def test_no_files(self):
         config = AgentConfig(id="t", name="t")
-        prompt = build_system_prompt(config, Path("/nonexistent"))
+        parts = build_system_prompt(config, Path("/nonexistent"))
+        prompt = parts.full_text()
         # Only time context when no files exist
         assert "Current time:" in prompt
         assert "UTC offset:" in prompt

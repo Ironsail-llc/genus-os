@@ -1,6 +1,10 @@
 {
-  "lastCheckedAt": "2026-03-30T22:55:15.602684",
+  "lastCheckedAt": "2026-03-31T22:55:18.254485",
   "spaces": {
+    "spaces/AAQAR_BgXvw": {
+      "displayName": "Daily Standup Meeting - Mar 31",
+      "type": "SPACE"
+    },
     "spaces/AAQA3z-N2IQ": {
       "displayName": "Daily Standup Meeting - Mar 30",
       "type": "SPACE"
@@ -152,7 +156,8 @@
     "spaces/AAQA88F_pYw": "spaces/AAQA88F_pYw/messages/a3QSwgue9fQ.a3QSwgue9fQ",
     "spaces/AAQARPvW3mM": "spaces/AAQARPvW3mM/messages/0vmkgDjsIDE.0vmkgDjsIDE",
     "spaces/AAQAN0NKDyc": "spaces/AAQAN0NKDyc/messages/7wftWcd3GTc.7wftWcd3GTc",
-    "spaces/AAQA3z-N2IQ": "spaces/AAQA3z-N2IQ/messages/bl3Dd56TJak.bl3Dd56TJak"
+    "spaces/AAQA3z-N2IQ": "spaces/AAQA3z-N2IQ/messages/bl3Dd56TJak.bl3Dd56TJak",
+    "spaces/AAQAR_BgXvw": "spaces/AAQAR_BgXvw/messages/Q9omhBoYFx4.Q9omhBoYFx4"
   },
   "pendingMessages": [
     {
@@ -999,6 +1004,32 @@
       "threadName": "spaces/AAQAN0NKDyc/threads/7wftWcd3GTc",
       "mentionsRobothor": false,
       "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAR_BgXvw",
+      "spaceName": "Daily Standup Meeting - Mar 31",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "sample in their portal",
+      "createTime": "2026-03-31T14:25:41.069519Z",
+      "messageName": "spaces/AAQAR_BgXvw/messages/5B2SSolaj_o.5B2SSolaj_o",
+      "threadName": "spaces/AAQAR_BgXvw/threads/5B2SSolaj_o",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAR_BgXvw",
+      "spaceName": "Daily Standup Meeting - Mar 31",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "But I also found an order with signature it was ordered today but different provider it has signature @Illia Tutko",
+      "createTime": "2026-03-31T14:32:51.285039Z",
+      "messageName": "spaces/AAQAR_BgXvw/messages/Q9omhBoYFx4.Q9omhBoYFx4",
+      "threadName": "spaces/AAQAR_BgXvw/threads/Q9omhBoYFx4",
+      "mentionsRobothor": false,
+      "isQuestion": false
     }
   ],
   "changes": [
@@ -1521,6 +1552,22 @@
       "spaceName": "Weekly Senior Leadership Standup - Mar 25",
       "sender": "",
       "preview": "https://www.uspto.gov/trademarks/basics/trademark-process"
+    },
+    {
+      "timestamp": "2026-03-31T19:20:03.039628",
+      "type": "new_message",
+      "space": "spaces/AAQAR_BgXvw",
+      "spaceName": "Daily Standup Meeting - Mar 31",
+      "sender": "",
+      "preview": "sample in their portal"
+    },
+    {
+      "timestamp": "2026-03-31T19:20:03.039719",
+      "type": "new_message",
+      "space": "spaces/AAQAR_BgXvw",
+      "spaceName": "Daily Standup Meeting - Mar 31",
+      "sender": "",
+      "preview": "But I also found an order with signature it was ordered today but different provider it has signatur"
     }
   ]
 }

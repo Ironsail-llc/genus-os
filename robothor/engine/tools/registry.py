@@ -72,7 +72,15 @@ class ToolRegistry:
             names = list(self._schemas.keys())
 
         if config.tools_denied:
-            names = [n for n in names if n not in config.tools_denied]
+            # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied
+            has_globs = any(c in p for p in config.tools_denied for c in "*?[")
+            if has_globs:
+                from fnmatch import fnmatch
+
+                names = [n for n in names if not any(fnmatch(n, p) for p in config.tools_denied)]
+            else:
+                denied = set(config.tools_denied)
+                names = [n for n in names if n not in denied]
 
         # Exclude spawn tools unless agent has can_spawn_agents enabled
         if not config.can_spawn_agents:

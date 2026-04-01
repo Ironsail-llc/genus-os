@@ -352,11 +352,34 @@ SECURITY_PREAMBLE = (
 _prompt_cache: dict[str, tuple[float, str]] = {}
 
 
-def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
+@dataclass(frozen=True)
+class SystemPromptParts:
+    """Split system prompt: static (cacheable) + dynamic (changes per call).
+
+    The static portion includes SECURITY_PREAMBLE, BEHAVIORAL_RULES, instruction
+    file, and bootstrap files — all cached by file mtime. The dynamic tail is
+    the time context which changes every minute.
+
+    For Anthropic models, this split enables API-level prompt caching: the static
+    block gets cache_control markers while the dynamic tail does not.
+    """
+
+    static_body: str
+    dynamic_tail: str
+
+    def full_text(self) -> str:
+        """Return the complete system prompt as a single string."""
+        return f"{self.static_body}\n\n---\n\n{self.dynamic_tail}"
+
+    def __str__(self) -> str:
+        return self.full_text()
+
+
+def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptParts:
     """Build the full system prompt from instruction + bootstrap files.
 
-    Caches the file-based portion keyed on file mtimes. The time context
-    is always appended fresh (it changes every minute).
+    Returns a SystemPromptParts with static (file-based, cached) and dynamic
+    (time context, always fresh) portions separated for API-level caching.
     """
     # Collect all source file paths for mtime checking
     source_files: list[Path] = []
@@ -382,6 +405,12 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
         # Security preamble — always first so it's closest to the system role boundary
         parts.append(SECURITY_PREAMBLE)
         total_chars += len(SECURITY_PREAMBLE)
+
+        # Behavioral rules — fleet-wide invariants injected after security preamble
+        from robothor.engine.prompts import BEHAVIORAL_RULES
+
+        parts.append(BEHAVIORAL_RULES)
+        total_chars += len(BEHAVIORAL_RULES)
 
         # Load instruction file first (primary)
         if config.instruction_file:
@@ -423,11 +452,11 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> str:
         body = "\n\n---\n\n".join(parts)
         _prompt_cache[cache_key] = (max_mtime, body)
 
-    # Always append fresh time context
+    # Always append fresh time context (dynamic tail)
     tz = ZoneInfo(config.timezone or "America/New_York")
     now = datetime.now(tz)
     time_context = (
         f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "
         f"(UTC offset: {now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
     )
-    return f"{body}\n\n---\n\n{time_context}"
+    return SystemPromptParts(static_body=body, dynamic_tail=time_context)
