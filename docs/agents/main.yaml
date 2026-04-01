@@ -5,8 +5,8 @@ version: "2026-03-09"
 department: core
 
 reports_to: null
-creates_tasks_for: [email-classifier, email-responder, crm-steward]
-receives_tasks_from: [email-classifier, calendar-monitor, conversation-inbox, vision-monitor, crm-steward, email-responder]
+creates_tasks_for: [email-classifier, email-responder, crm-hygiene, crm-dedup, crm-enrichment]
+receives_tasks_from: [email-classifier, calendar-monitor, conversation-inbox, vision-monitor, crm-dedup, email-responder]
 escalates_to: null
 
 tags_produced: [escalation, needs-philip]

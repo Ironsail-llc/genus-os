@@ -2134,9 +2134,14 @@ class AgentRunner:
                     broken_models,
                 )
                 last_error = TimeoutError(f"Model {model} timed out after 120s")
+                # Model rotation is activity — don't let watchdog kill us mid-fallback
+                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                    self._active_watchdog.touch()
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
+                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                    self._active_watchdog.touch()
 
         logger.error(
             "All models failed. Models: %s, broken: %s, last error: %s",
@@ -2277,9 +2282,14 @@ class AgentRunner:
                     streaming=True,
                 )
                 last_error = te
+                # Model rotation is activity — don't let watchdog kill us mid-fallback
+                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                    self._active_watchdog.touch()
             except Exception as e:
                 self._handle_model_error(e, model, broken_models, streaming=True)
                 last_error = e
+                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                    self._active_watchdog.touch()
 
         logger.error("All models failed (streaming). Last error: %s", last_error)
         return None

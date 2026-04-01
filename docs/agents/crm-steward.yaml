@@ -15,12 +15,13 @@ model:
     - openrouter/anthropic/claude-sonnet-4.6
     - gemini/gemini-2.5-pro
 
-schedule:
-  cron: "0 10 * * *"
-  timezone: America/New_York
-  timeout_seconds: 480
-  max_iterations: 6
-  session_target: isolated
+# RETIRED 2026-04-01 — split into crm-hygiene, crm-dedup, crm-enrichment
+# schedule:
+#   cron: "0 10 * * *"
+#   timezone: America/New_York
+#   timeout_seconds: 480
+#   max_iterations: 6
+#   session_target: isolated
 
 delivery:
   mode: none
@@ -102,6 +103,8 @@ v2:
     - "brain/memory/crm-steward-status.md"
 
 changelog:
+  - date: "2026-04-01"
+    change: "RETIRED — split into crm-hygiene, crm-dedup, crm-enrichment. Cron disabled."
   - date: "2026-03-09"
     change: "Swap to GLM-5 — merge_contacts/update_person need reliable multi-param tool calls"
   - date: "2026-03-09"

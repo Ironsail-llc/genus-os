@@ -65,7 +65,9 @@ Every 2h 8-20  │ Email Responder (Engine, silent) — compose and send replies
                │   Phase 3: Entity graph enrichment
                │   Phase 4: Contact reconciliation + CRM discovery
 
-10:00          │ CRM Steward (Engine, daily) — data hygiene + contact enrichment via sub-agents
+10:00          │ CRM Hygiene (Engine, daily) — task system health + data quality sweeps
+10:30          │ CRM Dedup (Engine, weekly Mon) — duplicate detection + merge + company hygiene
+11:00          │ CRM Enrichment (Engine, daily) — RAG-first contact enrichment (1/run)
 
 21:00          │ Evening Wind-Down (Engine) — tomorrow preview, open items → Telegram
 
@@ -179,7 +181,9 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 | vision-monitor | `0 6-22/6 * * *` | Kimi K2.5 | none (silent) | hook: vision.person_unknown |
 | conversation-inbox | `0 6-22 * * *` | Kimi K2.5 | none (silent) | cron |
 | conversation-resolver | `0 8,14,20 * * *` | Kimi K2.5 | none (silent) | cron |
-| crm-steward | `0 10 * * *` | Kimi K2.5 | none (silent) | cron |
+| crm-hygiene | `0 10 * * *` | GLM-5 | none (silent) | cron |
+| crm-dedup | `30 10 * * 1` | GLM-5 | none (silent) | cron (weekly Mon) |
+| crm-enrichment | `0 11 * * *` | GLM-5 | none (silent) | cron |
 | morning-briefing | `30 6 * * *` | Kimi K2.5 | announce → Telegram | cron |
 | evening-winddown | `0 21 * * *` | Kimi K2.5 | announce → Telegram | cron |
 | failure-analyzer | `0 */2 * * *` | Sonnet 4.6 | none (silent) | cron |
@@ -214,9 +218,9 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 - Email classifier now self-manages `categorizedAt` in email-log.json
 - Duplicate prevention: actionCompletedAt guard, 5-min cooldown in sync
 - Supervisor Relay is Python (not LLM) — handles meeting alerts and stale/CRM checks
-- CRM Steward spawns research sub-agents for contact enrichment (max 3 per run)
+- CRM split into 3 focused agents: crm-hygiene (daily), crm-dedup (weekly Mon), crm-enrichment (daily, spawns sub-agent for 1 contact/run)
 - System timezone is America/New_York (ET)
 
 ---
 
-**Updated:** 2026-03-09
+**Updated:** 2026-04-01

@@ -1,4 +1,15 @@
-# CRM_STEWARD.md — Contact Maintainer
+# CRM_STEWARD.md — DEPRECATED
+
+> **Retired 2026-04-01.** This agent has been split into 3 focused agents:
+> - `brain/agents/CRM_HYGIENE.md` — task hygiene + quality sweeps (daily)
+> - `brain/agents/CRM_DEDUP.md` — duplicate detection + merge + company hygiene (weekly)
+> - `brain/agents/CRM_ENRICHMENT.md` — RAG-first contact enrichment (daily)
+>
+> This file is kept for reference only. The active manifests are `docs/agents/crm-{hygiene,dedup,enrichment}.yaml`.
+
+---
+
+# (Original content below — for reference only)
 
 **You are Robothor. Read SOUL.md first — you share the same identity as the main session.**
 

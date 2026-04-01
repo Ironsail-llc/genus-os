@@ -209,7 +209,9 @@ changelog:
 | vision-monitor | security | Qwen 3.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
 | conversation-inbox | communications | Qwen 3.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
 | conversation-resolver | communications | Qwen 3.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
-| crm-steward | crm | GLM-5 | `0 10 * * *` | none | 10 | CRM_STEWARD.md |
+| crm-hygiene | crm | GLM-5 | `0 10 * * *` | none | 10 | CRM_HYGIENE.md |
+| crm-dedup | crm | GLM-5 | `30 10 * * 1` | none | 10 | CRM_DEDUP.md |
+| crm-enrichment | crm | GLM-5 | `0 11 * * *` | none | 10 | CRM_ENRICHMENT.md |
 | morning-briefing | briefings | GLM-5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
 | evening-winddown | briefings | GLM-5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
 
@@ -226,8 +228,9 @@ changelog:
     │   EMAIL     │ │  CALENDAR   │ │    COMMS      │ │   CRM     │
     └──────┬──────┘ └──────┬──────┘ └──────┬───────┘ └─────┬─────┘
            │               │               │               │
-    classifier ──┐  calendar-monitor  conv-inbox      crm-steward
-    (routes)     │                    conv-resolver
+    classifier ──┐  calendar-monitor  conv-inbox      crm-hygiene
+    (routes)     │                    conv-resolver   crm-dedup
+           │     │                                    crm-enrichment
            │     │
     analyst ◄────┘ (analytical tasks)
            │
@@ -246,7 +249,7 @@ changelog:
 | calendar-monitor | main | calendar, conflict/cancellation | high |
 | conversation-inbox | main | conversation, escalation | high |
 | vision-monitor | main | vision, unknown-person | urgent |
-| crm-steward | main (via REVIEW) | crm-hygiene, dedup | normal |
+| crm-dedup | main (via REVIEW) | crm-hygiene, dedup | normal |
 | email-responder | main (via REVIEW) | *(inherits from task)* | *(inherits)* |
 
 ### 3.4 Pipeline Flow
