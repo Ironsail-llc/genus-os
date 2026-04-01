@@ -393,7 +393,7 @@ class TestFindSafeSplitIndex:
     def test_split_at_user_message(self):
         from robothor.engine.compaction import _find_safe_split_index
 
-        msgs = [
+        msgs: list[dict[str, Any]] = [
             {"role": "user", "content": "a"},
             {"role": "assistant", "content": "b"},
             {"role": "user", "content": "c"},
@@ -404,7 +404,7 @@ class TestFindSafeSplitIndex:
     def test_avoids_splitting_inside_tool_group(self):
         from robothor.engine.compaction import _find_safe_split_index
 
-        msgs = [
+        msgs: list[dict[str, Any]] = [
             {"role": "user", "content": "start"},
             {"role": "assistant", "content": "ok", "tool_calls": [{"id": "t1"}]},
             {"role": "tool", "tool_call_id": "t1", "content": "result"},
@@ -420,7 +420,7 @@ class TestFindSafeSplitIndex:
     def test_boundary_values(self):
         from robothor.engine.compaction import _find_safe_split_index
 
-        msgs = [{"role": "user", "content": "x"}]
+        msgs: list[dict[str, Any]] = [{"role": "user", "content": "x"}]
         assert _find_safe_split_index(msgs, 0) == 0
         assert _find_safe_split_index(msgs, 1) == 1
         assert _find_safe_split_index([], 0) == 0
@@ -428,7 +428,7 @@ class TestFindSafeSplitIndex:
     def test_consecutive_tool_groups(self):
         from robothor.engine.compaction import _find_safe_split_index
 
-        msgs = [
+        msgs: list[dict[str, Any]] = [
             {"role": "user", "content": "a"},
             {"role": "assistant", "content": "b", "tool_calls": [{"id": "t1"}, {"id": "t2"}]},
             {"role": "tool", "tool_call_id": "t1", "content": "r1"},

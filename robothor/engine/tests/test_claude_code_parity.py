@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from robothor.engine.config import _deep_merge, _load_defaults, load_agent_config
@@ -308,7 +309,7 @@ class TestValidateToolPairs:
     def test_valid_pairs_unchanged(self):
         from robothor.engine.runner import AgentRunner
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hi"},
             {
@@ -326,7 +327,7 @@ class TestValidateToolPairs:
     def test_orphaned_tool_dropped(self):
         from robothor.engine.runner import AgentRunner
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hi"},
             {"role": "assistant", "tool_calls": [{"id": "real_id"}]},
@@ -341,7 +342,7 @@ class TestValidateToolPairs:
     def test_no_tool_messages_unchanged(self):
         from robothor.engine.runner import AgentRunner
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "ok"},
@@ -352,7 +353,7 @@ class TestValidateToolPairs:
     def test_mixed_valid_and_orphan(self):
         from robothor.engine.runner import AgentRunner
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "assistant", "tool_calls": [{"id": "t1"}]},
             {"role": "tool", "tool_call_id": "t1", "content": "valid"},
             {"role": "tool", "tool_call_id": "gone", "content": "orphan"},
