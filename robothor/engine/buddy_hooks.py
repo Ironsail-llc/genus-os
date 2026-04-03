@@ -1,0 +1,59 @@
+"""Buddy lifecycle hooks — feed the gamification engine from real agent events.
+
+Registers a single AGENT_END Python handler that increments the daily task
+counter in buddy_stats. The full RPG score computation happens in
+BuddyEngine.refresh_daily(), not here.
+
+Usage (in daemon.py hook registry setup):
+    from robothor.engine.buddy_hooks import register_buddy_hooks
+    register_buddy_hooks(hook_registry)
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.hook_registry import HookRegistry
+
+logger = logging.getLogger(__name__)
+
+
+def _on_agent_end(context: dict[str, Any]) -> dict[str, Any]:
+    """AGENT_END hook handler — increment buddy task counter.
+
+    Args:
+        context: Hook context with 'agent_id', 'run_id', 'status', etc.
+
+    Returns:
+        Hook result dict (always ALLOW — this is observational, never blocks).
+    """
+    status = context.get("status", "")
+    if status != "completed":
+        return {"action": "allow"}
+
+    try:
+        from robothor.engine.buddy import BuddyEngine
+
+        BuddyEngine().increment_task_count()
+    except Exception as e:
+        logger.debug("Buddy hook: failed to increment task count: %s", e)
+
+    return {"action": "allow"}
+
+
+def register_buddy_hooks(registry: HookRegistry) -> None:
+    """Register buddy lifecycle hooks with the hook registry."""
+    from robothor.engine.hook_registry import HookEvent, LifecycleHook
+
+    hook = LifecycleHook(
+        event=HookEvent.AGENT_END,
+        handler_type="python",
+        handler="robothor.engine.buddy_hooks._on_agent_end",
+        blocking=False,
+        priority=900,  # low priority — runs after important hooks
+        scope="global",
+    )
+    registry.register(hook)
+    logger.info("Buddy lifecycle hooks registered")
