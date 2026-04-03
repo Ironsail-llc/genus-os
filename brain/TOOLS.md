@@ -4,6 +4,16 @@ Environment-specific notes for agents. Per-agent tools are documented in each ag
 
 ---
 
+## LLM API Keys & Model Switching
+
+- **OpenRouter** uses a SINGLE API key (`OPENROUTER_API_KEY` env var) for ALL models routed through it. Any `openrouter/*` model works with the same key — no per-model keys exist.
+- API keys are loaded from SOPS-encrypted secrets (`/etc/robothor/secrets.enc.json`) into environment variables at runtime. They are NOT in the vault.
+- The vault (`vault_get`/`vault_set`) is for application-level secrets (webhook tokens, service passwords). Do NOT look for LLM API keys there.
+- **To switch models**: edit the YAML manifest in `docs/agents/<agent>.yaml` — change the `model.primary` field. No new keys needed for any OpenRouter model.
+- After editing manifests, restart the engine: the scheduler reloads configs on startup.
+
+---
+
 ## Google Workspace (gog CLI)
 
 - **Account:** robothor@ironsail.ai

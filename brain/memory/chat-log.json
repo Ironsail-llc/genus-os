@@ -1,6 +1,22 @@
 {
-  "lastCheckedAt": "2026-03-31T22:55:18.254485",
+  "lastCheckedAt": "2026-04-03T06:40:19.341928",
   "spaces": {
+    "spaces/AAQAc2xkpqw": {
+      "displayName": "R&D Backlog Refinement - Apr 2",
+      "type": "SPACE"
+    },
+    "spaces/AAQAsyHkyHQ": {
+      "displayName": "Ironsail x Webugol Internal Marketing - Apr 2",
+      "type": "SPACE"
+    },
+    "spaces/AAQAvsS0pHI": {
+      "displayName": "Weekly Senior Leadership Standup - Apr 1",
+      "type": "SPACE"
+    },
+    "spaces/AAQA7IKPRKE": {
+      "displayName": "Daily Standup Meeting - Apr 1",
+      "type": "SPACE"
+    },
     "spaces/AAQAR_BgXvw": {
       "displayName": "Daily Standup Meeting - Mar 31",
       "type": "SPACE"
@@ -157,7 +173,11 @@
     "spaces/AAQARPvW3mM": "spaces/AAQARPvW3mM/messages/0vmkgDjsIDE.0vmkgDjsIDE",
     "spaces/AAQAN0NKDyc": "spaces/AAQAN0NKDyc/messages/7wftWcd3GTc.7wftWcd3GTc",
     "spaces/AAQA3z-N2IQ": "spaces/AAQA3z-N2IQ/messages/bl3Dd56TJak.bl3Dd56TJak",
-    "spaces/AAQAR_BgXvw": "spaces/AAQAR_BgXvw/messages/Q9omhBoYFx4.Q9omhBoYFx4"
+    "spaces/AAQAR_BgXvw": "spaces/AAQAR_BgXvw/messages/Q9omhBoYFx4.Q9omhBoYFx4",
+    "spaces/AAQAc2xkpqw": "spaces/AAQAc2xkpqw/messages/v8U62uDFrlo.v8U62uDFrlo",
+    "spaces/AAQAsyHkyHQ": "spaces/AAQAsyHkyHQ/messages/6_RiOx9hVTs.6_RiOx9hVTs",
+    "spaces/AAQAvsS0pHI": "spaces/AAQAvsS0pHI/messages/s0AKUdC5WI0.s0AKUdC5WI0",
+    "spaces/AAQA7IKPRKE": "spaces/AAQA7IKPRKE/messages/KYqrwedoRtI.KYqrwedoRtI"
   },
   "pendingMessages": [
     {
@@ -1030,6 +1050,188 @@
       "threadName": "spaces/AAQAR_BgXvw/threads/Q9omhBoYFx4",
       "mentionsRobothor": false,
       "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/100054999380749122750",
+      "senderName": "",
+      "text": "",
+      "createTime": "2026-04-02T14:11:44.881611Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/jfewcwEYJes.jfewcwEYJes",
+      "threadName": "spaces/AAQAc2xkpqw/threads/jfewcwEYJes",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/105965477674161331428",
+      "senderName": "",
+      "text": "Sorry, I have an issue with ISP, will rejoin soon",
+      "createTime": "2026-04-02T14:25:06.789503Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/uFIQRAwDN7g.uFIQRAwDN7g",
+      "threadName": "spaces/AAQAc2xkpqw/threads/uFIQRAwDN7g",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "I dont have access in scriptsure sandbox yet",
+      "createTime": "2026-04-02T14:25:52.964767Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/siIpKNVz9lo.siIpKNVz9lo",
+      "threadName": "spaces/AAQAc2xkpqw/threads/siIpKNVz9lo",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "unlike in ImpetusRX we have the ID.me registration age",
+      "createTime": "2026-04-02T14:27:41.892511Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/rFan8HisyXM.rFan8HisyXM",
+      "threadName": "spaces/AAQAc2xkpqw/threads/rFan8HisyXM",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "page*",
+      "createTime": "2026-04-02T14:27:47.264751Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/NeXgveIXERA.NeXgveIXERA",
+      "threadName": "spaces/AAQAc2xkpqw/threads/NeXgveIXERA",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/118278946842035765431",
+      "senderName": "",
+      "text": "which will route me to SS to verify if the pt or order was received",
+      "createTime": "2026-04-02T14:28:15.774239Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/7uQXZx8t0eE.7uQXZx8t0eE",
+      "threadName": "spaces/AAQAc2xkpqw/threads/7uQXZx8t0eE",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/100054999380749122750",
+      "senderName": "",
+      "text": "ROLE : SPECTATOR ??",
+      "createTime": "2026-04-02T15:00:55.763583Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/do1rsy5lOfY.do1rsy5lOfY",
+      "threadName": "spaces/AAQAc2xkpqw/threads/do1rsy5lOfY",
+      "mentionsRobothor": false,
+      "isQuestion": true
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/100054999380749122750",
+      "senderName": "",
+      "text": "Guest",
+      "createTime": "2026-04-02T15:00:59.933535Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/LkB3H3VgLME.LkB3H3VgLME",
+      "threadName": "spaces/AAQAc2xkpqw/threads/LkB3H3VgLME",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/111886307380298625546",
+      "senderName": "",
+      "text": "Lead?",
+      "createTime": "2026-04-02T15:31:02.007055Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/nAXiA7UicDs.nAXiA7UicDs",
+      "threadName": "spaces/AAQAc2xkpqw/threads/nAXiA7UicDs",
+      "mentionsRobothor": false,
+      "isQuestion": true
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/102441203681985656470",
+      "senderName": "",
+      "text": "I found out that it was my Fireflies bot that caused the disruption during our meeting earlier. I only saw the initial \u201cR,\u201d so I assumed it was Rizzi becauseI had already resolved this issue in the past, but it seems the bot reactivated. I apologize to Rizzi for the assumption, and I\u2019ve made sure it won\u2019t join any future meetings.",
+      "createTime": "2026-04-02T16:40:49.772591Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/LxCzOliP5A0.LxCzOliP5A0",
+      "threadName": "spaces/AAQAc2xkpqw/threads/LxCzOliP5A0",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/111886307380298625546",
+      "senderName": "",
+      "text": "I committed some changes to staging regarding the creation of a pharmacy user and a new pharmacy portal. It may fail ci, but I have another round of changes and fixes if so.",
+      "createTime": "2026-04-02T17:33:41.605023Z",
+      "messageName": "spaces/AAQAc2xkpqw/messages/v8U62uDFrlo.v8U62uDFrlo",
+      "threadName": "spaces/AAQAc2xkpqw/threads/v8U62uDFrlo",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAsyHkyHQ",
+      "spaceName": "Ironsail x Webugol Internal Marketing - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/112959780955484048269",
+      "senderName": "",
+      "text": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing",
+      "createTime": "2026-04-02T13:03:55.621045Z",
+      "messageName": "spaces/AAQAsyHkyHQ/messages/AFjAKbVsmwI.AFjAKbVsmwI",
+      "threadName": "spaces/AAQAsyHkyHQ/threads/AFjAKbVsmwI",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAsyHkyHQ",
+      "spaceName": "Ironsail x Webugol Internal Marketing - Apr 2",
+      "spaceType": "SPACE",
+      "sender": "users/111886307380298625546",
+      "senderName": "",
+      "text": "https://github.com/Ironsail-llc/genus-os",
+      "createTime": "2026-04-02T13:14:59.701919Z",
+      "messageName": "spaces/AAQAsyHkyHQ/messages/6_RiOx9hVTs.6_RiOx9hVTs",
+      "threadName": "spaces/AAQAsyHkyHQ/threads/6_RiOx9hVTs",
+      "mentionsRobothor": false,
+      "isQuestion": false
+    },
+    {
+      "space": "spaces/AAQAvsS0pHI",
+      "spaceName": "Weekly Senior Leadership Standup - Apr 1",
+      "spaceType": "SPACE",
+      "sender": "users/101922857813055076554",
+      "senderName": "",
+      "text": "Sorry brb Joe the landlord is here.",
+      "createTime": "2026-04-01T15:20:43.327632Z",
+      "messageName": "spaces/AAQAvsS0pHI/messages/s0AKUdC5WI0.s0AKUdC5WI0",
+      "threadName": "spaces/AAQAvsS0pHI/threads/s0AKUdC5WI0",
+      "mentionsRobothor": false,
+      "isQuestion": false
     }
   ],
   "changes": [
@@ -1568,6 +1770,118 @@
       "spaceName": "Daily Standup Meeting - Mar 31",
       "sender": "",
       "preview": "But I also found an order with signature it was ordered today but different provider it has signatur"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.290596",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": ""
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.290975",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "Sorry, I have an issue with ISP, will rejoin soon"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.290993",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "I dont have access in scriptsure sandbox yet"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291006",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "unlike in ImpetusRX we have the ID.me registration age"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291016",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "page*"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291029",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "which will route me to SS to verify if the pt or order was received"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291037",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "ROLE : SPECTATOR ??"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291045",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "Guest"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291053",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "Lead?"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291081",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "I found out that it was my Fireflies bot that caused the disruption during our meeting earlier. I on"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.291099",
+      "type": "new_message",
+      "space": "spaces/AAQAc2xkpqw",
+      "spaceName": "R&D Backlog Refinement - Apr 2",
+      "sender": "",
+      "preview": "I committed some changes to staging regarding the creation of a pharmacy user and a new pharmacy por"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.892420",
+      "type": "new_message",
+      "space": "spaces/AAQAsyHkyHQ",
+      "spaceName": "Ironsail x Webugol Internal Marketing - Apr 2",
+      "sender": "",
+      "preview": "Hi, I'm transcribing this call with my Tactiq AI Extension. https://tactiq.io/r/transcribing"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:02.892461",
+      "type": "new_message",
+      "space": "spaces/AAQAsyHkyHQ",
+      "spaceName": "Ironsail x Webugol Internal Marketing - Apr 2",
+      "sender": "",
+      "preview": "https://github.com/Ironsail-llc/genus-os"
+    },
+    {
+      "timestamp": "2026-04-02T20:40:03.583304",
+      "type": "new_message",
+      "space": "spaces/AAQAvsS0pHI",
+      "spaceName": "Weekly Senior Leadership Standup - Apr 1",
+      "sender": "",
+      "preview": "Sorry brb Joe the landlord is here."
     }
   ]
 }
