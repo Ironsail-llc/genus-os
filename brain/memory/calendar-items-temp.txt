@@ -1,0 +1,55 @@
+counts: {'emails': 4, 'calendar': 2, 'jira': 6, 'total': 12}
+activeEscalationIds: ['19c6879e9126c65e', '19c9529c4c7bd9a2', '19d0c555602cbc2d']
+items: 12
+---
+{
+  "source": "calendar",
+  "type": "change",
+  "id": "7o3lhd0kngmj0v6a4rk18uqvsu",
+  "title": "Rochelle Blaza Out of Office",
+  "changeType": "new",
+  "details": null,
+  "start": "2026-04-06",
+  "end": null,
+  "detectedAt": "2026-03-31T10:00:02.634231",
+  "startLocal": null,
+  "endLocal": null,
+  "attendees": [
+    "illia@ironsail.ai",
+    "jhonray@ironsail.ai",
+    "pauledward@ironsail.ai",
+    "rochelle@valhallams.com",
+    "philip@ironsail.ai",
+    "rizzi@valhallams.com",
+    "jennifer@valhallams.com",
+    "adan@ironsail.ai",
+    "elguja@ironsail.ai",
+    "greg@ironsail.ai",
+    "joshua@ironsail.ai",
+    "nadjib@ironsail.ai",
+    "danylo@ironsail.ai",
+    "craig@ironsail.ai",
+    "sandra@valhallams.com",
+    "samantha@valhallams.com",
+    "hr@ironsail.ai"
+  ]
+}
+---
+{
+  "source": "calendar",
+  "type": "change",
+  "id": "j5nt996ebv0o9kv98ao8483lac_20260406T160000Z",
+  "title": " V/I Same Page Meetings",
+  "changeType": "new",
+  "details": null,
+  "start": "2026-04-06T12:30:00-04:00",
+  "end": null,
+  "detectedAt": "2026-03-31T11:30:02.648297",
+  "startLocal": "12:30 PM",
+  "endLocal": "1:00 PM",
+  "attendees": [
+    "daniel@valhallams.com",
+    "philip@ironsail.ai",
+    "robothor@ironsail.ai"
+  ]
+}

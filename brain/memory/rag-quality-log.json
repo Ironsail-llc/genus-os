@@ -2072,6 +2072,95 @@
       },
       "success": true,
       "duration_seconds": 21272.810938
+    },
+    {
+      "timestamp": "2026-04-02T03:30:01.596447",
+      "tier": 3,
+      "phases": {
+        "p1_catchup": {
+          "sources_retried": 0,
+          "errors": []
+        },
+        "p2_relationships": {
+          "contacts_analyzed": 30,
+          "briefs_generated": 30,
+          "errors": []
+        },
+        "p2_5_enrichment": {
+          "contacts_checked": 70,
+          "fields_updated": 2,
+          "errors": []
+        },
+        "p3_engagement": {
+          "scored": 0,
+          "changed": 0,
+          "errors": [
+            "phase3:"
+          ]
+        },
+        "p4_patterns": {
+          "patterns_found": 10,
+          "errors": []
+        },
+        "p5_housekeeping": {
+          "maintenance": {
+            "success": true,
+            "details": "{'facts_scored': 200, 'auto_scored': 40, 'facts_skipped_budget': 0, 'decay_updated': 12030, 'facts_pruned': 1, 'consolidation_groups': 33, 'unconsolidated_swept': 175, 'insights': {'discovered': 1, 'stored': 1, 'deduped': 0}, 'step_timings': {'importance_scoring': 272.7572796419845, 'decay': 35.59123753098538, 'prune': 0.024857220007106662, 'consolidation': 283.703417007986, 'insights': 35.32574427302461}}"
+          },
+          "quality": {
+            "tests": [
+              {
+                "query": "What decisions were made recently?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "Who are the key contacts and their engagement levels?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What active tasks and Jira tickets need attention?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What patterns were detected across email and CRM?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              },
+              {
+                "query": "What meeting prep or relationship briefs exist?",
+                "score": 0,
+                "note": "asyncio.run() cannot be called from a running event loop"
+              }
+            ],
+            "average_score": 0
+          }
+        },
+        "p6_cleanup": {
+          "items_pruned": 0,
+          "errors": []
+        }
+      },
+      "stats_before": {
+        "total_facts": 58945,
+        "active_facts": 11902,
+        "superseded_count": 44945,
+        "scored_count": 6058,
+        "entity_count": 9829,
+        "relation_count": 26871
+      },
+      "stats_after": {
+        "total_facts": 59122,
+        "active_facts": 11937,
+        "superseded_count": 45086,
+        "scored_count": 6163,
+        "entity_count": 9871,
+        "relation_count": 27026
+      },
+      "success": true,
+      "duration_seconds": 24095.77387
     }
   ]
 }

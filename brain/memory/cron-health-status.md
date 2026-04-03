@@ -1,40 +1,41 @@
 # Cron Health Status
-Updated: 2026-04-01 00:00 ET
+Updated: 2026-04-03 06:30 ET
 
 ## Fleet Summary (24h)
-- Runs: 158 (139 ok, 0 failed, 18 timeout)
-- Failure rate: 11%
-- Cost: $10.39
-- Avg duration: 93s
+- Runs: 168 (164 ok, 0 failed, 3 timeout)
+- Failure rate: 2%
+- Cost: $11.17
+- Avg duration: 61s
 
-**1 ERROR**, 0 stale, 12 healthy (13 total)
+**1 ERROR**, 0 stale, 13 healthy (14 total)
 
 ## Errors (7d)
-- **crm-steward**: 0 failed, 4 timeout (57% fail rate), last: 14.0h ago
+- **crm-steward**: 0 failed, 5 timeout (83% fail rate), last: 1.9d ago
 
 ## Healthy Agents (7d)
 | Agent | Runs | Failed | Avg Duration | Cost | Last Run |
 |-------|------|--------|-------------|------|----------|
-| calendar-monitor | 147 | 0 | 90s | $2.91 | 2.4h ago |
-| chat-responder | 238 | 0 | 64s | $6.82 | 1.5h ago |
-| conversation-inbox | 119 | 0 | 51s | $1.69 | 1.9h ago |
-| conversation-resolver | 21 | 0 | 83s | $0.58 | 3.7h ago |
-| email-analyst | 21 | 0 | 71s | $0.33 | 3.5h ago |
-| email-classifier | 84 | 0 | 80s | $1.90 | 1.8h ago |
-| email-responder | 49 | 0 | 94s | $2.24 | 3.8h ago |
-| engine-report | 7 | 0 | 46s | $0.15 | 1.0h ago |
-| evening-winddown | 7 | 0 | 77s | $3.07 | 3.0h ago |
-| main | 233 | 0 | 111s | $8.32 | 2m ago |
-| morning-briefing | 7 | 0 | 85s | $3.24 | 17.5h ago |
-| vision-monitor | 21 | 0 | 105s | $0.33 | 5.8h ago |
+| calendar-monitor | 209 | 0 | 81s | $4.00 | 22m ago |
+| canary | 1 | 0 | 7s | $0 | 14.6h ago |
+| chat-responder | 238 | 0 | 61s | $17.78 | 27m ago |
+| conversation-inbox | 119 | 0 | 54s | $1.66 | 25m ago |
+| conversation-resolver | 21 | 0 | 82s | $0.52 | 10.2h ago |
+| email-analyst | 21 | 0 | 66s | $0.28 | 10.0h ago |
+| email-classifier | 215 | 0 | 144s | $5.17 | 20m ago |
+| email-responder | 49 | 0 | 90s | $6.24 | 10.3h ago |
+| engine-report | 7 | 0 | 62s | $0.18 | 7.5h ago |
+| evening-winddown | 7 | 1 | 75s | $2.59 | 9.5h ago |
+| main | 254 | 0 | 101s | $21.47 | 5m ago |
+| morning-briefing | 7 | 0 | 98s | $2.58 | 2s ago |
+| vision-monitor | 21 | 0 | 95s | $0.30 | 18m ago |
 
 ## Tool Health (24h)
 ### Slowest Tools
-- `spawn_agent`: avg 152s (3 calls)
-- `web_search`: avg 780ms (55 calls)
-- `web_fetch`: avg 746ms (4 calls)
+- `look`: avg 48s (3 calls)
+- `search_memory`: avg 39s (5 calls)
+- `web_search`: avg 1s (9 calls)
 ### Most-Failing Tools
-- `exec`: 29/567 failed (5.1%)
-- `browser`: 13/92 failed (14.1%)
-- `web_fetch`: 11/15 failed (73.3%)
+- `write_file`: 31/67 failed (46.3%)
+- `exec`: 17/225 failed (7.6%)
+- `search_memory`: 5/10 failed (50.0%)
 

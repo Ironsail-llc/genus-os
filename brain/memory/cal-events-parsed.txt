@@ -1,0 +1,73 @@
+Found 9 events
+
+1. Weekly Catch-Up: Eugene & Philip
+   Start: 2026-03-31T09:00:00-04:00
+   End: 2026-03-31T10:00:00-04:00
+   Status: confirmed
+   Philip response: accepted
+   Attendees: ['eugene@ironsail.ai', 'philip@ironsail.ai', 'robothor@ironsail.ai']
+   ID: 4uklkvek28885lto956el08r7n_20260331T130000Z
+
+2. Daily Standup Meeting
+   Start: 2026-03-31T10:00:00-04:00
+   End: 2026-03-31T10:30:00-04:00
+   Status: confirmed
+   Philip response: declined
+   Attendees: ['elguja@ironsail.ai', 'greg@ironsail.ai', 'illia@ironsail.ai', 'nadjib@ironsail.ai', 'rochelle@ironsail.ai', 'danylo@ironsail.ai', 'jhonray@ironsail.ai', 'philip@ironsail.ai', 'rizzi@ironsail.ai', 'farhan@ironsail.ai', 'robothor@ironsail.ai', 'christian@ironsail.ai']
+   ID: 39d9v1pr8438c2q59h84ogfbtc_20260331T140000Z
+
+3. Weekly Product Update
+   Start: 2026-03-31T11:00:00-04:00
+   End: 2026-03-31T11:30:00-04:00
+   Status: confirmed
+   Philip response: needsAction
+   Attendees: ['rochelle@ironsail.ai', 'philip@ironsail.ai', 'christian@ironsail.ai', 'robothor@ironsail.ai']
+   ID: 7t2ogm09acgrjg5gs5g81e7bc6_20260331T150000Z
+
+4. Daily Standup Meeting
+   Start: 2026-04-01T10:00:00-04:00
+   End: 2026-04-01T10:30:00-04:00
+   Status: confirmed
+   Philip response: declined
+   Attendees: ['elguja@ironsail.ai', 'greg@ironsail.ai', 'illia@ironsail.ai', 'nadjib@ironsail.ai', 'rochelle@ironsail.ai', 'danylo@ironsail.ai', 'jhonray@ironsail.ai', 'philip@ironsail.ai', 'rizzi@ironsail.ai', 'farhan@ironsail.ai', 'robothor@ironsail.ai', 'christian@ironsail.ai']
+   ID: 39d9v1pr8438c2q59h84ogfbtc_20260401T140000Z
+
+5. Debrief & Planning Meeting: AI Session & Future Curriculum
+   Start: 2026-04-01T10:30:00-04:00
+   End: 2026-04-01T11:00:00-04:00
+   Status: confirmed
+   Philip response: None
+   Attendees: ['daniel@valhallams.com', 'hr@ironsail.ai', 'jennifer@valhallams.com', 'philip@valhallams.com', 'sandra@valhallams.com', 'robothor@ironsail.ai']
+   ID: c1rbg7q2d24su914rt70ev87fc_20260401T143000Z
+
+6. Weekly Senior Leadership Standup
+   Start: 2026-04-01T11:00:00-04:00
+   End: 2026-04-01T12:00:00-04:00
+   Status: confirmed
+   Philip response: None
+   Attendees: ['caroline@skyfin.net', 'daniel@valhallams.com', 'philip@valhallams.com', 'konrad@valhallams.com', 'samantha@valhallahq.com', 'robothor@ironsail.ai']
+   ID: jv7ps3sd7c5sljem4u18cfh5up_20260401T150000Z
+
+7. Ironsail x Webugol Internal Marketing
+   Start: 2026-04-02T09:00:00-04:00
+   End: 2026-04-02T10:00:00-04:00
+   Status: confirmed
+   Philip response: accepted
+   Attendees: ['eugene@ironsail.ai', 'philip@ironsail.ai', 'cielo@valhallams.com', 'robothor@ironsail.ai']
+   ID: a304ju1ctclso519dcoj8vci86_20260402T130000Z
+
+8. 🔍 Mac Studio M5 Weekly Check
+   Start: 2026-04-02T10:00:00-04:00
+   End: 2026-04-02T10:15:00-04:00
+   Status: confirmed
+   Philip response: None
+   Attendees: ['robothor@ironsail.ai']
+   ID: 1sblee0b6hg4nq04tp9995egck
+
+9. eCommerce Migration Weekly Update
+   Start: 2026-04-02T11:00:00-04:00
+   End: 2026-04-02T12:00:00-04:00
+   Status: confirmed
+   Philip response: needsAction
+   Attendees: ['eugene@ironsail.ai', 'greg@ironsail.ai', 'artem@webugol.com', 'oksana@webugol.com', 'daniel@valhallams.com', 'rochelle@ironsail.ai', 'philip@ironsail.ai', 'craig@ironsail.ai', 'konrad@valhallams.com', 'vlad@webugol.com', 'samantha@ironsailpharma.com', 'zoriana@webugol.com', 'olesia@valhallavitality.com', 'rizzi@ironsail.ai', 'elguja@ironsail.ai', 'danylo@ironsail.ai', 'christian@ironsail.ai', 'farhan@ironsail.ai', 'nadjib@ironsail.ai', 'shahbaz@ironsail.ai', 'robothor@ironsail.ai']
+   ID: 2shu1tmadfkn96frrsmdq6jvkk_20260402T150000Z
