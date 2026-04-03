@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -68,11 +69,15 @@ class TestValidateTask:
             "expected": {"must_contain": ["a"]},
             "category": "invalid",
         }
-        assert "invalid category" in _validate_task(task)
+        result = _validate_task(task)
+        assert result is not None
+        assert "invalid category" in result
 
     def test_missing_expected(self):
         task = {"id": "x", "prompt": "hi"}
-        assert "missing 'expected'" in _validate_task(task)
+        result = _validate_task(task)
+        assert result is not None
+        assert "missing 'expected'" in result
 
     def test_invalid_regex_must_contain(self):
         task = {
@@ -627,7 +632,7 @@ class TestExperimentBenchmarkMode:
         store, read_fn, write_fn = _mock_blocks()
 
         # Pre-store experiment state in benchmark mode
-        state = {
+        state: dict[str, Any] = {
             "id": "autoagent-test",
             "metric_name": "Benchmark score",
             "direction": "maximize",
