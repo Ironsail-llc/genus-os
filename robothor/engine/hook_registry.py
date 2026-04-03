@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -44,6 +46,12 @@ class HookEvent(StrEnum):
     ERROR = "error"
     ESCALATION = "escalation"
     STREAM_EVENT = "stream_event"
+    PRE_COMPACTION = "pre_compaction"
+    POST_COMPACTION = "post_compaction"
+    BUDGET_WARNING = "budget_warning"
+    CHECKPOINT = "checkpoint"
+    PLAN_CREATED = "plan_created"
+    REPLAN = "replan"
 
 
 class HookAction(StrEnum):
@@ -69,6 +77,8 @@ class LifecycleHook:
     filter: dict[str, str] = field(default_factory=dict)
     scope: str = "agent"  # "global", "agent", "workflow"
     agent_id: str = ""  # which agent this belongs to ("" = global)
+    chain_mode: str = "short_circuit"  # "short_circuit" or "chain"
+    timeout: int = 30  # seconds; 0 = no timeout
 
 
 @dataclass
@@ -79,6 +89,17 @@ class HookResult:
     modified_args: dict[str, Any] | None = None
     reason: str = ""
     system_message: str = ""
+
+
+@dataclass
+class HookMetrics:
+    """Execution metrics for a hook handler."""
+
+    executions: int = 0
+    failures: int = 0
+    total_duration_ms: float = 0.0
+    timeouts: int = 0
+    last_executed: float = 0.0  # time.monotonic()
 
 
 @dataclass
@@ -102,9 +123,12 @@ class HookContext:
 class HookRegistry:
     """Collects and dispatches lifecycle hooks."""
 
+    _sync_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hook-sync")
+
     def __init__(self) -> None:
         self._hooks: list[LifecycleHook] = []
         self._python_handlers: dict[str, Callable[..., Any]] = {}
+        self._metrics: dict[tuple[str, str], HookMetrics] = {}  # (handler, event) -> metrics
 
     def register(self, hook: LifecycleHook) -> None:
         """Register a lifecycle hook."""
@@ -150,7 +174,12 @@ class HookRegistry:
     ) -> HookResult:
         """Dispatch hooks for an event.
 
-        Blocking hooks: first BLOCK or MODIFY wins (short-circuit).
+        Blocking hooks with chain_mode="short_circuit" (default):
+            first BLOCK or MODIFY wins.
+        Blocking hooks with chain_mode="chain":
+            MODIFY updates context.tool_args and continues.
+            BLOCK accumulates but continues.
+            After all chain hooks: BLOCK > MODIFY > ALLOW.
         Non-blocking hooks: fire-and-forget via asyncio.create_task.
         """
         hooks = self.get_hooks_for_event(event, agent_id=context.agent_id)
@@ -158,6 +187,9 @@ class HookRegistry:
             return HookResult()
 
         result = HookResult()
+        chain_blocked = False
+        chain_block_reason = ""
+        chain_modified = False
 
         for hook in hooks:
             if not self._matches_filter(hook, context):
@@ -166,17 +198,40 @@ class HookRegistry:
             if hook.blocking:
                 try:
                     hr = await self._execute_handler(hook, context)
-                    if hr.action == HookAction.BLOCK:
-                        return hr
-                    if hr.action == HookAction.MODIFY:
-                        if hr.modified_args:
-                            context.tool_args = hr.modified_args
-                        return hr
+
+                    if hook.chain_mode == "chain":
+                        # Chain mode: accumulate results, continue
+                        if hr.action == HookAction.BLOCK:
+                            chain_blocked = True
+                            if hr.reason:
+                                chain_block_reason = hr.reason
+                        elif hr.action == HookAction.MODIFY:
+                            chain_modified = True
+                            if hr.modified_args:
+                                context.tool_args = hr.modified_args
+                                result.modified_args = hr.modified_args
+                            if hr.system_message:
+                                result.system_message = hr.system_message
+                    else:
+                        # Short-circuit mode (default): first BLOCK or MODIFY wins
+                        if hr.action == HookAction.BLOCK:
+                            return hr
+                        if hr.action == HookAction.MODIFY:
+                            if hr.modified_args:
+                                context.tool_args = hr.modified_args
+                            return hr
                 except Exception as e:
                     logger.error("Blocking hook %s failed: %s", hook.handler, e)
                     # Fail-open: blocking hook error = allow
             else:
                 asyncio.create_task(self._execute_handler_safe(hook, context))
+
+        # Resolve accumulated chain results: BLOCK > MODIFY > ALLOW
+        if chain_blocked:
+            return HookResult(action=HookAction.BLOCK, reason=chain_block_reason)
+        if chain_modified:
+            result.action = HookAction.MODIFY
+            return result
 
         return result
 
@@ -196,8 +251,59 @@ class HookRegistry:
                 return False
         return True
 
+    def _get_metrics(self, hook: LifecycleHook) -> HookMetrics:
+        """Get or create metrics for a hook handler."""
+        key = (hook.handler, hook.event.value)
+        if key not in self._metrics:
+            self._metrics[key] = HookMetrics()
+        return self._metrics[key]
+
+    def get_metrics(self) -> dict[tuple[str, str], HookMetrics]:
+        """Return all hook metrics keyed by (handler, event)."""
+        return dict(self._metrics)
+
     async def _execute_handler(self, hook: LifecycleHook, context: HookContext) -> HookResult:
-        """Execute a single hook handler and return its result."""
+        """Execute a single hook handler and return its result.
+
+        Wraps execution with timeout (if configured) and metrics tracking.
+        """
+        metrics = self._get_metrics(hook)
+        start = time.monotonic()
+
+        try:
+            coro = self._dispatch_handler(hook, context)
+            if hook.timeout > 0:
+                result = await asyncio.wait_for(coro, timeout=hook.timeout)
+            else:
+                result = await coro
+        except TimeoutError:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            metrics.timeouts += 1
+            metrics.executions += 1
+            metrics.total_duration_ms += elapsed_ms
+            metrics.last_executed = start
+            logger.warning(
+                "Hook %s timed out after %ds (fail-open)",
+                hook.handler,
+                hook.timeout,
+            )
+            return HookResult()
+        except Exception:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            metrics.failures += 1
+            metrics.executions += 1
+            metrics.total_duration_ms += elapsed_ms
+            metrics.last_executed = start
+            raise
+        else:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            metrics.executions += 1
+            metrics.total_duration_ms += elapsed_ms
+            metrics.last_executed = start
+            return result
+
+    async def _dispatch_handler(self, hook: LifecycleHook, context: HookContext) -> HookResult:
+        """Route to the correct handler implementation."""
         if hook.handler_type == "python":
             return await self._run_python(hook, context)
         elif hook.handler_type == "command":
@@ -205,9 +311,7 @@ class HookRegistry:
         elif hook.handler_type == "http":
             return await self._run_http(hook, context)
         elif hook.handler_type == "agent":
-            # Agent hooks are complex — stub for now
-            logger.info("Agent hook %s triggered (stub — allowing)", hook.handler)
-            return HookResult()
+            return await self._run_agent(hook, context)
         else:
             logger.warning("Unknown handler type: %s", hook.handler_type)
             return HookResult()
@@ -233,12 +337,11 @@ class HookRegistry:
                 logger.error("Failed to import handler %s: %s", hook.handler, e)
                 return HookResult()
 
-        result: HookResult
         if asyncio.iscoroutinefunction(handler):
-            result = await handler(context)
+            return await handler(context)
         else:
-            result = handler(context)
-        return result
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(self._sync_executor, handler, context)
 
     async def _run_command(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Run shell command. Exit 0 = allow, 1 = block."""
@@ -328,6 +431,57 @@ class HookRegistry:
             logger.error("HTTP hook failed: %s", e)
             return HookResult()
 
+    async def _run_agent(self, hook: LifecycleHook, context: HookContext) -> HookResult:
+        """Execute an agent as a hook handler via the runner."""
+        try:
+            from robothor.engine.tools.handlers.spawn import get_runner
+        except ImportError:
+            logger.error("Cannot import get_runner for agent hook %s", hook.handler)
+            return HookResult()
+
+        runner = get_runner()
+        if runner is None:
+            logger.warning("No runner available for agent hook %s", hook.handler)
+            return HookResult()
+
+        context_dict = {
+            "event": context.event.value,
+            "agent_id": context.agent_id,
+            "run_id": context.run_id,
+            "tool_name": context.tool_name,
+            "tool_args": context.tool_args,
+        }
+
+        try:
+            run = await runner.execute(
+                agent_id=hook.handler,
+                message=json.dumps(context_dict),
+                trigger_type="sub_agent",
+            )
+
+            if run.output_text:
+                try:
+                    data = json.loads(run.output_text)
+                    action = HookAction(data.get("action", "allow"))
+                    return HookResult(
+                        action=action,
+                        modified_args=data.get("modified_args"),
+                        reason=data.get("reason", ""),
+                        system_message=data.get("system_message", ""),
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning(
+                        "Agent hook %s output not valid JSON, allowing",
+                        hook.handler,
+                    )
+                    return HookResult()
+
+            return HookResult()
+
+        except Exception as e:
+            logger.error("Agent hook %s failed: %s", hook.handler, e)
+            return HookResult()
+
 
 # ─── Manifest loading ────────────────────────────────────────────────
 
@@ -360,6 +514,8 @@ def load_hooks_from_manifest(
                 filter=raw.get("filter", {}),
                 scope=raw.get("scope", "agent"),
                 agent_id=agent_id,
+                chain_mode=raw.get("chain_mode", "short_circuit"),
+                timeout=int(raw.get("timeout", 30)),
             )
         )
 
@@ -403,6 +559,8 @@ def load_global_hooks(hooks_dir: Any) -> list[LifecycleHook]:
                 filter=raw.get("filter", {}),
                 scope="global",
                 agent_id="",
+                chain_mode=raw.get("chain_mode", "short_circuit"),
+                timeout=int(raw.get("timeout", 30)),
             )
         )
 

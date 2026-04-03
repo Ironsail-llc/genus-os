@@ -504,6 +504,44 @@ def create_health_app(
         )
         return {"status": "started", "workflow_id": workflow_id}
 
+    # ── Config + hook introspection endpoints ──────────────────────────
+
+    @app.get("/api/config/explain/{agent_id}")
+    async def explain_agent_config(agent_id: str) -> dict[str, Any]:
+        from pathlib import Path
+
+        from robothor.engine.config import explain_config
+
+        manifest_dir = Path.home() / "robothor" / "docs" / "agents"
+        workspace = Path.home() / "robothor"
+
+        result = explain_config(agent_id, manifest_dir, workspace=workspace)
+        if not result.get("merged"):
+            return {"error": f"Agent '{agent_id}' not found"}
+        return result
+
+    @app.get("/api/hooks/metrics")
+    async def hook_metrics() -> dict[str, Any]:
+        from robothor.engine.hook_registry import get_hook_registry
+
+        registry = get_hook_registry()
+        if not registry:
+            return {"metrics": {}}
+
+        raw = registry.get_metrics()
+        # Convert tuple keys to strings for JSON serialization
+        return {
+            "metrics": {
+                f"{handler}:{event}": {
+                    "executions": m.executions,
+                    "failures": m.failures,
+                    "total_duration_ms": round(m.total_duration_ms, 2),
+                    "timeouts": m.timeouts,
+                }
+                for (handler, event), m in raw.items()
+            }
+        }
+
     return app
 
 

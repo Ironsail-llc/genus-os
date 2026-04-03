@@ -22,6 +22,17 @@ _skills_cache: tuple[float, dict[str, SkillDefinition]] | None = None
 
 
 @dataclass(frozen=True)
+class SkillParameter:
+    """A typed parameter for a skill."""
+
+    name: str
+    type: str = "string"  # string, integer, float, boolean, file_glob
+    description: str = ""
+    required: bool = False
+    default: Any = None
+
+
+@dataclass(frozen=True)
 class SkillDefinition:
     """A single skill parsed from a SKILL.md file."""
 
@@ -32,6 +43,10 @@ class SkillDefinition:
     tags: tuple[str, ...] = ()
     tools_required: tuple[str, ...] = ()
     trigger_phrases: tuple[str, ...] = ()
+    parameters: tuple[SkillParameter, ...] = ()
+    output_format: str = "text"  # "text" or "json"
+    composable: bool = False  # can invoke other skills mid-execution
+    depends_on: tuple[str, ...] = ()  # prerequisite skills
 
 
 def _parse_skill_file(path: Path) -> SkillDefinition | None:
@@ -51,25 +66,51 @@ def _parse_skill_file(path: Path) -> SkillDefinition | None:
     frontmatter_text = match.group(1)
     body = match.group(2).strip()
 
-    # Simple YAML parsing (key: value per line, supports lists)
+    # Parse YAML frontmatter — use PyYAML for full nested structure support,
+    # fall back to simple line parser if unavailable or parse fails.
     meta: dict[str, Any] = {}
-    for line in frontmatter_text.strip().split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, _, value = line.partition(":")
-            value = value.strip()
-            # Handle inline lists: [a, b, c]
-            if value.startswith("[") and value.endswith("]"):
-                items = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
-                meta[key.strip()] = items
-            else:
-                meta[key.strip()] = value
+    try:
+        import yaml
+
+        parsed = yaml.safe_load(frontmatter_text)
+        if isinstance(parsed, dict):
+            meta = parsed
+    except Exception:
+        # Fallback: simple line-by-line parser (key: value, inline lists)
+        for line in frontmatter_text.strip().split("\n"):
+            line = line.strip()
+            if ":" in line:
+                key, _, value = line.partition(":")
+                value = value.strip()
+                if value.startswith("[") and value.endswith("]"):
+                    items = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
+                    meta[key.strip()] = items
+                else:
+                    meta[key.strip()] = value
 
     name = meta.get("name", "")
     description = meta.get("description", "")
     if not name:
         logger.debug("Skill file %s missing name", path)
         return None
+
+    # Parse parameters list (each item is a dict or simple key: value)
+    raw_params = meta.get("parameters", [])
+    params: list[SkillParameter] = []
+    if isinstance(raw_params, list):
+        for p in raw_params:
+            if isinstance(p, dict):
+                params.append(
+                    SkillParameter(
+                        name=p.get("name", ""),
+                        type=p.get("type", "string"),
+                        description=p.get("description", ""),
+                        required=p.get("required", False),
+                        default=p.get("default"),
+                    )
+                )
+            elif isinstance(p, str):
+                params.append(SkillParameter(name=p))
 
     return SkillDefinition(
         name=name,
@@ -79,6 +120,12 @@ def _parse_skill_file(path: Path) -> SkillDefinition | None:
         tags=tuple(meta.get("tags", [])),
         tools_required=tuple(meta.get("tools_required", [])),
         trigger_phrases=tuple(meta.get("trigger_phrases", [])),
+        parameters=tuple(params),
+        output_format=meta.get("output_format", "text"),
+        composable=meta.get("composable", "false").lower() in ("true", "yes", "1")
+        if isinstance(meta.get("composable"), str)
+        else bool(meta.get("composable", False)),
+        depends_on=tuple(meta.get("depends_on", [])),
     )
 
 
@@ -129,10 +176,22 @@ def build_skill_catalog(skills: dict[str, SkillDefinition] | None = None) -> str
         return ""
 
     lines = ["## Available Skills", ""]
-    lines.append("Use `invoke_skill` to get detailed instructions for any skill.")
+    lines.append("Use `invoke_skill` with `name` and optional `args` dict.")
     lines.append("")
     for defn in skills.values():
+        if defn.parameters:
+            sig_parts = []
+            for p in defn.parameters:
+                if p.default is not None:
+                    sig_parts.append(f"{p.name}={p.default}")
+                elif not p.required:
+                    sig_parts.append(f"{p.name}=None")
+                else:
+                    sig_parts.append(p.name)
+            sig = f"({', '.join(sig_parts)})"
+        else:
+            sig = ""
         trigger = f" (triggers: {', '.join(defn.trigger_phrases)})" if defn.trigger_phrases else ""
-        lines.append(f"- **{defn.name}**: {defn.description}{trigger}")
+        lines.append(f"- **{defn.name}**{sig}: {defn.description}{trigger}")
 
     return "\n".join(lines)

@@ -1510,6 +1510,11 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "string",
                         "description": "Name of the skill to invoke (e.g. 'send-email', 'crm-lookup')",
                     },
+                    "args": {
+                        "type": "object",
+                        "description": "Named arguments for the skill (see skill catalog for parameters)",
+                        "additionalProperties": True,
+                    },
                 },
                 "required": ["name"],
             },
@@ -1523,6 +1528,25 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "parameters": {
                 "type": "object",
                 "properties": {},
+            },
+        },
+    }
+
+    # ── Timing ────────────────────────────────────────────────────────
+    schemas["wait_seconds"] = {
+        "type": "function",
+        "function": {
+            "name": "wait_seconds",
+            "description": "Pause execution for N seconds (max 300). Useful for polling patterns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seconds": {
+                        "type": "integer",
+                        "description": "Seconds to wait (1-300)",
+                    },
+                },
+                "required": ["seconds"],
             },
         },
     }

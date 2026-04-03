@@ -435,6 +435,27 @@ class AgentRunner:
                         if plan_context:
                             session.messages.append({"role": "user", "content": plan_context})
 
+                        # Dispatch PLAN_CREATED hook
+                        try:
+                            from robothor.engine.hook_registry import (
+                                HookContext,
+                                HookEvent,
+                                get_hook_registry,
+                            )
+
+                            hr = get_hook_registry()
+                            if hr:
+                                await hr.dispatch(
+                                    HookEvent.PLAN_CREATED,
+                                    HookContext(
+                                        event=HookEvent.PLAN_CREATED,
+                                        agent_id=agent_config.id,
+                                        run_id=session.run_id,
+                                    ),
+                                )
+                        except Exception:
+                            pass
+
                 # ── [TELEMETRY] Create trace context ──
                 trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
 
@@ -882,10 +903,25 @@ class AgentRunner:
                         }
                     )
 
-            # ── [BUDGET] Token tracking with soft enforcement ──
-            budget_status = session.check_budget(session.run.token_budget)
+            # ── [BUDGET] Token and cost tracking with enforcement ──
+            budget_status = session.check_budget(
+                session.run.token_budget, agent_config.max_cost_usd
+            )
             if budget_status == "exhausted" and not session.run.budget_exhausted:
                 session.run.budget_exhausted = True  # track for analytics
+                if agent_config.hard_budget:
+                    # Hard budget: force wrap-up and exit
+                    await self._force_wrapup(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        agent_config.temperature,
+                        trace,
+                        reason="Hard budget limit reached (token or cost cap).",
+                    )
+                    return
                 # Soft enforcement: tell the agent to wrap up
                 session.messages.append(
                     {
@@ -909,6 +945,23 @@ class AgentRunner:
                         ),
                     }
                 )
+                # Dispatch BUDGET_WARNING hook
+                if hook_registry:
+                    with contextlib.suppress(Exception):
+                        await hook_registry.dispatch(
+                            HookEvent.BUDGET_WARNING,
+                            HookContext(
+                                event=HookEvent.BUDGET_WARNING,
+                                agent_id=agent_config.id,
+                                run_id=session.run_id,
+                                metadata={
+                                    "token_budget": session.run.token_budget,
+                                    "tokens_used": session.run.input_tokens
+                                    + session.run.output_tokens,
+                                    "cost_usd": session.run.total_cost_usd,
+                                },
+                            ),
+                        )
 
             # Soft budget enforcement: after 2 iterations past exhaustion,
             # strip tool schemas to force a text-only response
@@ -917,6 +970,15 @@ class AgentRunner:
                 session.run._budget_exhausted_iters = budget_exhausted_iters  # type: ignore[attr-defined]
                 if budget_exhausted_iters > 2:
                     tool_schemas = []  # force text-only response
+
+            # ── [CONTINUOUS MODE] Periodic progress reports ──
+            if (
+                agent_config.continuous
+                and _iteration > 0
+                and agent_config.progress_report_interval > 0
+                and _iteration % agent_config.progress_report_interval == 0
+            ):
+                await self._send_progress_report(session, agent_config, _iteration)
 
             # ── [EAGER COMPRESSION] Thin previous iterations' tool results ──
             if agent_config.eager_tool_compression and _iteration > 0:
@@ -940,6 +1002,24 @@ class AgentRunner:
                     proactive_threshold = int(model_limits.max_input_tokens * 0.50)
                     if est_tokens > proactive_threshold:
                         pre_len = len(session.messages)
+
+                        # Dispatch PRE_COMPACTION hook
+                        if hook_registry:
+                            with contextlib.suppress(Exception):
+                                await hook_registry.dispatch(
+                                    HookEvent.PRE_COMPACTION,
+                                    HookContext(
+                                        event=HookEvent.PRE_COMPACTION,
+                                        agent_id=agent_config.id,
+                                        run_id=session.run_id,
+                                        metadata={
+                                            "est_tokens": est_tokens,
+                                            "threshold": proactive_threshold,
+                                            "message_count": pre_len,
+                                        },
+                                    ),
+                                )
+
                         session.messages[:] = await maybe_compress(
                             session.messages,
                             models,
@@ -954,6 +1034,22 @@ class AgentRunner:
                             est_tokens,
                             proactive_threshold,
                         )
+
+                        # Dispatch POST_COMPACTION hook
+                        if hook_registry:
+                            with contextlib.suppress(Exception):
+                                await hook_registry.dispatch(
+                                    HookEvent.POST_COMPACTION,
+                                    HookContext(
+                                        event=HookEvent.POST_COMPACTION,
+                                        agent_id=agent_config.id,
+                                        run_id=session.run_id,
+                                        metadata={
+                                            "pre_message_count": pre_len,
+                                            "post_message_count": len(session.messages),
+                                        },
+                                    ),
+                                )
                 except Exception as e:
                     logger.warning("Proactive compaction failed: %s", e)
 
@@ -961,6 +1057,15 @@ class AgentRunner:
             if scratchpad and scratchpad.should_inject():
                 summary = scratchpad.format_summary(plan_steps=plan_steps)
                 session.messages.append({"role": "user", "content": summary})
+
+            # ── [PRE-FLIGHT] Hard budget cost projection ──
+            if (
+                agent_config.hard_budget
+                and agent_config.max_cost_usd > 0
+                and session.project_next_call_cost() + session.run.total_cost_usd
+                > agent_config.max_cost_usd
+            ):
+                tool_schemas = []  # force text-only final response
 
             # ── LLM call ──
             response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
@@ -1090,30 +1195,68 @@ class AgentRunner:
                         tool_name, tool_args, agent_id=agent_config.id
                     )
                     if not gr.allowed:
-                        gr_error_msg = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
-                        session.record_tool_call(
-                            tool_name=tool_name,
-                            tool_input=tool_args,
-                            tool_output={"error": gr_error_msg, "guardrail": gr.guardrail_name},
-                            tool_call_id=tc.id,
-                            error_message=gr_error_msg,
-                        )
-                        iteration_errors.append((tool_name, gr_error_msg, None))
-                        with contextlib.suppress(Exception):
-                            from robothor.engine.tracking import log_tool_event
-
-                            log_tool_event(
-                                run_id=session.run.id,
-                                tool_name=tool_name,
-                                duration_ms=0,
-                                success=False,
-                                error_type="guardrail_blocked",
+                        # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
+                        if gr.action == "escalate":
+                            from robothor.engine.permission_escalation import (
+                                get_permission_manager,
                             )
-                        if scratchpad:
-                            scratchpad.record_tool_call(tool_name, error=gr_error_msg)
-                        if escalation:
-                            escalation.record_error()
-                        continue
+
+                            mgr = get_permission_manager()
+                            if mgr:
+                                approved = await mgr.request_approval(
+                                    agent_id=agent_config.id,
+                                    run_id=session.run_id,
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    guardrail_name=gr.guardrail_name,
+                                    reason=gr.reason,
+                                    timeout_seconds=agent_config.human_approval_timeout,
+                                )
+                                if approved:
+                                    pass  # fall through to execute tool
+                                else:
+                                    gr_error_msg = (
+                                        f"Denied by operator ({gr.guardrail_name}): {gr.reason}"
+                                    )
+                                    session.record_tool_call(
+                                        tool_name=tool_name,
+                                        tool_input=tool_args,
+                                        tool_output={"error": gr_error_msg},
+                                        tool_call_id=tc.id,
+                                        error_message=gr_error_msg,
+                                    )
+                                    if scratchpad:
+                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                                    continue
+                            else:
+                                pass  # no manager = auto-approve (autonomous default)
+                        else:
+                            gr_error_msg = (
+                                f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
+                            )
+                            session.record_tool_call(
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                                tool_output={"error": gr_error_msg, "guardrail": gr.guardrail_name},
+                                tool_call_id=tc.id,
+                                error_message=gr_error_msg,
+                            )
+                            iteration_errors.append((tool_name, gr_error_msg, None))
+                            with contextlib.suppress(Exception):
+                                from robothor.engine.tracking import log_tool_event
+
+                                log_tool_event(
+                                    run_id=session.run.id,
+                                    tool_name=tool_name,
+                                    duration_ms=0,
+                                    success=False,
+                                    error_type="guardrail_blocked",
+                                )
+                            if scratchpad:
+                                scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                            if escalation:
+                                escalation.record_error()
+                            continue
 
                 # Emit tool_start event
                 if on_tool:
@@ -1407,6 +1550,18 @@ class AgentRunner:
                         _replan_count += 1
                         scratchpad.set_plan(new_plan.plan)
                         plan_context = format_plan_context(new_plan)
+                        # Dispatch REPLAN hook
+                        if hook_registry:
+                            with contextlib.suppress(Exception):
+                                await hook_registry.dispatch(
+                                    HookEvent.REPLAN,
+                                    HookContext(
+                                        event=HookEvent.REPLAN,
+                                        agent_id=agent_config.id,
+                                        run_id=session.run_id,
+                                        metadata={"replan_count": _replan_count},
+                                    ),
+                                )
                         session.messages.append(
                             {
                                 "role": "user",
@@ -1422,10 +1577,60 @@ class AgentRunner:
                     scratchpad=scratchpad.to_dict() if scratchpad else None,
                     plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
                 )
+                # Dispatch CHECKPOINT hook
+                if hook_registry:
+                    with contextlib.suppress(Exception):
+                        await hook_registry.dispatch(
+                            HookEvent.CHECKPOINT,
+                            HookContext(
+                                event=HookEvent.CHECKPOINT,
+                                agent_id=agent_config.id,
+                                run_id=session.run_id,
+                                metadata={"step_number": session._step_counter},
+                            ),
+                        )
 
             # Update boundary for next iteration's eager compression
             _pre_iteration_msg_idx = len(session.messages)
             _iteration += 1
+
+    # ─── Continuous mode progress report ─────────────────────────────
+
+    async def _send_progress_report(
+        self,
+        session: Any,
+        agent_config: Any,
+        iteration: int,
+    ) -> None:
+        """Send a brief Telegram progress report during continuous execution."""
+        try:
+            from robothor.engine.delivery import get_telegram_sender
+
+            sender = get_telegram_sender()
+            if not sender:
+                return
+
+            # Summarize recent activity
+            tool_calls = sum(
+                1
+                for m in session.messages[-50:]
+                if m.get("role") == "assistant" and m.get("tool_calls")
+            )
+            cost = f"${session.run.total_cost_usd:.4f}" if session.run.total_cost_usd else "$0"
+
+            text = (
+                f"📊 *Progress report* — `{agent_config.id}`\n\n"
+                f"Iteration: {iteration}\n"
+                f"Tool calls (recent 50 msgs): {tool_calls}\n"
+                f"Cost so far: {cost}\n"
+                f"Status: running"
+            )
+
+            chat_id = agent_config.delivery_to
+            if chat_id:
+                await sender(chat_id, text, parse_mode="Markdown")
+        except Exception as e:
+            logger.debug("Progress report failed: %s", e)
 
     # ─── Force wrap-up (used by safety valve and escalation abort) ─────
 
@@ -1592,6 +1797,9 @@ class AgentRunner:
                 cache_read_tokens,
             )
             session.run.total_cost_usd += cost
+
+        # Record step cost for projection (used by hard budget pre-flight check)
+        session.record_step_cost(cost or 0.0)
 
         return response, model_used, elapsed_ms, msg_dict
 
@@ -1868,6 +2076,10 @@ class AgentRunner:
                 ]
             if agent_config.write_path_allowlist:
                 engine._write_allowlists[agent_config.id] = agent_config.write_path_allowlist
+            if agent_config.human_approval_tools:
+                engine.set_human_approval_patterns(
+                    agent_config.id, agent_config.human_approval_tools
+                )
             return engine
         except Exception:
             return None
