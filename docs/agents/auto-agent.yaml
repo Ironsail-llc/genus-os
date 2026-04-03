@@ -1,0 +1,97 @@
+id: auto-agent
+name: AutoAgent
+description: Meta-agent that optimizes other agents' harnesses (prompts, tools, config, routing) via structured benchmark suites
+version: "2026-04-03"
+department: operations
+
+reports_to: main
+creates_tasks_for: [auto-researcher]
+receives_tasks_from: [main, auto-researcher]
+escalates_to: main
+
+tags_produced: [autoagent, harness-optimization]
+tags_consumed: [autoagent, cross-system]
+
+model:
+  primary: openrouter/xiaomi/mimo-v2-pro
+  fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
+    - gemini/gemini-2.5-pro
+
+schedule:
+  cron: ""  # Triggered manually or via task assignment
+  timezone: America/New_York
+  timeout_seconds: 900
+  max_iterations: 30
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - list_directory
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - experiment_create
+  - experiment_measure
+  - experiment_commit
+  - experiment_status
+  - benchmark_define
+  - benchmark_run
+  - benchmark_compare
+  - deep_reason
+  - search_memory
+  - store_memory
+  - get_agent_stats
+  - list_agent_runs
+tools_denied: []
+
+streams:
+  read: [agent, system]
+  write: [agent]
+
+task_protocol: true
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/auto-agent-status.md
+shared_working_state: false
+
+warmup:
+  context_files:
+    - brain/memory/auto-agent-status.md
+  memory_blocks:
+    - autoagent_learnings
+    - autoresearch_learnings
+
+instruction_file: brain/agents/AUTO_AGENT.md
+bootstrap_files:
+  - brain/AGENTS.md
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  scratchpad_enabled: true
+  can_spawn_agents: false
+  cost_budget_usd: 5.00
+  guardrails:
+    - no_destructive_writes
+    - write_path_restrict
+    - exec_allowlist
+  exec_allowlist:
+    - "^git checkout -- "
+    - "^git diff"
+    - "^python -m pytest"
+    - "^python scripts/validate"
+  write_path_allowlist:
+    - "brain/memory/auto-agent-status.md"
+    - "brain/agents/*.md"
+    - "docs/agents/*.yaml"
+    - "docs/benchmarks/**"
+
+changelog:
+  - date: "2026-04-03"
+    change: "Initial creation — meta-agent harness optimization via benchmark suites"

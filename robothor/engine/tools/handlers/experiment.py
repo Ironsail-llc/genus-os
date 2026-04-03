@@ -159,7 +159,8 @@ async def _measure_benchmark(
     aggregate = bench_result["aggregate_score"]
 
     # If no baseline yet, set it
-    if state["baseline_value"] is None:
+    just_set_baseline = state["baseline_value"] is None
+    if just_set_baseline:
         state["baseline_value"] = aggregate
         state["current_best_value"] = aggregate
         _save_state(experiment_id, state)
@@ -175,15 +176,14 @@ async def _measure_benchmark(
         "timestamp": datetime.now(UTC).isoformat(),
     }
 
-    if state["baseline_value"] is not None:
-        result["baseline"] = state["baseline_value"]
-        result["current_best"] = state["current_best_value"]
-        result["vs_baseline_pct"] = round(
-            _calc_improvement(state["baseline_value"], aggregate, state["direction"]), 2
-        )
-        if state["baseline_value"] == aggregate:
-            result["baseline_set"] = True
-            result["message"] = f"Baseline established at {aggregate}"
+    result["baseline"] = state["baseline_value"]
+    result["current_best"] = state["current_best_value"]
+    result["vs_baseline_pct"] = round(
+        _calc_improvement(state["baseline_value"], aggregate, state["direction"]), 2
+    )
+    if just_set_baseline:
+        result["baseline_set"] = True
+        result["message"] = f"Baseline established at {aggregate}"
 
     return result
 

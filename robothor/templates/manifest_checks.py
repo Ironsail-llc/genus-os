@@ -170,9 +170,22 @@ def check_tools_registered(manifest: dict[str, Any], registered: set[str]) -> Ch
         return result
 
     unknown = [t for t in tools_allowed if t not in registered]
-    if unknown:
-        return result.fail(f"Unknown tools in tools_allowed: {unknown}")
-    return result
+    if not unknown:
+        return result
+
+    # Check if this agent has MCP adapters configured — adapter tools are
+    # discovered at runtime so they won't be in the static registry.
+    try:
+        from robothor.engine.adapters import get_adapters_for_agent
+
+        agent_id = manifest.get("id", "")
+        agent_adapters = get_adapters_for_agent(agent_id)
+        if agent_adapters:
+            return result.warn(f"Unregistered tools (may be adapter-provided): {unknown}")
+    except Exception:
+        pass
+
+    return result.fail(f"Unknown tools in tools_allowed: {unknown}")
 
 
 def check_status_file_tools(manifest: dict[str, Any]) -> CheckResult:
