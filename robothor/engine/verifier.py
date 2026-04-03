@@ -93,7 +93,7 @@ async def verify_output(
                 suggestions=data.get("suggestions", []),
             )
         except Exception as e:
-            logger.debug("Verification failed with model %s: %s", m, e)
+            logger.debug("Verification failed with model %s: %s", m, str(e).replace("\n", "\\n"))
             continue
 
     # If all models fail, pass by default (non-fatal)
