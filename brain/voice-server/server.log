@@ -1,0 +1,495 @@
+🎙️  Robothor Voice Server v2 (Gemini Live Native Audio)
+📍 TwiML URL: http://localhost:8765/twiml
+📍 WebSocket: ws://localhost:8765/media-stream
+🧠 Model: gemini-live-2.5-flash-native-audio
+🎤 Voice: Charon (deep male)
+--------------------------------------------------
+📞 TwiML requested, WebSocket URL: wss://voice.robothor.ai/media-stream
+🎙️ New Media Stream connection
+📱 Twilio connected: protocol=Call
+[CA08b44a7a06a473209751546873e54dc5] Inbound call from unknown
+[CA08b44a7a06a473209751546873e54dc5] Stream=MZ67f30002c1343fb43626dda5c1a3bfea
+[CA08b44a7a06a473209751546873e54dc5] Connected to Gemini Live API (Vertex AI)
+[CA08b44a7a06a473209751546873e54dc5] Gemini Live setup complete
+[CA08b44a7a06a473209751546873e54dc5] Starting audio handler, stream=MZ67f30002c1343fb43626dda5c1a3bfea
+[CA08b44a7a06a473209751546873e54dc5] Starting Gemini audio receiver
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: A
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: yer.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: Good morning.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Everything
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 13440 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2240 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  looks
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 13440 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2240 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  clear
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  so far.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Did you
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  have a
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  question?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 7680 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1280 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: Ja
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: .
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: I'm sorry,
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  I didn't
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  catch
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  that.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Could
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  you repeat
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  that for
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 13440 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2240 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  me?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 5760 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 960 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: Are
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: you actually working?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: Yes, Philip.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  I'm fully
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  operational.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Is there
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  something
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  specific
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  you need?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 5760 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 960 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: Hello
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: Hello
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: I hear
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  you.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 13440 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2240 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  What can
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 13440 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2240 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  I help
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  with?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 3840 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 640 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: That
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 's when I can't. That's pretty cool.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: don
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 't kill fancy Guthrie.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: Who
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: killed Nancy Guther?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: One moment.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 15360 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 2560 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  I am
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  looking
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  that up
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  now.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Initial
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  search
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  results
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  suggest
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  the case
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  is
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  still
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  ongoing.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  Is there
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  something
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  else
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  about
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  it you
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  wanted
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID:  to know?
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11520 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1920 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 9600 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1600 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: So
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: if initial search results show that the case is still ongoing it's a something
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: that we will something else that we wanted.
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 📝 USER SAID: 
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] 🎤 ROBOTHOR SAID: Is there
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 11114 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 1853 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Received 3840 bytes from Gemini
+[CA08b44a7a06a473209751546873e54dc5] Sent 640 bytes to Twilio
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent']
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['serverContent', 'usageMetadata']
+[CA08b44a7a06a473209751546873e54dc5] Gemini turn complete
+[CA08b44a7a06a473209751546873e54dc5] Grounding: {}
+[CA08b44a7a06a473209751546873e54dc5] Media stream stopped
+[CA08b44a7a06a473209751546873e54dc5] Gemini msg keys: ['goAway']
+[CA08b44a7a06a473209751546873e54dc5] Gemini audio loop ended, sent 95 chunks
+👋 Call ended: CA08b44a7a06a473209751546873e54dc5

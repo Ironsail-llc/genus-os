@@ -160,10 +160,16 @@ def run_init(args: Any) -> int:
     if yes:
         ai_name = os.environ.get("ROBOTHOR_AI_NAME", "Robothor")
         owner_name = os.environ.get("ROBOTHOR_OWNER_NAME", "")
+        owner_email = os.environ.get("ROBOTHOR_OWNER_EMAIL", "")
+        ai_email = os.environ.get("ROBOTHOR_AI_EMAIL", "")
+        timezone = os.environ.get("ROBOTHOR_TIMEZONE", "America/New_York")
     else:
         print("  Identity:")
         ai_name = input("    What should your AI be called? [Robothor]: ").strip() or "Robothor"
         owner_name = input("    Your name: ").strip()
+        owner_email = input("    Your email: ").strip()
+        ai_email = input(f"    {ai_name}'s email (leave blank to skip): ").strip()
+        timezone = input("    Your timezone [America/New_York]: ").strip() or "America/New_York"
         print()
 
     # 3. Docker mode: generate compose and start containers
@@ -287,6 +293,9 @@ def run_init(args: Any) -> int:
             ollama_config,
             owner_name=owner_name,
             ai_name=ai_name,
+            owner_email=owner_email,
+            ai_email=ai_email,
+            timezone=timezone,
             profiles=profiles,
             yes=yes,
         )
@@ -596,6 +605,9 @@ def write_env_file(
     *,
     owner_name: str = "",
     ai_name: str = "Robothor",
+    owner_email: str = "",
+    ai_email: str = "",
+    timezone: str = "America/New_York",
     profiles: list[str] | None = None,
     yes: bool = False,
 ) -> bool:
@@ -606,14 +618,23 @@ def write_env_file(
             print(f"  Keeping existing {path}")
             return False
 
+    # Extract non-secret config values — secrets are NEVER written to .env
+    db_host = str(db.host)
+    db_port = str(db.port)
+    db_name = str(db.name)
+    db_user = str(db.user)
     lines = [
         f"ROBOTHOR_OWNER_NAME={owner_name}",
         f"ROBOTHOR_AI_NAME={ai_name}",
-        f"ROBOTHOR_DB_HOST={db.host}",
-        f"ROBOTHOR_DB_PORT={db.port}",
-        f"ROBOTHOR_DB_NAME={db.name}",
-        f"ROBOTHOR_DB_USER={db.user}",
-        f"ROBOTHOR_DB_PASSWORD={db.password}",
+        f"ROBOTHOR_OWNER_EMAIL={owner_email}",
+        f"ROBOTHOR_AI_EMAIL={ai_email}",
+        f"ROBOTHOR_TIMEZONE={timezone}",
+        f"ROBOTHOR_DB_HOST={db_host}",
+        f"ROBOTHOR_DB_PORT={db_port}",
+        f"ROBOTHOR_DB_NAME={db_name}",
+        f"ROBOTHOR_DB_USER={db_user}",
+        "# ROBOTHOR_DB_PASSWORD — set via SOPS secrets or env, not stored here",
+        "ROBOTHOR_DB_PASSWORD=",
         f"ROBOTHOR_REDIS_HOST={redis.host}",
         f"ROBOTHOR_REDIS_PORT={redis.port}",
         f"ROBOTHOR_OLLAMA_HOST={ollama.host}",

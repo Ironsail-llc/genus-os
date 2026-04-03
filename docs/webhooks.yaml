@@ -1,0 +1,17 @@
+# Webhook channel configuration
+# Each channel maps an external service to a Redis event stream.
+# Agents pick up events via the existing EventHooks system (hooks.py).
+channels:
+  github:
+    stream: github
+    secret_env: GITHUB_WEBHOOK_SECRET
+    event_type_header: X-GitHub-Event
+    event_type_prefix: "github."
+    rate_limit_per_min: 60
+
+  generic:
+    stream: webhook
+    secret_env: GENERIC_WEBHOOK_SECRET
+    event_type_field: event_type
+    event_type_prefix: ""
+    rate_limit_per_min: 100

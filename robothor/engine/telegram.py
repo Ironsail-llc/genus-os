@@ -533,7 +533,11 @@ class TelegramBot:
                         await msg.edit_reply_markup(reply_markup=None)
                 except Exception:
                     pass
-                await self._execute_approved_plan(chat_id, session_key, session)
+                # Fire-and-forget — execute in background so Telegram handler is freed
+                task = asyncio.create_task(
+                    self._execute_approved_plan(chat_id, session_key, session)
+                )
+                self._active_tasks[chat_id] = task
             elif action == "revise":
                 await callback.answer("Send your feedback and I'll revise the plan.")
                 await self.send_message(chat_id, "Send your feedback and I'll revise the plan.")
@@ -1358,7 +1362,13 @@ class TelegramBot:
         session_key: str,
         session: Any,
     ) -> None:
-        """Execute an approved plan — full tools or deep reasoning."""
+        """Execute an approved plan in background mode.
+
+        Runs as a fire-and-forget asyncio task (caller wraps in create_task).
+        Sends immediate acknowledgement, executes with continuous-mode overrides
+        for long-running tasks, and delivers the final result as a new Telegram
+        message (triggering a push notification).
+        """
         plan = session.active_plan
         if not plan:
             await self.send_message(chat_id, "No pending plan to execute.")
@@ -1380,68 +1390,19 @@ class TelegramBot:
             await self._execute_deep_plan(chat_id, session_key, session)
             return
 
-        typing_active = True
-
-        async def typing_loop() -> None:
-            while typing_active:
-                with contextlib.suppress(Exception):
-                    await self.bot.send_chat_action(chat_id=int(chat_id), action=ChatAction.TYPING)
-                await asyncio.sleep(TYPING_INTERVAL)
-
-        typing_task = asyncio.create_task(typing_loop())
-
-        try:
-            thinking_msg = await self.bot.send_message(
-                chat_id=int(chat_id),
-                text="\u2705 Executing plan...",
-                parse_mode=None,
-            )
-            stream_msg_id: int | None = thinking_msg.message_id
-        except Exception:
-            stream_msg_id = None
-
-        last_edit_time: float = 0.0
-        last_edit_len: int = 0
-        first_content = True
-        stream_edit_interval: float = STREAM_EDIT_INTERVAL
-
-        async def on_content(accumulated_text: str) -> None:
-            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-            nonlocal stream_edit_interval
-            now = time.monotonic()
-            text_len = len(accumulated_text)
-            if first_content:
-                first_content = False
-            else:
-                time_ok = (now - last_edit_time) >= stream_edit_interval
-                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
-                if not time_ok and not chars_ok:
-                    return
-            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
-            try:
-                if stream_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=stream_msg_id,
-                        text=display,
-                        parse_mode=None,
-                    )
-                else:
-                    sent = await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=display,
-                        parse_mode=None,
-                    )
-                    stream_msg_id = sent.message_id
-            except TelegramRetryAfter as e:
-                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
-            except Exception:
-                pass
-            last_edit_time = now
-            last_edit_len = text_len
+        # ── Immediate acknowledgement ──
+        await self.send_message(
+            chat_id,
+            "\u2705 On it \u2014 executing in the background. "
+            "I'll send progress updates and notify you when done. "
+            "Send /stop to cancel.",
+        )
 
         try:
             model = self._model_override.get(chat_id)
+
+            # Build agent config with continuous-mode overrides for background execution
+            bg_config = self._build_background_config()
 
             # CONTEXT RESET — clean execution context, no planning history.
             # The LLM only sees the plan + original request. This structurally
@@ -1458,9 +1419,9 @@ class TelegramBot:
             run = await self.runner.execute(
                 agent_id=self.config.default_chat_agent,
                 message=execution_message,
+                agent_config=bg_config,
                 trigger_type=TriggerType.TELEGRAM,
                 trigger_detail=f"plan-exec:{chat_id}",
-                on_content=on_content,
                 model_override=model,
                 conversation_history=None,  # CLEAN CONTEXT
                 execution_mode=True,
@@ -1501,28 +1462,43 @@ class TelegramBot:
                 clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
             )
 
+            # Send final result as NEW message (not edit) so user gets push notification
+            duration_s = (run.duration_ms or 0) / 1000
+            cost_str = f"${run.total_cost_usd:.4f}" if run.total_cost_usd else "$0"
+            footer = f"\n\n\u2014 {duration_s:.0f}s / {cost_str}"
+
             if run.output_text:
-                if stream_msg_id is not None:
-                    await self._edit_final(chat_id, stream_msg_id, run.output_text)
-                else:
-                    await self.send_message(chat_id, run.output_text)
+                await self.send_message(chat_id, run.output_text + footer)
             elif run.error_message:
-                err = f"Error: {run.error_message}"
-                if stream_msg_id is not None:
-                    await self._edit_final(chat_id, stream_msg_id, err)
-                else:
-                    await self.send_message(chat_id, err)
+                await self.send_message(chat_id, f"Plan failed: {run.error_message}{footer}")
             else:
-                if stream_msg_id is not None:
-                    await self._edit_final(chat_id, stream_msg_id, "Done. No output.")
-                else:
-                    await self.send_message(chat_id, "Done. No output.")
+                await self.send_message(chat_id, f"Plan complete. No output.{footer}")
+        except asyncio.CancelledError:
+            logger.info("Background plan execution cancelled for chat %s", chat_id)
+            await self.send_message(chat_id, "Plan execution cancelled.")
         except Exception as e:
-            logger.error("Plan execution failed: %s", e, exc_info=True)
+            logger.error("Background plan execution failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Execution error: {html.escape(str(e))}")
         finally:
-            typing_active = False
-            typing_task.cancel()
+            self._active_tasks.pop(chat_id, None)
+
+    def _build_background_config(self) -> Any:
+        """Build agent config with continuous-mode overrides for background plan execution."""
+        from robothor.engine.config import load_agent_config
+
+        config = load_agent_config(self.config.default_chat_agent, self.config.manifest_dir)
+        if config is None:
+            raise RuntimeError(f"Agent config not found: {self.config.default_chat_agent}")
+
+        # Enable continuous mode — raises caps for sustained multi-hour runs
+        config.continuous = True
+        config.safety_cap = max(config.safety_cap, 2000)
+        config.timeout_seconds = max(config.timeout_seconds, 86400)  # 24h
+        config.max_iterations = max(config.max_iterations, 100)
+        config.stall_timeout_seconds = max(config.stall_timeout_seconds, 600)
+        config.checkpoint_enabled = True
+        config.progress_report_interval = 20  # frequent Telegram updates
+        return config
 
     async def _execute_deep_plan(
         self,

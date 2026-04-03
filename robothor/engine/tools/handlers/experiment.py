@@ -129,6 +129,66 @@ def _calc_improvement(baseline: float, current: float, direction: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark mode helper
+# ---------------------------------------------------------------------------
+
+
+async def _measure_benchmark(
+    experiment_id: str, state: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any]:
+    """Run a benchmark suite and return the aggregate score as the metric value.
+
+    Called by experiment_measure when mode=benchmark.
+    """
+    from robothor.engine.tools.handlers.benchmark import _benchmark_run
+
+    config = state["config"]
+    agent_id = config["benchmark_agent_id"]
+    suite_id = config["benchmark_suite_id"]
+    iteration = state["total_iterations"] + 1
+    tag = f"exp-{experiment_id}-iter-{iteration}"
+
+    bench_result = await _benchmark_run(
+        {"agent_id": agent_id, "suite_id": suite_id, "tag": tag},
+        ctx,
+    )
+
+    if bench_result.get("error"):
+        return {"error": f"Benchmark run failed: {bench_result['error']}"}
+
+    aggregate = bench_result["aggregate_score"]
+
+    # If no baseline yet, set it
+    if state["baseline_value"] is None:
+        state["baseline_value"] = aggregate
+        state["current_best_value"] = aggregate
+        _save_state(experiment_id, state)
+
+    result: dict[str, Any] = {
+        "experiment_id": experiment_id,
+        "value": aggregate,
+        "mode": "benchmark",
+        "benchmark_tag": tag,
+        "category_scores": bench_result.get("category_scores", {}),
+        "tasks_run": bench_result.get("tasks_run", 0),
+        "total_cost_usd": bench_result.get("total_cost_usd", 0),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+    if state["baseline_value"] is not None:
+        result["baseline"] = state["baseline_value"]
+        result["current_best"] = state["current_best_value"]
+        result["vs_baseline_pct"] = round(
+            _calc_improvement(state["baseline_value"], aggregate, state["direction"]), 2
+        )
+        if state["baseline_value"] == aggregate:
+            result["baseline_set"] = True
+            result["message"] = f"Baseline established at {aggregate}"
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Tool handlers
 # ---------------------------------------------------------------------------
 
@@ -173,9 +233,29 @@ async def _experiment_create(args: dict[str, Any], ctx: ToolContext) -> dict[str
             "tags": args.get("tags", ["autoresearch"]),
         }
 
-    # Validate required fields
-    if not config.get("metric_command"):
-        return {"error": "metric_command is required (shell command that outputs a number)"}
+    # Handle benchmark mode
+    mode = args.get("mode") or config.get("mode", "metric")
+    config["mode"] = mode
+
+    if mode == "benchmark":
+        # Benchmark mode: metric comes from benchmark suite aggregate score
+        benchmark_agent_id = args.get("benchmark_agent_id") or config.get("benchmark_agent_id", "")
+        benchmark_suite_id = args.get("benchmark_suite_id") or config.get("benchmark_suite_id", "")
+        if not benchmark_agent_id or not benchmark_suite_id:
+            return {
+                "error": "benchmark_agent_id and benchmark_suite_id are required for mode=benchmark"
+            }
+        config["benchmark_agent_id"] = benchmark_agent_id
+        config["benchmark_suite_id"] = benchmark_suite_id
+        # Auto-set metric fields for benchmark mode
+        config.setdefault("metric_name", f"Benchmark score: {benchmark_suite_id}")
+        config.setdefault("metric_command", "__benchmark__")  # sentinel — not a real command
+        config.setdefault("direction", "maximize")
+    else:
+        # Validate required fields for metric mode
+        if not config.get("metric_command"):
+            return {"error": "metric_command is required (shell command that outputs a number)"}
+
     if config.get("direction") not in ("maximize", "minimize"):
         return {"error": "direction must be 'maximize' or 'minimize'"}
 
@@ -231,6 +311,12 @@ async def _experiment_measure(args: dict[str, Any], ctx: ToolContext) -> dict[st
         return {"error": f"Experiment is {state['status']}, cannot measure"}
 
     config = state["config"]
+    mode = config.get("mode", "metric")
+
+    if mode == "benchmark":
+        # Benchmark mode: run the benchmark suite and use aggregate score
+        return await _measure_benchmark(experiment_id, state, ctx)
+
     metric_command = config["metric_command"]
     num_samples = args.get("samples") or config.get("measurement_samples", 1)
     num_samples = max(1, min(int(num_samples), 10))  # cap at 10

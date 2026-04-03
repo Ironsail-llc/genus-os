@@ -49,36 +49,189 @@ def create_health_app(
         init_ide(runner, config)
         app.include_router(ide_router)
 
+    # Mount webhook ingress
+    from robothor.engine.webhooks import get_webhook_router
+
+    app.include_router(get_webhook_router())
+
+    # ── Buddy / KAIROS / Extensions API routes ───────────────────────────
+
+    @app.get("/api/buddy/stats")
+    async def buddy_stats() -> dict[str, Any]:
+        """Get current buddy stats, level, and streak."""
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        stats = engine.compute_daily_stats()
+        level = engine.get_level_info()
+        current_streak, longest_streak = engine.get_streak()
+        return {
+            "level": level.level,
+            "level_name": level.level_name,
+            "total_xp": level.total_xp,
+            "progress_pct": level.progress_pct,
+            "streak": {"current": current_streak, "longest": longest_streak},
+            "today": {
+                "tasks": stats.tasks_completed,
+                "emails": stats.emails_processed,
+                "insights": stats.insights_generated,
+                "dreams": stats.dreams_completed,
+                "errors_avoided": stats.errors_avoided,
+            },
+            "scores": {
+                "debugging": stats.debugging_score,
+                "patience": stats.patience_score,
+                "chaos": stats.chaos_score,
+                "wisdom": stats.wisdom_score,
+                "reliability": stats.reliability_score,
+            },
+        }
+
+    @app.get("/api/buddy/history")
+    async def buddy_history(days: int = 7) -> dict[str, Any]:
+        """Get buddy stats history for the last N days."""
+        days = max(1, min(days, 365))
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT stat_date, tasks_completed, total_xp, level,
+                       current_streak_days,
+                       debugging_score, patience_score, chaos_score,
+                       wisdom_score, reliability_score
+                FROM buddy_stats
+                ORDER BY stat_date DESC
+                LIMIT %s
+                """,
+                (days,),
+            )
+            rows = cur.fetchall()
+        return {
+            "days": [
+                {
+                    "date": str(r[0]),
+                    "tasks": r[1],
+                    "xp": r[2],
+                    "level": r[3],
+                    "streak": r[4],
+                    "scores": {
+                        "debugging": r[5],
+                        "patience": r[6],
+                        "chaos": r[7],
+                        "wisdom": r[8],
+                        "reliability": r[9],
+                    },
+                }
+                for r in rows
+            ]
+        }
+
+    @app.get("/api/kairos/dreams")
+    async def kairos_dreams(limit: int = 10) -> dict[str, Any]:
+        """Get recent autoDream runs."""
+        limit = max(1, min(limit, 1000))
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, mode, started_at, completed_at, duration_ms,
+                       facts_consolidated, facts_pruned, insights_discovered,
+                       error_message
+                FROM autodream_runs
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        return {
+            "dreams": [
+                {
+                    "id": str(r[0]),
+                    "mode": r[1],
+                    "started_at": str(r[2]) if r[2] else None,
+                    "completed_at": str(r[3]) if r[3] else None,
+                    "duration_ms": r[4],
+                    "facts_consolidated": r[5],
+                    "facts_pruned": r[6],
+                    "insights_discovered": r[7],
+                    "error": r[8],
+                }
+                for r in rows
+            ]
+        }
+
+    @app.get("/api/extensions")
+    async def list_extensions() -> dict[str, Any]:
+        """List loaded business adapters / extensions."""
+        try:
+            from robothor.engine.adapters import get_loaded_adapters
+
+            adapters = get_loaded_adapters()
+            return {
+                "count": len(adapters),
+                "extensions": [
+                    {
+                        "name": a.name,
+                        "transport": a.transport,
+                        "version": a.version,
+                        "author": a.author,
+                        "description": a.description,
+                        "agents": a.agents,
+                    }
+                    for a in adapters
+                ],
+            }
+        except Exception:
+            logger.exception("Failed to list extensions")
+            return {"error": "Internal server error"}
+
+    @app.post("/api/extensions/reload")
+    async def reload_extensions() -> dict[str, Any]:
+        """Reload adapters from disk."""
+        from robothor.engine.adapters import refresh_adapters
+
+        adapters = refresh_adapters()
+        return {"reloaded": True, "count": len(adapters)}
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         """Health check endpoint."""
-        # Get schedule summary
-        schedules = []
         try:
-            from robothor.engine.tracking import list_schedules
+            # Get schedule summary
+            schedules = []
+            try:
+                from robothor.engine.tracking import list_schedules
 
-            schedules = list_schedules(tenant_id=config.tenant_id)
-        except Exception as e:
-            logger.warning("Failed to load schedules: %s", e)
+                schedules = list_schedules(tenant_id=config.tenant_id)
+            except Exception:
+                logger.warning("Failed to load schedules", exc_info=True)
 
-        agents = {}
-        for s in schedules:
-            agents[s["agent_id"]] = {
-                "enabled": s.get("enabled"),
-                "last_status": s.get("last_status"),
-                "last_run_at": str(s.get("last_run_at", "")),
-                "last_duration_ms": s.get("last_duration_ms"),
-                "consecutive_errors": s.get("consecutive_errors", 0),
+            agents = {}
+            for s in schedules:
+                agents[s["agent_id"]] = {
+                    "enabled": s.get("enabled"),
+                    "last_status": s.get("last_status"),
+                    "last_run_at": str(s.get("last_run_at", "")),
+                    "last_duration_ms": s.get("last_duration_ms"),
+                    "consecutive_errors": s.get("consecutive_errors", 0),
+                }
+
+            return {
+                "status": "healthy",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "engine_version": "0.1.0",
+                "tenant_id": config.tenant_id,
+                "bot_configured": bool(config.bot_token),
+                "agents": agents,
             }
-
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now(UTC).isoformat(),
-            "engine_version": "0.1.0",
-            "tenant_id": config.tenant_id,
-            "bot_configured": bool(config.bot_token),
-            "agents": agents,
-        }
+        except Exception:
+            logger.exception("Health check failed")
+            return {"status": "error", "error": "Internal server error"}
 
     # Startup state tracking
     _startup_complete = {"ready": False}
@@ -98,9 +251,13 @@ def create_health_app(
     @app.get("/liveness")
     async def liveness() -> dict[str, Any]:
         """Liveness probe — always 200 if process is running."""
-        from robothor.health_contract import liveness_response
+        try:
+            from robothor.health_contract import liveness_response
 
-        return liveness_response("engine", "0.1.0")
+            return liveness_response("engine", "0.1.0")
+        except Exception:
+            logger.exception("Liveness check failed")
+            return {"status": "error", "error": "Internal server error"}
 
     @app.get("/ready")
     async def readiness() -> Any:
@@ -122,12 +279,18 @@ def create_health_app(
             list_schedules(tenant_id=config.tenant_id)
             return "ok"
 
-        checks: dict[str, Any] = {
-            "database": check_db,
-            "schedules": check_schedules,
-        }
-        body, status = await readiness_response("engine", "0.1.0", checks)
-        return JSONResponse(body, status_code=status)
+        try:
+            checks: dict[str, Any] = {
+                "database": check_db,
+                "schedules": check_schedules,
+            }
+            body, status = await readiness_response("engine", "0.1.0", checks)
+            return JSONResponse(body, status_code=status)
+        except Exception:
+            logger.exception("Readiness check failed")
+            return JSONResponse(
+                {"status": "error", "error": "Internal server error"}, status_code=500
+            )
 
     @app.on_event("startup")
     async def _mark_startup_complete() -> None:
@@ -171,8 +334,9 @@ def create_health_app(
                     for r in runs
                 ]
             }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to list runs")
+            return {"error": "Internal server error"}
 
     @app.get("/api/runs/{run_id}/children")
     async def get_run_children(run_id: str) -> dict[str, Any]:
@@ -198,8 +362,9 @@ def create_health_app(
                     for c in children
                 ],
             }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to get run children")
+            return {"error": "Internal server error"}
 
     @app.get("/api/runs/{run_id}/tree")
     async def get_run_tree(run_id: str) -> dict[str, Any]:
@@ -209,8 +374,9 @@ def create_health_app(
 
             tree = _get_tree(run_id)
             return tree
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to get run tree")
+            return {"error": "Internal server error"}
 
     @app.get("/costs")
     async def costs(hours: int = 24) -> dict[str, Any]:
@@ -249,8 +415,9 @@ def create_health_app(
                 "total_cost_usd": round(total_cost, 6),
                 "agents": breakdown,
             }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to compute costs")
+            return {"error": "Internal server error"}
 
     @app.get("/costs/deep")
     async def costs_deep(hours: int = 24) -> dict[str, Any]:
@@ -291,8 +458,9 @@ def create_health_app(
                     "avg_cost_usd": 0,
                     "avg_duration_s": 0,
                 }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("LLM cost query failed")
+            return {"error": "Internal server error"}
 
     # ── Workflow API endpoints ───────────────────────────────────────
 
@@ -352,8 +520,9 @@ def create_health_app(
                         for row in rows
                     ]
                 }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to list workflow runs")
+            return {"error": "Internal server error"}
 
     @app.get("/api/workflows/runs/{run_id}")
     async def get_workflow_run(run_id: str) -> dict[str, Any]:
@@ -401,8 +570,9 @@ def create_health_app(
                 ]
 
                 return run_data
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to get workflow run")
+            return {"error": "Internal server error"}
 
     # ── v2 Enhancement endpoints ─────────────────────────────────────
 
@@ -430,8 +600,9 @@ def create_health_app(
                 )
             )
             return {"status": "resuming", "original_run_id": run_id}
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to resume run")
+            return {"error": "Internal server error"}
 
     @app.get("/api/v2/stats")
     async def v2_stats(hours: int = 24) -> dict[str, Any]:
@@ -479,8 +650,9 @@ def create_health_app(
                     "budget_exhaustions": budgets,
                     "checkpoints_saved": checkpoint_count,
                 }
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Failed to get v2 stats")
+            return {"error": "Internal server error"}
 
     @app.post("/api/workflows/{workflow_id}/execute")
     async def execute_workflow(workflow_id: str) -> dict[str, Any]:

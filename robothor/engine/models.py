@@ -225,6 +225,9 @@ class AgentConfig:
     eager_tool_compression: bool = False  # disabled: infinite loop bug when read_file re-offloads
     tool_offload_threshold: int = 0  # disabled: 0 means no offloading
 
+    # ── Tool execution ──
+    tool_timeout_seconds: int = 120  # per-tool call timeout (0 = unlimited)
+
     # ── Continuous execution mode ──
     continuous: bool = False  # raises caps for sustained multi-hour runs
     progress_report_interval: int = 50  # iterations between Telegram progress updates

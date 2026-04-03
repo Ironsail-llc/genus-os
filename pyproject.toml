@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Ironsail LLC", email = "robothor@ironsail.ai" },
+    { name = "Genus OS Contributors" },
 ]
 keywords = ["ai", "brain", "memory", "knowledge-graph", "rag", "vision", "agents"]
 classifiers = [

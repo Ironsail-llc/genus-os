@@ -213,7 +213,7 @@ class AgentRunner:
         if agent_config is None:
             agent_config = load_agent_config(agent_id, self.config.manifest_dir)
         if agent_config is None:
-            logger.error("Agent config not found: %s", agent_id)
+            logger.error("Agent config not found: %s", _sanitize(agent_id))
             session = AgentSession(agent_id, trigger_type, trigger_detail, self.config.tenant_id)
             session.start("", message, [])
             return session.fail(f"Agent config not found: {agent_id}")
@@ -285,7 +285,7 @@ class AgentRunner:
             try:
                 warmup_preamble = await warmup_future
             except Exception as e:
-                logger.debug("Warmup preamble failed for %s: %s", agent_id, e)
+                logger.debug("Warmup preamble failed for %s: %s", _sanitize(agent_id), _sanitize(e))
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
@@ -294,7 +294,7 @@ class AgentRunner:
         logger.info(
             "SETUP %dms agent=%s trigger=%s warmup=%s cached_prompt=%s",
             t_setup_ms,
-            agent_id,
+            _sanitize(agent_id),
             trigger_type.value,
             warmup_kind or "none",
             "hit" if _prompt_cache.get(agent_config.id) else "miss",
@@ -316,7 +316,7 @@ class AgentRunner:
             if adapters:
                 await self.registry.register_adapter_tools(adapters)
         except Exception as e:
-            logger.warning("Adapter loading failed (non-fatal): %s", e)
+            logger.warning("Adapter loading failed (non-fatal): %s", _sanitize(e))
 
         # Get filtered tools for this agent
         if readonly_mode:
@@ -380,7 +380,7 @@ class AgentRunner:
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
                 except Exception as e:
-                    logger.warning("Failed to record run start: %s", e)
+                    logger.warning("Failed to record run start: %s", _sanitize(e))
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
                 if agent_config.auto_task and not spawn_context:
@@ -402,7 +402,7 @@ class AgentRunner:
                         )
                         session.run.task_id = task_id if isinstance(task_id, str) else None
                     except Exception as e:
-                        logger.warning("Auto-task creation failed: %s", e)
+                        logger.warning("Auto-task creation failed: %s", _sanitize(e))
 
                 # Build model list for fallback (model_override takes priority)
                 if model_override:
@@ -482,7 +482,9 @@ class AgentRunner:
                         await sandbox.start()
                         set_current_sandbox(sandbox)
                     except Exception as e:
-                        logger.error("Sandbox start failed for %s: %s", agent_id, e)
+                        logger.error(
+                            "Sandbox start failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+                        )
                         sandbox = None
 
                 # Start stall watchdog — monitors current task for inactivity
@@ -516,7 +518,7 @@ class AgentRunner:
                         try:
                             await sandbox.stop()
                         except Exception as e:
-                            logger.warning("Sandbox cleanup failed: %s", e)
+                            logger.warning("Sandbox cleanup failed: %s", _sanitize(e))
                         from robothor.engine.sandbox import set_current_sandbox
 
                         set_current_sandbox(None)
@@ -524,7 +526,7 @@ class AgentRunner:
         except (TimeoutError, asyncio.CancelledError):
             if watchdog.was_stall_timeout:
                 idle_msg = f"Stall watchdog: no activity for {stall_timeout}s"
-                logger.warning("Agent %s killed: %s", agent_id, idle_msg)
+                logger.warning("Agent %s killed: %s", _sanitize(agent_id), idle_msg)
                 session.record_error(idle_msg)
                 # Trigger autoDream consolidation as post-stall cleanup
                 try:
@@ -537,12 +539,12 @@ class AgentRunner:
                 return self._finish_run(session.timeout(), trace=trace)
             # Hard timeout (only fires when stall watchdog is disabled)
             ht = agent_config.timeout_seconds
-            logger.warning("Agent %s hard-timed out after %ds", agent_id, ht)
+            logger.warning("Agent %s hard-timed out after %ds", _sanitize(agent_id), ht)
             session.record_error(f"Hard timeout after {ht}s")
             return self._finish_run(session.timeout(), trace=trace)
         except Exception as e:
             tb = traceback.format_exc()
-            logger.error("Agent %s failed: %s", agent_id, e, exc_info=True)
+            logger.error("Agent %s failed: %s", _sanitize(agent_id), _sanitize(e), exc_info=True)
             session.record_error(str(e), tb)
             return self._finish_run(session.fail(str(e), tb), trace=trace)
 
@@ -628,7 +630,7 @@ class AgentRunner:
         try:
             create_run(session.run)
         except Exception as e:
-            logger.warning("Failed to record deep run start: %s", e)
+            logger.warning("Failed to record deep run start: %s", _sanitize(e))
 
         # Build context — use override (from deep plan) or fall back to conversation history
         if context_override:
@@ -755,7 +757,7 @@ class AgentRunner:
                 await progress_task
 
             tb = traceback.format_exc()
-            logger.error("execute_deep failed: %s", e, exc_info=True)
+            logger.error("execute_deep failed: %s", _sanitize(e), exc_info=True)
             session.record_error(str(e), tb)
             return self._finish_run(session.fail(str(e), tb))
 
@@ -852,7 +854,7 @@ class AgentRunner:
                 )
                 await hook_registry.dispatch(HookEvent.AGENT_START, start_ctx)
             except Exception as e:
-                logger.warning("AGENT_START hook error: %s", e)
+                logger.warning("AGENT_START hook error: %s", _sanitize(e))
 
         # Build readonly tool set for runtime enforcement in plan mode
         _readonly_tool_set: frozenset[str] = frozenset()
@@ -875,6 +877,7 @@ class AgentRunner:
         _safety_cap = getattr(agent_config, "safety_cap", 200)
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
+        _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
 
         while True:
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
@@ -1065,7 +1068,7 @@ class AgentRunner:
                                     ),
                                 )
                 except Exception as e:
-                    logger.warning("Proactive compaction failed: %s", e)
+                    logger.warning("Proactive compaction failed: %s", _sanitize(e))
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -1211,7 +1214,9 @@ class AgentRunner:
                         if pre_hr.action == HookAction.MODIFY and pre_hr.modified_args:
                             tool_args = pre_hr.modified_args
                     except Exception as e:
-                        logger.warning("PRE_TOOL_USE hook error for %s: %s", tool_name, e)
+                        logger.warning(
+                            "PRE_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
+                        )
 
                 # ── [GUARDRAILS] Pre-execution check ──
                 if guardrail_engine:
@@ -1296,6 +1301,7 @@ class AgentRunner:
 
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
+                _tool_timeout = getattr(agent_config, "tool_timeout_seconds", 120)
                 if trace:
                     with trace.span("tool_call", tool=tool_name) as _span:
                         result = await self.registry.execute(
@@ -1304,6 +1310,7 @@ class AgentRunner:
                             agent_id=agent_config.id,
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
+                            timeout=_tool_timeout,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1312,6 +1319,7 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         tenant_id=session.run.tenant_id,
                         workspace=str(self.config.workspace),
+                        timeout=_tool_timeout,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
@@ -1336,7 +1344,11 @@ class AgentRunner:
                         )
                         await hook_registry.dispatch(HookEvent.POST_TOOL_USE, post_tool_ctx)
                     except Exception as e:
-                        logger.warning("POST_TOOL_USE hook error for %s: %s", tool_name, e)
+                        logger.warning(
+                            "POST_TOOL_USE hook error for %s: %s",
+                            _sanitize(tool_name),
+                            _sanitize(e),
+                        )
 
                 # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
                 if isinstance(result, dict) and not error_msg:
@@ -1418,6 +1430,22 @@ class AgentRunner:
                 # ── [SCRATCHPAD] Record tool call ──
                 if scratchpad:
                     scratchpad.record_tool_call(tool_name, error=error_msg)
+
+                # ── [CIRCUIT BREAKER] Stop calling tools that keep failing ──
+                if error_msg:
+                    _tool_failures[tool_name] = _tool_failures.get(tool_name, 0) + 1
+                    if _tool_failures[tool_name] >= 3:
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"[SYSTEM] Tool '{tool_name}' has failed "
+                                    f"{_tool_failures[tool_name]} times this run. "
+                                    "Do NOT call it again. Find an alternative "
+                                    "approach or skip this step and move on."
+                                ),
+                            }
+                        )
 
                 # ── [TODO LIST] Emit event + verification nudge ──
                 if tool_name == "todo_write" and session.todo_list and not error_msg:
@@ -1695,7 +1723,7 @@ class AgentRunner:
             if chat_id:
                 await sender(chat_id, text, parse_mode="Markdown")
         except Exception as e:
-            logger.debug("Progress report failed: %s", e)
+            logger.debug("Progress report failed: %s", _sanitize(e))
 
     # ─── Force wrap-up (used by safety valve and escalation abort) ─────
 
@@ -1995,7 +2023,7 @@ class AgentRunner:
                 return None
             return run.output_text or ""
         except Exception as e:
-            logger.debug("Failed to spawn recovery helper: %s", e)
+            logger.debug("Failed to spawn recovery helper: %s", _sanitize(e))
             return None
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
@@ -2011,7 +2039,7 @@ class AgentRunner:
                 manual_override=agent_config.difficulty_class,
             )
         except Exception as e:
-            logger.debug("Routing failed: %s", e)
+            logger.debug("Routing failed: %s", _sanitize(e))
             return None
 
     def _should_plan(self, agent_config: AgentConfig, route: Any) -> bool:
@@ -2039,7 +2067,7 @@ class AgentRunner:
                 fallback_models=models[1:2],
             )
         except Exception as e:
-            logger.debug("Planning phase failed: %s", e)
+            logger.debug("Planning phase failed: %s", _sanitize(e))
             return None
 
     def _create_trace(
@@ -2203,7 +2231,7 @@ class AgentRunner:
             # Verification failed — inject feedback and retry once
             feedback = format_verification_feedback(result)
             session.messages.append({"role": "user", "content": feedback})
-            logger.info("Verification failed for %s, retrying once", agent_config.id)
+            logger.info("Verification failed, retrying once")
 
             await self._run_loop(
                 session,
@@ -2216,7 +2244,7 @@ class AgentRunner:
             )
             return session.get_final_text()
         except Exception as e:
-            logger.debug("Verification failed: %s", e)
+            logger.debug("Verification failed: %s", _sanitize(e))
             return output_text
 
     def _resume_from_checkpoint(
@@ -2246,7 +2274,7 @@ class AgentRunner:
 
             return None
         except Exception as e:
-            logger.warning("Failed to resume from checkpoint: %s", e)
+            logger.warning("Failed to resume from checkpoint: %s", _sanitize(e))
             return None
 
     # ─── LLM Call Methods ────────────────────────────────────────────
@@ -2268,7 +2296,7 @@ class AgentRunner:
             compress_threshold = int(model_limits.max_input_tokens * 0.75)
             messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
         except Exception as e:
-            logger.warning("Pre-flight compression failed: %s", e)
+            logger.warning("Pre-flight compression failed: %s", _sanitize(e))
 
         return estimate_tokens(messages)
 
@@ -2630,7 +2658,7 @@ class AgentRunner:
                 except RuntimeError:
                     pass  # No event loop — skip async dispatch
         except Exception as e:
-            logger.warning("AGENT_END hook error: %s", e)
+            logger.warning("AGENT_END hook error: %s", _sanitize(e))
 
         try:
             update_run(
@@ -2660,9 +2688,9 @@ class AgentRunner:
                 try:
                     create_step(step)
                 except Exception as e:
-                    logger.warning("Failed to record step: %s", e)
+                    logger.warning("Failed to record step: %s", _sanitize(e))
         except Exception as e:
-            logger.warning("Failed to update run in database: %s", e)
+            logger.warning("Failed to update run in database: %s", _sanitize(e))
 
         # Auto-resolve CRM task linked to this run
         if run.task_id:
@@ -2684,6 +2712,6 @@ class AgentRunner:
                         tags=[run.agent_id, "failed", run.status.value],
                     )
             except Exception as e:
-                logger.warning("Auto-task update failed: %s", e)
+                logger.warning("Auto-task update failed: %s", _sanitize(e))
 
         return run

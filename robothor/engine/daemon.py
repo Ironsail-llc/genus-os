@@ -17,6 +17,7 @@ import logging
 import os
 import socket
 import sys
+import time
 from typing import Any
 
 from robothor.engine.config import EngineConfig
@@ -202,6 +203,11 @@ async def main() -> None:
     if agent_hook_count:
         logger.info("Loaded %d agent lifecycle hooks", agent_hook_count)
 
+    # Register buddy lifecycle hooks
+    from robothor.engine.buddy_hooks import register_buddy_hooks
+
+    register_buddy_hooks(hook_registry)
+
     # Register runner for sub-agent spawning
     from robothor.engine.tools import set_runner
 
@@ -228,6 +234,7 @@ async def main() -> None:
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
+        asyncio.create_task(_autodream_loop(), name="autodream"),
     ]
 
     logger.info("All subsystems started")
@@ -376,6 +383,33 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
+        # autoDream staleness check (every 20 ticks = 10 min)
+        if tick_count % 20 == 0 and tick_count > 20:
+            try:
+                from robothor.engine.autodream import COOLDOWN_SECONDS, _get_last_run_ts
+
+                last_run = _get_last_run_ts()
+                if last_run is not None:
+                    staleness = time.time() - last_run
+                    if staleness > COOLDOWN_SECONDS * 6:
+                        from robothor.engine.delivery import get_telegram_sender
+
+                        sender = get_telegram_sender()
+                        if sender and config.default_chat_id:
+                            hours = int(staleness / 3600)
+                            await sender(
+                                config.default_chat_id,
+                                f"*Watchdog Alert*\n\nautoDream has not run for {hours}h. "
+                                "Memory consolidation may be stalled.",
+                            )
+                    elif staleness > COOLDOWN_SECONDS * 3:
+                        logger.warning(
+                            "Watchdog: autoDream stale (last run %.0f min ago)",
+                            staleness / 60,
+                        )
+            except Exception as e:
+                logger.debug("Watchdog: autoDream staleness check failed: %s", e)
+
         # Alert after 3 consecutive PG failures
         if pg_failures == 3:
             try:
@@ -389,6 +423,37 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     )
             except Exception:
                 pass
+
+
+async def _autodream_loop() -> None:
+    """Background loop — triggers autoDream memory consolidation when engine is idle.
+
+    Implements exponential backoff on consecutive errors (60s → 120s → ... → 3600s max).
+    Resets to normal 60s interval on success.
+    """
+    from robothor.engine.autodream import is_cooled_down, run_autodream
+    from robothor.engine.dedup import running_agents
+
+    consecutive_errors = 0
+
+    while True:
+        sleep_seconds = 60 if consecutive_errors == 0 else min(60 * 2**consecutive_errors, 3600)
+        await asyncio.sleep(sleep_seconds)
+        try:
+            if running_agents() or not is_cooled_down():
+                continue
+            await run_autodream(mode="idle")
+            consecutive_errors = 0
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            consecutive_errors += 1
+            logger.warning(
+                "autoDream loop error (%d consecutive, next retry in %ds): %s",
+                consecutive_errors,
+                min(60 * 2**consecutive_errors, 3600),
+                e,
+            )
 
 
 def run() -> None:

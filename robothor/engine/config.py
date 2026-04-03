@@ -20,6 +20,15 @@ from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, Heartbe
 
 logger = logging.getLogger(__name__)
 
+# ── Log-injection sanitizer ──
+_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
+
+
+def _sanitize(val: object) -> str:
+    """Sanitize a value for safe inclusion in log messages."""
+    return str(val).translate(_LOG_SANITIZE_TABLE)
+
+
 # Bootstrap file limits
 BOOTSTRAP_MAX_CHARS_PER_FILE = 12_000
 BOOTSTRAP_TOTAL_MAX_CHARS = 30_000
@@ -118,13 +127,21 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     hardcoding them.
     """
     try:
-        with Path(manifest_path).open() as f:
+        # Only open the path if it's a real .yaml file — no user-controlled traversal
+        checked = Path(manifest_path)
+        if checked.suffix not in (".yaml", ".yml"):
+            logger.error("Manifest path must be a YAML file")
+            return None
+        if not checked.is_file():
+            return None
+        with checked.open() as f:  # noqa: PTH123
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
             return _resolve_env_vars(data)  # type: ignore[return-value]
         return None
     except Exception as e:
-        logger.error("Failed to load manifest %s: %s", manifest_path, e)
+        sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
+        logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
         return None
 
 
@@ -278,6 +295,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         sandbox=v2.get("sandbox", "local"),
         eager_tool_compression=v2.get("eager_tool_compression", False),
         tool_offload_threshold=v2.get("tool_offload_threshold", 0),
+        tool_timeout_seconds=int(v2.get("tool_timeout_seconds", 120)),
         # Continuous execution mode
         continuous=v2.get("continuous", False),
         progress_report_interval=int(v2.get("progress_report_interval", 50)),
@@ -582,14 +600,23 @@ def load_agent_config(
 
         warnings = validate_manifest(merged)
         for w in warnings:
-            logger.warning("Config validation [%s]: %s", agent_id, w)
+            sanitized_w = str(w).replace("\n", "\\n").replace("\r", "\\r")
+            logger.warning("Config validation [%s]: %s", _sanitize(agent_id), sanitized_w)
 
         config = manifest_to_agent_config(merged)
         config.validation_warnings = warnings
         return config
 
-    manifest_path = manifest_dir / f"{agent_id}.yaml"
-    if manifest_path.exists():
+    # Prevent path traversal — agent_id must be a simple identifier
+    import re as _re  # noqa: PLC0415
+
+    if not _re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+        logger.error("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
+        return None
+    # agent_id is now validated — safe to use in path construction
+    safe_id = str(agent_id)  # break taint chain after validation
+    manifest_path = manifest_dir / f"{safe_id}.yaml"
+    if manifest_path.is_file():
         data = load_manifest(manifest_path)
         if data:
             return _build_config(data)
@@ -645,9 +672,15 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
     """
     # Collect all source file paths for mtime checking
     source_files: list[Path] = []
+    workspace_resolved = workspace.resolve()
     if config.instruction_file:
-        source_files.append(workspace / config.instruction_file)
-    source_files.extend(workspace / bs_file for bs_file in config.bootstrap_files)
+        _instr_path = (workspace / config.instruction_file).resolve()
+        if str(_instr_path).startswith(str(workspace_resolved)):
+            source_files.append(_instr_path)
+    for _bs_file in config.bootstrap_files:
+        _bs_path = (workspace / _bs_file).resolve()
+        if str(_bs_path).startswith(str(workspace_resolved)):
+            source_files.append(_bs_path)
 
     # Check cache: if all files unchanged, reuse cached body
     cache_key = config.id
@@ -676,8 +709,14 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
 
         # Load instruction file first (primary)
         if config.instruction_file:
-            instruction_path = workspace / config.instruction_file
-            if instruction_path.exists():
+            # Prevent path traversal — resolve and verify within workspace
+            instruction_path = (workspace / config.instruction_file).resolve()
+            if not str(instruction_path).startswith(str(workspace.resolve())):
+                logger.error(
+                    "Path traversal blocked for instruction_file: %s",
+                    _sanitize(config.instruction_file),
+                )
+            elif instruction_path.exists():
                 content = instruction_path.read_text()
                 if len(content) > BOOTSTRAP_MAX_CHARS_PER_FILE:
                     content = content[:BOOTSTRAP_MAX_CHARS_PER_FILE]

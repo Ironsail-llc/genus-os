@@ -55,6 +55,10 @@ class AdapterConfig:
     # Common
     timeout_seconds: int = 30
     agents: list[str] = field(default_factory=lambda: ["*"])
+    # Metadata (optional, used by extension management API)
+    version: str = ""
+    author: str = ""
+    description: str = ""
 
 
 def _resolve_env(value: str) -> str:
@@ -94,6 +98,9 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         env=_resolve_dict(data.get("env", {})),
         timeout_seconds=int(data.get("timeout_seconds", 30)),
         agents=data.get("agents", ["*"]),
+        version=data.get("version", ""),
+        author=data.get("author", ""),
+        description=data.get("description", ""),
     )
 
 
@@ -136,3 +143,20 @@ def get_adapters_for_agent(
     if adapters is None:
         adapters = load_adapters()
     return [a for a in adapters if "*" in a.agents or agent_id in a.agents]
+
+
+# ── Hot-reload cache ─────────────────────────────────────────────────────────
+
+_loaded_adapters: list[AdapterConfig] = []
+
+
+def get_loaded_adapters() -> list[AdapterConfig]:
+    """Return the most recently loaded adapter configs (from cache)."""
+    return _loaded_adapters
+
+
+def refresh_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
+    """Reload all adapters from disk and update the module-level cache."""
+    global _loaded_adapters
+    _loaded_adapters = load_adapters(adapter_dir)
+    return _loaded_adapters

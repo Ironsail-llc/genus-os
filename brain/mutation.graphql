@@ -1,1 +1,0 @@
-mutation CreateTask($input: CreateTaskInput!) { createTask(input: $input) { task { id title priority status tags assignedToAgent body } } }

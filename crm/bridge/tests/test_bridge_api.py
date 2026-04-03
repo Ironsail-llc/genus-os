@@ -89,7 +89,7 @@ async def test_resolve_contact_existing(test_client):
         "display_name": "Test User",
     }
 
-    with patch("crm_dal.resolve_contact", return_value=resolved):
+    with patch("robothor.crm.dal.resolve_contact", return_value=resolved):
         r = await test_client.post(
             "/resolve-contact",
             json={
@@ -177,9 +177,9 @@ async def test_log_interaction_resolves_and_logs(test_client):
     }
 
     with (
-        patch("crm_dal.resolve_contact", return_value=resolved),
-        patch("crm_dal.get_conversations_for_contact", return_value=[{"id": 10}]),
-        patch("crm_dal.send_message", return_value={"id": 100}),
+        patch("robothor.crm.dal.resolve_contact", return_value=resolved),
+        patch("robothor.crm.dal.get_conversations_for_contact", return_value=[{"id": 10}]),
+        patch("robothor.crm.dal.send_message", return_value={"id": 100}),
     ):
         r = await test_client.post(
             "/log-interaction",

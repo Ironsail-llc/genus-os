@@ -48,6 +48,15 @@ if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
+# ── Log-injection sanitizer ──
+_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
+
+
+def _sanitize(val: object) -> str:
+    """Sanitize a value for safe inclusion in log messages."""
+    return str(val).translate(_LOG_SANITIZE_TABLE)
+
+
 logger = logging.getLogger(__name__)
 
 # Template pattern: {{ expr }}
@@ -237,8 +246,8 @@ class WorkflowEngine:
 
         logger.info(
             "Workflow started: %s (trigger=%s, run=%s)",
-            workflow_id,
-            trigger_type,
+            _sanitize(workflow_id),
+            _sanitize(trigger_type),
             run.id,
         )
 
@@ -248,11 +257,16 @@ class WorkflowEngine:
         except TimeoutError:
             run.status = RunStatus.TIMEOUT
             run.error_message = f"Timed out after {wf.timeout_seconds}s"
-            logger.warning("Workflow %s timed out", workflow_id)
+            logger.warning("Workflow %s timed out", _sanitize(workflow_id))
         except Exception as e:
             run.status = RunStatus.FAILED
             run.error_message = str(e)
-            logger.error("Workflow %s failed: %s", workflow_id, e, exc_info=True)
+            logger.error(
+                "Workflow %s failed: %s",
+                _sanitize(workflow_id),
+                _sanitize(e),
+                exc_info=True,
+            )
 
         # Finalize
         run.completed_at = datetime.now(UTC)
@@ -268,7 +282,7 @@ class WorkflowEngine:
 
         logger.info(
             "Workflow complete: %s status=%s duration=%dms steps=%d",
-            workflow_id,
+            _sanitize(workflow_id),
             run.status.value,
             run.duration_ms,
             len(run.step_results),

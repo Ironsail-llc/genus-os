@@ -41,6 +41,13 @@ tools_allowed:
   - get_inbox
   - ack_notification
   - append_to_block
+  - web_fetch
+  - web_search
+  # Apollo.io contact enrichment & search
+  - apollo_search_people
+  - apollo_enrich_person
+  - apollo_search_companies
+  - apollo_enrich_company
 tools_denied:
   - message
 bridge_endpoints:

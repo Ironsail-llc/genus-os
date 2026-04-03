@@ -555,8 +555,25 @@ def _git_status_context(config: AgentConfig) -> str | None:
     return "Git:\n" + "\n".join(parts) if parts else None
 
 
+def _buddy_status_context(config: AgentConfig) -> str | None:
+    """Inject buddy gamification status into main agent warmup."""
+    if config.id != "main":
+        return None
+    try:
+        from robothor.memory.blocks import read_block
+
+        result = read_block("buddy_status")
+        content = result.get("content", "") if isinstance(result, dict) else ""
+        if content and content.strip():
+            return f"[BUDDY] {content.strip()}"
+    except Exception:
+        pass
+    return None
+
+
 # Register built-in hooks on import
 register_context_hook(_date_context)
 register_context_hook(_travel_status)
 register_context_hook(_weather_context)
 register_agent_context_hook(_git_status_context)
+register_agent_context_hook(_buddy_status_context)

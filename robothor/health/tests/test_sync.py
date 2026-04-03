@@ -6,7 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from robothor.health import sync
+try:
+    from robothor.health import sync
+except ImportError:
+    pytest.skip("garminconnect not installed", allow_module_level=True)
 
 pytestmark = pytest.mark.integration
 

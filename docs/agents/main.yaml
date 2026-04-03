@@ -105,6 +105,11 @@ tools_allowed:
   - create_prescription_draft
   - schedule_appointment
   - transmit_prescription
+  # Apollo.io contact enrichment & search
+  - apollo_search_people
+  - apollo_enrich_person
+  - apollo_search_companies
+  - apollo_enrich_company
   # Deep reasoning (RLM)
   - deep_reason
   # Sub-agent spawning tools
@@ -135,6 +140,10 @@ review_workflow: true
 notification_inbox: true
 status_file: null
 shared_working_state: true
+
+warmup:
+  memory_blocks:
+    - buddy_status
 
 instruction_file: brain/SOUL.md
 bootstrap_files:

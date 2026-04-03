@@ -81,6 +81,19 @@ EXPERIMENT_TOOLS = frozenset(
     {"experiment_create", "experiment_measure", "experiment_commit", "experiment_status"}
 )
 
+# AutoAgent benchmark tools
+BENCHMARK_TOOLS = frozenset({"benchmark_define", "benchmark_run", "benchmark_compare"})
+
+# Apollo.io contact enrichment & search tools
+APOLLO_TOOLS = frozenset(
+    {
+        "apollo_search_people",
+        "apollo_enrich_person",
+        "apollo_search_companies",
+        "apollo_enrich_company",
+    }
+)
+
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
@@ -154,6 +167,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "team_scratchpad_read",
         # Experiment read-only tools
         "experiment_status",
+        # Benchmark read-only tools
+        "benchmark_compare",
+        # Apollo read-only tools (search is free, no side effects)
+        "apollo_search_people",
         # Skill tools (read-only — skills are just instructions)
         "invoke_skill",
         "list_skills",
