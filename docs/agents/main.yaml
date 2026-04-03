@@ -110,6 +110,8 @@ tools_allowed:
   # Sub-agent spawning tools
   - spawn_agent
   - spawn_agents
+  # In-conversation todo list
+  - todo_write
   # Vault (credential store)
   - vault_get
   - vault_set
@@ -162,6 +164,7 @@ heartbeat:
 
 v2:
   can_spawn_agents: true
+  todo_list_enabled: true              # Claude Code-style in-conversation checklist
   max_nesting_depth: 2
   sub_agent_max_iterations: 50        # was 10 — sub-agents need room to work
   sub_agent_timeout_seconds: 1800     # 30 min per sub-agent (was 900)
