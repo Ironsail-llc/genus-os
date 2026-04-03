@@ -178,7 +178,7 @@ The `computer-use` agent controls a virtual desktop (Xvfb :99, 1280x1024) and br
 
 **Tools:** 13 desktop_* tools (screenshot, click, type, key, scroll, drag, window management, launch, describe) + browser tool (navigate, snapshot, screenshot, act, evaluate).
 
-**Model:** Sonnet 4.6 (vision-capable) primary, GLM-5 fallback.
+**Model:** MiMo-V2-Pro primary, Sonnet 4.6 fallback, Gemini 2.5 Pro fallback.
 
 **Guardrails:** `desktop_safety` blocks terminal emulators, dangerous key combos, file:///javascript: URLs.
 
