@@ -199,7 +199,7 @@ class TestTemplateResolver:
         # Check manifest resolved correctly
         manifest = yaml.safe_load(result["manifest.yaml"])
         assert manifest["id"] == "test-agent"
-        assert manifest["model"]["primary"] == "openrouter/z-ai/glm-5"
+        assert manifest["model"]["primary"] == "openrouter/xiaomi/mimo-v2-pro"
         assert manifest["schedule"]["timezone"] == "America/New_York"
 
     def test_resolve_bundle_with_overrides(self, tmp_bundle):

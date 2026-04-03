@@ -13,16 +13,17 @@ tags_produced: [escalation, needs-philip]
 tags_consumed: [escalation, needs-philip, calendar, conflict, cancellation, vision, unknown-person, conversation]
 
 model:
-  primary: openrouter/anthropic/claude-sonnet-4.6
+  primary: openrouter/xiaomi/mimo-v2-pro
   fallbacks:
-    - openrouter/z-ai/glm-5
+    - openrouter/anthropic/claude-sonnet-4.6
     - gemini/gemini-2.5-pro
   temperature: 0.5
 
 schedule:
   cron: ""
   timezone: America/New_York
-  timeout_seconds: 600
+  timeout_seconds: 0                  # disabled — stall watchdog is the protection, no wall-clock cap
+  stall_timeout_seconds: 600          # 10 min (was default 300) — complex interactive tasks need room
   max_iterations: 30
   session_target: persistent
 
@@ -163,7 +164,7 @@ v2:
   can_spawn_agents: true
   max_nesting_depth: 2
   sub_agent_max_iterations: 50        # was 10 — sub-agents need room to work
-  sub_agent_timeout_seconds: 900      # 15 min per sub-agent (was 120s)
+  sub_agent_timeout_seconds: 1800     # 30 min per sub-agent (was 900)
 
 changelog:
   - date: "2026-03-09"

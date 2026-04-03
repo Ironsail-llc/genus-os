@@ -97,9 +97,11 @@ class TestStatusBar:
     def test_set_model_info(self):
         """Model info appears in status bar."""
         bar = StatusBar()
-        bar.set_model_info(model="openrouter/z-ai/glm-5", input_tokens=100, output_tokens=50)
+        bar.set_model_info(
+            model="openrouter/xiaomi/mimo-v2-pro", input_tokens=100, output_tokens=50
+        )
         rendered = bar._format()
-        assert "glm-5" in rendered
+        assert "mimo-v2-pro" in rendered
         assert "100" in rendered
         assert "50" in rendered
 

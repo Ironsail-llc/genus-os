@@ -96,6 +96,7 @@ Model aliases (for documentation reference only — manifests use full paths):
 
 | Alias | Full model path |
 |-------|----------------|
+| mimo | openrouter/xiaomi/mimo-v2-pro |
 | sonnet | openrouter/anthropic/claude-sonnet-4-6 |
 | minimax | openrouter/minimax/minimax-m2.5 |
 | gemini-pro | gemini/gemini-2.5-pro |
@@ -201,25 +202,25 @@ changelog:
 
 | ID | Dept | Model | Schedule | Delivery | max_iter | Instruction File |
 |----|------|-------|----------|----------|----------|-----------------|
-| main | core | Sonnet 4.6 | *(interactive)* + heartbeat `0 6-22/4 * * *` | none (heartbeat: announce) | 30 (hb: 15) | SOUL.md (hb: HEARTBEAT.md) |
-| email-classifier | email | Qwen 3.5 | `0 6-22/6 * * *` | none | 10 | EMAIL_CLASSIFIER.md |
-| email-analyst | email | Qwen 3.5 | `30 8-20/6 * * *` | none | 10 | EMAIL_ANALYST.md |
-| email-responder | email | Sonnet 4.6 | `0 8-20/4 * * *` | none | 15 | RESPONDER.md |
-| calendar-monitor | calendar | Qwen 3.5 | `0 6-22/6 * * *` | none | 8 | CALENDAR_MONITOR.md |
-| vision-monitor | security | Qwen 3.5 | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
-| conversation-inbox | communications | Qwen 3.5 | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
-| conversation-resolver | communications | Qwen 3.5 | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
-| crm-hygiene | crm | GLM-5 | `0 10 * * *` | none | 10 | CRM_HYGIENE.md |
-| crm-dedup | crm | GLM-5 | `30 10 * * 1` | none | 10 | CRM_DEDUP.md |
-| crm-enrichment | crm | GLM-5 | `0 11 * * *` | none | 10 | CRM_ENRICHMENT.md |
-| morning-briefing | briefings | GLM-5 | `30 6 * * *` | announce | 10 | *(payload-only)* |
-| evening-winddown | briefings | GLM-5 | `0 21 * * *` | announce | 10 | *(payload-only)* |
+| main | core | MiMo-V2-Pro | *(interactive)* + heartbeat `0 6-22 * * *` | none (heartbeat: announce) | 30 (hb: unlimited) | SOUL.md (hb: HEARTBEAT.md) |
+| email-classifier | email | MiMo-V2-Pro | `0 6-22/2 * * *` | none | 10 | EMAIL_CLASSIFIER.md |
+| email-analyst | email | MiMo-V2-Pro | `30 8-20/6 * * *` | none | 10 | EMAIL_ANALYST.md |
+| email-responder | email | MiMo-V2-Pro | `0 8-20/2 * * *` | none | 15 | RESPONDER.md |
+| calendar-monitor | calendar | MiMo-V2-Pro | `0 6-22/6 * * *` | none | 8 | CALENDAR_MONITOR.md |
+| vision-monitor | security | MiMo-V2-Pro | `0 6-22/6 * * *` | none | 5 | *(payload-only)* |
+| conversation-inbox | communications | MiMo-V2-Pro | `0 6-22 * * *` | none | 5 | CONVERSATION_INBOX.md |
+| conversation-resolver | communications | MiMo-V2-Pro | `0 8,14,20 * * *` | none | 5 | CONVERSATION_RESOLVER.md |
+| crm-hygiene | crm | MiMo-V2-Pro | `0 10 * * *` | none | 10 | CRM_HYGIENE.md |
+| crm-dedup | crm | MiMo-V2-Pro | `30 10 * * 1` | none | 10 | CRM_DEDUP.md |
+| crm-enrichment | crm | MiMo-V2-Pro | `0 11 * * *` | none | 10 | CRM_ENRICHMENT.md |
+| morning-briefing | briefings | MiMo-V2-Pro | `30 6 * * *` | announce | 10 | *(payload-only)* |
+| evening-winddown | briefings | MiMo-V2-Pro | `0 21 * * *` | announce | 10 | *(payload-only)* |
 
 ### 3.2 Org Chart
 
 ```
                     ┌───────────────┐
-                    │     main      │ (Sonnet 4.6, interactive + heartbeat every 4h)
+                    │     main      │ (MiMo-V2-Pro, interactive + heartbeat hourly)
                     │ SOUL.md / HB  │ Interactive chat + reads status, approves REVIEW
                     └──────┬────────┘
            ┌───────────────┼───────────────┬────────────────┐

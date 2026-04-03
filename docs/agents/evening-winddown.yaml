@@ -10,8 +10,9 @@ receives_tasks_from: []
 escalates_to: null
 
 model:
-  primary: openrouter/anthropic/claude-sonnet-4.6
+  primary: openrouter/xiaomi/mimo-v2-pro
   fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
     - gemini/gemini-2.5-pro
 
 schedule:

@@ -8,10 +8,10 @@ reports_to: main
 escalates_to: main
 
 model:
-  primary: openrouter/anthropic/claude-sonnet-4.6
+  primary: openrouter/xiaomi/mimo-v2-pro
   fallbacks:
     - ollama_chat/qwen3:8b
-  payload_alias: sonnet
+  payload_alias: mimo
 
 schedule:
   cron: ""

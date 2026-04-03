@@ -119,7 +119,7 @@ class TestModelRegistryCachePricing:
         assert limits.cache_read_cost_per_token > 0
 
     def test_non_anthropic_model_defaults_zero(self):
-        limits = get_model_limits("openrouter/z-ai/glm-5")
+        limits = get_model_limits("openrouter/xiaomi/mimo-v2-pro")
         assert limits.cache_write_cost_per_token == 0.0
         assert limits.cache_read_cost_per_token == 0.0
 
@@ -276,7 +276,7 @@ class TestPromptCachingOptimization:
             {"role": "user", "content": "Hello"},
         ]
         kwargs = AgentRunner._build_llm_kwargs(
-            "openrouter/z-ai/glm-5",
+            "openrouter/xiaomi/mimo-v2-pro",
             messages,
             [],
             1000,

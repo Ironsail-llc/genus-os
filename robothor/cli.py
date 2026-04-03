@@ -1575,7 +1575,8 @@ def _cmd_agent_setup() -> int:
 
         tz = input("  Timezone [America/New_York]: ").strip() or "America/New_York"
         model = (
-            input("  Default model [openrouter/z-ai/glm-5]: ").strip() or "openrouter/z-ai/glm-5"
+            input("  Default model [openrouter/xiaomi/mimo-v2-pro]: ").strip()
+            or "openrouter/xiaomi/mimo-v2-pro"
         )
         quality = (
             input("  Quality model [openrouter/anthropic/claude-sonnet-4.6]: ").strip()

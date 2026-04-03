@@ -10,7 +10,7 @@ receives_tasks_from: [email-classifier]
 escalates_to: main
 
 model:
-  primary: openrouter/z-ai/glm-5
+  primary: openrouter/xiaomi/mimo-v2-pro
   fallbacks:
     - openrouter/anthropic/claude-sonnet-4.6
     - gemini/gemini-2.5-pro
