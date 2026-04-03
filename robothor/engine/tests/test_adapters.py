@@ -182,10 +182,10 @@ class TestMcpHttpSession:
             },
         ]
         init_response = {"result": {"protocolVersion": "2024-11-05"}}
-        notif_response = {}
+        notif_response: dict[str, str] = {}
         list_response = {"result": {"tools": mock_tools}}
 
-        session._send = AsyncMock(side_effect=[init_response, notif_response, list_response])
+        session._send = AsyncMock(side_effect=[init_response, notif_response, list_response])  # type: ignore[method-assign]
 
         tools = await session.list_tools()
         assert len(tools) == 2
@@ -200,7 +200,7 @@ class TestMcpHttpSession:
         tool_response = {
             "result": {"content": [{"type": "text", "text": '{"patients": [{"id": "p1"}]}'}]}
         }
-        session._send = AsyncMock(return_value=tool_response)
+        session._send = AsyncMock(return_value=tool_response)  # type: ignore[method-assign]
 
         result = await session.call_tool("search_patients", {"query": "Smith"})
         assert result == {"patients": [{"id": "p1"}]}
@@ -213,10 +213,10 @@ class TestMcpHttpSession:
 
         error_response = {"error": {"message": "Invalid session ID"}}
         init_response = {"result": {"protocolVersion": "2024-11-05"}}
-        notif_response = {}
+        notif_response: dict[str, str] = {}
         success_response = {"result": {"content": [{"type": "text", "text": '{"ok": true}'}]}}
 
-        session._send = AsyncMock(
+        session._send = AsyncMock(  # type: ignore[method-assign]
             side_effect=[error_response, init_response, notif_response, success_response]
         )
 
