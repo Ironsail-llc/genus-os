@@ -134,6 +134,10 @@ notification_inbox: true
 status_file: null
 shared_working_state: true
 
+warmup:
+  memory_blocks:
+    - buddy_status
+
 instruction_file: brain/SOUL.md
 bootstrap_files:
   - brain/AGENTS.md

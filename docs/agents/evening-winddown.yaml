@@ -69,6 +69,8 @@ warmup:
   memory_blocks:
     - user_profile
     - shared_working_state
+    - buddy_status
+    - autodream_log
   context_files:
     - brain/memory/garmin-health.md
     - brain/memory/cron-health-status.md
