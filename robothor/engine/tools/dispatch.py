@@ -116,7 +116,8 @@ async def _execute_tool(
         try:
             pool = get_mcp_client_pool()
             session = await pool.get_session(route)
-            return await session.call_tool(name, args)
+            result: dict[str, Any] = await session.call_tool(name, args)
+            return result
         except Exception as e:
             logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
             return {"error": f"Adapter tool '{name}' failed: {e}"}

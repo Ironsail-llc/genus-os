@@ -298,7 +298,8 @@ class McpHttpSession:
         result = await self._send(
             {"jsonrpc": "2.0", "id": self._next_id(), "method": "resources/list"}
         )
-        return result.get("result", {}).get("resources", [])
+        resources: list[dict[str, Any]] = result.get("result", {}).get("resources", [])
+        return resources
 
     async def read_resource(self, uri: str) -> Any:
         """Read a resource from this MCP server."""
