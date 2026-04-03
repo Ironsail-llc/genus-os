@@ -25,7 +25,6 @@ def create_health_app(
 ) -> Any:
     """Create a lightweight FastAPI health app."""
     from fastapi import FastAPI
-    from fastapi.responses import JSONResponse
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
@@ -94,25 +93,21 @@ def create_health_app(
         days = max(1, min(days, 365))
         from robothor.db.connection import get_connection
 
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT stat_date, tasks_completed, total_xp, level,
-                           current_streak_days,
-                           debugging_score, patience_score, chaos_score,
-                           wisdom_score, reliability_score
-                    FROM buddy_stats
-                    ORDER BY stat_date DESC
-                    LIMIT %s
-                    """,
-                    (days,),
-                )
-                rows = cur.fetchall()
-        except Exception as e:
-            logger.warning("buddy_history DB error: %s", e)
-            return JSONResponse({"error": "Database unavailable"}, status_code=503)  # type: ignore[return-value]
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT stat_date, tasks_completed, total_xp, level,
+                       current_streak_days,
+                       debugging_score, patience_score, chaos_score,
+                       wisdom_score, reliability_score
+                FROM buddy_stats
+                ORDER BY stat_date DESC
+                LIMIT %s
+                """,
+                (days,),
+            )
+            rows = cur.fetchall()  # type: ignore[return-value]
         return {
             "days": [
                 {
@@ -139,24 +134,20 @@ def create_health_app(
         limit = max(1, min(limit, 1000))
         from robothor.db.connection import get_connection
 
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT id, mode, started_at, completed_at, duration_ms,
-                           facts_consolidated, facts_pruned, insights_discovered,
-                           error_message
-                    FROM autodream_runs
-                    ORDER BY started_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
-                rows = cur.fetchall()
-        except Exception as e:
-            logger.warning("kairos_dreams DB error: %s", e)
-            return JSONResponse({"error": "Database unavailable"}, status_code=503)  # type: ignore[return-value]
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, mode, started_at, completed_at, duration_ms,
+                       facts_consolidated, facts_pruned, insights_discovered,
+                       error_message
+                FROM autodream_runs
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()  # type: ignore[return-value]
         return {
             "dreams": [
                 {
