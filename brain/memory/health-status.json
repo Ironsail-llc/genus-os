@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-04-01T00:00:01.736618",
+  "checkedAt": "2026-04-03T06:00:01.322913",
   "totalChecks": 31,
   "okCount": 24,
   "criticalCount": 7,
@@ -9,191 +9,191 @@
       "name": "system:memory",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.743495"
+      "checkedAt": "2026-04-03T06:00:01.331687"
     },
     {
       "name": "systemd:robothor-bridge",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.748519"
+      "checkedAt": "2026-04-03T06:00:01.339654"
     },
     {
       "name": "systemd:robothor-crm",
       "status": "CRITICAL",
       "detail": "inactive",
-      "checkedAt": "2026-04-01T00:00:01.753351"
+      "checkedAt": "2026-04-03T06:00:01.345912"
     },
     {
       "name": "systemd:robothor-dashboard",
       "status": "CRITICAL",
       "detail": "inactive",
-      "checkedAt": "2026-04-01T00:00:01.759750"
+      "checkedAt": "2026-04-03T06:00:01.354214"
     },
     {
       "name": "systemd:robothor-orchestrator",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.763594"
+      "checkedAt": "2026-04-03T06:00:01.360470"
     },
     {
       "name": "systemd:robothor-privacy",
       "status": "CRITICAL",
       "detail": "inactive",
-      "checkedAt": "2026-04-01T00:00:01.770140"
+      "checkedAt": "2026-04-03T06:00:01.366794"
     },
     {
       "name": "systemd:robothor-sms",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.774214"
+      "checkedAt": "2026-04-03T06:00:01.371485"
     },
     {
       "name": "systemd:robothor-status-dashboard",
       "status": "CRITICAL",
       "detail": "inactive",
-      "checkedAt": "2026-04-01T00:00:01.785574"
+      "checkedAt": "2026-04-03T06:00:01.376317"
     },
     {
       "name": "systemd:robothor-status",
       "status": "CRITICAL",
       "detail": "inactive",
-      "checkedAt": "2026-04-01T00:00:01.802047"
+      "checkedAt": "2026-04-03T06:00:01.381108"
     },
     {
       "name": "systemd:robothor-transcript",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.807704"
+      "checkedAt": "2026-04-03T06:00:01.387042"
     },
     {
       "name": "systemd:robothor-vision",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.813922"
+      "checkedAt": "2026-04-03T06:00:01.393902"
     },
     {
       "name": "systemd:robothor-voice",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.818364"
+      "checkedAt": "2026-04-03T06:00:01.398512"
     },
     {
       "name": "systemd:cloudflared",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.822458"
+      "checkedAt": "2026-04-03T06:00:01.404417"
     },
     {
       "name": "systemd:mediamtx-webcam",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.828227"
+      "checkedAt": "2026-04-03T06:00:01.410051"
     },
     {
       "name": "http:bridge",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:01.922268",
-      "response_time_ms": 94.0
+      "checkedAt": "2026-04-03T06:00:01.507647",
+      "response_time_ms": 97.6
     },
     {
       "name": "http:orchestrator",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.008978",
-      "response_time_ms": 74.5
+      "checkedAt": "2026-04-03T06:00:01.585031",
+      "response_time_ms": 62.8
     },
     {
       "name": "http:vision",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.022901",
-      "response_time_ms": 1.4
+      "checkedAt": "2026-04-03T06:00:01.599443",
+      "response_time_ms": 2.2
     },
     {
       "name": "http:ollama",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.035541",
-      "response_time_ms": 2.1
+      "checkedAt": "2026-04-03T06:00:01.612859",
+      "response_time_ms": 2.8
     },
     {
       "name": "http:status",
       "status": "CRITICAL",
       "detail": "HTTPConnectionPool(host='localhost', port=3000): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3000): Failed to establish a new connection: [Errno 111] Connection refused\"))",
-      "checkedAt": "2026-04-01T00:00:02.045938"
+      "checkedAt": "2026-04-03T06:00:01.622834"
     },
     {
       "name": "http:status-dashboard",
       "status": "CRITICAL",
       "detail": "HTTPConnectionPool(host='localhost', port=3001): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=3001): Failed to establish a new connection: [Errno 111] Connection refused\"))",
-      "checkedAt": "2026-04-01T00:00:02.051593"
+      "checkedAt": "2026-04-03T06:00:01.629263"
     },
     {
       "name": "db:robothor_memory",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.129662"
+      "checkedAt": "2026-04-03T06:00:01.708744"
     },
     {
       "name": "crm:native",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.201051"
+      "checkedAt": "2026-04-03T06:00:01.794354"
     },
     {
       "name": "redis",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:02.224453"
+      "checkedAt": "2026-04-03T06:00:01.818022"
     },
     {
       "name": "gmail:auth",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.054582"
+      "checkedAt": "2026-04-03T06:00:02.732232"
     },
     {
       "name": "email:data_quality",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.057013"
+      "checkedAt": "2026-04-03T06:00:02.736135"
     },
     {
       "name": "cron:email_sync",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.057986"
+      "checkedAt": "2026-04-03T06:00:02.738692"
     },
     {
       "name": "pipeline:triage_inbox",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.058136"
+      "checkedAt": "2026-04-03T06:00:02.739034"
     },
     {
       "name": "pipeline:triage_consistency",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.058913"
+      "checkedAt": "2026-04-03T06:00:02.741069"
     },
     {
       "name": "pipeline:agent:email-classifier",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.092521"
+      "checkedAt": "2026-04-03T06:00:02.788347"
     },
     {
       "name": "pipeline:agent:calendar-monitor",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.121976"
+      "checkedAt": "2026-04-03T06:00:02.820524"
     },
     {
       "name": "pipeline:agent:morning-briefing",
       "status": "ok",
       "detail": "",
-      "checkedAt": "2026-04-01T00:00:03.150178"
+      "checkedAt": "2026-04-03T06:00:02.851719"
     }
   ]
 }

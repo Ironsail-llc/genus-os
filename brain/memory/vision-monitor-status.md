@@ -1,7 +1,6 @@
 # Vision Monitor Status
-Last run: 2026-03-31T22:17:44.045159+00:00
+Last run: 2026-04-03T10:13:30.000466+00:00
 Persons detected: 0
 Vision mode: disarmed
-Scene: No persons detected (who_is_here returned empty)
-Note: look tool failed - snapshot service unavailable
+Scene: Dimly lit room with window view, no persons.
 Status: No escalation - no persons detected

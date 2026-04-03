@@ -31,6 +31,13 @@ glm-test/
 *.png
 memory_system/yolov8n.pt
 
+# Transient calendar analysis files
+memory/cal-*.txt
+memory/*-temp.txt
+
+# Periodic calendar sync logs
+memory/calendar-*.log
+
 # Voice server logs
 voice-server/server.log
 test-results/
