@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.engine.tools.dispatch import ToolContext
 
 HANDLERS: dict[str, Any] = {}
 
 
-def _handler(name: str) -> Any:
-    def decorator(fn: Any) -> Any:
+def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         HANDLERS[name] = fn
         return fn
 
