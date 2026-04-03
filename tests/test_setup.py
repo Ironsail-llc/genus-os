@@ -140,7 +140,7 @@ class TestWriteEnvFile:
         assert "ROBOTHOR_DB_PORT=5433" in content
         assert "ROBOTHOR_DB_NAME=mydb" in content
         assert "ROBOTHOR_DB_USER=me" in content
-        assert "ROBOTHOR_DB_PASSWORD=pw" in content
+        assert "ROBOTHOR_DB_PASSWORD=" in content  # password never written to .env
         assert "ROBOTHOR_REDIS_HOST=redis-host" in content
         assert "ROBOTHOR_REDIS_PORT=6380" in content
         assert "ROBOTHOR_OLLAMA_HOST=ollama-host" in content
