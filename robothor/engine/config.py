@@ -446,7 +446,7 @@ def explain_config(
     layers["fleet_defaults"] = _load_defaults(manifest_dir)
 
     manifest_path = manifest_dir / f"{agent_id}.yaml"
-    layers["agent_manifest"] = load_manifest(manifest_path) if manifest_path.exists() else {}
+    layers["agent_manifest"] = (load_manifest(manifest_path) or {}) if manifest_path.exists() else {}
 
     if workspace:
         project = _load_project_config(workspace)

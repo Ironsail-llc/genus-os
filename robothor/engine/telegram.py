@@ -526,15 +526,22 @@ class TelegramBot:
             from robothor.engine.permission_escalation import get_permission_manager
 
             # Security: only the authorized chat can approve/deny escalations
-            if str(callback.message.chat.id) != str(self.config.default_chat_id):
+            msg = callback.message
+            if not msg or not hasattr(msg, "chat"):
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+            if str(msg.chat.id) != str(self.config.default_chat_id):
                 logger.warning(
                     "Unauthorized permission callback from chat_id=%s user_id=%s",
-                    callback.message.chat.id,
+                    msg.chat.id,
                     callback.from_user.id if callback.from_user else "unknown",
                 )
                 await callback.answer("Unauthorized", show_alert=True)
                 return
 
+            if not callback.data:
+                await callback.answer("Invalid callback data")
+                return
             parts = callback.data.split(":", 2)
             if len(parts) < 3:
                 await callback.answer("Invalid callback data")
@@ -563,7 +570,8 @@ class TelegramBot:
 
             # Remove inline keyboard after decision
             with contextlib.suppress(Exception):
-                await callback.message.edit_reply_markup(reply_markup=None)
+                if msg and hasattr(msg, "edit_reply_markup"):
+                    await msg.edit_reply_markup(reply_markup=None)
 
         # ── File/document/photo messages ──
 

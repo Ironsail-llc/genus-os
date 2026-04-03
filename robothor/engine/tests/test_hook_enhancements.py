@@ -149,6 +149,7 @@ class TestChainMode:
         result = await reg.dispatch(HookEvent.PRE_TOOL_USE, ctx)
         assert result.action == HookAction.MODIFY
         # mod_a runs first, sets a; mod_b sees updated tool_args (with a), sets b
+        assert result.modified_args is not None
         assert result.modified_args["a"] == "set_by_a"
         assert result.modified_args["b"] == "set_by_b"
 
@@ -217,7 +218,7 @@ class TestHookTimeout:
             handler_type="python",
             handler="slow",
             blocking=True,
-            timeout=0.1,  # 100ms
+            timeout=1,  # short timeout
         )
         reg.register(hook)
 

@@ -338,10 +338,11 @@ class HookRegistry:
                 return HookResult()
 
         if asyncio.iscoroutinefunction(handler):
-            return await handler(context)
+            result = await handler(context)
         else:
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(self._sync_executor, handler, context)
+            result = await loop.run_in_executor(self._sync_executor, handler, context)
+        return result if isinstance(result, HookResult) else HookResult()
 
     async def _run_command(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Run shell command. Exit 0 = allow, 1 = block."""
@@ -434,6 +435,7 @@ class HookRegistry:
     async def _run_agent(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Execute an agent as a hook handler via the runner."""
         try:
+            from robothor.engine.models import TriggerType
             from robothor.engine.tools.handlers.spawn import get_runner
         except ImportError:
             logger.error("Cannot import get_runner for agent hook %s", hook.handler)
@@ -456,7 +458,7 @@ class HookRegistry:
             run = await runner.execute(
                 agent_id=hook.handler,
                 message=json.dumps(context_dict),
-                trigger_type="sub_agent",
+                trigger_type=TriggerType.SUB_AGENT,
             )
 
             if run.output_text:
