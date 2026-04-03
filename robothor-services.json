@@ -138,15 +138,6 @@
       "tunnel_route": "tts.robothor.ai",
       "dependencies": []
     },
-    "impetus_one": {
-      "name": "Impetus One",
-      "port": 8000,
-      "host": "127.0.0.1",
-      "health": "/api/health",
-      "systemd_unit": null,
-      "tunnel_route": null,
-      "dependencies": []
-    },
     "ops_dashboard": {
       "name": "Ops Dashboard",
       "port": 3003,

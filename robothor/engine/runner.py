@@ -150,10 +150,10 @@ litellm.suppress_debug_info = True
 # NOTE: max_tokens here is the MODEL's context window, not the output cap we request.
 litellm.register_model(
     {
-        "openrouter/z-ai/glm-5": {
-            "max_tokens": 204800,
-            "input_cost_per_token": 0.0000008,  # $0.80/M
-            "output_cost_per_token": 0.00000256,  # $2.56/M
+        "openrouter/xiaomi/mimo-v2-pro": {
+            "max_tokens": 1000000,
+            "input_cost_per_token": 0.000001,  # $0.80/M
+            "output_cost_per_token": 0.000003,  # $2.56/M
         },
         "openrouter/anthropic/claude-sonnet-4.6": {
             "max_tokens": 200000,
@@ -289,6 +289,24 @@ class AgentRunner:
             "hit" if _prompt_cache.get(agent_config.id) else "miss",
         )
 
+        # ── Load business adapters (external MCP servers) ──
+        try:
+            from robothor.engine.adapters import get_adapters_for_agent
+            from robothor.engine.mcp_client import configure_mcp_servers, register_adapter
+
+            # Wire up v2.mcp_servers from manifest (previously dead code)
+            if agent_config.mcp_servers:
+                configure_mcp_servers(agent_config.mcp_servers)
+
+            # Load and register business adapters
+            adapters = get_adapters_for_agent(agent_id)
+            for adapter in adapters:
+                register_adapter(adapter)
+            if adapters:
+                await self.registry.register_adapter_tools(adapters)
+        except Exception as e:
+            logger.warning("Adapter loading failed (non-fatal): %s", e)
+
         # Get filtered tools for this agent
         if readonly_mode:
             # Plan mode: sandwich pattern — prepend constraints BEFORE identity,
@@ -339,8 +357,10 @@ class AgentRunner:
         # the watchdog is explicitly disabled (stall_timeout_seconds: 0).
         # This lets agents run for hours on complex tasks without being killed.
         stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        hard_timeout = None if stall_timeout > 0 else agent_config.timeout_seconds
-        watchdog = _StallWatchdog(stall_timeout=stall_timeout, hard_timeout=0)
+        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        watchdog = _StallWatchdog(
+            stall_timeout=stall_timeout, hard_timeout=agent_config.timeout_seconds
+        )
         self._active_watchdog = watchdog  # expose for touch() calls from tool handlers
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:

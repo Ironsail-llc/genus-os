@@ -6,6 +6,7 @@ Validates consumer handler logic without requiring Redis.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -113,7 +114,7 @@ class TestEmailConsumer:
             c.handle(event)
             mock_popen.assert_called_once()
         finally:
-            os.unlink(script_path)
+            Path(script_path).unlink()
             os.environ.pop("EMAIL_HOOK_SCRIPT", None)
 
     def test_ignores_unknown_event_type(self):
@@ -189,7 +190,6 @@ class TestHealthConsumer:
                 "services": {
                     "crm": "ok",
                     "memory": "error:connection refused",
-                    "impetus_one": "ok",
                 },
             },
         }

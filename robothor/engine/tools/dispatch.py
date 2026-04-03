@@ -39,7 +39,6 @@ def _collect_handlers() -> dict[str, Any]:
         filesystem,
         git,
         gws,
-        impetus,
         mcp_client,
         memory,
         messaging,
@@ -72,7 +71,6 @@ def _collect_handlers() -> dict[str, Any]:
         voice,
         spawn,
         pdf,
-        impetus,
         reasoning,
         federation,
         pf,
@@ -103,7 +101,26 @@ async def _execute_tool(
     tenant_id: str = "robothor-primary",
     workspace: str = "",
 ) -> dict[str, Any]:
-    """Route tool call to the correct handler."""
+    """Route tool call to the correct handler.
+
+    Checks adapter-provided tools first (dynamic MCP servers), then falls
+    through to hardcoded engine handlers.
+    """
+    # Check if this tool is provided by a business adapter
+    from robothor.engine.tools import get_registry
+
+    route = get_registry().get_adapter_route(name)
+    if route:
+        from robothor.engine.mcp_client import get_mcp_client_pool
+
+        try:
+            pool = get_mcp_client_pool()
+            session = await pool.get_session(route)
+            return await session.call_tool(name, args)
+        except Exception as e:
+            logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
+            return {"error": f"Adapter tool '{name}' failed: {e}"}
+
     ctx = ToolContext(agent_id=agent_id, tenant_id=tenant_id, workspace=workspace)
     handlers = _get_handlers()
     handler = handlers.get(name)

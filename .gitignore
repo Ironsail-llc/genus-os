@@ -2,6 +2,9 @@
 /templates/
 /tunnel/
 
+# Business adapters (local MCP server configs — not part of the public repo)
+/adapters/
+
 # Backup logs
 scripts/backup.log
 

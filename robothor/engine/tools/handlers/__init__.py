@@ -8,7 +8,6 @@ from robothor.engine.tools.handlers import (  # noqa: F401
     filesystem,
     git,
     gws,
-    impetus,
     memory,
     observability,
     pdf,

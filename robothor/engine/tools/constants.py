@@ -2,25 +2,6 @@
 
 from __future__ import annotations
 
-# Impetus One tools — routed via Bridge MCP passthrough
-IMPETUS_TOOLS = frozenset(
-    {
-        "search_patients",
-        "get_patient_details",
-        "get_patient_clinical_notes",
-        "get_patient_prescriptions",
-        "search_prescriptions",
-        "get_prescription_status",
-        "search_medications",
-        "search_pharmacies",
-        "get_appointments",
-        "list_actable_providers",
-        "create_prescription_draft",
-        "schedule_appointment",
-        "transmit_prescription",
-    }
-)
-
 # Sub-agent spawning tools
 SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
 
@@ -143,17 +124,6 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Vault read-only tools
         "vault_get",
         "vault_list",
-        # Healthcare read-only tools
-        "search_patients",
-        "get_patient_details",
-        "get_patient_clinical_notes",
-        "get_patient_prescriptions",
-        "search_prescriptions",
-        "get_prescription_status",
-        "search_medications",
-        "search_pharmacies",
-        "get_appointments",
-        "list_actable_providers",
         # Reasoning
         "deep_reason",
         # PDF
