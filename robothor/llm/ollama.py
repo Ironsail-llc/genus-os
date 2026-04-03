@@ -236,14 +236,14 @@ async def chat(
                     "chat: %d thinking chars, %d content chars, %d eval tokens, done=%s",
                     len(thinking) if thinking else 0,
                     len(content),
-                    eval_count,
-                    done_reason,
+                    int(eval_count),
+                    str(done_reason).replace("\n", "\\n"),
                 )
                 if done_reason == "length" and not content.strip():
                     logger.warning(
                         "Thinking exhausted token budget (eval=%d, num_predict=%d)",
-                        eval_count,
-                        payload["options"]["num_predict"],
+                        int(eval_count),
+                        int(payload["options"]["num_predict"]),
                     )
                 return content
         except (httpx.TimeoutException, httpx.ConnectError) as e:

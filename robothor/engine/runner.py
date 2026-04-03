@@ -58,6 +58,17 @@ from robothor.engine.session import AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
 
+# ── Log-injection sanitizer ──
+# CodeQL py/log-injection: user-controlled values (model names, error
+# messages) must not inject newlines into log output.
+_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
+
+
+def _sanitize(val: object) -> str:
+    """Sanitize a value for safe inclusion in log messages."""
+    return str(val).translate(_LOG_SANITIZE_TABLE)
+
+
 # Max seconds to wait for the next streaming chunk before aborting and
 # falling back to the next model.  Prevents stalled streams from hanging
 # the entire run (the stream *creation* timeout is separate — 120 s).
@@ -2121,12 +2132,12 @@ class AgentRunner:
             reason = "timeout" if is_timeout else str(status)
             logger.warning(
                 "Model %s failed (%s), removing from rotation for this run",
-                model,
-                reason,
+                _sanitize(model),
+                _sanitize(reason),
             )
         else:
             suffix = " (streaming)" if streaming else ""
-            logger.warning("Model %s%s failed: %s", model, suffix, e)
+            logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))
 
     async def _call_llm(
         self,
@@ -2140,7 +2151,11 @@ class AgentRunner:
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
 
-        logger.debug("LLM call with models: %s (broken: %s)", models, broken_models or set())
+        logger.debug(
+            "LLM call with models: %s (broken: %s)",
+            _sanitize(models),
+            _sanitize(broken_models or set()),
+        )
         for model in models:
             if broken_models and model in broken_models:
                 continue
@@ -2165,9 +2180,9 @@ class AgentRunner:
 
         logger.error(
             "All models failed. Models: %s, broken: %s, last error: %s",
-            models,
-            broken_models or set(),
-            last_error,
+            _sanitize(models),
+            _sanitize(broken_models or set()),
+            _sanitize(last_error),
         )
         return None
 
@@ -2228,7 +2243,7 @@ class AgentRunner:
                         logger.warning(
                             "Stream stalled for %ds, aborting model=%s",
                             STREAM_CHUNK_TIMEOUT,
-                            model,
+                            _sanitize(model),
                         )
                         raise TimeoutError(
                             f"Stream stalled after {STREAM_CHUNK_TIMEOUT}s of no chunks"
@@ -2256,7 +2271,7 @@ class AgentRunner:
                     if getattr(delta, "content", None):
                         if not ttft_logged:
                             ttft_ms = int((time.monotonic() - stream_start) * 1000)
-                            logger.info("TTFT %dms model=%s", ttft_ms, model)
+                            logger.info("TTFT %dms model=%s", ttft_ms, _sanitize(model))
                             ttft_logged = True
                         accumulated_content += delta.content
                         await _emit(
