@@ -61,6 +61,7 @@ class AgentSession:
         self._step_counter = 0
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold
+        self._step_costs: list[float] = []
 
     @property
     def run_id(self) -> str:
@@ -252,15 +253,20 @@ class AgentSession:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
 
-    def check_budget(self, token_budget: int = 0) -> str:
-        """Check token budget status for observability and soft warnings.
+    def check_budget(self, token_budget: int = 0, max_cost_usd: float = 0.0) -> str:
+        """Check token budget and cost budget status.
 
         Returns: "exhausted", "warning", or "ok"
 
-        Note: This is used for TRACKING and soft LLM nudges only.
-        The engine does NOT enforce budget as a hard stop — runs
-        continue regardless of budget status.
+        When ``hard_budget`` is enabled on the agent config, callers should
+        treat "exhausted" as a hard stop signal.
         """
+        # Cost-based check (takes precedence)
+        if max_cost_usd > 0 and self.run.total_cost_usd >= max_cost_usd:
+            return "exhausted"
+        if max_cost_usd > 0 and self.run.total_cost_usd >= max_cost_usd * 0.8:
+            return "warning"
+        # Token-based check
         if token_budget > 0:
             total_tokens = self.run.input_tokens + self.run.output_tokens
             if total_tokens >= token_budget:
@@ -268,6 +274,19 @@ class AgentSession:
             if total_tokens >= token_budget * 0.8:
                 return "warning"
         return "ok"
+
+    def project_next_call_cost(self) -> float:
+        """Estimate the cost of the next LLM call from rolling average of recent calls."""
+        if not self._step_costs:
+            return 0.0
+        recent = self._step_costs[-3:]  # last 3 calls
+        return sum(recent) / len(recent)
+
+    def record_step_cost(self, cost: float) -> None:
+        """Record an LLM call cost for projection purposes."""
+        if not hasattr(self, "_step_costs"):
+            self._step_costs: list[float] = []
+        self._step_costs.append(cost)
 
     # ── Eager tool result compression ──────────────────────────────
 

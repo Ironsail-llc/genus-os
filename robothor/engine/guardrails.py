@@ -8,6 +8,7 @@ All events are logged to the agent_guardrail_events table.
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import re
 import time
@@ -52,6 +53,7 @@ POLICY_DESCRIPTIONS: dict[str, str] = {
     "exec_allowlist": "Shell commands are restricted to an explicit allowlist.",
     "write_path_restrict": "File writes are restricted to specific paths.",
     "desktop_safety": "Desktop automation has additional safety checks (no terminal emulators, no dangerous key combos).",
+    "human_approval": "Certain tools require explicit human approval before execution.",
 }
 
 
@@ -115,6 +117,7 @@ class GuardrailEngine:
     _exec_allowlists: dict[str, list[re.Pattern]] = field(default_factory=dict)  # type: ignore[type-arg]
     _write_allowlists: dict[str, list[str]] = field(default_factory=dict)
     _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    _human_approval_patterns: dict[str, list[str]] = field(default_factory=dict)
 
     def check_pre_execution(
         self,
@@ -163,6 +166,8 @@ class GuardrailEngine:
             return self._check_write_path(tool_name, tool_args, agent_id)
         if policy == "desktop_safety":
             return self._check_desktop_safety(tool_name, tool_args)
+        if policy == "human_approval":
+            return self._check_human_approval(tool_name, tool_args, agent_id)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -295,10 +300,8 @@ class GuardrailEngine:
         ws = self.workspace.rstrip("/") + "/" if self.workspace else ""
         if ws and path.startswith(ws):
             path = path[len(ws) :]
-        from fnmatch import fnmatch
-
         for pattern in patterns:
-            if fnmatch(path, pattern):
+            if fnmatch.fnmatch(path, pattern):
                 return GuardrailResult()
         return GuardrailResult(
             allowed=False,
@@ -370,6 +373,27 @@ class GuardrailEngine:
                         guardrail_name="desktop_safety",
                     )
 
+        return GuardrailResult()
+
+    def set_human_approval_patterns(self, agent_id: str, patterns: list[str]) -> None:
+        """Configure tool patterns that require human approval for an agent."""
+        self._human_approval_patterns[agent_id] = patterns
+
+    def _check_human_approval(
+        self, tool_name: str, tool_args: dict[str, Any], agent_id: str
+    ) -> GuardrailResult:
+        """Escalate tool calls that match human_approval_tools patterns."""
+        patterns = self._human_approval_patterns.get(agent_id, [])
+        if not patterns:
+            return GuardrailResult()
+        for pattern in patterns:
+            if fnmatch.fnmatch(tool_name, pattern):
+                return GuardrailResult(
+                    allowed=False,
+                    action="escalate",
+                    reason=f"Tool '{tool_name}' requires human approval",
+                    guardrail_name="human_approval",
+                )
         return GuardrailResult()
 
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
