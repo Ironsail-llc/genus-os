@@ -1,1 +1,0 @@
-{"success":false,"error":"Invalid JSON in request body","hint":"Make sure your request body is valid JSON with 'submolt', 'title', and optionally 'content' or 'url'"}

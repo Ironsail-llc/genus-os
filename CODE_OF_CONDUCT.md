@@ -26,7 +26,7 @@ This code of conduct applies to all project spaces including issues, pull reques
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to **robothor@ironsail.ai**. All complaints will be reviewed and investigated promptly and fairly. The project team is obligated to maintain confidentiality regarding the reporter of an incident.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported via [GitHub Issues](../../issues). All complaints will be reviewed and investigated promptly and fairly. The project team is obligated to maintain confidentiality regarding the reporter of an incident.
 
 ## Enforcement Actions
 

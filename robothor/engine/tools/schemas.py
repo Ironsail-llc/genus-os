@@ -1253,6 +1253,19 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "string",
                         "description": "Unique experiment identifier (kebab-case)",
                     },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["metric", "benchmark"],
+                        "description": "Experiment mode: 'metric' (default) runs a shell command, 'benchmark' uses a benchmark suite",
+                    },
+                    "benchmark_agent_id": {
+                        "type": "string",
+                        "description": "Agent to benchmark (required when mode=benchmark)",
+                    },
+                    "benchmark_suite_id": {
+                        "type": "string",
+                        "description": "Benchmark suite to use (required when mode=benchmark)",
+                    },
                     "config_file": {
                         "type": "string",
                         "description": "Path to experiment YAML config (optional — use inline params instead)",
@@ -1417,6 +1430,156 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                 },
                 "required": ["experiment_id"],
+            },
+        },
+    }
+
+    # ── AutoAgent benchmark tools ────────────────────────────────────
+
+    schemas["benchmark_define"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_define",
+            "description": (
+                "Define or update a benchmark suite for evaluating an agent's harness. "
+                "Provide a config_file (YAML) or inline task definitions. "
+                "Each task has a prompt, expected behavior criteria, category, and weight."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent to benchmark",
+                    },
+                    "suite_id": {
+                        "type": "string",
+                        "description": "Unique suite identifier (kebab-case)",
+                    },
+                    "config_file": {
+                        "type": "string",
+                        "description": "Path to suite YAML config (optional — use inline params instead)",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Human-readable suite description",
+                    },
+                    "max_cost_usd": {
+                        "type": "number",
+                        "description": "Maximum total cost for running the full suite (default 1.00, cap 5.00)",
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "Task identifier"},
+                                "prompt": {
+                                    "type": "string",
+                                    "description": "Message to send to the agent",
+                                },
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["correctness", "safety", "efficiency", "tone"],
+                                    "description": "Task category (default: correctness)",
+                                },
+                                "weight": {
+                                    "type": "number",
+                                    "description": "Scoring weight (default 1.0, safety tasks often 2.0)",
+                                },
+                                "expected": {
+                                    "type": "object",
+                                    "properties": {
+                                        "must_contain": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": "Regex patterns that must appear in output",
+                                        },
+                                        "must_not_contain": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": "Regex patterns that must NOT appear in output",
+                                        },
+                                        "max_cost_usd": {
+                                            "type": "number",
+                                            "description": "Max cost for this single task run",
+                                        },
+                                        "max_iterations": {
+                                            "type": "integer",
+                                            "description": "Max agent iterations for this task",
+                                        },
+                                    },
+                                    "description": "Expected behavior criteria for scoring",
+                                },
+                            },
+                            "required": ["id", "prompt", "expected"],
+                        },
+                        "description": "List of benchmark tasks",
+                    },
+                },
+                "required": ["agent_id", "suite_id"],
+            },
+        },
+    }
+    schemas["benchmark_run"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_run",
+            "description": (
+                "Execute a benchmark suite against an agent. Runs each task as a "
+                "sub-agent invocation, scores output with deterministic pattern matching, "
+                "and returns per-task scores, per-category breakdown, and weighted aggregate (0.0-1.0)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent to benchmark",
+                    },
+                    "suite_id": {
+                        "type": "string",
+                        "description": "Suite identifier",
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Label for this run (e.g. 'baseline', 'iter-3'). Must be unique per suite.",
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of task IDs to run (default: all tasks)",
+                    },
+                },
+                "required": ["agent_id", "suite_id", "tag"],
+            },
+        },
+    }
+    schemas["benchmark_compare"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_compare",
+            "description": (
+                "Compare two benchmark runs. Returns per-task deltas, per-category deltas, "
+                "aggregate delta, and flags any safety-category regressions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "suite_id": {
+                        "type": "string",
+                        "description": "Suite identifier",
+                    },
+                    "run_a": {
+                        "type": "string",
+                        "description": "Tag of the baseline run",
+                    },
+                    "run_b": {
+                        "type": "string",
+                        "description": "Tag of the comparison run",
+                    },
+                },
+                "required": ["suite_id", "run_a", "run_b"],
             },
         },
     }
