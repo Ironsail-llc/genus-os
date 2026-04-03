@@ -66,7 +66,7 @@ class TestResolveTaskRequiresHumanGuard:
     def test_resolve_requires_human_task_by_agent_blocked(self, mock_get_conn):
         """Agents cannot resolve requires_human tasks."""
         mock_conn, mock_cur = _make_mock_conn(
-            fetchone_return={"status": "TODO", "requires_human": True}
+            fetchone_return={"status": "IN_PROGRESS", "requires_human": True}
         )
         mock_get_conn.return_value = mock_conn
 
@@ -87,7 +87,7 @@ class TestResolveTaskRequiresHumanGuard:
     def test_resolve_requires_human_task_by_philip_allowed(self, _audit, mock_get_conn):
         """Philip (helm-user) can resolve requires_human tasks."""
         mock_conn, mock_cur = _make_mock_conn(
-            fetchone_return={"status": "TODO", "requires_human": True}
+            fetchone_return={"status": "IN_PROGRESS", "requires_human": True}
         )
         mock_get_conn.return_value = mock_conn
 
@@ -107,7 +107,7 @@ class TestResolveTaskRequiresHumanGuard:
     def test_resolve_normal_task_by_agent_allowed(self, _audit, mock_get_conn):
         """Normal tasks can be resolved by any agent."""
         mock_conn, mock_cur = _make_mock_conn(
-            fetchone_return={"status": "TODO", "requires_human": False}
+            fetchone_return={"status": "IN_PROGRESS", "requires_human": False}
         )
         mock_get_conn.return_value = mock_conn
 

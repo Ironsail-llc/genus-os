@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -129,16 +130,37 @@ class ToolRegistry:
         agent_id: str = "",
         tenant_id: str = "robothor-primary",
         workspace: str = "",
+        timeout: int = 120,
     ) -> dict[str, Any]:
-        """Execute a tool and return the result dict."""
+        """Execute a tool and return the result dict.
+
+        Args:
+            timeout: Per-tool timeout in seconds. 0 = unlimited.
+        """
         try:
-            return await _execute_tool(
-                tool_name,
-                arguments,
-                agent_id=agent_id,
-                tenant_id=tenant_id,
-                workspace=workspace,
-            )
+            if timeout > 0:
+                async with asyncio.timeout(timeout):
+                    return await _execute_tool(
+                        tool_name,
+                        arguments,
+                        agent_id=agent_id,
+                        tenant_id=tenant_id,
+                        workspace=workspace,
+                    )
+            else:
+                return await _execute_tool(
+                    tool_name,
+                    arguments,
+                    agent_id=agent_id,
+                    tenant_id=tenant_id,
+                    workspace=workspace,
+                )
+        except TimeoutError:
+            logger.warning("Tool %s timed out after %ds", tool_name, timeout)
+            return {
+                "error": f"Tool '{tool_name}' timed out after {timeout}s. "
+                "Try a different approach or skip this step."
+            }
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             return {"error": f"Tool execution failed: {e}"}

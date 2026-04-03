@@ -210,9 +210,11 @@ def _import_cron_health_check():
     """Import cron_health_check from brain/scripts using importlib."""
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location(
-        "cron_health_check", Path(_BRAIN_SCRIPTS) / "cron_health_check.py"
-    )
+    script_path = Path(_BRAIN_SCRIPTS) / "cron_health_check.py"
+    if not script_path.exists():
+        pytest.skip("brain/scripts/cron_health_check.py not deployed")
+
+    spec = importlib.util.spec_from_file_location("cron_health_check", script_path)
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

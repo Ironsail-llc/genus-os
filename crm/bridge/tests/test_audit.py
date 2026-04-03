@@ -28,9 +28,12 @@ BRIDGE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BRIDGE_DIR))
 sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
 
-import audit
-import bridge_service
-from bridge_service import app
+try:
+    import audit
+    import bridge_service
+    from bridge_service import app
+except ImportError:
+    pytest.skip("bridge dependencies not deployed (audit module missing)", allow_module_level=True)
 
 # Prefix for test data isolation
 TEST_PREFIX = f"__audit_test_{uuid.uuid4().hex[:6]}__"

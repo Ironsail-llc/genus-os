@@ -23,13 +23,18 @@ from psycopg2.extras import RealDictCursor
 
 # Audit logging — import from memory_system
 sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
-import audit
+try:
+    import audit
+except ImportError:
+    audit = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
 
 def _safe_audit(operation, entity_type, entity_id, **kwargs):
     """Wrap audit.log_crm_mutation so it never propagates exceptions."""
+    if audit is None:
+        return None
     try:
         return audit.log_crm_mutation(operation, entity_type, entity_id, **kwargs)
     except Exception as e:
@@ -1806,8 +1811,10 @@ def search_records(query: str, object_name: str | None = None, limit: int = 20) 
         else:
             continue
 
-        for row in cur.fetchall():
-            results.append({"id": str(row["id"]), "label": row["label"], "type": row["type"]})
+        results.extend(
+            {"id": str(row["id"]), "label": row["label"], "type": row["type"]}
+            for row in cur.fetchall()
+        )
 
     conn.close()
     return results[:limit]

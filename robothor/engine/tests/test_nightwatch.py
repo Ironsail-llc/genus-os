@@ -14,15 +14,21 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "brain" / "scripts"))
 
-from nightwatch_lib import (
-    check_pause_condition,
-    cleanup_worktree,
-    create_worktree,
-    determine_scope,
-    extract_pr_url,
-    get_merge_rate,
-    today_str,
-)
+try:
+    from nightwatch_lib import (
+        check_pause_condition,
+        cleanup_worktree,
+        create_worktree,
+        determine_scope,
+        extract_pr_url,
+        get_merge_rate,
+        today_str,
+    )
+except ImportError:
+    pytest.skip(
+        "nightwatch_lib not available (brain/scripts not deployed)",
+        allow_module_level=True,
+    )
 
 
 def slugify(title: str) -> str:

@@ -861,6 +861,7 @@ class AgentRunner:
         _safety_cap = getattr(agent_config, "safety_cap", 200)
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
+        _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
 
         while True:
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
@@ -1272,6 +1273,7 @@ class AgentRunner:
 
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
+                _tool_timeout = getattr(agent_config, "tool_timeout_seconds", 120)
                 if trace:
                     with trace.span("tool_call", tool=tool_name) as _span:
                         result = await self.registry.execute(
@@ -1280,6 +1282,7 @@ class AgentRunner:
                             agent_id=agent_config.id,
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
+                            timeout=_tool_timeout,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1288,6 +1291,7 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         tenant_id=session.run.tenant_id,
                         workspace=str(self.config.workspace),
+                        timeout=_tool_timeout,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
@@ -1377,6 +1381,22 @@ class AgentRunner:
                 # ── [SCRATCHPAD] Record tool call ──
                 if scratchpad:
                     scratchpad.record_tool_call(tool_name, error=error_msg)
+
+                # ── [CIRCUIT BREAKER] Stop calling tools that keep failing ──
+                if error_msg:
+                    _tool_failures[tool_name] = _tool_failures.get(tool_name, 0) + 1
+                    if _tool_failures[tool_name] >= 3:
+                        session.messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"[SYSTEM] Tool '{tool_name}' has failed "
+                                    f"{_tool_failures[tool_name]} times this run. "
+                                    "Do NOT call it again. Find an alternative "
+                                    "approach or skip this step and move on."
+                                ),
+                            }
+                        )
 
                 # ── [ESCALATION] Record error/success ──
                 if escalation:

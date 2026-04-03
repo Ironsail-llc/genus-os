@@ -277,6 +277,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         sandbox=v2.get("sandbox", "local"),
         eager_tool_compression=v2.get("eager_tool_compression", False),
         tool_offload_threshold=v2.get("tool_offload_threshold", 0),
+        tool_timeout_seconds=int(v2.get("tool_timeout_seconds", 120)),
         # Continuous execution mode
         continuous=v2.get("continuous", False),
         progress_report_interval=int(v2.get("progress_report_interval", 50)),
