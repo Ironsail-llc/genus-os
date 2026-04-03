@@ -208,7 +208,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     # v2 enhancement fields
     v2 = manifest.get("v2", {})
 
-    return AgentConfig(
+    config = AgentConfig(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
         description=manifest.get("description", ""),
@@ -277,7 +277,24 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         sandbox=v2.get("sandbox", "local"),
         eager_tool_compression=v2.get("eager_tool_compression", False),
         tool_offload_threshold=v2.get("tool_offload_threshold", 0),
+        # Continuous execution mode
+        continuous=v2.get("continuous", False),
+        progress_report_interval=int(v2.get("progress_report_interval", 50)),
+        max_cost_usd=float(v2.get("max_cost_usd", 0.0)),
+        hard_budget=v2.get("hard_budget", False),
+        # Human-in-the-loop
+        human_approval_tools=v2.get("human_approval_tools", []),
+        human_approval_timeout=int(v2.get("human_approval_timeout", 300)),
     )
+
+    # ── Continuous mode overrides — raise caps for sustained multi-hour runs ──
+    if config.continuous:
+        config.safety_cap = max(config.safety_cap, 2000)
+        config.timeout_seconds = max(config.timeout_seconds, 86400)  # 24h
+        config.max_iterations = max(config.max_iterations, 100)
+        config.checkpoint_enabled = True
+
+    return config
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -317,25 +334,266 @@ def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def load_agent_config(agent_id: str, manifest_dir: Path) -> AgentConfig | None:
+# ── Project-level config ────────────────────────────────────────────
+
+_project_config_cache: tuple[float, dict[str, Any]] = (0.0, {})
+
+
+def _load_project_config(workspace: Path) -> dict[str, Any]:
+    """Load project-level overrides from ``.robothor/config.yaml``."""
+    global _project_config_cache  # noqa: PLW0603
+    config_path = workspace / ".robothor" / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        mtime = config_path.stat().st_mtime
+        if _project_config_cache[0] == mtime:
+            return _project_config_cache[1]
+        with config_path.open() as f:
+            data = yaml.safe_load(f) or {}
+        _project_config_cache = (mtime, data)
+        return data
+    except Exception as e:
+        logger.warning("Failed to load project config: %s", e)
+        return {}
+
+
+# ── Runtime overrides ───────────────────────────────────────────────
+
+_runtime_overrides: dict[str, Any] = {}
+
+
+def set_runtime_overrides(overrides: dict[str, Any]) -> None:
+    """Set runtime overrides from CLI flags or API calls."""
+    global _runtime_overrides  # noqa: PLW0603
+    _runtime_overrides = overrides
+
+
+def _get_runtime_overrides() -> dict[str, Any]:
+    return _runtime_overrides
+
+
+def _collect_env_overrides() -> dict[str, Any]:
+    """Collect ``ROBOTHOR_OVERRIDE_*`` environment variables as config overrides.
+
+    ``ROBOTHOR_OVERRIDE_V2__MAX_ITERATIONS=30``  →  ``{"v2": {"max_iterations": 30}}``
+    """
+    overrides: dict[str, Any] = {}
+    for key, value in os.environ.items():
+        if not key.startswith("ROBOTHOR_OVERRIDE_"):
+            continue
+        path = key[len("ROBOTHOR_OVERRIDE_") :].lower().split("__")
+        if not path or not path[-1]:
+            continue
+        current = overrides
+        for segment in path[:-1]:
+            current = current.setdefault(segment, {})
+        current[path[-1]] = _coerce_value(value)
+    return overrides
+
+
+def _coerce_value(value: str) -> Any:
+    """Coerce an env var string to int, float, bool, or leave as string."""
+    if value.lower() in ("true", "yes"):
+        return True
+    if value.lower() in ("false", "no"):
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+# ── Conditional config ──────────────────────────────────────────────
+
+
+def _apply_conditional_config(data: dict[str, Any], trigger_type: str) -> dict[str, Any]:
+    """Apply ``when:`` block overrides matching the given trigger_type."""
+    when_block = data.get("when", [])
+    if not isinstance(when_block, list):
+        return data
+    result = dict(data)
+    for clause in when_block:
+        if not isinstance(clause, dict):
+            continue
+        if clause.get("trigger_type") == trigger_type:
+            overrides = clause.get("overrides", {})
+            if overrides:
+                result = _deep_merge(result, overrides)
+    result.pop("when", None)
+    return result
+
+
+def explain_config(
+    agent_id: str,
+    manifest_dir: Path,
+    workspace: Path | None = None,
+) -> dict[str, Any]:
+    """Return the merge chain for an agent, showing which layer provides each value.
+
+    Useful for debugging config inheritance. Returns:
+    - layers: each layer's raw data
+    - merged: final merged result
+    - attribution: which layer set each leaf key (dot-separated paths)
+    """
+    layers: dict[str, dict[str, Any]] = {}
+
+    layers["fleet_defaults"] = _load_defaults(manifest_dir)
+
+    manifest_path = manifest_dir / f"{agent_id}.yaml"
+    layers["agent_manifest"] = load_manifest(manifest_path) if manifest_path.exists() else {}
+
+    if workspace:
+        project = _load_project_config(workspace)
+        layers["project_all"] = project.get("_all", {})
+        layers["project_agent"] = project.get(agent_id, {})
+    else:
+        layers["project_all"] = {}
+        layers["project_agent"] = {}
+
+    layers["env_overrides"] = _collect_env_overrides()
+    layers["runtime_overrides"] = _get_runtime_overrides()
+
+    # Build attribution
+    attribution: dict[str, str] = {}
+    merged: dict[str, Any] = {}
+    layer_order = [
+        "fleet_defaults",
+        "agent_manifest",
+        "project_all",
+        "project_agent",
+        "env_overrides",
+        "runtime_overrides",
+    ]
+    for layer_name in layer_order:
+        layer_data = layers.get(layer_name, {})
+        if layer_data:
+            _attribute_merge(merged, layer_data, layer_name, attribution)
+
+    return {
+        "agent_id": agent_id,
+        "layers": {k: v for k, v in layers.items() if v},  # skip empty layers
+        "merged": merged,
+        "attribution": attribution,
+    }
+
+
+def _attribute_merge(
+    merged: dict[str, Any],
+    override: dict[str, Any],
+    layer_name: str,
+    attribution: dict[str, str],
+    prefix: str = "",
+) -> None:
+    """Merge override into merged, recording which layer set each leaf key."""
+    for key, val in override.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(val, dict) and isinstance(merged.get(key), dict):
+            _attribute_merge(merged[key], val, layer_name, attribution, full_key)
+        else:
+            merged[key] = val
+            attribution[full_key] = layer_name
+
+
+# ── Fleet-level hooks merge ─────────────────────────────────────────
+
+
+def _merge_lifecycle_hooks(merged: dict[str, Any], defaults: dict[str, Any]) -> None:
+    """Concatenate fleet-level lifecycle hooks with agent hooks (deduplicate)."""
+    fleet_hooks = defaults.get("v2", {}).get("lifecycle_hooks", [])
+    if not fleet_hooks:
+        return
+    v2 = merged.setdefault("v2", {})
+    agent_hooks = v2.get("lifecycle_hooks", [])
+
+    # Deduplicate by (event, handler) — agent hooks win on collision
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for hook in agent_hooks:
+        key = (hook.get("event", ""), hook.get("handler", ""))
+        seen.add(key)
+        result.append(hook)
+    for hook in fleet_hooks:
+        key = (hook.get("event", ""), hook.get("handler", ""))
+        if key not in seen:
+            result.append(hook)
+
+    v2["lifecycle_hooks"] = result
+
+
+def load_agent_config(
+    agent_id: str,
+    manifest_dir: Path,
+    workspace: Path | None = None,
+    trigger_type: str | None = None,
+) -> AgentConfig | None:
     """Load a single agent config by ID from the manifest directory.
 
     If ``_defaults.yaml`` exists in the manifest dir, its values are used
     as fleet-wide defaults — agent-specific values win on merge.
+
+    Args:
+        workspace: Optional project directory for ``.robothor/config.yaml`` overrides.
+        trigger_type: Optional trigger type for conditional config (``when:`` block).
     """
     defaults = _load_defaults(manifest_dir)
+
+    def _build_config(manifest_data: dict[str, Any]) -> AgentConfig:
+        merged = _deep_merge(defaults, manifest_data) if defaults else dict(manifest_data)
+
+        # Project-level overrides (.robothor/config.yaml)
+        if workspace:
+            project = _load_project_config(workspace)
+            if project:
+                project_all = project.get("_all", {})
+                project_agent = project.get(agent_id, {})
+                if project_all:
+                    merged = _deep_merge(merged, project_all)
+                if project_agent:
+                    merged = _deep_merge(merged, project_agent)
+
+        # Environment variable overrides
+        env_overrides = _collect_env_overrides()
+        if env_overrides:
+            merged = _deep_merge(merged, env_overrides)
+
+        # Runtime overrides (highest precedence)
+        rt = _get_runtime_overrides()
+        if rt:
+            merged = _deep_merge(merged, rt)
+
+        # Conditional config (when: block)
+        if trigger_type:
+            merged = _apply_conditional_config(merged, trigger_type)
+
+        # Fleet-level lifecycle hooks (concatenate, not replace)
+        _merge_lifecycle_hooks(merged, defaults)
+
+        # Validate
+        from robothor.engine.config_schema import validate_manifest
+
+        warnings = validate_manifest(merged)
+        for w in warnings:
+            logger.warning("Config validation [%s]: %s", agent_id, w)
+
+        config = manifest_to_agent_config(merged)
+        config.validation_warnings = warnings
+        return config
 
     manifest_path = manifest_dir / f"{agent_id}.yaml"
     if manifest_path.exists():
         data = load_manifest(manifest_path)
         if data:
-            merged = _deep_merge(defaults, data) if defaults else data
-            return manifest_to_agent_config(merged)
+            return _build_config(data)
     # Fallback: scan all manifests for matching ID
     for m in load_all_manifests(manifest_dir):
         if m["id"] == agent_id:
-            merged = _deep_merge(defaults, m) if defaults else m
-            return manifest_to_agent_config(merged)
+            return _build_config(m)
     return None
 
 

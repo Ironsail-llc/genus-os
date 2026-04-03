@@ -223,6 +223,21 @@ class AgentConfig:
     eager_tool_compression: bool = False  # disabled: infinite loop bug when read_file re-offloads
     tool_offload_threshold: int = 0  # disabled: 0 means no offloading
 
+    # ── Continuous execution mode ──
+    continuous: bool = False  # raises caps for sustained multi-hour runs
+    progress_report_interval: int = 50  # iterations between Telegram progress updates
+    max_cost_usd: float = 0.0  # dollar-cost cap (0 = unlimited)
+    hard_budget: bool = False  # hard stop on budget exhaustion (vs soft nudge)
+
+    # ── Human-in-the-loop (opt-in per agent) ──
+    human_approval_tools: list[str] = field(
+        default_factory=list
+    )  # tool name patterns requiring approval
+    human_approval_timeout: int = 300  # auto-approve after N seconds if no response
+
+    # ── Config validation ──
+    validation_warnings: list[str] = field(default_factory=list)
+
 
 @dataclass
 class LLMMessage:

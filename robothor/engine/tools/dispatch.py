@@ -48,6 +48,7 @@ def _collect_handlers() -> dict[str, Any]:
         reasoning,
         skills,
         spawn,
+        timing,
         vault,
         vision,
         voice,
@@ -77,6 +78,7 @@ def _collect_handlers() -> dict[str, Any]:
         messaging,
         skills,
         mcp_client,
+        timing,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

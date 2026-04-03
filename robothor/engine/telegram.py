@@ -28,6 +28,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeAllPrivateChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -135,7 +136,7 @@ TEXT_EXTENSIONS = {
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
-    "GLM-5": "openrouter/z-ai/glm-5",
+    "MiMo-V2-Pro": "openrouter/xiaomi/mimo-v2-pro",
     "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
     "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
 }
@@ -517,6 +518,52 @@ class TelegramBot:
             except Exception:
                 pass
             await callback.answer(f"Switched to {display}")
+
+        # ── Permission approval callbacks ──
+
+        @self.dp.callback_query(F.data.startswith("perm:"))
+        async def on_permission_decision(callback: CallbackQuery) -> None:
+            from robothor.engine.permission_escalation import get_permission_manager
+
+            # Security: only the authorized chat can approve/deny escalations
+            if str(callback.message.chat.id) != str(self.config.default_chat_id):
+                logger.warning(
+                    "Unauthorized permission callback from chat_id=%s user_id=%s",
+                    callback.message.chat.id,
+                    callback.from_user.id if callback.from_user else "unknown",
+                )
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+
+            parts = callback.data.split(":", 2)
+            if len(parts) < 3:
+                await callback.answer("Invalid callback data")
+                return
+
+            action = parts[1]  # "approve", "all", or "deny"
+            request_id = parts[2]
+
+            mgr = get_permission_manager()
+            if not mgr:
+                await callback.answer("Permission system not active")
+                return
+
+            if action == "approve":
+                mgr.resolve(request_id, approved=True)
+                await callback.answer("Approved")
+            elif action == "all":
+                mgr.resolve(request_id, approved=True, remember_session=True)
+                await callback.answer("Approved for session")
+            elif action == "deny":
+                mgr.resolve(request_id, approved=False)
+                await callback.answer("Denied")
+            else:
+                await callback.answer("Unknown action")
+                return
+
+            # Remove inline keyboard after decision
+            with contextlib.suppress(Exception):
+                await callback.message.edit_reply_markup(reply_markup=None)
 
         # ── File/document/photo messages ──
 
@@ -1897,19 +1944,20 @@ class TelegramBot:
 
         # Register command menu with Telegram
         try:
-            await self.bot.set_my_commands(
-                [
-                    BotCommand(command="deep", description="Deep reasoning via RLM"),
-                    BotCommand(command="plan", description="Plan before executing"),
-                    BotCommand(command="model", description="Switch AI model"),
-                    BotCommand(command="clear", description="Clear conversation history"),
-                    BotCommand(command="context", description="Context window stats"),
-                    BotCommand(command="status", description="Engine health"),
-                    BotCommand(command="reset", description="Reset model + history"),
-                    BotCommand(command="stop", description="Cancel current response"),
-                    BotCommand(command="help", description="Show commands"),
-                ]
-            )
+            commands = [
+                BotCommand(command="deep", description="Deep reasoning via RLM"),
+                BotCommand(command="plan", description="Plan before executing"),
+                BotCommand(command="model", description="Switch AI model"),
+                BotCommand(command="clear", description="Clear conversation history"),
+                BotCommand(command="context", description="Context window stats"),
+                BotCommand(command="status", description="Engine health"),
+                BotCommand(command="reset", description="Reset model + history"),
+                BotCommand(command="stop", description="Cancel current response"),
+                BotCommand(command="help", description="Show commands"),
+            ]
+            # Set for both default and private-chat scopes so DMs see the full menu
+            await self.bot.set_my_commands(commands)
+            await self.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
         except Exception as e:
             logger.warning("Failed to set bot commands: %s", e)
 
