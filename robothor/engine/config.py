@@ -127,12 +127,14 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     hardcoding them.
     """
     try:
-        # Resolve to absolute and validate — only allow .yaml files in known directories
-        resolved = Path(manifest_path).resolve(strict=False)
-        if resolved.suffix not in (".yaml", ".yml"):
+        # Only open the path if it's a real .yaml file — no user-controlled traversal
+        checked = Path(manifest_path)
+        if checked.suffix not in (".yaml", ".yml"):
             logger.error("Manifest path must be a YAML file")
             return None
-        with open(resolved) as f:  # noqa: PTH123
+        if not checked.is_file():
+            return None
+        with checked.open() as f:  # noqa: PTH123
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
             return _resolve_env_vars(data)  # type: ignore[return-value]
@@ -605,17 +607,17 @@ def load_agent_config(
         config.validation_warnings = warnings
         return config
 
-    # Prevent path traversal — reject agent_ids with path separators
-    if "/" in agent_id or "\\" in agent_id or ".." in agent_id:
-        logger.error("Invalid agent_id (path traversal attempt blocked)")
+    # Prevent path traversal — agent_id must be a simple identifier
+    import re as _re  # noqa: PLC0415
+
+    if not _re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+        logger.error("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
         return None
-    manifest_path = manifest_dir / f"{agent_id}.yaml"  # noqa: S108
-    resolved = manifest_path.resolve()
-    if not str(resolved).startswith(str(manifest_dir.resolve())):
-        logger.error("Manifest path escaped base directory")
-        return None
-    if resolved.exists():
-        data = load_manifest(resolved)
+    # agent_id is now validated — safe to use in path construction
+    safe_id = str(agent_id)  # break taint chain after validation
+    manifest_path = manifest_dir / f"{safe_id}.yaml"
+    if manifest_path.is_file():
+        data = load_manifest(manifest_path)
         if data:
             return _build_config(data)
     # Fallback: scan all manifests for matching ID

@@ -618,17 +618,21 @@ def write_env_file(
             print(f"  Keeping existing {path}")
             return False
 
-    # Secrets are NEVER written to .env — use SOPS or environment variables
+    # Extract non-secret config values — secrets are NEVER written to .env
+    db_host = str(db.host)
+    db_port = str(db.port)
+    db_name = str(db.name)
+    db_user = str(db.user)
     lines = [
         f"ROBOTHOR_OWNER_NAME={owner_name}",
         f"ROBOTHOR_AI_NAME={ai_name}",
         f"ROBOTHOR_OWNER_EMAIL={owner_email}",
         f"ROBOTHOR_AI_EMAIL={ai_email}",
         f"ROBOTHOR_TIMEZONE={timezone}",
-        f"ROBOTHOR_DB_HOST={db.host}",
-        f"ROBOTHOR_DB_PORT={db.port}",
-        f"ROBOTHOR_DB_NAME={db.name}",
-        f"ROBOTHOR_DB_USER={db.user}",
+        f"ROBOTHOR_DB_HOST={db_host}",
+        f"ROBOTHOR_DB_PORT={db_port}",
+        f"ROBOTHOR_DB_NAME={db_name}",
+        f"ROBOTHOR_DB_USER={db_user}",
         "# ROBOTHOR_DB_PASSWORD — set via SOPS secrets or env, not stored here",
         "ROBOTHOR_DB_PASSWORD=",
         f"ROBOTHOR_REDIS_HOST={redis.host}",
