@@ -126,7 +126,7 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
             return _resolve_env_vars(data)  # type: ignore[return-value]
         return None
     except Exception as e:
-        sanitized_path = str(manifest_path).replace('\n', '\\n').replace('\r', '\\r')
+        sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
         logger.error("Failed to load manifest %s: %s", sanitized_path, e)
         return None
 
@@ -586,7 +586,7 @@ def load_agent_config(
 
         warnings = validate_manifest(merged)
         for w in warnings:
-            sanitized_w = str(w).replace('\n', '\\n').replace('\r', '\\r')
+            sanitized_w = str(w).replace("\n", "\\n").replace("\r", "\\r")
             logger.warning("Config validation [%s]: %s", agent_id, sanitized_w)
 
         config = manifest_to_agent_config(merged)

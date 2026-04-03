@@ -482,7 +482,9 @@ class AgentRunner:
                         await sandbox.start()
                         set_current_sandbox(sandbox)
                     except Exception as e:
-                        logger.error("Sandbox start failed for %s: %s", _sanitize(agent_id), _sanitize(e))
+                        logger.error(
+                            "Sandbox start failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+                        )
                         sandbox = None
 
                 # Start stall watchdog — monitors current task for inactivity

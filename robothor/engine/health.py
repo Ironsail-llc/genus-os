@@ -280,7 +280,9 @@ def create_health_app(
             return JSONResponse(body, status_code=status)
         except Exception:
             logger.exception("Readiness check failed")
-            return JSONResponse({"status": "error", "error": "Internal server error"}, status_code=500)
+            return JSONResponse(
+                {"status": "error", "error": "Internal server error"}, status_code=500
+            )
 
     @app.on_event("startup")
     async def _mark_startup_complete() -> None:
