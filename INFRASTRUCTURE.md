@@ -351,8 +351,6 @@ Managed by: `robothor-bridge.service`
 | /api/audit | GET | Query audit log |
 | /api/telemetry | GET | Query telemetry |
 | /api/events | GET | SSE event stream |
-| /api/impetus/* | * | Proxy to Impetus One platform |
-
 All `/api/*` endpoints support `X-Tenant-Id` header for multi-tenant scoping (defaults to `robothor-primary`). The endpoints are REST proxies used by the OpenClaw `crm-tools` plugin. They query native PostgreSQL CRM tables via `crm_dal` so the agent doesn't need direct database credentials. Middleware stack: CorrelationMiddleware → TenantMiddleware → RBACMiddleware.
 
 ### MCP Servers (configured in `.claude.json`) — Claude Code only

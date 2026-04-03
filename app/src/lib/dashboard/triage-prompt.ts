@@ -27,14 +27,6 @@ Available data sources:
 - "memory:<query>" — search memory/knowledge base for <query>
 - "web:<query>" — web search for <query> (weather, news, research, etc.)
 - "overview" — combined health + inbox summary
-- "prescriptions" — prescription pipeline (counts by status, pending review)
-- "appointments:io" — appointments from Impetus One
-- "patients" — patient list/search results
-- "queue" — provider review queue (priority items)
-- "orders" — e-commerce order status
-- "pharmacy" — pharmacy list and transmission status
-- "medications" — medication catalog
-- "encounters" — patient encounters/chart notes
 
 Respond with ONLY valid JSON, no markdown fences:
 {"shouldUpdate": true/false, "dataNeeds": ["source1", "source2"], "summary": "brief description of what dashboard should show"}

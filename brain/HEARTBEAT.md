@@ -94,9 +94,9 @@ Check:
 - **Unhandled emails**: If an email was classified but has no responder task, flag it
 - **Mid-tier digest**: If any emails were classified importance 3, mention them in one line each: "[sender] emailed about [subject] — routed to [responder/analyst]". These don't need Philip's action but he should know they exist. (Importance 4-5 emails are already fast-tracked to Telegram via the relay — don't duplicate those here.)
 
-### 7. Prescriptions
+### 7. Business Adapters
 
-Check Impetus One: `search_prescriptions(query="pending")`, `get_appointments(dateRange="this_week")`
+If business adapter tools are available (loaded from `~/.config/robothor/adapters/`), check relevant dashboards and pending items.
 
 ### 8. Worker handoff
 

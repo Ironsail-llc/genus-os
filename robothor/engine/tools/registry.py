@@ -20,6 +20,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._schemas: dict[str, dict[str, Any]] = {}
+        self._adapter_routes: dict[str, str] = {}  # tool_name → adapter server name
         self._register_all()
 
     def _register_all(self) -> None:
@@ -40,6 +41,38 @@ class ToolRegistry:
 
         # Engine-specific tools
         self._schemas.update(get_engine_schemas())
+
+    async def register_adapter_tools(self, adapters: list[Any]) -> None:
+        """Connect to adapter MCP servers, discover tools, register as first-class schemas."""
+        from robothor.engine.mcp_client import get_mcp_client_pool
+
+        pool = get_mcp_client_pool()
+        for adapter in adapters:
+            try:
+                session = await pool.get_session(adapter.name)
+                mcp_tools = await session.list_tools()
+                for tool in mcp_tools:
+                    name = tool.get("name", "")
+                    if not name:
+                        continue
+                    self._schemas[name] = {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get(
+                                "inputSchema", {"type": "object", "properties": {}}
+                            ),
+                        },
+                    }
+                    self._adapter_routes[name] = adapter.name
+                logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
+            except Exception:
+                logger.exception("Failed to discover tools from adapter '%s'", adapter.name)
+
+    def get_adapter_route(self, tool_name: str) -> str | None:
+        """Return the adapter server name for a tool, or None if not adapter-provided."""
+        return self._adapter_routes.get(tool_name)
 
     def build_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists."""

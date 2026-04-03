@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from robothor.engine.models import AgentConfig
-from robothor.engine.tools import IMPETUS_TOOLS, ToolRegistry, _execute_tool, get_registry
+from robothor.engine.tools import ToolRegistry, _execute_tool, get_registry
 
 
 class TestToolRegistry:
@@ -292,7 +292,7 @@ class TestObservabilityTools:
                 "agent_id": "vision-monitor",
                 "status": "completed",
                 "trigger_type": "cron",
-                "model_used": "glm-5",
+                "model_used": "mimo-v2-pro",
                 "duration_ms": 25000,
                 "input_tokens": 1000,
                 "output_tokens": 500,
@@ -328,8 +328,8 @@ class TestObservabilityTools:
             "status": "completed",
             "trigger_type": "cron",
             "trigger_detail": None,
-            "model_used": "glm-5",
-            "models_attempted": ["glm-5"],
+            "model_used": "mimo-v2-pro",
+            "models_attempted": ["mimo-v2-pro"],
             "duration_ms": 13000,
             "input_tokens": 800,
             "output_tokens": 300,
@@ -382,7 +382,7 @@ class TestObservabilityTools:
                 "cron_expr": "0 6-22/2 * * *",
                 "timezone": "America/New_York",
                 "timeout_seconds": 480,
-                "model_primary": "glm-5",
+                "model_primary": "mimo-v2-pro",
                 "last_run_at": "2026-02-27 10:00:00",
                 "last_status": "completed",
                 "last_duration_ms": 13000,
@@ -460,91 +460,6 @@ class TestObservabilityTools:
         assert "list_agent_runs" in names
         assert "get_agent_stats" in names
         assert "exec" in names
-
-
-class TestImpetusTool:
-    def test_impetus_tools_frozenset_has_all_13(self):
-        """IMPETUS_TOOLS frozenset contains exactly 13 tools."""
-        assert len(IMPETUS_TOOLS) == 13
-        assert "search_patients" in IMPETUS_TOOLS
-        assert "get_patient_details" in IMPETUS_TOOLS
-        assert "get_patient_clinical_notes" in IMPETUS_TOOLS
-        assert "get_patient_prescriptions" in IMPETUS_TOOLS
-        assert "search_prescriptions" in IMPETUS_TOOLS
-        assert "get_prescription_status" in IMPETUS_TOOLS
-        assert "search_medications" in IMPETUS_TOOLS
-        assert "search_pharmacies" in IMPETUS_TOOLS
-        assert "get_appointments" in IMPETUS_TOOLS
-        assert "list_actable_providers" in IMPETUS_TOOLS
-        assert "create_prescription_draft" in IMPETUS_TOOLS
-        assert "schedule_appointment" in IMPETUS_TOOLS
-        assert "transmit_prescription" in IMPETUS_TOOLS
-
-    def test_all_impetus_schemas_registered(self):
-        """All 13 Impetus tool schemas are registered in ToolRegistry."""
-        from robothor.api.mcp import get_tool_definitions
-
-        real_defs = get_tool_definitions()
-        with patch("robothor.api.mcp.get_tool_definitions", return_value=real_defs):
-            registry = ToolRegistry()
-        for tool_name in IMPETUS_TOOLS:
-            assert tool_name in registry._schemas, f"{tool_name} not in registry"
-
-    @pytest.mark.asyncio
-    async def test_search_patients_calls_mcp_directly(self):
-        """search_patients calls Impetus One MCP directly (no bridge)."""
-        mock_mcp = AsyncMock()
-        mock_mcp.call_tool.return_value = {"patients": [{"id": "p1", "name": "Smith"}]}
-
-        with patch(
-            "robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=mock_mcp
-        ):
-            result = await _execute_tool("search_patients", {"query": "Smith"})
-
-        assert result == {"patients": [{"id": "p1", "name": "Smith"}]}
-        mock_mcp.call_tool.assert_called_once_with("search_patients", {"query": "Smith"})
-
-    @pytest.mark.asyncio
-    async def test_transmit_prescription_calls_mcp_directly(self):
-        """transmit_prescription (write tool) calls Impetus One MCP directly."""
-        mock_mcp = AsyncMock()
-        mock_mcp.call_tool.return_value = {"status": "pending_confirmation", "confirmationId": "c1"}
-
-        with patch(
-            "robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=mock_mcp
-        ):
-            result = await _execute_tool("transmit_prescription", {"prescriptionId": "rx-1"})
-
-        assert result["confirmationId"] == "c1"
-        mock_mcp.call_tool.assert_called_once_with(
-            "transmit_prescription", {"prescriptionId": "rx-1"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_not_configured_returns_error(self):
-        """When Impetus One env vars are not set, tools return a clear error."""
-        with patch("robothor.engine.tools.handlers.impetus._get_impetus_mcp", return_value=None):
-            result = await _execute_tool("search_patients", {"query": "test"})
-
-        assert "error" in result
-        assert "not configured" in result["error"]
-
-    def test_impetus_tools_in_main_agent_allowlist(self):
-        """Impetus tools are available to the main agent when in tools_allowed."""
-        from robothor.api.mcp import get_tool_definitions
-
-        real_defs = get_tool_definitions()
-        with patch("robothor.api.mcp.get_tool_definitions", return_value=real_defs):
-            registry = ToolRegistry()
-
-        config = AgentConfig(
-            id="main",
-            name="main",
-            tools_allowed=list(IMPETUS_TOOLS) + ["exec"],
-        )
-        names = registry.get_tool_names(config)
-        for tool_name in IMPETUS_TOOLS:
-            assert tool_name in names, f"{tool_name} not accessible to main agent"
 
 
 class TestMergeAndAliasTools:
