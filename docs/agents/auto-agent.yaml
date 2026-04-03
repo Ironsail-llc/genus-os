@@ -26,9 +26,7 @@ schedule:
   session_target: isolated
 
 delivery:
-  mode: announce
-  channel: telegram
-  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
+  mode: none
 
 tools_allowed:
   - exec

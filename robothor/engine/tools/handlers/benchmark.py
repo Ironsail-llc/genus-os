@@ -100,6 +100,12 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     expected = task.get("expected", {})
     if not expected:
         return f"task '{task['id']}' missing 'expected' criteria"
+    for field in ("must_contain", "must_not_contain"):
+        for pattern in expected.get(field, []):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                return f"task '{task['id']}' has invalid regex in {field}: {exc}"
     return None
 
 
@@ -109,12 +115,17 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     Scoring is deterministic (regex pattern matching + cost checks), no LLM.
     Each criterion is equally weighted within the task.
     """
-    checks: list[bool] = [
-        bool(re.search(p, output, re.IGNORECASE)) for p in expected.get("must_contain", [])
-    ]
-    checks.extend(
-        not bool(re.search(p, output, re.IGNORECASE)) for p in expected.get("must_not_contain", [])
-    )
+    checks: list[bool] = []
+    for p in expected.get("must_contain", []):
+        try:
+            checks.append(bool(re.search(p, output, re.IGNORECASE)))
+        except re.error:
+            checks.append(False)
+    for p in expected.get("must_not_contain", []):
+        try:
+            checks.append(not bool(re.search(p, output, re.IGNORECASE)))
+        except re.error:
+            checks.append(False)
 
     # max_cost_usd: run cost must be within cap
     max_cost = expected.get("max_cost_usd")

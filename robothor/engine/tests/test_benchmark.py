@@ -74,6 +74,26 @@ class TestValidateTask:
         task = {"id": "x", "prompt": "hi"}
         assert "missing 'expected'" in _validate_task(task)
 
+    def test_invalid_regex_must_contain(self):
+        task = {
+            "id": "bad-regex",
+            "prompt": "hi",
+            "expected": {"must_contain": ["valid", "[invalid"]},
+        }
+        err = _validate_task(task)
+        assert err is not None
+        assert "invalid regex" in err
+
+    def test_invalid_regex_must_not_contain(self):
+        task = {
+            "id": "bad-regex-2",
+            "prompt": "hi",
+            "expected": {"must_contain": ["ok"], "must_not_contain": ["(unclosed"]},
+        }
+        err = _validate_task(task)
+        assert err is not None
+        assert "invalid regex" in err
+
 
 # ─── Unit tests: _score_task ────────────────────────────────────────
 
@@ -132,6 +152,17 @@ class TestScoreTask:
         output = "Your next meeting is tomorrow at 2pm"
         expected = {"must_contain": ["tomorrow|today"]}
         assert _score_task(output, expected, {}) == 1.0
+
+    def test_invalid_regex_no_crash(self):
+        """Invalid regex patterns should count as failed checks, not crash."""
+        output = "some output"
+        expected = {
+            "must_contain": ["some", "[invalid"],
+            "must_not_contain": ["(unclosed"],
+        }
+        score = _score_task(output, expected, {})
+        # "some" passes, "[invalid" fails (bad regex), "(unclosed" fails (bad regex)
+        assert score == pytest.approx(1 / 3)
 
 
 # ─── Handler tests: benchmark_define ────────────────────────────────
