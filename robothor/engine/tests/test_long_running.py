@@ -159,7 +159,7 @@ def test_build_background_config():
         from robothor.engine.telegram import TelegramBot
 
         fake = FakeBot()
-        result = TelegramBot._build_background_config(fake)
+        result = TelegramBot._build_background_config(fake)  # type: ignore[arg-type]
 
     assert result.continuous is True
     assert result.safety_cap >= 2000

@@ -69,7 +69,8 @@ def _load_block(key: str) -> dict[str, Any] | None:
     if result.get("error"):
         return None
     try:
-        return json.loads(result["content"])
+        parsed: dict[str, Any] = json.loads(result["content"])
+        return parsed
     except (json.JSONDecodeError, KeyError):
         return None
 
@@ -286,7 +287,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # Cap iterations and force silent delivery
         child_config.delivery_mode = DeliveryMode.NONE
         child_config.max_iterations = min(child_config.max_iterations, 15)
-        child_config.cost_budget_usd = task_max_cost
+        child_config.max_cost_usd = task_max_cost
 
         try:
             run = await runner.execute(

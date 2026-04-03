@@ -518,7 +518,9 @@ async def search_facts(
 
             for c in candidates:
                 c["content"] = c.get("fact_text", "")
-            reranked = await rerank_with_fallback(query, candidates, top_k=limit)
+            reranked: list[dict[str, Any]] = await rerank_with_fallback(
+                query, candidates, top_k=limit
+            )
             if include_insights:
                 try:
                     insights = await search_insights(query, limit=3)
