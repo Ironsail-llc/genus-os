@@ -107,7 +107,7 @@ def create_health_app(
                 """,
                 (days,),
             )
-            rows = cur.fetchall()  # type: ignore[return-value]
+            rows = cur.fetchall()
         return {
             "days": [
                 {
@@ -147,7 +147,7 @@ def create_health_app(
                 """,
                 (limit,),
             )
-            rows = cur.fetchall()  # type: ignore[return-value]
+            rows = cur.fetchall()
         return {
             "dreams": [
                 {
