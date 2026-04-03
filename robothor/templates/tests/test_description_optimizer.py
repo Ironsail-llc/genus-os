@@ -91,7 +91,7 @@ class TestGenerateSkillMd:
             "version": "1.0.0",
             "description": "A test agent",
             "department": "custom",
-            "model": {"primary": "glm-5"},
+            "model": {"primary": "mimo-v2-pro"},
         }
         skill_md = generate_skill_md(manifest)
         assert skill_md.startswith("---\n")

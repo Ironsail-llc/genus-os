@@ -162,25 +162,25 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 | Agent ID | Schedule | Model | Delivery | Primary Trigger |
 |----------|----------|-------|----------|----------------|
-| email-classifier | `0 6-22/2 * * *` | Kimi K2.5 | none (silent) | hook: email.new, triage.refreshed |
-| calendar-monitor | `0 6-22/6 * * *` | Kimi K2.5 | none (silent) | hook: calendar.* |
-| email-analyst | `30 8-20/6 * * *` | Kimi K2.5 | none (silent) | downstream from classifier |
-| email-responder | `0 8-20/2 * * *` | Sonnet 4.6 | none (silent) | downstream from classifier |
-| main:heartbeat | `0 6-22 * * *` | Sonnet 4.6 | announce → Telegram | cron |
-| vision-monitor | `0 6-22/6 * * *` | Kimi K2.5 | none (silent) | hook: vision.person_unknown |
-| conversation-inbox | `0 6-22 * * *` | Kimi K2.5 | none (silent) | cron |
-| conversation-resolver | `0 8,14,20 * * *` | Kimi K2.5 | none (silent) | cron |
-| crm-hygiene | `0 10 * * *` | GLM-5 | none (silent) | cron |
-| crm-dedup | `30 10 * * 1` | GLM-5 | none (silent) | cron (weekly Mon) |
-| crm-enrichment | `0 11 * * *` | GLM-5 | none (silent) | cron |
-| morning-briefing | `30 6 * * *` | Kimi K2.5 | announce → Telegram | cron |
-| evening-winddown | `0 21 * * *` | Kimi K2.5 | announce → Telegram | cron |
-| failure-analyzer | DISABLED | Sonnet 4.6 | none (silent) | superseded by nightwatch.py |
-| improvement-analyst | DISABLED | Sonnet 4.6 | none (silent) | superseded by nightwatch.py |
-| overnight-pr | DISABLED | Sonnet 4.6 | none (silent) | superseded by nightwatch.py |
-| computer-use | — (no cron) | Sonnet 4.6 | none (silent) | spawn_agent only |
-| chat-responder | `*/30 6-22 * * *` | GLM-5 | none (silent) | downstream from chat-monitor |
-| auto-researcher | — (no cron) | Sonnet 4.6 | announce → Telegram | manual / task assignment |
+| email-classifier | `0 6-22/2 * * *` | MiMo-V2-Pro | none (silent) | hook: email.new, triage.refreshed |
+| calendar-monitor | `0 6-22/6 * * *` | MiMo-V2-Pro | none (silent) | hook: calendar.* |
+| email-analyst | `30 8-20/6 * * *` | MiMo-V2-Pro | none (silent) | downstream from classifier |
+| email-responder | `0 8-20/2 * * *` | MiMo-V2-Pro | none (silent) | downstream from classifier |
+| main:heartbeat | `0 6-22 * * *` | MiMo-V2-Pro | announce → Telegram | cron |
+| vision-monitor | `0 6-22/6 * * *` | MiMo-V2-Pro | none (silent) | hook: vision.person_unknown |
+| conversation-inbox | `0 6-22 * * *` | MiMo-V2-Pro | none (silent) | cron |
+| conversation-resolver | `0 8,14,20 * * *` | MiMo-V2-Pro | none (silent) | cron |
+| crm-hygiene | `0 10 * * *` | MiMo-V2-Pro | none (silent) | cron |
+| crm-dedup | `30 10 * * 1` | MiMo-V2-Pro | none (silent) | cron (weekly Mon) |
+| crm-enrichment | `0 11 * * *` | MiMo-V2-Pro | none (silent) | cron |
+| morning-briefing | `30 6 * * *` | MiMo-V2-Pro | announce → Telegram | cron |
+| evening-winddown | `0 21 * * *` | MiMo-V2-Pro | announce → Telegram | cron |
+| failure-analyzer | DISABLED | MiMo-V2-Pro | none (silent) | superseded by nightwatch.py |
+| improvement-analyst | DISABLED | MiMo-V2-Pro | none (silent) | superseded by nightwatch.py |
+| overnight-pr | DISABLED | MiMo-V2-Pro | none (silent) | superseded by nightwatch.py |
+| computer-use | — (no cron) | MiMo-V2-Pro | none (silent) | spawn_agent only |
+| chat-responder | `*/30 6-22 * * *` | MiMo-V2-Pro | none (silent) | downstream from chat-monitor |
+| auto-researcher | — (no cron) | MiMo-V2-Pro | announce → Telegram | manual / task assignment |
 
 ## Engine Workflow Crons (APScheduler from `docs/workflows/*.yaml`)
 
@@ -196,7 +196,7 @@ The wrapper sources `/run/robothor/secrets.env` (SOPS-decrypted at boot) before 
 
 ## Notes
 
-- GWS-heavy agents (Main, Email Responder, Chat Responder, Calendar Monitor) use **GLM-5**. Nightwatch agents use **Sonnet 4.6**. Other workers use **Qwen 3.5 122B** (local) or **GLM-5**.
+- **All agents use MiMo-V2-Pro** (`openrouter/xiaomi/mimo-v2-pro`) as primary model. Fallback chain: Sonnet 4.6 → Gemini 2.5 Pro. Main agent has no hard timeout (stall watchdog only).
 - Only 3 agents talk to the owner: Main heartbeat (decisions), Morning Briefing (daily), Evening Wind-Down (daily). All worker agents are silent — they coordinate via tasks, status files, and notification inbox.
 - Main heartbeat runs hourly and reads all worker status files. Always sends a report — never silent.
 - Workers write status files and stop silently.

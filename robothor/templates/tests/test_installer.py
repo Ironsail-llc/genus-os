@@ -26,7 +26,7 @@ class TestInstall:
         assert manifest_path.exists()
         manifest = yaml.safe_load(manifest_path.read_text())
         assert manifest["id"] == "test-agent"
-        assert manifest["model"]["primary"] == "openrouter/z-ai/glm-5"
+        assert manifest["model"]["primary"] == "openrouter/xiaomi/mimo-v2-pro"
 
     def test_install_with_overrides(self, tmp_bundle, tmp_repo, tmp_instance_dir):
         """Install with variable overrides."""
@@ -166,7 +166,7 @@ class TestImport:
             "version": "2026-03-01",
             "department": "custom",
             "model": {
-                "primary": "openrouter/z-ai/glm-5",
+                "primary": "openrouter/xiaomi/mimo-v2-pro",
                 "fallbacks": ["gemini/gemini-2.5-pro"],
             },
             "schedule": {

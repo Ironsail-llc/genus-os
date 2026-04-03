@@ -20,7 +20,7 @@ class TestGetModelLimits:
         assert limits.default_output_tokens == 16_384
 
     def test_known_model_glm5(self):
-        limits = get_model_limits("openrouter/z-ai/glm-5")
+        limits = get_model_limits("openrouter/xiaomi/mimo-v2-pro")
         assert limits.max_input_tokens == 204_800
         assert limits.max_output_tokens == 65_536
         assert limits.default_output_tokens == 8_192
@@ -60,7 +60,7 @@ class TestGetModelLimits:
         assert limits.supports_thinking is True
 
     def test_glm5_no_thinking(self):
-        limits = get_model_limits("openrouter/z-ai/glm-5")
+        limits = get_model_limits("openrouter/xiaomi/mimo-v2-pro")
         assert limits.supports_thinking is False
 
     def test_thinking_budget_constant(self):
@@ -77,7 +77,7 @@ class TestComputeTokenBudget:
         assert budget == 1_000_000 * 15  # 15,000,000
 
     def test_glm5_10_iterations(self):
-        budget = compute_token_budget("openrouter/z-ai/glm-5", 10)
+        budget = compute_token_budget("openrouter/xiaomi/mimo-v2-pro", 10)
         assert budget == 204_800 * 10  # 2,048,000
 
     def test_gemini_pro_10_iterations(self):
@@ -124,7 +124,7 @@ class TestGetOutputTokens:
         assert tokens == 16_384  # default
 
     def test_glm5_default_output(self):
-        tokens = get_output_tokens("openrouter/z-ai/glm-5", 50_000)
+        tokens = get_output_tokens("openrouter/xiaomi/mimo-v2-pro", 50_000)
         assert tokens == 8_192
 
     def test_unknown_model_uses_fallback(self):

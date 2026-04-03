@@ -20,7 +20,7 @@ class TestAutoTaskCreation:
         config = AgentConfig(
             id="test-agent",
             name="Test Agent",
-            model_primary="openrouter/z-ai/glm-5",
+            model_primary="openrouter/xiaomi/mimo-v2-pro",
             auto_task=True,
             max_iterations=1,
             timeout_seconds=30,
@@ -65,7 +65,7 @@ class TestAutoTaskCreation:
         config = AgentConfig(
             id="test-agent",
             name="Test Agent",
-            model_primary="openrouter/z-ai/glm-5",
+            model_primary="openrouter/xiaomi/mimo-v2-pro",
             auto_task=False,
         )
         # The guard is simply `if agent_config.auto_task and not spawn_context:`

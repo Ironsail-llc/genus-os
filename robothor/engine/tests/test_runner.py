@@ -806,11 +806,11 @@ class TestThinkingAPI:
     @pytest.mark.asyncio
     async def test_non_thinking_model_no_thinking_param(self, runner, sample_agent_config):
         """Non-thinking models should not get thinking parameter."""
-        sample_agent_config.model_primary = "openrouter/z-ai/glm-5"
+        sample_agent_config.model_primary = "openrouter/xiaomi/mimo-v2-pro"
         sample_agent_config.model_fallbacks = []
 
         response = MagicMock()
-        response.model = "openrouter/z-ai/glm-5"
+        response.model = "openrouter/xiaomi/mimo-v2-pro"
         response.choices = [MagicMock()]
         response.choices[0].message.content = "Hello!"
         response.choices[0].message.tool_calls = None

@@ -167,7 +167,7 @@ class TestRunHeartbeat:
             id="main",
             name="Robothor",
             model_primary="anthropic/claude-sonnet-4.6",
-            model_fallbacks=["openrouter/z-ai/glm-5"],
+            model_fallbacks=["openrouter/xiaomi/mimo-v2-pro"],
             tools_allowed=["exec", "read_file", "list_tasks"],
             instruction_file="brain/SOUL.md",
             heartbeat=HeartbeatConfig(

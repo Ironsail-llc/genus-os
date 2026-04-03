@@ -54,6 +54,15 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_002_56,  # $2.56/M
         ttft_hint_ms=4000,  # Variable via OpenRouter
     ),
+    # MiMo-V2-Pro via OpenRouter
+    "openrouter/xiaomi/mimo-v2-pro": ModelLimits(
+        max_input_tokens=1_000_000,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_001,  # $1/M
+        output_cost_per_token=0.000_003,  # $3/M
+        ttft_hint_ms=3000,
+    ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
         max_input_tokens=1_048_576,
