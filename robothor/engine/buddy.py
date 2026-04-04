@@ -176,7 +176,9 @@ class AgentBuddyStats:
 # ── SQL helpers for optional agent_id filtering ────────────────────────────
 
 
-def _agent_filter(agent_id: str | None, *, table_alias: str | None = None) -> tuple[str, tuple]:
+def _agent_filter(
+    agent_id: str | None, *, table_alias: str | None = None
+) -> tuple[str, tuple[str, ...]]:
     """Return (SQL fragment, params) to filter by agent_id when provided."""
     if agent_id is not None:
         col = f"{table_alias}.agent_id" if table_alias else "agent_id"
