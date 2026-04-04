@@ -52,6 +52,22 @@ from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+class _AttrDict(dict[str, Any]):
+    """Dict subclass that supports attribute access for template expressions."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            val = dict.__getitem__(self, name)
+            return _AttrDict(val) if isinstance(val, dict) else val
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __getitem__(self, key: str) -> Any:
+        val = dict.__getitem__(self, key)
+        return _AttrDict(val) if isinstance(val, dict) else val
+
+
 # Template pattern: {{ expr }}
 _TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 
@@ -65,7 +81,7 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
     def _replace(match: re.Match[str]) -> str:
         expr = match.group(1)
         try:
-            result = eval(expr, {"__builtins__": {}}, context)
+            result = eval(expr, {"__builtins__": {}}, _AttrDict(context))
             return str(result) if result is not None else ""
         except Exception as e:
             logger.warning("Template eval failed for '%s': %s", expr, e)

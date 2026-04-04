@@ -128,6 +128,103 @@ def create_health_app(
             ]
         }
 
+    @app.get("/api/buddy/agents")
+    async def buddy_agents() -> dict[str, Any]:
+        """Get fleet RPG leaderboard — all agents ranked by overall score."""
+        try:
+            from robothor.db.connection import get_connection
+            from robothor.engine.buddy import level_name
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT agent_id, debugging_score, patience_score, chaos_score,
+                           wisdom_score, reliability_score, overall_score,
+                           level, total_xp, daily_xp, tasks_completed,
+                           last_benchmark_score, last_benchmark_at
+                    FROM agent_buddy_stats
+                    WHERE stat_date = CURRENT_DATE
+                    ORDER BY overall_score DESC
+                    """
+                )
+                rows = cur.fetchall()
+            agents = []
+            for rank, r in enumerate(rows, 1):
+                lvl = r[7] or 1
+                agents.append(
+                    {
+                        "rank": rank,
+                        "agentId": r[0],
+                        "overall": r[6],
+                        "level": lvl,
+                        "levelName": level_name(lvl),
+                        "totalXp": r[8] or 0,
+                        "dailyXp": r[9] or 0,
+                        "tasksCompleted": r[10] or 0,
+                        "scores": {
+                            "debugging": r[1],
+                            "patience": r[2],
+                            "chaos": r[3],
+                            "wisdom": r[4],
+                            "reliability": r[5],
+                        },
+                        "benchmarkScore": float(r[11]) if r[11] is not None else None,
+                        "benchmarkAt": r[12].isoformat() if r[12] else None,
+                    }
+                )
+            return {"agents": agents}
+        except Exception as e:
+            logger.warning("Failed to load buddy agents leaderboard: %s", e)
+            return {"agents": [], "error": "Failed to load leaderboard"}
+
+    @app.get("/api/buddy/agents/{agent_id}")
+    async def buddy_agent_history(agent_id: str, days: int = 14) -> dict[str, Any]:
+        """Get per-agent RPG score history for sparkline/trend charts."""
+        days = max(1, min(days, 365))
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT stat_date, debugging_score, patience_score, chaos_score,
+                           wisdom_score, reliability_score, overall_score,
+                           level, total_xp, daily_xp, tasks_completed
+                    FROM agent_buddy_stats
+                    WHERE agent_id = %s
+                    ORDER BY stat_date DESC
+                    LIMIT %s
+                    """,
+                    (agent_id, days),
+                )
+                rows = cur.fetchall()
+            return {
+                "agentId": agent_id,
+                "days": [
+                    {
+                        "date": str(r[0]),
+                        "scores": {
+                            "debugging": r[1],
+                            "patience": r[2],
+                            "chaos": r[3],
+                            "wisdom": r[4],
+                            "reliability": r[5],
+                        },
+                        "overall": r[6],
+                        "level": r[7],
+                        "totalXp": r[8],
+                        "dailyXp": r[9],
+                        "tasks": r[10],
+                    }
+                    for r in rows
+                ],
+            }
+        except Exception as e:
+            logger.warning("Failed to load buddy agent history: %s", e)
+            return {"agentId": agent_id, "days": [], "error": "Failed to load agent history"}
+
     @app.get("/api/kairos/dreams")
     async def kairos_dreams(limit: int = 10) -> dict[str, Any]:
         """Get recent autoDream runs."""

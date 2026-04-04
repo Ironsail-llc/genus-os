@@ -20,29 +20,8 @@ steps:
     message: "New email received. Process the triage inbox and classify emails."
     on_failure: abort
 
-  - id: check_result
-    type: condition
-    input: "{{ steps.classify.output_text }}"
-    branches:
-      - when: "'analytical' in value.lower() or 'analyzed' in value.lower()"
-        goto: analyze
-      - when: "'routed' in value.lower() or 'replied' in value.lower() or 'dismissed' in value.lower()"
-        goto: respond
-      - otherwise: true
-        goto: done
-
-  - id: analyze
-    type: agent
-    agent_id: email-analyst
-    message: "Email classified as analytical. Check your task inbox and analyze assigned emails."
-    on_failure: skip
-    next: respond
-
   - id: respond
     type: agent
     agent_id: email-responder
     message: "Check your task inbox and compose replies for assigned emails."
     on_failure: skip
-
-  - id: done
-    type: noop

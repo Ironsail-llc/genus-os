@@ -4,10 +4,14 @@ Tracks RPG stats, XP, levels, and streaks computed from real agent execution
 data in the agent_runs and autodream_runs tables. No shadow bookkeeping — all
 metrics derived from existing data on read, cached daily in buddy_stats.
 
+Supports both **global** stats (the original Robothor "team level") and
+**per-agent** stats stored in agent_buddy_stats for the fleet leaderboard.
+
 Usage:
     engine = BuddyEngine()
-    stats = engine.compute_daily_stats()
-    level = engine.get_level_info()
+    stats = engine.compute_daily_stats()                  # global
+    stats = engine.compute_daily_stats(agent_id="main")   # per-agent
+    fleet = engine.compute_fleet_scores()                  # all agents ranked
     engine.refresh_daily()  # called by evening-winddown or autoDream deep mode
 """
 
@@ -31,6 +35,13 @@ XP_ERROR_RECOVERY = 15
 XP_DREAM_COMPLETED = 10
 XP_STREAK_BONUS = 5  # per streak day, multiplicative
 
+# Overall score weights (must sum to 1.0)
+WEIGHT_RELIABILITY = 0.30
+WEIGHT_DEBUGGING = 0.25
+WEIGHT_PATIENCE = 0.20
+WEIGHT_WISDOM = 0.15
+WEIGHT_CHAOS = 0.10  # applied as (100 - chaos_score)
+
 
 def xp_for_level(level: int) -> int:
     """XP threshold to reach a given level. Level 1 = 100, Level 10 = 1000."""
@@ -45,6 +56,39 @@ def level_from_xp(total_xp: int) -> int:
         return 1
     n = int((-1 + math.sqrt(1 + 8 * total_xp / 100)) / 2)
     return max(1, n)
+
+
+def level_name(level: int) -> str:
+    """Thematic name based on level range."""
+    if level < 5:
+        return "Spark"
+    if level < 10:
+        return "Flame"
+    if level < 20:
+        return "Blaze"
+    if level < 35:
+        return "Inferno"
+    if level < 50:
+        return "Thunderstrike"
+    return "Eternal Storm"
+
+
+def compute_overall_score(
+    debugging: int,
+    patience: int,
+    chaos: int,
+    wisdom: int,
+    reliability: int,
+) -> int:
+    """Weighted composite score (0-100). Chaos is inverted (low chaos = good)."""
+    raw = (
+        reliability * WEIGHT_RELIABILITY
+        + debugging * WEIGHT_DEBUGGING
+        + patience * WEIGHT_PATIENCE
+        + wisdom * WEIGHT_WISDOM
+        + (100 - chaos) * WEIGHT_CHAOS
+    )
+    return min(100, max(0, int(raw)))
 
 
 # ── Data Classes ────────────────────────────────────────────────────────────
@@ -100,17 +144,46 @@ class LevelInfo:
     @property
     def level_name(self) -> str:
         """Thematic name based on level range."""
-        if self.level < 5:
-            return "Spark"
-        if self.level < 10:
-            return "Flame"
-        if self.level < 20:
-            return "Blaze"
-        if self.level < 35:
-            return "Inferno"
-        if self.level < 50:
-            return "Thunderstrike"
-        return "Eternal Storm"
+        return level_name(self.level)
+
+
+@dataclass
+class AgentBuddyStats:
+    """Per-agent RPG stats for one day."""
+
+    agent_id: str
+    stat_date: date
+    tasks_completed: int = 0
+    errors_recovered: int = 0
+    debugging_score: int = 50
+    patience_score: int = 50
+    chaos_score: int = 50
+    wisdom_score: int = 50
+    reliability_score: int = 50
+    overall_score: int = 50
+    daily_xp: int = 0
+    total_xp: int = 0
+    level: int = 1
+    rank: int = 0
+    last_benchmark_score: float | None = None
+    last_benchmark_at: datetime | None = None
+
+    @property
+    def level_name(self) -> str:
+        return level_name(self.level)
+
+
+# ── SQL helpers for optional agent_id filtering ────────────────────────────
+
+
+def _agent_clause(agent_id: str | None, *, column: str = "agent_id") -> tuple[str, list[str]]:
+    """Return (SQL AND-clause, params list) to filter by agent_id when provided.
+
+    Use ``column`` to qualify the column for JOINs, e.g. ``column="r.agent_id"``.
+    """
+    if agent_id is not None:
+        return " AND " + column + " = %s", [agent_id]
+    return "", []
 
 
 # ── Buddy Engine ────────────────────────────────────────────────────────────
@@ -119,15 +192,20 @@ class LevelInfo:
 class BuddyEngine:
     """Computes Robothor's gamification stats from real execution data."""
 
-    def compute_daily_stats(self, target_date: date | None = None) -> DailyStats:
+    def compute_daily_stats(
+        self, target_date: date | None = None, *, agent_id: str | None = None
+    ) -> DailyStats:
         """Compute stats for a given date from agent_runs + autodream_runs.
 
-        Queries the actual execution tables — no shadow counters.
+        When agent_id is provided, scopes all queries to that agent.
+        When None, computes global (system-wide) stats.
         """
         if target_date is None:
             target_date = datetime.now(UTC).date()
 
         stats = DailyStats(stat_date=target_date)
+        ac, ac_params = _agent_clause(agent_id)
+        ac_r, ac_r_params = _agent_clause(agent_id, column="r.agent_id")
 
         try:
             from robothor.db.connection import get_connection
@@ -141,8 +219,9 @@ class BuddyEngine:
                     SELECT COUNT(*) FROM agent_runs
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') = %s
                       AND status = 'completed'
-                    """,
-                    (target_date,),
+                    """
+                    + ac,
+                    [target_date, *ac_params],
                 )
                 row = cur.fetchone()
                 stats.tasks_completed = int(row[0]) if row else 0
@@ -156,8 +235,9 @@ class BuddyEngine:
                       AND s.tool_name IN ('gws_gmail_search', 'gws_gmail_get', 'gws_gmail_send',
                                           'gws_gmail_modify', 'gmail_search_messages',
                                           'gmail_read_message', 'gmail_read_thread')
-                    """,
-                    (target_date,),
+                    """
+                    + ac_r,
+                    [target_date, *ac_r_params],
                 )
                 row = cur.fetchone()
                 stats.emails_processed = int(row[0]) if row else 0
@@ -169,46 +249,49 @@ class BuddyEngine:
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') = %s
                       AND status = 'completed'
                       AND error_message IS NOT NULL
-                    """,
-                    (target_date,),
+                    """
+                    + ac,
+                    [target_date, *ac_params],
                 )
                 row = cur.fetchone()
                 stats.errors_avoided = int(row[0]) if row else 0
 
-                # Count autoDream completions
-                cur.execute(
-                    """
-                    SELECT COUNT(*), COALESCE(SUM(insights_discovered), 0)
-                    FROM autodream_runs
-                    WHERE DATE(started_at AT TIME ZONE 'America/New_York') = %s
-                      AND completed_at IS NOT NULL
-                      AND error_message IS NULL
-                    """,
-                    (target_date,),
-                )
-                row = cur.fetchone()
-                if row:
-                    stats.dreams_completed = int(row[0])
-                    stats.insights_generated = int(row[1])
+                # Count autoDream completions (global only — dreams are system-wide)
+                if agent_id is None:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*), COALESCE(SUM(insights_discovered), 0)
+                        FROM autodream_runs
+                        WHERE DATE(started_at AT TIME ZONE 'America/New_York') = %s
+                          AND completed_at IS NOT NULL
+                          AND error_message IS NULL
+                        """,
+                        (target_date,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        stats.dreams_completed = int(row[0])
+                        stats.insights_generated = int(row[1])
 
         except Exception as e:
             logger.warning("Failed to compute daily stats: %s", e)
 
         # Compute RPG scores
-        stats.debugging_score = self._compute_debugging(target_date)
-        stats.patience_score = self._compute_patience(target_date)
-        stats.chaos_score = self._compute_chaos(target_date)
+        stats.debugging_score = self._compute_debugging(target_date, agent_id=agent_id)
+        stats.patience_score = self._compute_patience(target_date, agent_id=agent_id)
+        stats.chaos_score = self._compute_chaos(target_date, agent_id=agent_id)
         stats.wisdom_score = self._compute_wisdom(stats)
-        stats.reliability_score = self._compute_reliability(target_date)
+        stats.reliability_score = self._compute_reliability(target_date, agent_id=agent_id)
 
         return stats
 
-    def _compute_debugging(self, target_date: date) -> int:
+    def _compute_debugging(self, target_date: date, *, agent_id: str | None = None) -> int:
         """Debugging: error recovery rate over last 7 days."""
         try:
             from robothor.db.connection import get_connection
 
             start = target_date - timedelta(days=7)
+            ac, ac_params = _agent_clause(agent_id)
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -218,8 +301,9 @@ class BuddyEngine:
                         COUNT(*) FILTER (WHERE error_message IS NOT NULL AND status = 'completed') as recovered
                     FROM agent_runs
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
-                    """,
-                    (start, target_date),
+                    """
+                    + ac,
+                    [start, target_date, *ac_params],
                 )
                 row = cur.fetchone()
                 if row and row[0] > 0:
@@ -228,12 +312,13 @@ class BuddyEngine:
             pass
         return 50
 
-    def _compute_patience(self, target_date: date) -> int:
+    def _compute_patience(self, target_date: date, *, agent_id: str | None = None) -> int:
         """Patience: ratio of avg duration to timeout (consistent, not rushed)."""
         try:
             from robothor.db.connection import get_connection
 
             start = target_date - timedelta(days=7)
+            ac, ac_params = _agent_clause(agent_id)
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -242,8 +327,9 @@ class BuddyEngine:
                     FROM agent_runs
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
                       AND status = 'completed' AND duration_ms > 0
-                    """,
-                    (start, target_date),
+                    """
+                    + ac,
+                    [start, target_date, *ac_params],
                 )
                 row = cur.fetchone()
                 if row and row[0] and row[1]:
@@ -256,21 +342,25 @@ class BuddyEngine:
             pass
         return 50
 
-    def _compute_chaos(self, target_date: date) -> int:
+    def _compute_chaos(self, target_date: date, *, agent_id: str | None = None) -> int:
         """Chaos: inverse of outcome consistency (high variance = high chaos)."""
         try:
             from robothor.db.connection import get_connection
 
             start = target_date - timedelta(days=7)
+            ac, ac_params = _agent_clause(agent_id)
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     """
                     SELECT status, COUNT(*) FROM agent_runs
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                    """
+                    + ac
+                    + """
                     GROUP BY status
                     """,
-                    (start, target_date),
+                    [start, target_date, *ac_params],
                 )
                 rows = cur.fetchall()
                 if rows:
@@ -289,12 +379,13 @@ class BuddyEngine:
         raw = stats.insights_generated * 10 + stats.dreams_completed * 5
         return min(100, raw)
 
-    def _compute_reliability(self, target_date: date) -> int:
+    def _compute_reliability(self, target_date: date, *, agent_id: str | None = None) -> int:
         """Reliability: completion rate over last 7 days."""
         try:
             from robothor.db.connection import get_connection
 
             start = target_date - timedelta(days=7)
+            ac, ac_params = _agent_clause(agent_id)
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -304,8 +395,9 @@ class BuddyEngine:
                         COUNT(*) FILTER (WHERE status = 'completed') as completed
                     FROM agent_runs
                     WHERE DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
-                    """,
-                    (start, target_date),
+                    """
+                    + ac,
+                    [start, target_date, *ac_params],
                 )
                 row = cur.fetchone()
                 if row and row[0] > 0:
@@ -313,6 +405,326 @@ class BuddyEngine:
         except Exception:
             pass
         return 50
+
+    # ── Per-agent scoring ──────────────────────────────────────────────────
+
+    # Minimum runs in the 7-day window before we trust per-agent scores.
+    # Below this threshold, scores stay at None (unranked) rather than 50.
+    MIN_RUNS_FOR_SCORING = 3
+
+    def _agent_run_count(self, agent_id: str, target_date: date) -> int:
+        """Count completed runs for an agent in the last 7 days."""
+        try:
+            from robothor.db.connection import get_connection
+
+            start = target_date - timedelta(days=7)
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM agent_runs
+                    WHERE agent_id = %s
+                      AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                    """,
+                    (agent_id, start, target_date),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
+    def compute_agent_scores(
+        self, agent_id: str, target_date: date | None = None
+    ) -> AgentBuddyStats | None:
+        """Compute RPG scores for a single agent on a given date.
+
+        Returns None if the agent has fewer than MIN_RUNS_FOR_SCORING runs
+        in the 7-day window (not enough data for meaningful scores).
+        """
+        if target_date is None:
+            target_date = datetime.now(UTC).date()
+
+        # Check minimum data threshold
+        run_count = self._agent_run_count(agent_id, target_date)
+        if run_count < self.MIN_RUNS_FOR_SCORING:
+            return None
+
+        stats = self.compute_daily_stats(target_date, agent_id=agent_id)
+        # AutoDreams are system-wide, not per-agent, so wisdom has no signal here.
+        # Use neutral default (50) instead of the 0 that _compute_wisdom produces.
+        stats.wisdom_score = 50
+        daily_xp = (
+            stats.tasks_completed * XP_TASK_COMPLETED + stats.errors_avoided * XP_ERROR_RECOVERY
+        )
+
+        # Get accumulated XP from agent_buddy_stats history
+        accumulated_xp = self._get_agent_total_xp(agent_id, exclude_date=target_date)
+        new_total_xp = accumulated_xp + daily_xp
+
+        # Read latest benchmark score if available
+        benchmark_score, benchmark_at = self._get_latest_benchmark(agent_id)
+
+        return AgentBuddyStats(
+            agent_id=agent_id,
+            stat_date=target_date,
+            tasks_completed=stats.tasks_completed,
+            errors_recovered=stats.errors_avoided,
+            debugging_score=stats.debugging_score,
+            patience_score=stats.patience_score,
+            chaos_score=stats.chaos_score,
+            wisdom_score=stats.wisdom_score,
+            reliability_score=stats.reliability_score,
+            overall_score=compute_overall_score(
+                stats.debugging_score,
+                stats.patience_score,
+                stats.chaos_score,
+                stats.wisdom_score,
+                stats.reliability_score,
+            ),
+            daily_xp=daily_xp,
+            total_xp=new_total_xp,
+            level=level_from_xp(new_total_xp),
+            last_benchmark_score=benchmark_score,
+            last_benchmark_at=benchmark_at,
+        )
+
+    def _get_agent_total_xp(self, agent_id: str, exclude_date: date | None = None) -> int:
+        """Sum all daily_xp for an agent from agent_buddy_stats, optionally excluding a date."""
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                if exclude_date:
+                    cur.execute(
+                        "SELECT COALESCE(SUM(daily_xp), 0) FROM agent_buddy_stats "
+                        "WHERE agent_id = %s AND stat_date != %s",
+                        (agent_id, exclude_date),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COALESCE(SUM(daily_xp), 0) FROM agent_buddy_stats "
+                        "WHERE agent_id = %s",
+                        (agent_id,),
+                    )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
+    def _get_latest_benchmark(self, agent_id: str) -> tuple[float | None, datetime | None]:
+        """Read the latest benchmark score from the memory block."""
+        try:
+            import json
+
+            from robothor.memory.blocks import read_block
+
+            data = read_block(f"agent_benchmark_latest:{agent_id}")
+            if data and data.get("content"):
+                parsed = json.loads(data["content"])
+                score = float(parsed["aggregate_score"])
+                ts = datetime.fromisoformat(parsed["timestamp"])
+                return score, ts
+        except Exception:
+            pass
+        return None, None
+
+    def compute_fleet_scores(self, target_date: date | None = None) -> list[AgentBuddyStats]:
+        """Compute RPG scores for all active agents, sorted by overall_score desc."""
+        if target_date is None:
+            target_date = datetime.now(UTC).date()
+
+        agent_ids = self._get_active_agent_ids()
+        results: list[AgentBuddyStats] = []
+
+        for aid in agent_ids:
+            try:
+                agent_stats = self.compute_agent_scores(aid, target_date)
+                if agent_stats is not None:
+                    results.append(agent_stats)
+                else:
+                    logger.debug("Skipping agent %s: insufficient run data", aid)
+            except Exception as e:
+                logger.debug("Failed to compute scores for agent %s: %s", aid, e)
+
+        # Sort by overall score descending and assign ranks
+        results.sort(key=lambda s: s.overall_score, reverse=True)
+        for i, s in enumerate(results, 1):
+            s.rank = i
+
+        return results
+
+    def _get_active_agent_ids(self) -> list[str]:
+        """Get list of agent_ids from agent_schedules."""
+        try:
+            from robothor.engine.tracking import list_schedules
+
+            schedules = list_schedules(enabled_only=True)
+            return [s["agent_id"] for s in schedules if s.get("cron_expr")]
+        except Exception:
+            return []
+
+    def _upsert_agent_stats(self, stats: AgentBuddyStats) -> None:
+        """Persist per-agent stats to agent_buddy_stats table."""
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO agent_buddy_stats (
+                        agent_id, stat_date, tasks_completed, errors_recovered,
+                        debugging_score, patience_score, chaos_score,
+                        wisdom_score, reliability_score, overall_score,
+                        daily_xp, total_xp, level,
+                        last_benchmark_score, last_benchmark_at, computed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (agent_id, stat_date) DO UPDATE SET
+                        tasks_completed = EXCLUDED.tasks_completed,
+                        errors_recovered = EXCLUDED.errors_recovered,
+                        debugging_score = EXCLUDED.debugging_score,
+                        patience_score = EXCLUDED.patience_score,
+                        chaos_score = EXCLUDED.chaos_score,
+                        wisdom_score = EXCLUDED.wisdom_score,
+                        reliability_score = EXCLUDED.reliability_score,
+                        overall_score = EXCLUDED.overall_score,
+                        daily_xp = EXCLUDED.daily_xp,
+                        total_xp = EXCLUDED.total_xp,
+                        level = EXCLUDED.level,
+                        last_benchmark_score = EXCLUDED.last_benchmark_score,
+                        last_benchmark_at = EXCLUDED.last_benchmark_at,
+                        computed_at = NOW()
+                    """,
+                    (
+                        stats.agent_id,
+                        stats.stat_date,
+                        stats.tasks_completed,
+                        stats.errors_recovered,
+                        stats.debugging_score,
+                        stats.patience_score,
+                        stats.chaos_score,
+                        stats.wisdom_score,
+                        stats.reliability_score,
+                        stats.overall_score,
+                        stats.daily_xp,
+                        stats.total_xp,
+                        stats.level,
+                        stats.last_benchmark_score,
+                        stats.last_benchmark_at,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("Failed to upsert agent buddy stats for %s: %s", stats.agent_id, e)
+
+    # ── AutoAgent integration ──────────────────────────────────────────────
+
+    def flag_underperformers(self, threshold: int = 40, consecutive_days: int = 3) -> list[str]:
+        """Flag agents with consistently low scores for AutoAgent optimization.
+
+        Returns list of agent_ids that were flagged (tasks created).
+        """
+        flagged: list[str] = []
+        try:
+            from robothor.db.connection import get_connection
+
+            today = datetime.now(UTC).date()
+            start = today - timedelta(days=consecutive_days - 1)
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                # Find agents where ALL of the last N days have overall_score < threshold
+                cur.execute(
+                    """
+                    SELECT agent_id
+                    FROM agent_buddy_stats
+                    WHERE stat_date BETWEEN %s AND %s
+                      AND overall_score < %s
+                    GROUP BY agent_id
+                    HAVING COUNT(DISTINCT stat_date) >= %s
+                    """,
+                    (start, today, threshold, consecutive_days),
+                )
+                candidates = [row[0] for row in cur.fetchall()]
+
+            if not candidates:
+                return []
+
+            flagged.extend(aid for aid in candidates if self._create_autoagent_task(aid, threshold))
+
+        except Exception as e:
+            logger.warning("Failed to flag underperformers: %s", e)
+
+        return flagged
+
+    def _create_autoagent_task(self, agent_id: str, threshold: int) -> bool:
+        """Create a CRM task for AutoAgent to optimize a low-scoring agent.
+
+        Checks for existing open tasks to avoid duplicates (7-day cooldown).
+        """
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                # Check for existing open autoagent task for this agent within 7 days
+                cur.execute(
+                    """
+                    SELECT id FROM tasks
+                    WHERE assigned_to = 'auto-agent'
+                      AND status IN ('pending', 'in_progress')
+                      AND %s = ANY(tags)
+                      AND created_at > NOW() - INTERVAL '7 days'
+                    LIMIT 1
+                    """,
+                    (agent_id,),
+                )
+                if cur.fetchone():
+                    return False  # Already has an open task
+
+                # Get latest scores for context
+                cur.execute(
+                    """
+                    SELECT overall_score, debugging_score, patience_score,
+                           chaos_score, wisdom_score, reliability_score
+                    FROM agent_buddy_stats
+                    WHERE agent_id = %s
+                    ORDER BY stat_date DESC LIMIT 1
+                    """,
+                    (agent_id,),
+                )
+                row = cur.fetchone()
+                scores_str = ""
+                if row:
+                    scores_str = (
+                        f"Overall: {row[0]}, Debugging: {row[1]}, Patience: {row[2]}, "
+                        f"Chaos: {row[3]}, Wisdom: {row[4]}, Reliability: {row[5]}"
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO tasks (title, body, assigned_to, status, created_by, tags)
+                    VALUES (%s, %s, 'auto-agent', 'pending', 'buddy-engine', ARRAY['autoagent', 'low-score', %s])
+                    """,
+                    (
+                        f"Optimize {agent_id}: low RPG score (below {threshold})",
+                        f"Agent {agent_id} has scored below {threshold} for 3+ consecutive days.\n\n"
+                        f"**Current scores:** {scores_str}\n\n"
+                        f"Please define a benchmark suite (if none exists), run it, and iterate on "
+                        f"the agent's instruction file and manifest to improve performance.",
+                        agent_id,
+                    ),
+                )
+                conn.commit()
+                logger.info("Created AutoAgent optimization task for %s", agent_id)
+                return True
+
+        except Exception as e:
+            logger.warning("Failed to create autoagent task for %s: %s", agent_id, e)
+            return False
+
+    # ── Global stats (original behavior) ───────────────────────────────────
 
     def get_streak(self, target_date: date | None = None) -> tuple[int, int]:
         """Compute current and longest streak from buddy_stats history.
@@ -406,6 +818,7 @@ class BuddyEngine:
         """Compute and persist daily stats, update XP and level.
 
         Called once/day by evening-winddown agent or autoDream deep mode.
+        Now also computes and persists per-agent scores and flags underperformers.
 
         Returns:
             Dict with stats summary and level-up info.
@@ -504,6 +917,28 @@ class BuddyEngine:
         # Update memory block
         self._update_status_block(stats, daily_xp, current_streak, level_before)
 
+        # ── Per-agent scoring ──────────────────────────────────────────────
+        try:
+            fleet = self.compute_fleet_scores(target_date)
+            for agent_stats in fleet:
+                self._upsert_agent_stats(agent_stats)
+            result["fleet_scores"] = len(fleet)
+            logger.info("Refreshed per-agent buddy stats for %d agents", len(fleet))
+        except Exception as e:
+            logger.warning("Failed to refresh per-agent buddy stats: %s", e)
+            result["fleet_error"] = str(e)
+
+        # ── Flag underperformers for AutoAgent ─────────────────────────────
+        try:
+            flagged = self.flag_underperformers()
+            if flagged:
+                result["flagged_agents"] = flagged
+                logger.info(
+                    "Flagged %d agents for AutoAgent optimization: %s", len(flagged), flagged
+                )
+        except Exception as e:
+            logger.debug("Failed to flag underperformers: %s", e)
+
         return result
 
     def _update_status_block(
@@ -525,10 +960,11 @@ class BuddyEngine:
         except Exception as e:
             logger.debug("Failed to update buddy_status block: %s", e)
 
-    def increment_task_count(self) -> None:
+    def increment_task_count(self, agent_id: str | None = None) -> None:
         """Lightweight counter increment — called by AGENT_END lifecycle hook.
 
         Only updates the counter column, not the computed scores.
+        Increments both the global buddy_stats and per-agent agent_buddy_stats.
         """
         try:
             from robothor.db.connection import get_connection
@@ -536,6 +972,7 @@ class BuddyEngine:
             today = datetime.now(UTC).date()
             with get_connection() as conn:
                 cur = conn.cursor()
+                # Global counter
                 cur.execute(
                     """
                     INSERT INTO buddy_stats (stat_date, tasks_completed)
@@ -545,6 +982,17 @@ class BuddyEngine:
                     """,
                     (today,),
                 )
+                # Per-agent counter
+                if agent_id:
+                    cur.execute(
+                        """
+                        INSERT INTO agent_buddy_stats (agent_id, stat_date, tasks_completed)
+                        VALUES (%s, %s, 1)
+                        ON CONFLICT (agent_id, stat_date) DO UPDATE SET
+                            tasks_completed = agent_buddy_stats.tasks_completed + 1
+                        """,
+                        (agent_id, today),
+                    )
                 conn.commit()
         except Exception as e:
             logger.debug("Failed to increment task count: %s", e)

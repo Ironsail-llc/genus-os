@@ -16,7 +16,7 @@ model:
     - gemini/gemini-2.5-pro
 
 schedule:
-  cron: "15 8-20/2 * * *"
+  cron: "15 8-22/1 * * *"
   timezone: America/New_York
   timeout_seconds: 600
   max_iterations: 15

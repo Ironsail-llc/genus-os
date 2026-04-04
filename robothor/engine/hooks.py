@@ -36,13 +36,8 @@ logger = logging.getLogger(__name__)
 # Legacy fallback — used only when no manifests define hooks.
 # Once all hooks are in manifests, this dict can be removed.
 _LEGACY_EVENT_TRIGGERS: dict[str, list[dict[str, Any]]] = {
-    "email": [
-        {
-            "event_type": "email.new",
-            "agent_id": "email-classifier",
-            "message": "New email received. Process the triage inbox and classify emails.",
-        },
-    ],
+    # "email" triggers removed — handled by email-pipeline workflow exclusively.
+    # Workflow runs classify → respond deterministically on email.new events.
     "calendar": [
         {
             "event_type": "calendar.new",

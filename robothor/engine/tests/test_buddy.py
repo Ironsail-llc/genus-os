@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -459,3 +460,385 @@ class TestBuddyStatusContext:
         config = AgentConfig(id="main", name="Main")
         result = _buddy_status_context(config)
         assert result is None
+
+
+# ── Standalone functions ───────────────────────────────────────────────────
+
+
+class TestStandaloneFunctions:
+    """Tests for module-level utility functions."""
+
+    def test_level_name(self):
+        from robothor.engine.buddy import level_name
+
+        assert level_name(1) == "Spark"
+        assert level_name(5) == "Flame"
+        assert level_name(10) == "Blaze"
+        assert level_name(20) == "Inferno"
+        assert level_name(35) == "Thunderstrike"
+        assert level_name(50) == "Eternal Storm"
+
+    def test_compute_overall_score(self):
+        from robothor.engine.buddy import compute_overall_score
+
+        # All 100s: reliability(30)*100 + debugging(25)*100 + patience(20)*100
+        #           + wisdom(15)*100 + (100-0)(10)*100 = 100
+        score = compute_overall_score(
+            debugging=100, patience=100, chaos=0, wisdom=100, reliability=100
+        )
+        assert score == 100
+
+    def test_compute_overall_score_all_zeros(self):
+        from robothor.engine.buddy import compute_overall_score
+
+        score = compute_overall_score(debugging=0, patience=0, chaos=100, wisdom=0, reliability=0)
+        assert score == 0
+
+    def test_compute_overall_score_mixed(self):
+        from robothor.engine.buddy import compute_overall_score
+
+        score = compute_overall_score(
+            debugging=80, patience=70, chaos=20, wisdom=60, reliability=90
+        )
+        assert score == 78
+
+
+# ── AgentBuddyStats ───────────────────────────────────────────────────────
+
+
+class TestAgentBuddyStats:
+    """Tests for the per-agent stats dataclass."""
+
+    def test_level_name_property(self):
+        from robothor.engine.buddy import AgentBuddyStats
+
+        stats = AgentBuddyStats(agent_id="test", stat_date=date(2026, 4, 4), level=10)
+        assert stats.level_name == "Blaze"
+
+    def test_defaults(self):
+        from robothor.engine.buddy import AgentBuddyStats
+
+        stats = AgentBuddyStats(agent_id="test", stat_date=date(2026, 4, 4))
+        assert stats.overall_score == 50
+        assert stats.rank == 0
+        assert stats.last_benchmark_score is None
+
+
+# ── Per-agent compute ──────────────────────────────────────────────────────
+
+
+class TestPerAgentCompute:
+    """Tests for per-agent score computation."""
+
+    @patch("robothor.engine.buddy.BuddyEngine._get_latest_benchmark", return_value=(None, None))
+    @patch("robothor.engine.buddy.BuddyEngine._get_agent_total_xp", return_value=500)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_reliability", return_value=90)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_wisdom", return_value=60)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_chaos", return_value=20)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_patience", return_value=70)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_debugging", return_value=80)
+    @patch("robothor.engine.buddy.BuddyEngine._agent_run_count", return_value=10)
+    @patch("robothor.db.connection.get_connection")
+    def test_compute_agent_scores(
+        self,
+        mock_conn,
+        mock_runcount,
+        mock_dbg,
+        mock_pat,
+        mock_chaos,
+        mock_wis,
+        mock_rel,
+        mock_xp,
+        mock_bench,
+    ):
+        cursor = MagicMock()
+        call_idx = [0]
+        results = [
+            [(5,)],  # tasks_completed
+            [(10,)],  # emails_processed
+            [(1,)],  # errors_avoided
+        ]
+
+        def fetchone():
+            idx = call_idx[0]
+            call_idx[0] += 1
+            return results[idx][0] if idx < len(results) else None
+
+        cursor.fetchone = fetchone
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        agent_stats = engine.compute_agent_scores("email-classifier", date(2026, 4, 4))
+
+        assert agent_stats is not None
+        assert agent_stats.agent_id == "email-classifier"
+        assert agent_stats.tasks_completed == 5
+        assert agent_stats.debugging_score == 80
+        assert agent_stats.reliability_score == 90
+        assert agent_stats.overall_score > 0
+        # XP: 5*10 + 1*15 = 65, total = 500 + 65 = 565
+        assert agent_stats.daily_xp == 65
+        assert agent_stats.total_xp == 565
+        assert agent_stats.level >= 1
+
+    @patch("robothor.engine.buddy.BuddyEngine._agent_run_count", return_value=1)
+    def test_compute_agent_scores_insufficient_runs(self, mock_runcount):
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        result = engine.compute_agent_scores("brand-new-agent", date(2026, 4, 4))
+
+        assert result is None
+
+    @patch("robothor.engine.buddy.BuddyEngine.compute_agent_scores")
+    @patch("robothor.engine.buddy.BuddyEngine._get_active_agent_ids")
+    def test_compute_fleet_scores(self, mock_ids, mock_scores):
+        from robothor.engine.buddy import AgentBuddyStats, BuddyEngine
+
+        target = date(2026, 4, 4)
+        mock_ids.return_value = ["agent-a", "agent-b", "agent-c"]
+
+        def make_stats(agent_id):
+            overall = {"agent-a": 90, "agent-b": 50, "agent-c": 75}[agent_id]
+            return AgentBuddyStats(agent_id=agent_id, stat_date=target, overall_score=overall)
+
+        mock_scores.side_effect = lambda aid, td: make_stats(aid)
+
+        engine = BuddyEngine()
+        fleet = engine.compute_fleet_scores(target)
+
+        assert len(fleet) == 3
+        # Sorted by overall desc
+        assert fleet[0].agent_id == "agent-a"
+        assert fleet[0].rank == 1
+        assert fleet[1].agent_id == "agent-c"
+        assert fleet[1].rank == 2
+        assert fleet[2].agent_id == "agent-b"
+        assert fleet[2].rank == 3
+
+    @patch("robothor.db.connection.get_connection")
+    def test_increment_task_count_per_agent(self, mock_conn):
+        cursor = MagicMock()
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        engine.increment_task_count(agent_id="email-classifier")
+
+        # Should have 2 execute calls: global + per-agent
+        assert cursor.execute.call_count == 2
+        calls = [c[0][0] for c in cursor.execute.call_args_list]
+        assert "buddy_stats" in calls[0]
+        assert "agent_buddy_stats" in calls[1]
+
+    @patch("robothor.db.connection.get_connection")
+    def test_increment_task_count_no_agent_id(self, mock_conn):
+        cursor = MagicMock()
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        engine.increment_task_count(agent_id=None)
+
+        # Should have 1 execute call: global only
+        assert cursor.execute.call_count == 1
+        assert "buddy_stats" in cursor.execute.call_args[0][0]
+
+
+# ── Agent filter helper ───────────────────────────────────────────────────
+
+
+class TestAgentClause:
+    """Tests for the _agent_clause SQL helper."""
+
+    def test_no_agent_id(self):
+        from robothor.engine.buddy import _agent_clause
+
+        clause, params = _agent_clause(None)
+        assert clause == ""
+        assert params == []
+
+    def test_with_agent_id(self):
+        from robothor.engine.buddy import _agent_clause
+
+        clause, params = _agent_clause("email-classifier")
+        assert "agent_id" in clause
+        assert params == ["email-classifier"]
+        assert "f'" not in clause  # no f-strings in output
+
+    def test_with_column_qualifier(self):
+        from robothor.engine.buddy import _agent_clause
+
+        clause, params = _agent_clause("email-classifier", column="r.agent_id")
+        assert "r.agent_id" in clause
+        assert params == ["email-classifier"]
+
+    def test_no_agent_id_with_column(self):
+        from robothor.engine.buddy import _agent_clause
+
+        clause, params = _agent_clause(None, column="r.agent_id")
+        assert clause == ""
+        assert params == []
+
+
+# ── Per-agent wisdom neutral default ──────────────────────────────────────
+
+
+class TestPerAgentWisdomDefault:
+    """Verify that per-agent scoring uses neutral wisdom (50) since dreams are global."""
+
+    @patch("robothor.engine.buddy.BuddyEngine._get_latest_benchmark", return_value=(None, None))
+    @patch("robothor.engine.buddy.BuddyEngine._get_agent_total_xp", return_value=0)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_reliability", return_value=80)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_chaos", return_value=20)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_patience", return_value=70)
+    @patch("robothor.engine.buddy.BuddyEngine._compute_debugging", return_value=80)
+    @patch("robothor.engine.buddy.BuddyEngine._agent_run_count", return_value=10)
+    @patch("robothor.db.connection.get_connection")
+    def test_wisdom_defaults_to_50(
+        self,
+        mock_conn,
+        mock_runcount,
+        mock_dbg,
+        mock_pat,
+        mock_chaos,
+        mock_rel,
+        mock_xp,
+        mock_bench,
+    ):
+        cursor = MagicMock()
+        results = [[(5,)], [(0,)], [(1,)]]
+        call_idx = [0]
+
+        def fetchone():
+            idx = call_idx[0]
+            call_idx[0] += 1
+            return results[idx][0] if idx < len(results) else None
+
+        cursor.fetchone = fetchone
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        agent_stats = engine.compute_agent_scores("test-agent", date(2026, 4, 4))
+
+        assert agent_stats is not None
+        assert agent_stats.wisdom_score == 50
+
+
+# ── Buddy hooks with agent_id ─────────────────────────────────────────────
+
+
+class TestBuddyHooksPerAgent:
+    """Tests for the buddy hook passing agent_id."""
+
+    @patch("robothor.engine.buddy.BuddyEngine.increment_task_count")
+    def test_on_agent_end_passes_agent_id(self, mock_inc):
+        from types import SimpleNamespace
+
+        from robothor.engine.buddy_hooks import _on_agent_end
+
+        ctx = SimpleNamespace(
+            metadata={"status": "completed", "agent_id": "email-classifier"},
+            agent_id="email-classifier",
+            run_id="123",
+        )
+        result = _on_agent_end(ctx)
+
+        assert result["action"] == "allow"
+        mock_inc.assert_called_once_with(agent_id="email-classifier")
+
+    @patch("robothor.engine.buddy.BuddyEngine.increment_task_count")
+    def test_on_agent_end_falls_back_to_context_attr(self, mock_inc):
+        from types import SimpleNamespace
+
+        from robothor.engine.buddy_hooks import _on_agent_end
+
+        ctx = SimpleNamespace(
+            metadata={"status": "completed"},
+            agent_id="morning-briefing",
+            run_id="456",
+        )
+        result = _on_agent_end(ctx)
+
+        assert result["action"] == "allow"
+        mock_inc.assert_called_once_with(agent_id="morning-briefing")
+
+
+# ── Underperformer flagging ───────────────────────────────────────────────
+
+
+class TestFlagUnderperformers:
+    """Tests for the AutoAgent integration."""
+
+    @patch("robothor.engine.buddy.BuddyEngine._create_autoagent_task", return_value=True)
+    @patch("robothor.db.connection.get_connection")
+    def test_flag_underperformers_finds_agents(self, mock_conn, mock_task):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [("slow-agent",), ("broken-agent",)]
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        flagged = engine.flag_underperformers(threshold=40, consecutive_days=3)
+
+        assert flagged == ["slow-agent", "broken-agent"]
+        assert mock_task.call_count == 2
+
+    @patch("robothor.db.connection.get_connection")
+    def test_flag_underperformers_none_found(self, mock_conn):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        mock_conn.return_value = _mock_conn_ctx(cursor)
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        flagged = engine.flag_underperformers()
+
+        assert flagged == []
+
+
+# ── Benchmark integration ─────────────────────────────────────────────────
+
+
+class TestBenchmarkIntegration:
+    """Tests for reading benchmark scores from memory blocks."""
+
+    @patch("robothor.memory.blocks.read_block")
+    def test_get_latest_benchmark(self, mock_read):
+        mock_read.return_value = {
+            "content": json.dumps(
+                {
+                    "aggregate_score": 0.85,
+                    "timestamp": "2026-04-04T12:00:00+00:00",
+                }
+            )
+        }
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        score, ts = engine._get_latest_benchmark("email-classifier")
+
+        assert score == 0.85
+        assert ts is not None
+        mock_read.assert_called_once_with("agent_benchmark_latest:email-classifier")
+
+    @patch("robothor.memory.blocks.read_block")
+    def test_get_latest_benchmark_missing(self, mock_read):
+        mock_read.return_value = None
+
+        from robothor.engine.buddy import BuddyEngine
+
+        engine = BuddyEngine()
+        score, ts = engine._get_latest_benchmark("no-benchmarks")
+
+        assert score is None
+        assert ts is None

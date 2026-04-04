@@ -59,10 +59,11 @@ class TestStreamPrefix:
 class TestEventTypesMatchPublishers:
     """Verify event types match what publisher scripts actually emit."""
 
-    def test_email_trigger_uses_email_new(self):
-        """email_sync.py publishes 'email.new'."""
-        email_types = {t["event_type"] for t in EVENT_TRIGGERS["email"]}
-        assert "email.new" in email_types
+    def test_email_handled_by_workflow_not_legacy_triggers(self):
+        """email.new is handled by email-pipeline workflow, not legacy triggers."""
+        assert "email" not in EVENT_TRIGGERS, (
+            "email triggers should be in email-pipeline workflow, not legacy map"
+        )
 
     def test_calendar_triggers_match_calendar_sync(self):
         """calendar_sync.py publishes calendar.new, calendar.rescheduled,
@@ -115,11 +116,12 @@ class TestHandleEvent:
     @pytest.mark.asyncio
     async def test_reads_type_field_not_event_type(self, hooks, mock_redis):
         """event_bus._make_envelope() stores event type under 'type',
-        not 'event_type'. Verify _handle_event reads the correct field."""
+        not 'event_type'. Verify _handle_event reads the correct field.
+        Uses calendar trigger since email is handled by workflow."""
         data = {
-            b"type": b"email.new",
-            b"source": b"email_sync",
-            b"payload": b'{"subject": "test"}',
+            b"type": b"calendar.new",
+            b"source": b"calendar_sync",
+            b"payload": b'{"summary": "test"}',
         }
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
@@ -131,23 +133,25 @@ class TestHandleEvent:
             patch("robothor.engine.config.load_agent_config") as mock_load,
         ):
             mock_load.return_value = AgentConfig(
-                id="email-classifier",
-                name="Email Classifier",
+                id="calendar-monitor",
+                name="Calendar Monitor",
                 delivery_mode=DeliveryMode.ANNOUNCE,
             )
 
-            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
+            await hooks._handle_event(
+                f"{STREAM_PREFIX}calendar", b"1-0", data, mock_redis, "engine"
+            )
 
             # Runner should have been called — meaning the event type matched
             hooks.runner.execute.assert_called_once()
             call_kwargs = hooks.runner.execute.call_args
-            assert call_kwargs.kwargs["agent_id"] == "email-classifier"
+            assert call_kwargs.kwargs["agent_id"] == "calendar-monitor"
 
     @pytest.mark.asyncio
     async def test_strips_prefix_for_trigger_lookup(self, hooks, mock_redis):
-        """When stream name is 'robothor:events:email', _handle_event
-        should strip prefix and look up 'email' in EVENT_TRIGGERS."""
-        data = {b"type": b"email.new", b"source": b"email_sync"}
+        """When stream name is 'robothor:events:calendar', _handle_event
+        should strip prefix and look up 'calendar' in EVENT_TRIGGERS."""
+        data = {b"type": b"calendar.new", b"source": b"calendar_sync"}
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
 
@@ -158,18 +162,20 @@ class TestHandleEvent:
             patch("robothor.engine.config.load_agent_config") as mock_load,
         ):
             mock_load.return_value = AgentConfig(
-                id="email-classifier",
-                name="Email Classifier",
+                id="calendar-monitor",
+                name="Calendar Monitor",
                 delivery_mode=DeliveryMode.ANNOUNCE,
             )
 
             # Pass prefixed stream name — should still match
-            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
+            await hooks._handle_event(
+                f"{STREAM_PREFIX}calendar", b"1-0", data, mock_redis, "engine"
+            )
             hooks.runner.execute.assert_called_once()
 
             # Pass bare name (no match in _prefixed_to_bare, falls through)
             hooks.runner.execute.reset_mock()
-            await hooks._handle_event("email", b"2-0", data, mock_redis, "engine")
+            await hooks._handle_event("calendar", b"2-0", data, mock_redis, "engine")
             hooks.runner.execute.assert_called_once()
 
     @pytest.mark.asyncio
@@ -209,15 +215,15 @@ class TestDownstreamTriggers:
     async def test_downstream_triggered_on_success(self, hooks, mock_redis):
         """When a hook run completes successfully and the agent has
         downstream_agents, those agents should be triggered."""
-        data = {b"type": b"email.new", b"source": b"email_sync"}
+        data = {b"type": b"calendar.new", b"source": b"calendar_sync"}
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
 
-        classifier_config = AgentConfig(
-            id="email-classifier",
-            name="Email Classifier",
+        monitor_config = AgentConfig(
+            id="calendar-monitor",
+            name="Calendar Monitor",
             delivery_mode=DeliveryMode.ANNOUNCE,
-            downstream_agents=["email-analyst", "email-responder"],
+            downstream_agents=["calendar-analyst"],
         )
 
         with (
@@ -226,28 +232,30 @@ class TestDownstreamTriggers:
             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
             patch("robothor.engine.config.load_agent_config") as mock_load,
         ):
-            mock_load.return_value = classifier_config
+            mock_load.return_value = monitor_config
 
             # Patch _trigger_downstream to track calls without actually running
             hooks._trigger_downstream = AsyncMock()
 
-            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
+            await hooks._handle_event(
+                f"{STREAM_PREFIX}calendar", b"1-0", data, mock_redis, "engine"
+            )
 
-            # Runner should have been called for the classifier
+            # Runner should have been called for the monitor
             hooks.runner.execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_downstream_skipped_on_failure(self, hooks, mock_redis):
         """When a hook run fails, downstream agents should NOT be triggered."""
-        data = {b"type": b"email.new", b"source": b"email_sync"}
+        data = {b"type": b"calendar.new", b"source": b"calendar_sync"}
 
         hooks.runner.execute = AsyncMock(return_value=_make_run("failed"))
 
-        classifier_config = AgentConfig(
-            id="email-classifier",
-            name="Email Classifier",
+        monitor_config = AgentConfig(
+            id="calendar-monitor",
+            name="Calendar Monitor",
             delivery_mode=DeliveryMode.ANNOUNCE,
-            downstream_agents=["email-analyst", "email-responder"],
+            downstream_agents=["calendar-analyst"],
         )
 
         with (
@@ -256,10 +264,12 @@ class TestDownstreamTriggers:
             patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
             patch("robothor.engine.config.load_agent_config") as mock_load,
         ):
-            mock_load.return_value = classifier_config
+            mock_load.return_value = monitor_config
             hooks._trigger_downstream = AsyncMock()
 
-            await hooks._handle_event(f"{STREAM_PREFIX}email", b"1-0", data, mock_redis, "engine")
+            await hooks._handle_event(
+                f"{STREAM_PREFIX}calendar", b"1-0", data, mock_redis, "engine"
+            )
 
             # _trigger_downstream should not have been called
             hooks._trigger_downstream.assert_not_called()

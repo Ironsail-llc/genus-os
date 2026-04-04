@@ -27,13 +27,13 @@ CACHE_TTL = 30
 # Agent status markdown files
 STATUS_DIR = os.getenv(
     "AGENT_STATUS_DIR",
-    os.path.expanduser("~/robothor/brain/memory"),
+    str(Path("~/robothor/brain/memory").expanduser()),
 )
 
 # Manifest directory for display names
 MANIFEST_DIR = os.getenv(
     "AGENT_MANIFEST_DIR",
-    os.path.expanduser("~/robothor/docs/agents"),
+    str(Path("~/robothor/docs/agents").expanduser()),
 )
 
 
@@ -304,12 +304,80 @@ def _build_agent_status() -> dict:
             }
         )
 
+    # ── Merge per-agent RPG scores ──────────────────────────────────────────
+    rpg_scores: dict[str, dict] = {}
+    try:
+        from robothor.db.connection import get_connection
+        from robothor.engine.buddy import level_name
+
+        cols = [
+            "agent_id",
+            "debugging_score",
+            "patience_score",
+            "chaos_score",
+            "wisdom_score",
+            "reliability_score",
+            "overall_score",
+            "level",
+            "total_xp",
+            "last_benchmark_score",
+            "stat_date",
+        ]
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # Use DISTINCT ON to get the most recent row per agent (today or yesterday).
+            # This avoids a gap between midnight and the next refresh_daily().
+            cur.execute(
+                """
+                SELECT DISTINCT ON (agent_id)
+                       agent_id, debugging_score, patience_score, chaos_score,
+                       wisdom_score, reliability_score, overall_score,
+                       level, total_xp, last_benchmark_score, stat_date
+                FROM agent_buddy_stats
+                WHERE stat_date >= CURRENT_DATE - INTERVAL '1 day'
+                ORDER BY agent_id, stat_date DESC
+                """
+            )
+            for row in cur.fetchall():
+                r = dict(zip(cols, row, strict=False))
+                lvl = r["level"] or 1
+                is_stale = str(r["stat_date"]) != str(datetime.now(UTC).date())
+                rpg_scores[r["agent_id"]] = {
+                    "overall": r["overall_score"],
+                    "level": lvl,
+                    "levelName": level_name(lvl),
+                    "totalXp": r["total_xp"] or 0,
+                    "scores": {
+                        "debugging": r["debugging_score"],
+                        "patience": r["patience_score"],
+                        "chaos": r["chaos_score"],
+                        "wisdom": r["wisdom_score"],
+                        "reliability": r["reliability_score"],
+                    },
+                    "benchmarkScore": float(r["last_benchmark_score"])
+                    if r["last_benchmark_score"] is not None
+                    else None,
+                    "stale": is_stale,
+                }
+    except Exception as e:
+        logger.debug("Failed to load per-agent RPG scores: %s", e)
+
+    # Assign ranks by overall score and merge into agent dicts
+    ranked_ids = sorted(rpg_scores.keys(), key=lambda k: rpg_scores[k]["overall"], reverse=True)
+    for rank, aid in enumerate(ranked_ids, 1):
+        rpg_scores[aid]["rank"] = rank
+
+    for agent in agents:
+        rpg = rpg_scores.get(agent["agentId"])
+        if rpg:
+            agent["rpg"] = rpg
+
     return {"agents": agents, "summary": summary}
 
 
 @router.get("/agents/status")
 async def api_agent_status():
-    """Get status of all agent cron jobs with health tiers."""
+    """Get status of all agent cron jobs with health tiers and RPG scores."""
     now = time.time()
     if _cache["data"] and now < _cache["expires"]:
         return _cache["data"]

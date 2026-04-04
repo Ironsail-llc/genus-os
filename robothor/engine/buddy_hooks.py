@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _on_agent_end(context: Any) -> dict[str, Any]:
-    """AGENT_END hook handler — increment buddy task counter.
+    """AGENT_END hook handler — increment buddy task counter (global + per-agent).
 
     Args:
         context: HookContext dataclass from the hook registry.
@@ -35,10 +35,12 @@ def _on_agent_end(context: Any) -> dict[str, Any]:
     if status != "completed":
         return {"action": "allow"}
 
+    agent_id = metadata.get("agent_id") or getattr(context, "agent_id", None)
+
     try:
         from robothor.engine.buddy import BuddyEngine
 
-        BuddyEngine().increment_task_count()
+        BuddyEngine().increment_task_count(agent_id=agent_id)
     except Exception as e:
         logger.debug("Buddy hook: failed to increment task count: %s", e)
 

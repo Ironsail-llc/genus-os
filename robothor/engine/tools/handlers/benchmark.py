@@ -381,6 +381,18 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     _save_block(_run_block(suite_id, tag), run_record)
 
+    # Write latest benchmark score for buddy RPG integration
+    _save_block(
+        f"agent_benchmark_latest:{agent_id}",
+        {
+            "agent_id": agent_id,
+            "suite_id": suite_id,
+            "tag": tag,
+            "aggregate_score": round(aggregate, 3),
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
     return {
         "success": True,
         "suite_id": suite_id,

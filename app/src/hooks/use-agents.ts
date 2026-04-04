@@ -4,6 +4,22 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
+export interface AgentRPG {
+  overall: number;
+  level: number;
+  levelName: string;
+  totalXp: number;
+  rank: number;
+  scores: {
+    debugging: number;
+    patience: number;
+    chaos: number;
+    wisdom: number;
+    reliability: number;
+  };
+  benchmarkScore?: number | null;
+}
+
 export interface AgentInfo {
   name: string;
   schedule: string;
@@ -16,6 +32,7 @@ export interface AgentInfo {
   errorCount?: number;
   pendingTasks?: number;
   enabled?: boolean;
+  rpg?: AgentRPG;
 }
 
 export interface AgentSummary {

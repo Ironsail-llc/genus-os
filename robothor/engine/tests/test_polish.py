@@ -22,7 +22,8 @@ class TestExpandedTriggers:
     def test_all_expected_streams_registered(self):
         from robothor.engine.hooks import EVENT_TRIGGERS
 
-        assert "email" in EVENT_TRIGGERS
+        # email stream is handled by email-pipeline workflow, not legacy triggers
+        assert "email" not in EVENT_TRIGGERS
         assert "calendar" in EVENT_TRIGGERS
         assert "vision" in EVENT_TRIGGERS
 
