@@ -53,7 +53,7 @@ from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-class _AttrDict(dict):
+class _AttrDict(dict[str, Any]):
     """Dict subclass that supports attribute access for template expressions."""
 
     def __getattr__(self, name: str) -> Any:
