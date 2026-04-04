@@ -51,6 +51,7 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.models import PlanState, TriggerType
+from robothor.engine.task_registry import get_task_registry
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -214,6 +215,7 @@ class TelegramBot:
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}  # chat_id → running task
         self._last_message_at: dict[str, float] = {}  # chat_id → monotonic timestamp
         self._idle_timeout: float = 900.0  # 15 minutes
+        self._session_locks: dict[str, asyncio.Lock] = {}  # chat_id → per-chat lock
 
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
@@ -222,6 +224,12 @@ class TelegramBot:
 
         # Register send function for delivery module
         set_telegram_sender(self.send_message)
+
+    def _get_session_lock(self, chat_id: str) -> asyncio.Lock:
+        """Get or create a per-chat asyncio.Lock for session mutation safety."""
+        if chat_id not in self._session_locks:
+            self._session_locks[chat_id] = asyncio.Lock()
+        return self._session_locks[chat_id]
 
     def _setup_handlers(self) -> None:
         """Register all message and callback handlers."""
@@ -268,11 +276,12 @@ class TelegramBot:
             chat_id = str(message.chat.id)
             session = get_shared_session(self._session_key(chat_id))
             session.history.clear()
-            asyncio.create_task(
+            get_task_registry().spawn(
                 clear_session_async(
                     self._session_key(chat_id),
                     tenant_id=self.config.tenant_id,
-                )
+                ),
+                name=f"tg-clear-session:{chat_id}",
             )
             await message.answer("Conversation history cleared.")
 
@@ -283,11 +292,12 @@ class TelegramBot:
             session = get_shared_session(self._session_key(chat_id))
             session.history.clear()
             session.model_override = None
-            asyncio.create_task(
+            get_task_registry().spawn(
                 clear_session_async(
                     self._session_key(chat_id),
                     tenant_id=self.config.tenant_id,
-                )
+                ),
+                name=f"tg-reset-session:{chat_id}",
             )
             primary = self._get_manifest_primary()
             name = MODEL_DISPLAY_NAMES.get(primary, primary)
@@ -544,8 +554,9 @@ class TelegramBot:
             elif action == "reject":
                 session.active_plan.status = "rejected"
                 # Persist cleared state
-                asyncio.create_task(
-                    clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+                get_task_registry().spawn(
+                    clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                    name=f"tg-reject-plan:{chat_id}",
                 )
                 session.active_plan = None
                 # Remove inline keyboard
@@ -573,12 +584,13 @@ class TelegramBot:
             # Sync to shared session so webchat also picks up the override
             session = get_shared_session(self._session_key(chat_id))
             session.model_override = model_id
-            asyncio.create_task(
+            get_task_registry().spawn(
                 update_model_override_async(
                     self._session_key(chat_id),
                     model_id,
                     tenant_id=self.config.tenant_id,
-                )
+                ),
+                name=f"tg-model-override:{chat_id}",
             )
             display = MODEL_DISPLAY_NAMES[model_id]
 
@@ -831,17 +843,22 @@ class TelegramBot:
             try:
                 from robothor.engine.context import maybe_compress
 
-                if session.history and len(session.history) > 5:
-                    original_count = len(session.history)
-                    compressed = await maybe_compress(session.history, threshold=20_000)
-                    if len(compressed) < original_count:
-                        session.history[:] = compressed
-                        logger.info(
-                            "Idle timeout compression for chat %s (%d→%d messages)",
-                            chat_id,
-                            original_count,
-                            len(compressed),
-                        )
+                async with self._get_session_lock(chat_id):
+                    if len(session.history) > 5:
+                        history_snapshot = list(session.history)
+                        original_count = len(session.history)
+                        compressed = await maybe_compress(history_snapshot, threshold=20_000)
+                        if (
+                            len(compressed) < original_count
+                            and len(session.history) == original_count
+                        ):
+                            session.history[:] = compressed
+                            logger.info(
+                                "Idle timeout compression for chat %s (%d→%d messages)",
+                                chat_id,
+                                original_count,
+                                len(compressed),
+                            )
             except Exception as e:
                 logger.debug("Idle compression failed: %s", e)
         self._last_message_at[chat_id] = now
@@ -987,8 +1004,11 @@ class TelegramBot:
 
         async def run_agent() -> None:
             nonlocal stream_msg_id
+            _lock = self._get_session_lock(chat_id)
             try:
-                history = list(session.history)
+                async with _lock:
+                    history = list(session.history)
+
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
                     message=user_text,
@@ -1001,27 +1021,28 @@ class TelegramBot:
                     conversation_history=history or None,
                 )
 
-                # Always record user message in session history
-                session.history.append({"role": "user", "content": user_text})
+                async with _lock:
+                    # Always record user message in session history
+                    session.history.append({"role": "user", "content": user_text})
 
-                if run.output_text:
-                    session.history.append({"role": "assistant", "content": run.output_text})
-                elif run.error_message:
-                    # Record error so the next run knows what failed
-                    session.history.append(
-                        {
-                            "role": "assistant",
-                            "content": f"[Run failed: {run.error_message}]",
-                        }
-                    )
+                    if run.output_text:
+                        session.history.append({"role": "assistant", "content": run.output_text})
+                    elif run.error_message:
+                        # Record error so the next run knows what failed
+                        session.history.append(
+                            {
+                                "role": "assistant",
+                                "content": f"[Run failed: {run.error_message}]",
+                            }
+                        )
 
-                # Trim from front
-                if len(session.history) > self._max_history:
-                    session.history[:] = session.history[-self._max_history :]
+                    # Trim from front
+                    if len(session.history) > self._max_history:
+                        session.history[:] = session.history[-self._max_history :]
 
                 # Persist to DB (fire-and-forget)
                 if run.output_text:
-                    asyncio.create_task(
+                    get_task_registry().spawn(
                         save_exchange_async(
                             session_key,
                             user_text,
@@ -1029,7 +1050,8 @@ class TelegramBot:
                             channel="telegram",
                             model_override=model,
                             tenant_id=self.config.tenant_id,
-                        )
+                        ),
+                        name=f"tg-save-exchange:{chat_id}",
                     )
 
                 if run.output_text:
@@ -1066,15 +1088,16 @@ class TelegramBot:
             except Exception as e:
                 logger.error("Failed to process message: %s", e, exc_info=True)
                 # Record the failed attempt so next run has context
-                session.history.append({"role": "user", "content": user_text})
-                session.history.append(
-                    {
-                        "role": "assistant",
-                        "content": f"[Internal error — run failed: {e}]",
-                    }
-                )
-                if len(session.history) > self._max_history:
-                    session.history[:] = session.history[-self._max_history :]
+                async with _lock:
+                    session.history.append({"role": "user", "content": user_text})
+                    session.history.append(
+                        {
+                            "role": "assistant",
+                            "content": f"[Internal error — run failed: {e}]",
+                        }
+                    )
+                    if len(session.history) > self._max_history:
+                        session.history[:] = session.history[-self._max_history :]
                 await self.send_message(chat_id, f"Internal error: {html.escape(str(e))}")
             finally:
                 nonlocal typing_active
@@ -1199,12 +1222,13 @@ class TelegramBot:
                 session.active_plan = plan
 
                 # Persist plan state to DB
-                asyncio.create_task(
+                get_task_registry().spawn(
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
                         tenant_id=self.config.tenant_id,
-                    )
+                    ),
+                    name=f"tg-save-plan:{chat_id}",
                 )
 
                 # Display plan with approval keyboard
@@ -1308,14 +1332,15 @@ class TelegramBot:
 
             # Persist exchange to DB
             if run.output_text:
-                asyncio.create_task(
+                get_task_registry().spawn(
                     save_exchange_async(
                         session_key,
                         f"/deep {query}",
                         run.output_text,
                         channel="telegram",
                         tenant_id=self.config.tenant_id,
-                    )
+                    ),
+                    name=f"tg-save-deep:{chat_id}",
                 )
 
             # Display result
@@ -1445,7 +1470,7 @@ class TelegramBot:
 
             # Persist to DB
             if run.output_text:
-                asyncio.create_task(
+                get_task_registry().spawn(
                     save_exchange_async(
                         session_key,
                         plan.original_message,
@@ -1453,13 +1478,15 @@ class TelegramBot:
                         channel="telegram",
                         model_override=model,
                         tenant_id=self.config.tenant_id,
-                    )
+                    ),
+                    name=f"tg-save-plan-exec:{chat_id}",
                 )
 
             # Clear plan + persist
             session.active_plan = None
-            asyncio.create_task(
-                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+            get_task_registry().spawn(
+                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                name=f"tg-clear-plan-exec:{chat_id}",
             )
 
             # Send final result as NEW message (not edit) so user gets push notification
@@ -1588,7 +1615,7 @@ class TelegramBot:
 
             # Persist exchange to DB
             if run.output_text:
-                asyncio.create_task(
+                get_task_registry().spawn(
                     save_exchange_async(
                         session_key,
                         plan.original_message,
@@ -1596,13 +1623,15 @@ class TelegramBot:
                         channel="telegram",
                         model_override=self._model_override.get(chat_id),
                         tenant_id=self.config.tenant_id,
-                    )
+                    ),
+                    name=f"tg-save-deep-exec:{chat_id}",
                 )
 
             # Clear plan + persist
             session.active_plan = None
-            asyncio.create_task(
-                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id)
+            get_task_registry().spawn(
+                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                name=f"tg-clear-deep-exec:{chat_id}",
             )
 
             # Display result
@@ -1787,12 +1816,13 @@ class TelegramBot:
                 )
 
                 # Persist updated plan state
-                asyncio.create_task(
+                get_task_registry().spawn(
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
                         tenant_id=self.config.tenant_id,
-                    )
+                    ),
+                    name=f"tg-save-plan-revision:{chat_id}",
                 )
             else:
                 # Agent didn't produce a revised plan

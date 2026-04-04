@@ -8,6 +8,7 @@ schedule:
 
 v2:
   error_feedback: true
+  checkpoint_enabled: true
   guardrails:
     - no_destructive_writes
     - no_sensitive_data

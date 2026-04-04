@@ -159,7 +159,7 @@ async def _get_async_redis() -> Any:
                 password=cfg.redis.password or None,
                 socket_connect_timeout=5,
             )
-            await r.ping()  # type: ignore[misc]
+            await r.ping()  # type: ignore[misc,unused-ignore]
             _async_redis = r
             return _async_redis
         except Exception as e:

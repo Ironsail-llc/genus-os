@@ -79,10 +79,10 @@ def _cleanup_stale_runs() -> int:
                 for row in rows:
                     logger.warning("Cleaned up stale run %s (agent: %s)", row[0], row[1])
                 # Release dedup locks for cleaned-up agents
-                from robothor.engine.dedup import release
+                from robothor.engine.dedup import release_sync
 
                 for row in rows:
-                    release(row[1])
+                    release_sync(row[1])
             return len(rows)
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
@@ -140,12 +140,39 @@ async def _start_federation(config: EngineConfig) -> Any:
 
 async def main() -> None:
     """Start all engine subsystems."""
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    # Configure structured logging via structlog
+    # Wraps stdlib logging so existing logging.getLogger() calls get structured output
+    import structlog
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
     )
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.dev.ConsoleRenderer()
+        if os.environ.get("ROBOTHOR_LOG_FORMAT") != "json"
+        else structlog.processors.JSONRenderer(),
+    )
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
     logger.info("Starting Genus OS Agent Engine...")
 
@@ -296,6 +323,11 @@ async def main() -> None:
         except Exception as e:
             logger.debug("Federation NATS disconnect failed: %s", e)
 
+    # Drain tracked background tasks before stopping subsystems
+    from robothor.engine.task_registry import get_task_registry
+
+    await get_task_registry().drain()
+
     await scheduler.stop()
     await hooks.stop()
     await bot.stop()
@@ -319,33 +351,43 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
         tick_count += 1
         _sd_notify("WATCHDOG=1")
 
-        # Ping PostgreSQL
+        # Ping PostgreSQL (with timeout to prevent event loop blocking)
         try:
-            from robothor.db.connection import get_connection
+            loop = asyncio.get_running_loop()
 
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT 1")
+            def _pg_ping() -> None:
+                from robothor.db.connection import get_connection
+
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT 1")
+
+            await asyncio.wait_for(loop.run_in_executor(None, _pg_ping), timeout=10.0)
             pg_failures = 0
         except Exception as e:
             pg_failures += 1
             logger.warning("Watchdog: PostgreSQL ping failed (%d): %s", pg_failures, e)
 
-        # Ping Redis
+        # Ping Redis (with timeout to prevent event loop blocking)
         try:
-            import redis
+            loop = asyncio.get_running_loop()
 
-            from robothor.config import get_config
+            def _redis_ping() -> None:
+                import redis as _redis
 
-            cfg = get_config()
-            r = redis.Redis(
-                host=cfg.redis.host,
-                port=cfg.redis.port,
-                db=cfg.redis.db,
-                password=cfg.redis.password or None,
-            )
-            r.ping()
-            r.close()
+                from robothor.config import get_config
+
+                cfg = get_config()
+                r = _redis.Redis(
+                    host=cfg.redis.host,
+                    port=cfg.redis.port,
+                    db=cfg.redis.db,
+                    password=cfg.redis.password or None,
+                )
+                r.ping()
+                r.close()
+
+            await asyncio.wait_for(loop.run_in_executor(None, _redis_ping), timeout=10.0)
             redis_failures = 0
         except Exception as e:
             redis_failures += 1

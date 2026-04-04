@@ -110,7 +110,7 @@ class TestCronDedup:
         scheduler = CronScheduler(engine_config, runner)
 
         # Pre-acquire the lock
-        try_acquire("test-agent")
+        await try_acquire("test-agent")
 
         with (
             patch("robothor.engine.config.load_agent_config", return_value=sample_agent_config),

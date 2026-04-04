@@ -54,20 +54,14 @@ from robothor.engine.prompts import (
     PLAN_MODE_PREAMBLE,
     PLAN_MODE_SUFFIX,
 )
-from robothor.engine.session import AgentSession
-from robothor.engine.tools import get_registry
-from robothor.engine.tracking import create_run, create_step, update_run
 
 # ── Log-injection sanitizer ──
 # CodeQL py/log-injection: user-controlled values (model names, error
 # messages) must not inject newlines into log output.
-_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
-
-
-def _sanitize(val: object) -> str:
-    """Sanitize a value for safe inclusion in log messages."""
-    return str(val).translate(_LOG_SANITIZE_TABLE)
-
+from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
+from robothor.engine.session import AgentSession
+from robothor.engine.tools import get_registry
+from robothor.engine.tracking import create_run, create_step, update_run
 
 # Max seconds to wait for the next streaming chunk before aborting and
 # falling back to the next model.  Prevents stalled streams from hanging
@@ -181,6 +175,7 @@ class AgentRunner:
     def __init__(self, config: EngineConfig) -> None:
         self.config = config
         self.registry = get_registry()
+        self._active_watchdog: _StallWatchdog | None = None
 
     async def execute(
         self,
@@ -453,8 +448,10 @@ class AgentRunner:
                                         run_id=session.run_id,
                                     ),
                                 )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to publish planner hook context: %s", _sanitize(e)
+                            )
 
                 # ── [TELEMETRY] Create trace context ──
                 trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
@@ -533,9 +530,14 @@ class AgentRunner:
                     from robothor.engine.autodream import is_cooled_down, run_autodream
 
                     if is_cooled_down():
-                        asyncio.create_task(run_autodream(mode="post_stall"))
-                except Exception:
-                    pass  # best-effort, never block run finalization
+                        from robothor.engine.task_registry import get_task_registry
+
+                        get_task_registry().spawn(
+                            run_autodream(mode="post_stall"),
+                            name=f"autodream-post-stall:{agent_id}",
+                        )
+                except Exception as e:
+                    logger.warning("autoDream post_stall failed: %s", _sanitize(e))
                 return self._finish_run(session.timeout(), trace=trace)
             # Hard timeout (only fires when stall watchdog is disabled)
             ht = agent_config.timeout_seconds
@@ -1362,7 +1364,8 @@ class AgentRunner:
                         result_preview = json.dumps(result, default=str)
                         if len(result_preview) > 2000:
                             result_preview = result_preview[:2000] + "..."
-                    except Exception:
+                    except Exception as e:
+                        logger.warning("JSON serialization of tool result failed: %s", _sanitize(e))
                         result_preview = str(result)[:2000]
                     with contextlib.suppress(Exception):
                         await on_tool(
@@ -1403,7 +1406,7 @@ class AgentRunner:
                 )
 
                 # Touch stall watchdog — tool completed, we're active
-                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                if self._active_watchdog:
                     self._active_watchdog.touch()
 
                 # ── [ERROR CLASSIFICATION] Classify error type ──
@@ -1807,7 +1810,7 @@ class AgentRunner:
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
         # Touch stall watchdog — LLM responded, we're alive
-        if hasattr(self, "_active_watchdog") and self._active_watchdog:
+        if self._active_watchdog:
             self._active_watchdog.touch()
 
         if response is None or not response.choices:
@@ -1881,7 +1884,8 @@ class AgentRunner:
                     cache_read_tokens,
                 )
                 session.run.total_cost_usd += cost
-        except Exception:
+        except Exception as e:
+            logger.warning("litellm cost calculation failed, using fallback: %s", e)
             cost = self._calculate_cost(
                 models[0],
                 input_tokens,
@@ -2091,7 +2095,8 @@ class AgentRunner:
                 kwargs["parent_span_id"] = spawn_context.parent_span_id
 
             return TraceContext(**kwargs)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to create trace context: %s", e)
             return None
 
     def _create_scratchpad(
@@ -2112,7 +2117,8 @@ class AgentRunner:
             from robothor.engine.scratchpad import Scratchpad
 
             return Scratchpad()
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to create scratchpad: %s", e)
             return None
 
     def _create_escalation(self, agent_config: AgentConfig) -> Any:
@@ -2142,7 +2148,8 @@ class AgentRunner:
             from robothor.engine.checkpoint import CheckpointManager
 
             return CheckpointManager(run_id=run_id)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to create checkpoint manager: %s", e)
             return None
 
     def _create_guardrails(self, agent_config: AgentConfig) -> Any:
@@ -2174,7 +2181,8 @@ class AgentRunner:
                     agent_config.id, agent_config.human_approval_tools
                 )
             return engine
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to create guardrails engine: %s", e)
             return None
 
     def _should_verify(
@@ -2456,6 +2464,11 @@ class AgentRunner:
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
 
+        # Divide total timeout budget across fallback models so worst-case
+        # wall-clock time stays bounded (instead of N * 120s).
+        total_timeout_budget = 180  # total time for all fallbacks
+        per_model_timeout = max(30, total_timeout_budget // len(models))
+
         logger.debug(
             "LLM call with models: %s (broken: %s)",
             _sanitize(models),
@@ -2466,21 +2479,23 @@ class AgentRunner:
                 continue
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                return await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=120)
+                return await asyncio.wait_for(
+                    litellm.acompletion(**kwargs), timeout=per_model_timeout
+                )
             except TimeoutError:
                 self._handle_model_error(
-                    TimeoutError(f"LLM call to {model} hung for 120s"),
+                    TimeoutError(f"LLM call to {model} hung for {per_model_timeout}s"),
                     model,
                     broken_models,
                 )
-                last_error = TimeoutError(f"Model {model} timed out after 120s")
+                last_error = TimeoutError(f"Model {model} timed out after {per_model_timeout}s")
                 # Model rotation is activity — don't let watchdog kill us mid-fallback
-                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                if self._active_watchdog:
                     self._active_watchdog.touch()
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
-                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                if self._active_watchdog:
                     self._active_watchdog.touch()
 
         logger.error(
@@ -2513,6 +2528,11 @@ class AgentRunner:
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
 
+        # Divide total timeout budget across fallback models so worst-case
+        # wall-clock time stays bounded (instead of N * 120s).
+        total_timeout_budget = 180  # total time for all fallbacks
+        per_model_timeout = max(30, total_timeout_budget // len(models))
+
         async def _emit(event: dict[str, Any]) -> None:
             if on_stream_event:
                 with contextlib.suppress(Exception):
@@ -2526,7 +2546,9 @@ class AgentRunner:
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 stream_start = time.monotonic()
-                stream = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=120)
+                stream = await asyncio.wait_for(
+                    litellm.acompletion(**kwargs), timeout=per_model_timeout
+                )
 
                 chunks: list[Any] = []
                 accumulated_content = ""
@@ -2557,7 +2579,7 @@ class AgentRunner:
                     chunks.append(chunk)
 
                     # Touch watchdog on each chunk so active streams stay alive
-                    if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                    if self._active_watchdog:
                         self._active_watchdog.touch()
 
                     if not chunk.choices:
@@ -2623,12 +2645,12 @@ class AgentRunner:
                 )
                 last_error = te
                 # Model rotation is activity — don't let watchdog kill us mid-fallback
-                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                if self._active_watchdog:
                     self._active_watchdog.touch()
             except Exception as e:
                 self._handle_model_error(e, model, broken_models, streaming=True)
                 last_error = e
-                if hasattr(self, "_active_watchdog") and self._active_watchdog:
+                if self._active_watchdog:
                     self._active_watchdog.touch()
 
         logger.error("All models failed (streaming). Last error: %s", last_error)
@@ -2650,11 +2672,21 @@ class AgentRunner:
                     run_id=run.id,
                     output_text=run.output_text or "",
                     error=run.error_message or "",
+                    metadata={
+                        "status": run.status.value
+                        if hasattr(run.status, "value")
+                        else str(run.status),
+                    },
                 )
                 # Dispatch as fire-and-forget if we're in an event loop
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(hr.dispatch(HookEvent.AGENT_END, end_ctx))
+                    asyncio.get_running_loop()  # verify loop exists
+                    from robothor.engine.task_registry import get_task_registry
+
+                    get_task_registry().spawn(
+                        hr.dispatch(HookEvent.AGENT_END, end_ctx),
+                        name=f"agent-end-hook:{run.agent_id}",
+                    )
                 except RuntimeError:
                     pass  # No event loop — skip async dispatch
         except Exception as e:

@@ -49,40 +49,57 @@ def _truncate_json(data: Any, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> Any:
 
 
 def create_run(run: AgentRun) -> str:
-    """Insert a new agent run. Returns the run ID."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO agent_runs (
-                id, tenant_id, agent_id, trigger_type, trigger_detail,
-                correlation_id, status, started_at, model_used,
-                system_prompt_chars, user_prompt_chars, tools_provided,
-                delivery_mode, parent_run_id, nesting_depth, task_id
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    """Insert a new agent run. Returns the run ID.
+
+    Retries up to 3 times on transient DB errors (connection drops, pool exhaustion).
+    """
+    from robothor.engine.retry import retry_sync
+
+    def _insert() -> str:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO agent_runs (
+                    id, tenant_id, agent_id, trigger_type, trigger_detail,
+                    correlation_id, status, started_at, model_used,
+                    system_prompt_chars, user_prompt_chars, tools_provided,
+                    delivery_mode, parent_run_id, nesting_depth, task_id
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    run.id,
+                    run.tenant_id,
+                    run.agent_id,
+                    run.trigger_type.value
+                    if hasattr(run.trigger_type, "value")
+                    else run.trigger_type,
+                    run.trigger_detail,
+                    run.correlation_id,
+                    run.status.value if hasattr(run.status, "value") else run.status,
+                    run.started_at,
+                    run.model_used,
+                    run.system_prompt_chars,
+                    run.user_prompt_chars,
+                    run.tools_provided,
+                    run.delivery_mode,
+                    run.parent_run_id,
+                    run.nesting_depth,
+                    run.task_id,
+                ),
             )
-            """,
-            (
-                run.id,
-                run.tenant_id,
-                run.agent_id,
-                run.trigger_type.value if hasattr(run.trigger_type, "value") else run.trigger_type,
-                run.trigger_detail,
-                run.correlation_id,
-                run.status.value if hasattr(run.status, "value") else run.status,
-                run.started_at,
-                run.model_used,
-                run.system_prompt_chars,
-                run.user_prompt_chars,
-                run.tools_provided,
-                run.delivery_mode,
-                run.parent_run_id,
-                run.nesting_depth,
-                run.task_id,
-            ),
-        )
-    return run.id
+        return run.id
+
+    import psycopg2
+
+    return retry_sync(
+        _insert,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
 
 
 def update_run(
@@ -145,10 +162,22 @@ def update_run(
     values.append(run_id)
     sql = f"UPDATE agent_runs SET {', '.join(updates)} WHERE id = %s"
 
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(sql, values)
-        return bool(cur.rowcount > 0)
+    from robothor.engine.retry import retry_sync
+
+    def _update() -> bool:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(sql, values)
+            return bool(cur.rowcount > 0)
+
+    import psycopg2
+
+    return retry_sync(
+        _update,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:
@@ -254,44 +283,59 @@ def get_run_tree(run_id: str) -> dict[str, Any]:
 
 
 def create_step(step: RunStep) -> str:
-    """Insert a new run step (append-only audit trail). Returns step ID."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO agent_run_steps (
-                id, run_id, step_number, step_type,
-                tool_name, tool_input, tool_output,
-                model, input_tokens, output_tokens,
-                cache_creation_tokens, cache_read_tokens,
-                started_at, completed_at, duration_ms,
-                error_message
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    """Insert a new run step (append-only audit trail). Returns step ID.
+
+    Retries up to 3 times on transient DB errors (matching create_run pattern).
+    """
+    from robothor.engine.retry import retry_sync
+
+    def _insert() -> str:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO agent_run_steps (
+                    id, run_id, step_number, step_type,
+                    tool_name, tool_input, tool_output,
+                    model, input_tokens, output_tokens,
+                    cache_creation_tokens, cache_read_tokens,
+                    started_at, completed_at, duration_ms,
+                    error_message
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    step.id,
+                    step.run_id,
+                    step.step_number,
+                    step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
+                    step.tool_name,
+                    json.dumps(step.tool_input, default=str) if step.tool_input else None,
+                    json.dumps(_truncate_json(step.tool_output), default=str)
+                    if step.tool_output
+                    else None,
+                    step.model,
+                    step.input_tokens,
+                    step.output_tokens,
+                    step.cache_creation_tokens,
+                    step.cache_read_tokens,
+                    step.started_at,
+                    step.completed_at,
+                    step.duration_ms,
+                    step.error_message,
+                ),
             )
-            """,
-            (
-                step.id,
-                step.run_id,
-                step.step_number,
-                step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
-                step.tool_name,
-                json.dumps(step.tool_input, default=str) if step.tool_input else None,
-                json.dumps(_truncate_json(step.tool_output), default=str)
-                if step.tool_output
-                else None,
-                step.model,
-                step.input_tokens,
-                step.output_tokens,
-                step.cache_creation_tokens,
-                step.cache_read_tokens,
-                step.started_at,
-                step.completed_at,
-                step.duration_ms,
-                step.error_message,
-            ),
-        )
-    return step.id
+        return step.id
+
+    import psycopg2
+
+    return retry_sync(
+        _insert,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
 
 
 def list_steps(run_id: str) -> list[dict[str, Any]]:

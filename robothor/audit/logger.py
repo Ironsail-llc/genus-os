@@ -39,7 +39,8 @@ def _get_connection() -> Any:
 
         pool = get_pool()
         return pool.getconn()
-    except Exception:
+    except Exception as e:
+        logger.warning("Audit: pool unavailable, using direct DSN: %s", e)
         from robothor.config import get_config
 
         cfg = get_config()

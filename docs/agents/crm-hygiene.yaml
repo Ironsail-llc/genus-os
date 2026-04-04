@@ -16,10 +16,10 @@ model:
     - gemini/gemini-2.5-pro
 
 schedule:
-  cron: "0 10 * * *"
+  cron: "15 3,10 * * *"
   timezone: America/New_York
   timeout_seconds: 300
-  max_iterations: 10
+  max_iterations: 15
   session_target: isolated
 
 delivery:
@@ -92,5 +92,7 @@ v2:
     - "brain/memory/crm-hygiene-status.md"
 
 changelog:
+  - date: "2026-04-04"
+    change: "Absorbed task_cleanup.py + crm_consistency.py cron scripts — added stale task resolution, test data cleanup, referential integrity checks"
   - date: "2026-04-01"
     change: "Split from crm-steward — owns task hygiene + quality sweep phases"

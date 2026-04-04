@@ -20,16 +20,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _on_agent_end(context: dict[str, Any]) -> dict[str, Any]:
+def _on_agent_end(context: Any) -> dict[str, Any]:
     """AGENT_END hook handler — increment buddy task counter.
 
     Args:
-        context: Hook context with 'agent_id', 'run_id', 'status', etc.
+        context: HookContext dataclass from the hook registry.
 
     Returns:
         Hook result dict (always ALLOW — this is observational, never blocks).
     """
-    status = context.get("status", "")
+    # HookContext is a dataclass — access status from metadata dict
+    metadata = getattr(context, "metadata", {}) or {}
+    status = metadata.get("status", "")
     if status != "completed":
         return {"action": "allow"}
 

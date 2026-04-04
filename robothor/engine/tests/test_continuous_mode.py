@@ -24,7 +24,7 @@ class TestContinuousDefaultsNotOverridden:
         assert config.safety_cap == 200
         assert config.timeout_seconds == 600
         assert config.max_iterations == 20
-        assert config.checkpoint_enabled is False
+        assert config.checkpoint_enabled is True  # default changed to True for reliability
 
     def test_explicit_false(self):
         """Explicitly setting continuous=False should behave like default."""
