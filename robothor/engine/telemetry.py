@@ -134,4 +134,55 @@ class TraceContext:
                 maxlen=5000,
             )
         except Exception as e:
-            logger.debug("Failed to publish telemetry: %s", e)
+            logger.debug("Failed to publish telemetry to Redis: %s", e)
+
+        # Optionally export to OTLP collector
+        otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if otlp_endpoint:
+            self._export_otlp(otlp_endpoint, run_data)
+
+    def _export_otlp(self, endpoint: str, run_data: dict[str, Any]) -> None:
+        """Export trace data to an OTLP HTTP endpoint. Best-effort."""
+        try:
+            import httpx
+
+            payload = {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {
+                                    "key": "service.name",
+                                    "value": {"stringValue": "robothor-engine"},
+                                },
+                                {"key": "agent.id", "value": {"stringValue": self.agent_id}},
+                            ]
+                        },
+                        "scopeSpans": [
+                            {
+                                "scope": {"name": "robothor.engine"},
+                                "spans": [
+                                    {
+                                        "traceId": self.trace_id,
+                                        "spanId": s.span_id,
+                                        "parentSpanId": s.parent_span_id or "",
+                                        "name": s.name,
+                                        "startTimeUnixNano": str(int(s.start_time * 1e9))
+                                        if s.start_time
+                                        else "0",
+                                        "endTimeUnixNano": str(int(s.end_time * 1e9))
+                                        if s.end_time
+                                        else "0",
+                                        "status": {"code": 2 if s.status == "error" else 1},
+                                    }
+                                    for s in self.spans
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+            url = f"{endpoint.rstrip('/')}/v1/traces"
+            httpx.post(url, json=payload, timeout=5.0)
+        except Exception as e:
+            logger.debug("Failed to export OTLP trace: %s", e)

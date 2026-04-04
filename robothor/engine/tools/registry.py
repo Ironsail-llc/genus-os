@@ -43,15 +43,39 @@ class ToolRegistry:
         # Engine-specific tools
         self._schemas.update(get_engine_schemas())
 
+    # Adapter connection failure cache: {adapter_name: (fail_time, backoff_seconds)}
+    _adapter_failures: dict[str, tuple[float, float]] = {}
+
     async def register_adapter_tools(self, adapters: list[Any]) -> None:
-        """Connect to adapter MCP servers, discover tools, register as first-class schemas."""
+        """Connect to adapter MCP servers, discover tools, register as first-class schemas.
+
+        Resilience features:
+        - 5s timeout per adapter connection (don't block agent startup)
+        - Failed adapters cached with exponential backoff (5min initial, 30min max)
+        - Failures logged once at WARNING, then suppressed until retry window
+        """
+        import asyncio
+        import time
+
         from robothor.engine.mcp_client import get_mcp_client_pool
 
         pool = get_mcp_client_pool()
         for adapter in adapters:
+            # Check failure cache — skip if in backoff window
+            now = time.monotonic()
+            if adapter.name in self._adapter_failures:
+                fail_time, backoff = self._adapter_failures[adapter.name]
+                if now - fail_time < backoff:
+                    logger.debug(
+                        "Adapter '%s': skipping (backoff %.0fs remaining)",
+                        adapter.name,
+                        backoff - (now - fail_time),
+                    )
+                    continue
+
             try:
-                session = await pool.get_session(adapter.name)
-                mcp_tools = await session.list_tools()
+                session = await asyncio.wait_for(pool.get_session(adapter.name), timeout=5.0)
+                mcp_tools = await asyncio.wait_for(session.list_tools(), timeout=5.0)
                 for tool in mcp_tools:
                     name = tool.get("name", "")
                     if not name:
@@ -67,9 +91,26 @@ class ToolRegistry:
                         },
                     }
                     self._adapter_routes[name] = adapter.name
+                # Clear failure cache on success
+                self._adapter_failures.pop(adapter.name, None)
                 logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
-            except Exception:
-                logger.exception("Failed to discover tools from adapter '%s'", adapter.name)
+            except Exception as e:
+                # Exponential backoff: 300s (5min) -> 600s -> 1200s -> max 1800s (30min)
+                _, prev_backoff = self._adapter_failures.get(adapter.name, (0, 150.0))
+                new_backoff = min(prev_backoff * 2, 1800.0)
+                self._adapter_failures[adapter.name] = (now, new_backoff)
+                if prev_backoff <= 150.0:
+                    # First failure or first retry — log at WARNING
+                    logger.warning(
+                        "Adapter '%s' unavailable (backoff %.0fs): %s",
+                        adapter.name,
+                        new_backoff,
+                        e,
+                    )
+                else:
+                    logger.debug(
+                        "Adapter '%s' still unavailable, backoff %.0fs", adapter.name, new_backoff
+                    )
 
     def get_adapter_route(self, tool_name: str) -> str | None:
         """Return the adapter server name for a tool, or None if not adapter-provided."""

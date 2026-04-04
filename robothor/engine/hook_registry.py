@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.task_registry import get_task_registry
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -224,7 +226,10 @@ class HookRegistry:
                     logger.error("Blocking hook %s failed: %s", hook.handler, e)
                     # Fail-open: blocking hook error = allow
             else:
-                asyncio.create_task(self._execute_handler_safe(hook, context))
+                get_task_registry().spawn(
+                    self._execute_handler_safe(hook, context),
+                    name=f"hook:{hook.event.value}:{hook.handler}",
+                )
 
         # Resolve accumulated chain results: BLOCK > MODIFY > ALLOW
         if chain_blocked:

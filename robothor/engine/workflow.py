@@ -48,14 +48,7 @@ if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
-# ── Log-injection sanitizer ──
-_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
-
-
-def _sanitize(val: object) -> str:
-    """Sanitize a value for safe inclusion in log messages."""
-    return str(val).translate(_LOG_SANITIZE_TABLE)
-
+from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

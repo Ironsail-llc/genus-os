@@ -1,0 +1,67 @@
+{
+  "items": [
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 6,
+      "error": "6 consecutive zero-extraction runs",
+      "timestamp": "2026-04-04T15:50:01.304179"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "conversation",
+      "error_count": 3,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:00:01.828174"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "twenty_crm",
+      "error_count": 3,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:00:01.829090"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 7,
+      "error": "7 consecutive zero-extraction runs",
+      "timestamp": "2026-04-04T16:05:01.837723"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "conversation",
+      "error_count": 4,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:10:02.098343"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "twenty_crm",
+      "error_count": 4,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:10:02.099067"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "quality_gate",
+      "error_count": 8,
+      "error": "8 consecutive zero-extraction runs",
+      "timestamp": "2026-04-04T16:15:02.121725"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "conversation",
+      "error_count": 5,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:20:01.395707"
+    },
+    {
+      "type": "ingestion_error",
+      "source": "twenty_crm",
+      "error_count": 5,
+      "error": "No module named 'crm_fetcher'",
+      "timestamp": "2026-04-04T16:20:01.396491"
+    }
+  ]
+}

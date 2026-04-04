@@ -295,18 +295,25 @@ class TestBuddyHooks:
 
     @patch("robothor.engine.buddy.BuddyEngine.increment_task_count")
     def test_on_agent_end_completed(self, mock_inc):
+        from types import SimpleNamespace
+
         from robothor.engine.buddy_hooks import _on_agent_end
 
-        result = _on_agent_end({"agent_id": "main", "status": "completed", "run_id": "123"})
+        # _on_agent_end expects a HookContext-like object with metadata dict
+        ctx = SimpleNamespace(metadata={"status": "completed"}, agent_id="main", run_id="123")
+        result = _on_agent_end(ctx)
 
         assert result["action"] == "allow"
         mock_inc.assert_called_once()
 
     @patch("robothor.engine.buddy.BuddyEngine.increment_task_count")
     def test_on_agent_end_failed_skips(self, mock_inc):
+        from types import SimpleNamespace
+
         from robothor.engine.buddy_hooks import _on_agent_end
 
-        result = _on_agent_end({"agent_id": "main", "status": "failed", "run_id": "123"})
+        ctx = SimpleNamespace(metadata={"status": "failed"}, agent_id="main", run_id="123")
+        result = _on_agent_end(ctx)
 
         assert result["action"] == "allow"
         mock_inc.assert_not_called()

@@ -16,6 +16,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_INTERVAL = 5  # checkpoint every N successful tool calls
+CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 
 
 @dataclass
@@ -53,8 +54,8 @@ class CheckpointManager:
                 cur.execute(
                     """
                     INSERT INTO agent_run_checkpoints
-                        (run_id, step_number, messages, scratchpad, plan)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (run_id, step_number, messages, scratchpad, plan, schema_version)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         self.run_id,
@@ -62,6 +63,7 @@ class CheckpointManager:
                         json.dumps(messages, default=str),
                         json.dumps(scratchpad, default=str) if scratchpad else None,
                         json.dumps(plan, default=str) if plan else None,
+                        CHECKPOINT_SCHEMA_VERSION,
                     ),
                 )
             self._checkpoint_count += 1
@@ -88,7 +90,8 @@ class CheckpointManager:
                 cur = conn.cursor(cursor_factory=RealDictCursor)
                 cur.execute(
                     """
-                    SELECT step_number, messages, scratchpad, plan
+                    SELECT step_number, messages, scratchpad, plan,
+                           COALESCE(schema_version, 0) AS schema_version
                     FROM agent_run_checkpoints
                     WHERE run_id = %s
                     ORDER BY step_number DESC
@@ -97,9 +100,20 @@ class CheckpointManager:
                     (run_id,),
                 )
                 row = cur.fetchone()
-                if row:
-                    return dict(row)
-                return None
+                if not row:
+                    return None
+                result = dict(row)
+                # Skip resume if schema version doesn't match
+                saved_version = result.get("schema_version", 0)
+                if saved_version != CHECKPOINT_SCHEMA_VERSION:
+                    logger.warning(
+                        "Checkpoint schema mismatch for run %s: saved=%d, current=%d — skipping resume",
+                        run_id,
+                        saved_version,
+                        CHECKPOINT_SCHEMA_VERSION,
+                    )
+                    return None
+                return result
         except Exception as e:
             logger.warning("Failed to load checkpoint: %s", e)
             return None

@@ -198,6 +198,14 @@ def create_health_app(
         adapters = refresh_adapters()
         return {"reloaded": True, "count": len(adapters)}
 
+    @app.get("/metrics")
+    async def metrics() -> Any:
+        """Prometheus metrics endpoint."""
+        from fastapi.responses import PlainTextResponse
+        from prometheus_client import generate_latest
+
+        return PlainTextResponse(generate_latest(), media_type="text/plain; version=0.0.4")
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         """Health check endpoint."""

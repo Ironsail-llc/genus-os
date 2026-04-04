@@ -20,6 +20,7 @@ from robothor.engine.config import load_all_manifests, manifest_to_agent_config
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
 from robothor.engine.models import AgentConfig, AgentRun, TriggerType
+from robothor.engine.task_registry import get_task_registry
 from robothor.engine.tracking import delete_stale_schedules, update_schedule_state, upsert_schedule
 
 # Circuit breaker: skip agent after this many consecutive errors
@@ -232,7 +233,7 @@ class CronScheduler:
 
         Handles: dedup → circuit breaker → safety timeout → execute/deliver → track.
         """
-        if not try_acquire(dedup_key):
+        if not await try_acquire(dedup_key):
             logger.info("Cron skipped: %s already running", dedup_key)
             return
 
@@ -265,7 +266,7 @@ class CronScheduler:
                 self._record_timeout(dedup_key)
 
         finally:
-            release(dedup_key)
+            await release(dedup_key)
 
     def _circuit_breaker_tripped(self, dedup_key: str, agent_config: AgentConfig) -> bool:
         """Check circuit breaker. Returns True if tripped (should skip)."""
@@ -438,7 +439,10 @@ class CronScheduler:
         if run.status.value == "completed" and downstream_agents:
             for downstream_id in downstream_agents:
                 logger.info("Triggering downstream agent: %s", downstream_id)
-                asyncio.create_task(self._run_agent(downstream_id))
+                get_task_registry().spawn(
+                    self._run_agent(downstream_id),
+                    name=f"sched-downstream:{downstream_id}",
+                )
 
         return run
 

@@ -655,8 +655,15 @@ async def run_insight_discovery(hours_back: int = 24) -> dict[str, Any]:
 # ── Full Lifecycle Maintenance (Nightly) ──────────────────────────────────────
 
 
+_LIFECYCLE_LOCK_KEY = "robothor:lifecycle:maintenance_lock"
+_LIFECYCLE_LOCK_TTL = 1800  # 30 minutes — prevents concurrent maintenance runs
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
+
+    Uses a Redis distributed lock to prevent concurrent consolidation runs
+    from creating duplicate facts.
 
     Steps:
         1. Score importance for unscored facts (200 per run, 600s budget)
@@ -671,6 +678,27 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     Returns:
         Dict with maintenance statistics.
     """
+    # Acquire distributed lock via Redis SETNX
+    try:
+        import redis as _redis
+
+        from robothor.config import get_config
+
+        cfg = get_config()
+        r = _redis.Redis(
+            host=cfg.redis.host,
+            port=cfg.redis.port,
+            db=cfg.redis.db,
+            password=cfg.redis.password or None,
+        )
+        if not r.set(_LIFECYCLE_LOCK_KEY, "running", nx=True, ex=_LIFECYCLE_LOCK_TTL):
+            logger.info("Lifecycle maintenance skipped — another instance holds the lock")
+            r.close()
+            return {"skipped": True, "reason": "lock_held"}
+        r.close()
+    except Exception as e:
+        logger.warning("Redis lock acquisition failed (proceeding anyway): %s", e)
+
     step_timings: dict[str, float] = {}
 
     # Step 1: Score importance
@@ -883,6 +911,24 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
 
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
+
+    # Release the distributed lock
+    try:
+        import redis as _redis
+
+        from robothor.config import get_config
+
+        cfg = get_config()
+        r = _redis.Redis(
+            host=cfg.redis.host,
+            port=cfg.redis.port,
+            db=cfg.redis.db,
+            password=cfg.redis.password or None,
+        )
+        r.delete(_LIFECYCLE_LOCK_KEY)
+        r.close()
+    except Exception:
+        pass  # Lock will expire via TTL
 
     return {
         "facts_scored": facts_scored,

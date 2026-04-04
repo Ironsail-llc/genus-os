@@ -49,40 +49,57 @@ def _truncate_json(data: Any, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> Any:
 
 
 def create_run(run: AgentRun) -> str:
-    """Insert a new agent run. Returns the run ID."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO agent_runs (
-                id, tenant_id, agent_id, trigger_type, trigger_detail,
-                correlation_id, status, started_at, model_used,
-                system_prompt_chars, user_prompt_chars, tools_provided,
-                delivery_mode, parent_run_id, nesting_depth, task_id
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    """Insert a new agent run. Returns the run ID.
+
+    Retries up to 3 times on transient DB errors (connection drops, pool exhaustion).
+    """
+    from robothor.engine.retry import retry_sync
+
+    def _insert() -> str:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO agent_runs (
+                    id, tenant_id, agent_id, trigger_type, trigger_detail,
+                    correlation_id, status, started_at, model_used,
+                    system_prompt_chars, user_prompt_chars, tools_provided,
+                    delivery_mode, parent_run_id, nesting_depth, task_id
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    run.id,
+                    run.tenant_id,
+                    run.agent_id,
+                    run.trigger_type.value
+                    if hasattr(run.trigger_type, "value")
+                    else run.trigger_type,
+                    run.trigger_detail,
+                    run.correlation_id,
+                    run.status.value if hasattr(run.status, "value") else run.status,
+                    run.started_at,
+                    run.model_used,
+                    run.system_prompt_chars,
+                    run.user_prompt_chars,
+                    run.tools_provided,
+                    run.delivery_mode,
+                    run.parent_run_id,
+                    run.nesting_depth,
+                    run.task_id,
+                ),
             )
-            """,
-            (
-                run.id,
-                run.tenant_id,
-                run.agent_id,
-                run.trigger_type.value if hasattr(run.trigger_type, "value") else run.trigger_type,
-                run.trigger_detail,
-                run.correlation_id,
-                run.status.value if hasattr(run.status, "value") else run.status,
-                run.started_at,
-                run.model_used,
-                run.system_prompt_chars,
-                run.user_prompt_chars,
-                run.tools_provided,
-                run.delivery_mode,
-                run.parent_run_id,
-                run.nesting_depth,
-                run.task_id,
-            ),
-        )
-    return run.id
+        return run.id
+
+    import psycopg2
+
+    return retry_sync(
+        _insert,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
 
 
 def update_run(
@@ -145,10 +162,22 @@ def update_run(
     values.append(run_id)
     sql = f"UPDATE agent_runs SET {', '.join(updates)} WHERE id = %s"
 
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(sql, values)
-        return bool(cur.rowcount > 0)
+    from robothor.engine.retry import retry_sync
+
+    def _update() -> bool:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(sql, values)
+            return bool(cur.rowcount > 0)
+
+    import psycopg2
+
+    return retry_sync(
+        _update,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:

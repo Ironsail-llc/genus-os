@@ -151,7 +151,7 @@ async def _handle_spawn_agent(
     dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}:{msg_hash}"
     from robothor.engine.dedup import release, try_acquire
 
-    if not try_acquire(dedup_key):
+    if not await try_acquire(dedup_key):
         return {
             "error": f"Agent {child_agent_id} with this exact message is already running as a sub-agent"
         }
@@ -170,7 +170,7 @@ async def _handle_spawn_agent(
                 spawn_context=child_spawn_ctx,
             )
     finally:
-        release(dedup_key)
+        await release(dedup_key)
 
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
 

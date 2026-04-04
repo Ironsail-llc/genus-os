@@ -20,6 +20,7 @@ import yaml
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
 from robothor.engine.models import TriggerType
+from robothor.engine.task_registry import get_task_registry
 
 MAX_RETRIES = 3
 
@@ -261,7 +262,7 @@ class EventHooks:
             agent_id = trigger["agent_id"]
 
             # Dedup: skip if agent is already running (shared with scheduler)
-            if not try_acquire(agent_id):
+            if not await try_acquire(agent_id):
                 logger.debug("Skipping %s — already running", agent_id)
                 continue
 
@@ -297,8 +298,9 @@ class EventHooks:
                             "Hook triggering downstream agent: %s",
                             downstream_id,
                         )
-                        asyncio.create_task(
-                            self._trigger_downstream(downstream_id, bare_stream, event_type)
+                        get_task_registry().spawn(
+                            self._trigger_downstream(downstream_id, bare_stream, event_type),
+                            name=f"hook-downstream:{downstream_id}:{bare_stream}:{event_type}",
                         )
 
                 logger.info(
@@ -312,7 +314,7 @@ class EventHooks:
                 logger.error("Hook execution failed for %s: %s", agent_id, e)
                 failed = True
             finally:
-                release(agent_id)
+                await release(agent_id)
 
         # Dispatch matching workflows (fire-and-forget, parallel to agents)
         if self.workflow_engine:
@@ -326,7 +328,10 @@ class EventHooks:
                     bare_stream,
                     event_type,
                 )
-                asyncio.create_task(self._run_workflow(wf.id, bare_stream, event_type))
+                get_task_registry().spawn(
+                    self._run_workflow(wf.id, bare_stream, event_type),
+                    name=f"hook-workflow:{wf.id}:{bare_stream}:{event_type}",
+                )
 
         # Dead letter queue on failure
         if failed:
@@ -375,7 +380,7 @@ class EventHooks:
         Mirrors scheduler._run_agent pattern: load config, build warmth,
         execute, deliver. Uses try_acquire/release for dedup.
         """
-        if not try_acquire(agent_id):
+        if not await try_acquire(agent_id):
             logger.debug("Downstream %s skipped — already running", agent_id)
             return
 

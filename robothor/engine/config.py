@@ -20,14 +20,7 @@ from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, Heartbe
 
 logger = logging.getLogger(__name__)
 
-# ── Log-injection sanitizer ──
-_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
-
-
-def _sanitize(val: object) -> str:
-    """Sanitize a value for safe inclusion in log messages."""
-    return str(val).translate(_LOG_SANITIZE_TABLE)
-
+from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 # Bootstrap file limits
 BOOTSTRAP_MAX_CHARS_PER_FILE = 12_000
@@ -287,7 +280,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         guardrails_opt_out=v2.get("guardrails_opt_out", False),
         exec_allowlist=v2.get("exec_allowlist", []),
         write_path_allowlist=v2.get("write_path_allowlist", []),
-        checkpoint_enabled=v2.get("checkpoint_enabled", False),
+        checkpoint_enabled=v2.get("checkpoint_enabled", True),
         verification_enabled=v2.get("verification_enabled", False),
         verification_prompt=v2.get("verification_prompt", ""),
         difficulty_class=v2.get("difficulty_class", ""),
