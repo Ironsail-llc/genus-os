@@ -13,6 +13,7 @@ Usage::
 
 from __future__ import annotations
 
+import html
 import logging
 from typing import Any
 
@@ -56,7 +57,7 @@ async def _send_telegram(level: str, title: str, body: str) -> bool:
         icon = {"info": "\u2139\ufe0f", "warning": "\u26a0\ufe0f", "critical": "\U0001f6a8"}.get(
             level, "\u2753"
         )
-        message = f"{icon} <b>{title}</b>\n{body}"
+        message = f"{icon} <b>{html.escape(title)}</b>\n{html.escape(body)}"
         await deliver_telegram(message)
         return True
     except Exception as e:

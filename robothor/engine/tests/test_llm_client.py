@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from robothor.engine.llm_client import (
+    AllModelsFailedError,
     llm_call,
     llm_call_streaming,
     llm_call_with_fallback,
@@ -182,25 +183,24 @@ async def test_fallback_on_timeout():
 
 
 @pytest.mark.asyncio
-async def test_fallback_all_fail_returns_none():
-    """Returns None when every model fails."""
+async def test_fallback_all_fail_raises():
+    """Raises AllModelsFailedError when every model fails."""
     with patch("litellm.acompletion", side_effect=Exception("all broken")):
-        result = await llm_call_with_fallback(
-            [{"role": "user", "content": "hi"}],
-            models=["model-a", "model-b"],
-        )
-
-    assert result is None
+        with pytest.raises(AllModelsFailedError, match="All models failed"):
+            await llm_call_with_fallback(
+                [{"role": "user", "content": "hi"}],
+                models=["model-a", "model-b"],
+            )
 
 
 @pytest.mark.asyncio
-async def test_fallback_empty_models_returns_none():
-    """Returns None for empty models list."""
-    result = await llm_call_with_fallback(
-        [{"role": "user", "content": "hi"}],
-        models=[],
-    )
-    assert result is None
+async def test_fallback_empty_models_raises():
+    """Raises AllModelsFailedError for empty models list."""
+    with pytest.raises(AllModelsFailedError, match="No models provided"):
+        await llm_call_with_fallback(
+            [{"role": "user", "content": "hi"}],
+            models=[],
+        )
 
 
 @pytest.mark.asyncio
@@ -329,22 +329,21 @@ async def test_streaming_fallback_on_failure():
 
 
 @pytest.mark.asyncio
-async def test_streaming_all_fail_returns_none():
-    """Returns None when all streaming models fail."""
+async def test_streaming_all_fail_raises():
+    """Raises AllModelsFailedError when all streaming models fail."""
     with patch("litellm.acompletion", side_effect=Exception("broken")):
-        result = await llm_call_streaming(
-            [{"role": "user", "content": "hi"}],
-            models=["model-a"],
-        )
-
-    assert result is None
+        with pytest.raises(AllModelsFailedError, match="All models failed"):
+            await llm_call_streaming(
+                [{"role": "user", "content": "hi"}],
+                models=["model-a"],
+            )
 
 
 @pytest.mark.asyncio
-async def test_streaming_empty_models_returns_none():
-    """Returns None for empty models list."""
-    result = await llm_call_streaming(
-        [{"role": "user", "content": "hi"}],
-        models=[],
-    )
-    assert result is None
+async def test_streaming_empty_models_raises():
+    """Raises AllModelsFailedError for empty models list."""
+    with pytest.raises(AllModelsFailedError, match="No models provided"):
+        await llm_call_streaming(
+            [{"role": "user", "content": "hi"}],
+            models=[],
+        )

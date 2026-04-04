@@ -416,7 +416,7 @@ class EventHooks:
         except Exception as e:
             logger.error("Downstream execution failed for %s: %s", agent_id, e)
         finally:
-            release(agent_id)
+            await release(agent_id)
 
     async def _run_workflow(self, workflow_id: str, stream: str, event_type: str) -> None:
         """Execute a workflow triggered by an event (fire-and-forget)."""

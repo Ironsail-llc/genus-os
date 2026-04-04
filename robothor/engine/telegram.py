@@ -844,19 +844,21 @@ class TelegramBot:
                 from robothor.engine.context import maybe_compress
 
                 async with self._get_session_lock(chat_id):
-                    history_snapshot = list(session.history) if len(session.history) > 5 else None
-                    original_count = len(session.history)
-                if history_snapshot is not None:
-                    compressed = await maybe_compress(history_snapshot, threshold=20_000)
-                    if len(compressed) < original_count:
-                        async with self._get_session_lock(chat_id):
+                    if len(session.history) > 5:
+                        history_snapshot = list(session.history)
+                        original_count = len(session.history)
+                        compressed = await maybe_compress(history_snapshot, threshold=20_000)
+                        if (
+                            len(compressed) < original_count
+                            and len(session.history) == original_count
+                        ):
                             session.history[:] = compressed
-                        logger.info(
-                            "Idle timeout compression for chat %s (%d→%d messages)",
-                            chat_id,
-                            original_count,
-                            len(compressed),
-                        )
+                            logger.info(
+                                "Idle timeout compression for chat %s (%d→%d messages)",
+                                chat_id,
+                                original_count,
+                                len(compressed),
+                            )
             except Exception as e:
                 logger.debug("Idle compression failed: %s", e)
         self._last_message_at[chat_id] = now

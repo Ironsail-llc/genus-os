@@ -119,6 +119,13 @@ brain/memory/evening-winddown-status.json
 brain/memory/contacts.json
 brain/memory/tasks.json
 brain/memory/overnight-pr-status.md
+brain/memory/worker-handoff.json
+brain/memory/meet-transcripts.json
+brain/memory/meet-transcript-state.json
+brain/memory/cron-health-status.md
+brain/memory/garmin-health.md
+brain/memory/.meet-transcript.lock
+brain/memory_system/locks/
 
 # Vault master key
 .vault-key

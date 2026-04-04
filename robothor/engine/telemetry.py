@@ -83,7 +83,7 @@ class TraceContext:
         s = Span(
             name=name,
             parent_span_id=parent_id,
-            start_time=time.monotonic(),
+            start_time=time.time(),
             attributes=attributes,
         )
         self._span_stack.append(s)
@@ -93,7 +93,7 @@ class TraceContext:
             s.status = "error"
             raise
         finally:
-            s.end_time = time.monotonic()
+            s.end_time = time.time()
             self._span_stack.pop()
             self.spans.append(s)
 

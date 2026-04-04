@@ -20,9 +20,9 @@ Output:
 """
 
 import json
+import logging
 import os
 import subprocess
-import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -30,9 +30,7 @@ from pathlib import Path
 
 import requests
 
-sys.path.insert(0, "/home/philip/robothor/brain/memory_system")
-import audit
-import event_bus
+logger = logging.getLogger(__name__)
 
 # === Paths ===
 MEMORY_DIR = Path("/home/philip/robothor/brain/memory")
@@ -158,11 +156,11 @@ def check_http_endpoints() -> list[dict]:
             )
             result["response_time_ms"] = round(elapsed_ms, 1)
             results.append(result)
-            audit.log_telemetry(name, "response_time_ms", elapsed_ms, unit="ms")
-            audit.log_telemetry(name, "http_status", resp.status_code)
+            logger.info("telemetry: %s response_time_ms=%.1f", name, elapsed_ms)
+            logger.info("telemetry: %s http_status=%d", name, resp.status_code)
         except Exception as e:
             results.append(check_result(f"http:{name}", False, str(e)))
-            audit.log_telemetry(name, "http_status", 0, details={"error": str(e)[:200]})
+            logger.info("telemetry: %s http_status=0 error=%s", name, str(e)[:200])
     return results
 
 
@@ -231,7 +229,7 @@ def check_databases() -> list[dict]:
         )
         if out.returncode == 0:
             active_conns = int(out.stdout.strip())
-            audit.log_telemetry("postgresql", "active_connections", active_conns)
+            logger.info("telemetry: postgresql active_connections=%d", active_conns)
     except Exception:
         pass
 
@@ -286,11 +284,11 @@ def check_redis() -> list[dict]:
             for line in info_out.stdout.split("\n"):
                 if line.startswith("used_memory:"):
                     val = int(line.split(":")[1].strip())
-                    audit.log_telemetry("redis", "used_memory_bytes", val, unit="bytes")
+                    logger.info("telemetry: redis used_memory_bytes=%d", val)
                 elif line.startswith("maxmemory:"):
                     val = int(line.split(":")[1].strip())
                     if val > 0:
-                        audit.log_telemetry("redis", "maxmemory_bytes", val, unit="bytes")
+                        logger.info("telemetry: redis maxmemory_bytes=%d", val)
         except Exception:
             pass
         return [check_result("redis", ok, out.stdout.strip() if not ok else "")]
@@ -447,7 +445,7 @@ def check_memory_pressure() -> list[dict]:
                     avail_kb = int(line.split()[1])
                     avail_gb = avail_kb / (1024 * 1024)
                     ok = avail_gb >= 8.0
-                    audit.log_telemetry("system", "memory_available_gb", round(avail_gb, 1), unit="GB")
+                    logger.info("telemetry: system memory_available_gb=%.1f", avail_gb)
                     return [
                         check_result(
                             "system:memory",
@@ -633,32 +631,13 @@ def main():
     else:
         resolve_health_escalations()
 
-    # Write summary to audit log
-    audit.log_event(
-        "service.health",
-        f"Health check: {ok_count}/{len(all_results)} ok",
-        category="system",
-        status="ok" if not critical else "error",
-        details={
-            "total_checks": len(all_results),
-            "ok_count": ok_count,
-            "critical_count": len(critical),
-            "critical_names": [r["name"] for r in critical],
-        },
-    )
-
-    # Dual-write: publish to event bus
-    event_bus.publish(
-        "health",
-        "service.health",
-        {
-            "total_checks": len(all_results),
-            "ok_count": ok_count,
-            "critical_count": len(critical),
-            "critical_names": [r["name"] for r in critical],
-            "status": "ok" if not critical else "CRITICAL",
-        },
-        source="system_health_check",
+    # Log summary
+    logger.info(
+        "service.health: %d/%d ok, %d critical (%s)",
+        ok_count,
+        len(all_results),
+        len(critical),
+        [r["name"] for r in critical],
     )
 
     print(f"[{datetime.now().isoformat()}] Health check done.")

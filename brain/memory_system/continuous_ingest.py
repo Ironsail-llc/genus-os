@@ -506,7 +506,7 @@ async def ingest_conversations() -> dict[str, int]:
     results = {"new": 0, "skipped": 0, "errors": 0}
 
     try:
-        from crm_fetcher import fetch_conversations, format_conversation_for_ingestion
+        from crm_fetcher import fetch_conversations, format_conversation_for_ingestion  # noqa: removed module — falls through to except
 
         conversations = fetch_conversations(hours=48)
 
@@ -571,7 +571,7 @@ async def ingest_twenty_crm() -> dict[str, int]:
     results = {"new": 0, "skipped": 0, "errors": 0}
 
     try:
-        from crm_fetcher import fetch_twenty_notes, fetch_twenty_tasks
+        from crm_fetcher import fetch_twenty_notes, fetch_twenty_tasks  # noqa: removed module — falls through to except
 
         # Notes
         notes = fetch_twenty_notes(hours=48)
@@ -663,7 +663,7 @@ async def ingest_contacts() -> dict[str, int]:
     results = {"new": 0, "skipped": 0, "errors": 0}
 
     try:
-        from crm_fetcher import fetch_twenty_contacts, format_contact_for_ingestion
+        from crm_fetcher import fetch_twenty_contacts, format_contact_for_ingestion  # noqa: removed module — falls through to except
 
         contacts = fetch_twenty_contacts(hours=168)  # 7 days
 

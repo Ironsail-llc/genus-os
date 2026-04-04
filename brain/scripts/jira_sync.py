@@ -25,10 +25,7 @@ from jira import JIRA
 # === Config ===
 JIRA_SERVER = "https://ironsail.atlassian.net"
 JIRA_EMAIL = "philip@ironsail.ai"
-JIRA_TOKEN = os.environ.get(
-    "JIRA_API_TOKEN",
-    "***REMOVED***",
-)
+JIRA_TOKEN = os.environ["JIRA_API_TOKEN"]
 
 JIRA_LOG = Path("/home/philip/robothor/brain/memory/jira-log.json")
 TASKS_FILE = Path("/home/philip/robothor/brain/memory/tasks.json")

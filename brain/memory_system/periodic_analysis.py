@@ -39,7 +39,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 
 async def load_llm_client():
-    import llm_client
+    from robothor.llm import ollama as llm_client
 
     return llm_client
 

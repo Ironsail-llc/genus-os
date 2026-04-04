@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from typing import Any, TypeVar
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_DEFAULT_RETRYABLE = (Exception,)
+_DEFAULT_RETRYABLE = (ConnectionError, TimeoutError, OSError)
 
 
 async def retry_async(
@@ -71,9 +72,12 @@ async def retry_async(
             last_exc = e
             if attempt >= max_attempts:
                 break
-            delay = min(backoff_base * (2 ** (attempt - 1)), max_backoff)
+            delay = min(backoff_base * (2 ** (attempt - 1)), max_backoff) * random.uniform(0.5, 1.0)
             if on_retry:
-                on_retry(attempt, e)
+                try:
+                    on_retry(attempt, e)
+                except Exception:
+                    logger.warning("on_retry callback failed", exc_info=True)
             else:
                 logger.warning(
                     "Retry %d/%d after %s (%.1fs backoff): %s",
@@ -109,9 +113,12 @@ def retry_sync(
             last_exc = e
             if attempt >= max_attempts:
                 break
-            delay = min(backoff_base * (2 ** (attempt - 1)), max_backoff)
+            delay = min(backoff_base * (2 ** (attempt - 1)), max_backoff) * random.uniform(0.5, 1.0)
             if on_retry:
-                on_retry(attempt, e)
+                try:
+                    on_retry(attempt, e)
+                except Exception:
+                    logger.warning("on_retry callback failed", exc_info=True)
             else:
                 logger.warning(
                     "Retry %d/%d after %s (%.1fs backoff): %s",

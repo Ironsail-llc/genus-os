@@ -35,10 +35,10 @@ dependencies = [
     "litellm~=1.50",
     "aiogram~=3.10",
     "apscheduler~=3.10",
-    "html2text>=2024.2",
+    "html2text~=2024.2",
     "cryptography~=42.0",
-    "structlog>=24.0",
-    "prometheus-client>=0.21",
+    "structlog~=24.0",
+    "prometheus-client~=0.21",
 ]
 
 [project.optional-dependencies]
