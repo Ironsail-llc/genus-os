@@ -1,7 +1,7 @@
 id: evening-winddown
 name: Evening Wind-Down
 description: Daily evening summary with tomorrow preview and open items
-version: "2026-03-21"
+version: "2026-04-05"
 department: briefings
 
 reports_to: null
@@ -30,7 +30,6 @@ delivery:
 tools_allowed:
   - read_file
   - write_file
-  - exec
   - search_memory
   - get_entity
   - memory_block_read
@@ -38,6 +37,7 @@ tools_allowed:
   - list_agent_tasks
   - gws_calendar_list
   - list_tasks_summary
+  - list_conversations
   - web_search
   - web_fetch
   - create_note
@@ -46,6 +46,7 @@ tools_denied:
   - create_message
   - make_call
   - transmit_prescription
+  - exec
 bridge_endpoints:
   - "GET /health"
   - "GET /api/conversations"
@@ -93,6 +94,8 @@ v2:
     - "^gws calendar"
 
 changelog:
+  - date: "2026-04-05"
+    change: "Remove exec from tools_allowed (force native tools), add list_conversations, move exec to tools_denied to prevent blocked-command loops causing timeouts"
   - date: "2026-03-21"
     change: "Add write_file + create_note to tools_allowed, expand exec_allowlist for telegram, fix blocked commands"
   - date: "2026-03-20"
