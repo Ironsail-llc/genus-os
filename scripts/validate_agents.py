@@ -54,7 +54,7 @@ def load_manifests(agent_id: str | None = None) -> dict:
     """Load YAML manifests from docs/agents/."""
     manifests = {}
     for f in sorted(MANIFEST_DIR.glob("*.yaml")):
-        with open(f) as fh:
+        with f.open() as fh:
             data = yaml.safe_load(fh)
         if (
             data
@@ -104,9 +104,12 @@ def main():
     else:
         print("Schema: schema.yaml not found, using minimal required fields")
 
-    # Load all manifests
+    # Load all manifests (instance data — may not exist in clean checkout)
     all_manifests = load_manifests()
     if not all_manifests:
+        if args.ci:
+            print("OK: No manifests found (agent manifests are instance config, not platform code)")
+            sys.exit(0)
         print("ERROR: No manifests found in docs/agents/*.yaml", file=sys.stderr)
         sys.exit(2)
 

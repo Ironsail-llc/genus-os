@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import pytest
+
 from robothor.engine.config import load_manifest, manifest_to_agent_config
 
 if TYPE_CHECKING:
@@ -23,6 +25,13 @@ AUTO_AGENT_MANIFEST_PATH = (
 )
 AUTO_RESEARCHER_MANIFEST_PATH = (
     Path(__file__).resolve().parents[3] / "docs" / "agents" / "auto-researcher.yaml"
+)
+
+# Agent manifests are instance data (.gitignored) — skip these tests in CI
+_MANIFESTS_AVAILABLE = MANIFEST_PATH.exists()
+pytestmark = pytest.mark.skipif(
+    not _MANIFESTS_AVAILABLE,
+    reason="Agent manifests are instance config, not present in clean checkout",
 )
 
 
