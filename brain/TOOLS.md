@@ -81,7 +81,7 @@ Key flags: `--summary`, `--from`/`--to` (RFC3339 with timezone offset — **alwa
 | Tool | Purpose |
 |------|---------|
 | `gws_calendar_list` | List events in a date range (returns structured event data) |
-| `gws_calendar_create` | Create a calendar event with attendees, location, description |
+| `gws_calendar_create` | Create a calendar event with attendees, location, description. Includes Google Meet link by default (`with_meet: true`). Set `with_meet: false` to skip. |
 | `gws_calendar_delete` | Delete a calendar event by ID |
 
 ### Google Chat

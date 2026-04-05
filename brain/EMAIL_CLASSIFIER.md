@@ -103,6 +103,21 @@ create_task(
 )
 ```
 
+**For `meeting_logistics` emails**, include extra scheduling fields in the task body so the responder can act without re-parsing the thread:
+```
+create_task(
+    title="Reply to [sender]: [subject]",
+    assignedToAgent="email-responder",
+    tags=["email", "reply-needed", "meeting_logistics"],
+    priority="normal",
+    body="threadId: <gmail thread id>\nfrom: <from field>\ndate: <date>\nscheduling_type: <specific_time|negotiation|open_ask>\nproposed_times: <extracted times, e.g. 'Tuesday 2pm' or 'Monday or Wednesday afternoon', or 'none'>\nattendees: <mentioned attendee emails, or 'none'>\nduration: <extracted duration, or 'default 30m'>"
+)
+```
+Where `scheduling_type` is:
+- `specific_time` — sender proposed concrete date/time(s): "Let's meet Tuesday at 2pm"
+- `negotiation` — sender proposed options: "Are you free Monday or Wednesday?"
+- `open_ask` — no times proposed: "When can we meet?", "Let's schedule a call"
+
 **CRITICAL: threadId validation.** The `threadId` in the task body MUST be the Gmail thread ID from `triage-inbox.json` (looks like `19c8b019e28fbcf3` — a hex string). NEVER use:
 - CRM conversation IDs (numeric, e.g., `80`)
 - CRM person/company UUIDs

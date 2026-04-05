@@ -351,6 +351,63 @@ class TestGwsCalendarCreate:
             assert body["summary"] == "Lunch"
             assert body["attendees"] == [{"email": "alice@example.com"}]
 
+    def test_create_includes_meet_by_default(self):
+        mock_result = MagicMock(returncode=0, stdout='{"id":"e2","summary":"Sync"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Sync",
+                    "start": "2026-04-10T14:00:00-04:00",
+                    "end": "2026-04-10T15:00:00-04:00",
+                },
+            )
+
+            cmd = mock_run.call_args[0][0]
+            json_idx = cmd.index("--json")
+            body = json.loads(cmd[json_idx + 1])
+            assert "conferenceData" in body
+            assert (
+                body["conferenceData"]["createRequest"]["conferenceSolutionKey"]["type"]
+                == "hangoutsMeet"
+            )
+
+            params_idx = cmd.index("--params")
+            params = json.loads(cmd[params_idx + 1])
+            assert params["conferenceDataVersion"] == 1
+
+    def test_create_without_meet(self):
+        mock_result = MagicMock(returncode=0, stdout='{"id":"e3","summary":"Quick"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Quick",
+                    "start": "2026-04-10T14:00:00-04:00",
+                    "end": "2026-04-10T15:00:00-04:00",
+                    "with_meet": False,
+                },
+            )
+
+            cmd = mock_run.call_args[0][0]
+            json_idx = cmd.index("--json")
+            body = json.loads(cmd[json_idx + 1])
+            assert "conferenceData" not in body
+
+            params_idx = cmd.index("--params")
+            params = json.loads(cmd[params_idx + 1])
+            assert "conferenceDataVersion" not in params
+
     def test_create_requires_fields(self):
         from robothor.engine.tools import _handle_gws_tool
 

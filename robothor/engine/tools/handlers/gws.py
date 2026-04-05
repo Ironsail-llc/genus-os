@@ -165,14 +165,28 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("attendees"):
             event_body["attendees"] = [{"email": e} for e in args["attendees"]]
 
+        with_meet = args.get("with_meet", True)
+        if with_meet:
+            request_id = f"robothor-{summary[:20]}-{start[:10]}".replace(" ", "-")
+            event_body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": request_id,
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+
         calendar_id = args.get("calendar_id", "primary")
+        cal_params: dict[str, Any] = {"calendarId": calendar_id}
+        if with_meet:
+            cal_params["conferenceDataVersion"] = 1
+
         return _run_gws(
             [
                 "calendar",
                 "events",
                 "insert",
                 "--params",
-                _json.dumps({"calendarId": calendar_id}),
+                _json.dumps(cal_params),
                 "--json",
                 _json.dumps(event_body),
             ]

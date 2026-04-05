@@ -46,6 +46,9 @@ tools_allowed:
   - gws_gmail_search
   - gws_gmail_get
   - gws_gmail_send
+  - gws_calendar_list
+  - gws_calendar_create
+  - list_tasks
 tools_denied:
   - message
 bridge_endpoints:
@@ -93,7 +96,7 @@ bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md
 
-tags_produced: []
+tags_produced: [scheduling-link, calendar]
 tags_consumed: [email, reply-needed]
 
 v2:
@@ -103,11 +106,15 @@ v2:
     - write_path_restrict
   exec_allowlist:
     - "^gog gmail (thread|send|search)"
+    - "^gog calendar"
     - "^gws gmail"
+    - "^gws calendar"
   write_path_allowlist:
     - "brain/memory/response-status.md"
 
 changelog:
+  - date: "2026-04-04"
+    change: "Add gws_calendar_list/create + list_tasks tools for meeting scheduling pipeline"
   - date: "2026-04-01"
     change: "Cron is now safety-net only — primary trigger is email-pipeline workflow via email.new hook (24/7)"
   - date: "2026-03-09"

@@ -38,9 +38,93 @@ Based on the email content and task tags:
 - **question** (answer is NOT available) → Before escalating, **spawn a research sub-agent** with `sessions_spawn` to search memory, CRM, and calendar for the answer. If the sub-agent finds it, reply directly. If not, send "Thanks for reaching out. I'm checking on this and will get back to you." and escalate via task.
 - **status_check** → "Yes, received — [brief confirmation of what you got]."
 - **fyi** → "Received, thanks."
-- **meeting_logistics** → Check the calendar, respond with facts
+- **meeting_logistics** → See "Meeting Scheduling" section below
 - **analytical** (with analysis in response-analysis.json) → See "Analytical Replies" below
 - If you can't compose a good reply → escalate via task, don't reply
+
+## Meeting Scheduling (`meeting_logistics`)
+
+When a task has the `meeting_logistics` tag, follow this decision tree.
+
+### Step 1: Parse the request
+
+Read the task body for `scheduling_type`, `proposed_times`, `attendees`, and `duration`.
+If these fields are missing, fetch the email thread via `gws_gmail_get` and determine:
+- Did the sender propose specific time(s)?
+- Did they ask when Philip is free?
+- Did they request a recurring meeting?
+
+### Step 2: Route by type
+
+#### A. Recurring meeting request → Escalate
+
+Recurring meetings need Philip's approval:
+```
+create_task(
+    title="[ESCALATION] Recurring meeting request from [sender]: [subject]",
+    assignedToAgent="main",
+    tags=["email", "escalation", "needs-philip", "meeting_logistics"],
+    priority="high",
+    requiresHuman=true,
+    body="threadId: <threadId>\nreason: Recurring meeting — needs Philip's schedule approval"
+)
+```
+Send a holding reply: "Let me check Philip's recurring availability and get back to you."
+
+#### B. Specific time proposed → Check availability and schedule
+
+1. Check Philip's calendar for conflicts:
+   ```
+   gws_calendar_list(time_min=<proposed_start - 1h>, time_max=<proposed_end + 1h>)
+   ```
+2. **If Philip is FREE:**
+   - Create the event directly:
+     ```
+     gws_calendar_create(
+         summary="<meeting topic> with <sender name>",
+         start="<RFC3339>",
+         end="<RFC3339>",
+         attendees=["<sender email>", "<other attendees>"],
+         description="Scheduled from email thread"
+     )
+     ```
+   - Reply confirming: "Done — [topic] is on the calendar for [day] at [time]. You'll get a Calendar invite with a Meet link shortly."
+   - Set task to **REVIEW** (calendar-modifying action)
+3. **If there's a CONFLICT:**
+   - Find 2-3 open slots in the next 5 business days:
+     ```
+     gws_calendar_list(time_min=<today>, time_max=<today + 7 days>)
+     ```
+   - Look for gaps during business hours (9 AM - 6 PM ET, Mon-Fri), minimum 30 minutes (or requested duration), 15-minute buffer between meetings
+   - Reply: "That time won't work — Philip has a conflict. How about one of these?\n\n• [Day, Time 1]\n• [Day, Time 2]\n• [Day, Time 3]\n\nOr pick a time that works: https://calendar.app.google/TLqVaiyMTtcdLY7E6"
+   - Create a scheduling-link tracking task (see Section C, step 4)
+   - Set task to **REVIEW**
+
+#### C. No specific time / "when are you free?" → Suggest slots + booking link
+
+1. Check Philip's calendar for the next 5 business days:
+   ```
+   gws_calendar_list(time_min=<now>, time_max=<now + 7 days>)
+   ```
+2. Identify 3 open slots during business hours (9 AM - 6 PM ET, skip weekends). All-day events don't block unless they're OOO/Focus time.
+3. Reply: "Here are a few times that work:\n\n• [Day, Time 1]\n• [Day, Time 2]\n• [Day, Time 3]\n\nOr grab any open slot: https://calendar.app.google/TLqVaiyMTtcdLY7E6"
+4. Create a scheduling-link tracking task for calendar-monitor:
+   ```
+   create_task(
+       title="Scheduling link shared: [sender name]",
+       assignedToAgent="calendar-monitor",
+       tags=["scheduling-link", "calendar"],
+       priority="normal",
+       body="recipientEmail: <sender email>\nrecipientName: <sender name>\npurpose: <topic>\nsharedVia: email"
+   )
+   ```
+5. Set task to **REVIEW**
+
+### Timezone
+
+Philip is in **America/New_York**. Interpret times like "Tuesday at 2pm" as Eastern. Use the current UTC offset (-04:00 EDT / -05:00 EST) when constructing RFC3339 timestamps for calendar tools.
+
+---
 
 ## Analytical Replies
 
@@ -63,13 +147,14 @@ gog gmail send \
   --reply-all \
   --reply-to-message-id <lastMessageId from thread JSON> \
   --subject "Re: <original subject>" \
-  --body-html "<your reply as HTML>" \
+  --body "<your reply>" \
   --account robothor@ironsail.ai \
   --no-input
 ```
 
 - `--subject` is **required** by gog — always include it prefixed with "Re: "
-- Add `--cc philip@ironsail.ai` ONLY if Philip is NOT already in the thread
+- ALWAYS CC philip@ironsail.ai — no exceptions
+- ALWAYS use --reply-all — everyone on the thread stays included
 - **Fallback**: if message ID extraction fails, use `--thread-id <threadId>` instead
 
 ## After Each Reply
@@ -165,8 +250,8 @@ gog gmail thread get <threadId> --account robothor@ironsail.ai --full --json
 # **Preferred**: Use the `gws_gmail_send` tool
 gog gmail send --reply-all --reply-to-message-id <lastMessageId> \
   --subject "Re: <original subject>" \
-  --body-html "<your reply as HTML>" --account robothor@ironsail.ai --no-input
-# Add --cc philip@ironsail.ai ONLY if Philip is not already in the thread
+  --body "<your reply>" --account robothor@ironsail.ai --no-input
+# ALWAYS CC philip@ironsail.ai — no exceptions
 # Fallback: --thread-id <threadId> if message ID extraction fails
 ```
 

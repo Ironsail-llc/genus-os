@@ -716,6 +716,11 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Calendar ID (default 'primary')",
                         "default": "primary",
                     },
+                    "with_meet": {
+                        "type": "boolean",
+                        "description": "Add a Google Meet video conference link (default true)",
+                        "default": True,
+                    },
                 },
                 "required": ["summary", "start", "end"],
             },
