@@ -85,6 +85,8 @@ class TestRunAutodream:
     """Tests for the main run_autodream() orchestrator."""
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -103,6 +105,8 @@ class TestRunAutodream:
         mock_ts,
         mock_rec,
         mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_consol.return_value = {"skipped": False, "consolidation_groups": 2}
         mock_prune.return_value = {"total_pruned": 3}
@@ -123,6 +127,8 @@ class TestRunAutodream:
         mock_rec.assert_called_once()
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -141,6 +147,8 @@ class TestRunAutodream:
         mock_ts,
         mock_rec,
         mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_consol.return_value = {"skipped": True, "unconsolidated_count": 1}
         mock_prune.return_value = {"total_pruned": 0}
@@ -155,6 +163,8 @@ class TestRunAutodream:
         assert result["insights_discovered"] == 0
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -162,7 +172,15 @@ class TestRunAutodream:
     @patch("robothor.engine.autodream._is_quiet_hours", return_value=True)
     @patch("robothor.engine.autodream.run_lifecycle_maintenance", new_callable=AsyncMock)
     async def test_idle_upgrades_to_deep_during_quiet_hours(
-        self, mock_maint, mock_quiet, mock_pub, mock_ts, mock_rec, mock_block
+        self,
+        mock_maint,
+        mock_quiet,
+        mock_pub,
+        mock_ts,
+        mock_rec,
+        mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_maint.return_value = {
             "consolidation_groups": 5,
@@ -183,6 +201,8 @@ class TestRunAutodream:
         mock_maint.assert_called_once()
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -190,7 +210,15 @@ class TestRunAutodream:
     @patch("robothor.engine.autodream._is_quiet_hours", return_value=False)
     @patch("robothor.engine.autodream.run_lifecycle_maintenance", new_callable=AsyncMock)
     async def test_deep_mode_runs_full_lifecycle(
-        self, mock_maint, mock_quiet, mock_pub, mock_ts, mock_rec, mock_block
+        self,
+        mock_maint,
+        mock_quiet,
+        mock_pub,
+        mock_ts,
+        mock_rec,
+        mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_maint.return_value = {
             "consolidation_groups": 3,
@@ -207,6 +235,8 @@ class TestRunAutodream:
         mock_maint.assert_called_once()
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -225,6 +255,8 @@ class TestRunAutodream:
         mock_ts,
         mock_rec,
         mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_consol.return_value = {"skipped": False, "consolidation_groups": 1}
         mock_prune.return_value = {"total_pruned": 0}
@@ -237,6 +269,8 @@ class TestRunAutodream:
         assert result["mode"] == "post_stall"
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -244,7 +278,15 @@ class TestRunAutodream:
     @patch("robothor.engine.autodream._is_quiet_hours", return_value=False)
     @patch("robothor.engine.autodream.run_intraday_consolidation", new_callable=AsyncMock)
     async def test_handles_lifecycle_errors_gracefully(
-        self, mock_consol, mock_quiet, mock_pub, mock_ts, mock_rec, mock_block
+        self,
+        mock_consol,
+        mock_quiet,
+        mock_pub,
+        mock_ts,
+        mock_rec,
+        mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_consol.side_effect = RuntimeError("DB connection failed")
 
@@ -260,6 +302,8 @@ class TestRunAutodream:
         assert call_args[1].get("error") or (len(call_args[0]) >= 5 and call_args[0][4] is not None)
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.release_lock")
+    @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
     @patch("robothor.engine.autodream._update_memory_block")
     @patch("robothor.engine.autodream._record_run")
     @patch("robothor.engine.autodream._set_last_run_ts")
@@ -278,6 +322,8 @@ class TestRunAutodream:
         mock_ts,
         mock_rec,
         mock_block,
+        mock_lock,
+        mock_unlock,
     ):
         mock_consol.return_value = {"skipped": True}
         mock_prune.return_value = {"total_pruned": 0}
