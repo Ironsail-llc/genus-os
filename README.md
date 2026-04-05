@@ -16,7 +16,7 @@ Your infrastructure. Your data. Your rules.
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/tests-2%2C000%2B%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-9%2C000%2B%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---
@@ -36,17 +36,21 @@ Most AI platforms force a choice: cloud-hosted convenience or self-hosted comple
 
 ## Highlights
 
-**Governed Agent Platform** — 17 agents defined by declarative YAML manifests with full audit trails. A workflow engine with conditional branching. 106 registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
+**Governed Agent Platform** — 24 agents defined by declarative YAML manifests with full audit trails. A workflow engine with conditional branching. 110+ registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
 
 **Enterprise Federation** — Connect Genus OS instances across sites, subsidiaries, and partners into a peer-to-peer mesh. Ed25519 signed invite tokens establish cryptographic trust. Each connection has scoped exports/imports — no implicit access, no transitive trust. Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering across distributed instances. NATS JetStream transport with leaf-node topology handles unreliable networks gracefully. Every instance runs autonomously; federation adds connectivity, not dependency.
 
-**The Helm (Control Plane)** — Not a dashboard — an enterprise control plane. Next.js 16 + Dockview with 45 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor fleet health across federated instances. Fully extensible component registry for custom operational views.
+**The Helm (Control Plane)** — Not a dashboard — an enterprise control plane. Next.js 16 + Dockview with 48 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor fleet health across federated instances. Fully extensible component registry for custom operational views.
 
 **Intelligence Layer** — Two-tier memory: working context and long-term facts with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal Rank Fusion). Knowledge graph that grows autonomously. Fully local RAG stack — embeddings, reranking, and generation never leave your network. Facts carry confidence scores, categories, and lifecycle states with quality gates that prevent knowledge degradation.
 
 **Physical Security** — YOLOv8 nano + InsightFace ArcFace for real-time object detection and face recognition. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Sub-2-second unknown person alerts. Scene analysis via vision LLM. All processing local — no cloud, no external API calls, no video data leaving your premises.
 
-**Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 64 tools over stdio. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
+**Desktop & Browser Automation** — Full computer-use capability with 13 desktop tools (screenshot, click, type, drag, scroll, window management, app launch) via Xvfb virtual display and VNC. Browser automation for web interactions. Agents can operate GUI applications autonomously — no human screen required.
+
+**Inter-Agent Communication** — Agents coordinate via typed messages, team scratchpads, and shared working state. Teams form dynamically for multi-agent collaboration. RPG-style scoring tracks per-agent performance with XP, levels, and stats (debugging, patience, reliability, wisdom).
+
+**Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 44 tools over stdio; agents can also call external MCP servers as clients. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
 
 ## Getting Started
 
@@ -190,6 +194,8 @@ Required manifest fields: `id` (kebab-case), `name`, `description`, `version` (Y
 | `downstream_agents` | Agents this one creates tasks for. |
 | `sla` | Response time targets by priority level. |
 | `review_workflow` | If true, tasks go to REVIEW for supervisor approval. |
+| `messaging` | Enable inter-agent messaging and team scratchpads. |
+| `lifecycle_hooks` | Event-driven hooks (on_start, on_complete, on_failure) with handler types: command, http, agent, python. |
 
 Full schema: [schema.yaml](docs/agents/schema.yaml) | Reference: [Agent Playbook](docs/agents/PLAYBOOK.md)
 
@@ -202,7 +208,7 @@ robothor engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
-The engine provides **101 tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, and more. Each agent sees only the tools in its `tools_allowed` list.
+The engine provides **110+ tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, desktop automation, browser control, inter-agent messaging, Apollo.io enrichment, MCP client calls, experiment/benchmark tracking, and more. Each agent sees only the tools in its `tools_allowed` list.
 
 ### Agent Engine v2
 
@@ -229,6 +235,30 @@ v2:
 ```
 
 Child agents inherit the parent's remaining budget (never exceed it), delivery is forced to `none`, and dedup keys are namespaced under the parent run. The `spawn_agents` tool runs multiple sub-agents concurrently (up to 3).
+
+### Inter-Agent Messaging
+
+Agents can communicate directly without spawning sub-agents:
+
+| Tool | Purpose |
+|------|---------|
+| `send_agent_message` | Send a typed message to another agent |
+| `receive_agent_messages` | Check inbox for messages from other agents |
+| `create_team` | Form a dynamic team for multi-agent collaboration |
+| `team_scratchpad_write` | Write to a shared team scratchpad |
+| `team_scratchpad_read` | Read from a shared team scratchpad |
+
+### MCP Client
+
+Agents can call external MCP servers as clients, extending their capabilities dynamically:
+
+```yaml
+tools_allowed:
+  - mcp_list_servers    # Discover available MCP servers
+  - mcp_list_tools      # List tools on a specific server
+  - mcp_call_tool       # Invoke a tool on an external MCP server
+  - mcp_read_resource   # Read a resource from an MCP server
+```
 
 ## Workflows
 
@@ -263,7 +293,7 @@ steps:
       - when: "'technical' in value.lower()"
         goto: engineer
       - otherwise: true
-        goto: done
+        goto: acknowledge
 
   - id: escalate
     type: agent
@@ -275,8 +305,10 @@ steps:
     agent_id: support-engineer
     message: "Technical ticket assigned. Investigate and resolve."
 
-  - id: done
-    type: noop
+  - id: acknowledge
+    type: agent
+    agent_id: support-triage
+    message: "Non-critical ticket. Send acknowledgment and add to backlog."
 ```
 
 **Event hooks** on Redis Streams are the primary trigger. Cron schedules serve as safety nets at relaxed frequencies. The workflow engine handles conditional branching, failure modes (`abort` / `skip`), and step chaining.
@@ -310,7 +342,7 @@ Not a dashboard — a control plane. Built with Next.js 16 and Dockview for a pa
 - **Agent Status** — Live health, run history, and error tracking
 - **CRM Views** — Contacts, companies, conversations, notes
 - **Service Health** — System topology with status indicators
-- **Component Registry** — 45 lazy-loaded components, add your own
+- **Component Registry** — 48 lazy-loaded components, add your own
 
 ## The CRM
 
@@ -321,6 +353,7 @@ How agents coordinate. Native PostgreSQL tables — no external CRM dependency.
 - **Cross-channel identity** — A single contact resolved across email, Telegram, voice, web, and API
 - **Multi-tenancy** — Every table scoped by `tenant_id`. Bridge middleware enforces isolation.
 - **Merge tools** — Deduplicate contacts and companies. Keeper absorbs loser's data, re-links all records.
+- **Agent RPG scoring** — Per-agent performance tracking with XP, levels, and stats (debugging, patience, chaos, wisdom, reliability). Daily snapshots track progression over time.
 
 ## Memory
 
@@ -363,6 +396,51 @@ Always-on camera monitoring with runtime mode switching:
 | Armed | Per-frame tracking with full detection pipeline |
 
 **Pipeline:** Motion detection &rarr; YOLOv8 nano (6 MB) &rarr; InsightFace ArcFace (300 MB) &rarr; pluggable alerts. Unknown persons trigger a snapshot to your chosen channel in under 2 seconds. Scene analysis via vision LLM (Ollama). Any RTSP camera source. Mode switch at runtime, no restart.
+
+## Desktop Automation
+
+Full computer-use capability — agents can operate GUI applications on a headless virtual display without a human screen.
+
+| Tool | Purpose |
+|------|---------|
+| `desktop_screenshot` | Capture the virtual display |
+| `desktop_click` / `double_click` / `right_click` | Mouse interactions |
+| `desktop_type` / `desktop_key` | Keyboard input |
+| `desktop_drag` / `desktop_scroll` | Drag-and-drop, scrolling |
+| `desktop_window_list` / `desktop_window_focus` | Window management |
+| `desktop_launch` | Launch applications |
+| `desktop_describe` | Vision-based screen description |
+
+**Infrastructure:** Xvfb provides a virtual framebuffer (no physical display required). VNC exposes the display for remote monitoring. The `computer-use` agent manifest pre-configures all 13 desktop tools.
+
+**Browser automation** is available via the `browser` tool for web-based interactions.
+
+## Apollo.io Integration
+
+Contact enrichment and company research via Apollo.io's API:
+
+| Tool | Purpose |
+|------|---------|
+| `apollo_search_people` | Search contacts by name, title, company |
+| `apollo_enrich_person` | Full profile enrichment (email, phone, social, role) |
+| `apollo_search_companies` | Company discovery by industry, size, tech stack |
+| `apollo_enrich_company` | Full company profile (funding, employee count, tech) |
+
+Results feed directly into the CRM via the `crm-enrichment` agent.
+
+## AutoResearch
+
+An iterative metric optimization system for running structured experiments:
+
+```yaml
+tools_allowed:
+  - experiment_create    # Define hypothesis, metric, variants
+  - experiment_measure   # Record observations
+  - experiment_commit    # Lock in winning variant
+  - experiment_status    # Check running experiments
+```
+
+The `auto-researcher` agent uses these tools to test hypotheses, track metrics, and commit improvements. Paired with `benchmark_define`, `benchmark_run`, and `benchmark_compare` for agent performance benchmarking.
 
 ## Federation
 
@@ -468,7 +546,7 @@ Every action in Genus OS is tracked, auditable, and controllable.
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  Agent Engine                                            │
-│  YAML manifests · workflow pipelines · 101 tools         │
+│  YAML manifests · workflow pipelines · 110+ tools        │
 │  APScheduler · Redis Stream hooks · Telegram delivery    │
 │  v2: guardrails · planning · checkpoints · telemetry    │
 │  sub-agents · analytics · Nightwatch                     │
@@ -503,24 +581,25 @@ Every action in Genus OS is tracked, auditable, and controllable.
 robothor/
 ├── robothor/               # Python package — the intelligence layer
 │   ├── engine/             # Agent Engine: runner, tools, scheduler, hooks, workflows,
-│   │                        #   analytics, guardrails, planner, telemetry, sub-agents
+│   │   ├── tools/          #   110+ tools organized by handler module (26 handlers)
+│   │   └── tests/          #   analytics, guardrails, planner, telemetry, sub-agents
 │   ├── memory/             # Two-tier memory, facts, entities, lifecycle
 │   ├── rag/                # Semantic search, reranking, context assembly
 │   ├── crm/                # Models, validation, blocklists
 │   ├── vision/             # YOLO detection, InsightFace recognition, alerts
 │   ├── events/             # Redis Streams, RBAC, consumer workers
-│   ├── api/                # MCP server (64 tools), RAG orchestrator
-│   ├── federation/          # Peer-to-peer instance networking (identity, sync, NATS)
+│   ├── api/                # MCP server (44 tools), RAG orchestrator
+│   ├── federation/         # Peer-to-peer instance networking (identity, sync, NATS)
 │   ├── health/             # Garmin health data sync
 │   └── cli.py              # CLI entry point
 │
 ├── app/                    # The Helm (Next.js 16, React 19, Dockview)
 ├── crm/                    # CRM stack: Bridge service, migrations, Docker Compose
 ├── docs/
-│   ├── agents/             # YAML agent manifests + PLAYBOOK.md
-│   └── workflows/          # Declarative workflow pipelines
-├── brain/                  # Scripts, voice, vision, agent instructions (symlink)
-├── scripts/                # Backup, validation, utilities
+│   ├── agents/             # 24 YAML agent manifests + PLAYBOOK.md
+│   └── workflows/          # 5 declarative workflow pipelines
+├── brain/                  # Scripts, voice, vision, agent instructions
+├── scripts/                # Backup, validation, Nightwatch scripts
 └── templates/              # Bootstrap templates for new instances
 ```
 
@@ -532,7 +611,7 @@ robothor/
 | `robothor serve` | Start orchestrator + engine |
 | `robothor status` | System health overview |
 | `robothor migrate` | Run database migrations |
-| `robothor mcp` | Start MCP server (64 tools, stdio) |
+| `robothor mcp` | Start MCP server (44 tools, stdio) |
 | `robothor tui` | Terminal monitoring dashboard |
 | `robothor agent scaffold <id>` | Scaffold a new agent (manifest + instruction file) |
 | `robothor engine start` | Start the engine daemon |
@@ -595,18 +674,21 @@ The system runs as systemd services behind a Cloudflare tunnel with encrypted se
 | Bridge | CRM API, contact resolution, webhooks, multi-tenancy |
 | Vision | YOLO + InsightFace detection loop |
 | Voice Server | Twilio inbound/outbound calls + Gemini Live + Kokoro TTS |
+| SMS Server | Twilio SMS webhook handler |
 | The Helm | Live control plane dashboard |
 | NATS Server | Federation transport (JetStream, leaf nodes) |
+| Xvfb + VNC | Virtual display for desktop automation (computer use) |
+| MediaMTX | RTSP/HLS camera streaming |
 | Cloudflare Tunnel | All `*.robothor.ai` routes with Access policies |
 
 **Local models (Ollama):**
 
 | Model | Size | Role |
 |-------|------|------|
-| qwen3:14b | 9.3 GB | Agent workloads |
-| llama3.2-vision:11b | 7.8 GB | Vision analysis |
-| qwen3-embedding:0.6b | 639 MB | Dense vector embeddings |
-| Qwen3-Reranker-0.6B | 1.2 GB | Cross-encoder reranking |
+| llama3.2-vision:11b | 7.8 GB | Vision scene analysis |
+| qwen3-embedding:0.6b | 639 MB | Dense vector embeddings (1024-dim) |
+| Qwen3-Reranker-0.6B:F16 | 1.2 GB | Cross-encoder reranking |
+| qwen3:8b | 5.2 GB | Local fallback (watchdog, lightweight tasks) |
 
 ## Testing
 
@@ -618,7 +700,7 @@ cd app && pnpm test                             # Helm tests
 python scripts/validate_agents.py               # Agent manifest validation
 ```
 
-**2,000+ tests** across Python and TypeScript. See [TESTING.md](docs/TESTING.md) for the full strategy, markers, and coverage plan.
+**9,000+ tests** across Python and TypeScript. See [TESTING.md](docs/TESTING.md) for the full strategy, markers, and coverage plan.
 
 ## Contributing
 
