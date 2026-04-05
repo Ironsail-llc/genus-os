@@ -22,6 +22,14 @@ if [ -f "$SECRETS_ENV" ]; then
     set +a
 fi
 
+# Source instance config (sets ROBOTHOR_DB_USER, ROBOTHOR_OWNER_NAME, etc.)
+INSTANCE_ENV="/etc/robothor/robothor.env"
+if [ -f "$INSTANCE_ENV" ]; then
+    set -a
+    source "$INSTANCE_ENV"
+    set +a
+fi
+
 # Cron does not set USER — set it so robothor.config uses the correct DB user.
 # pg_hba.conf uses peer auth on Unix sockets, requiring OS user = PG role.
 export USER="${USER:-robothor}"
