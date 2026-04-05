@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+import os
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +92,7 @@ def _cmd_agent_scaffold(args: argparse.Namespace) -> int:
     status_file = f"brain/memory/{agent_id}-status.md"
 
     # Paths
-    workspace = Path.home() / "robothor"
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
     manifest_dir = workspace / "docs" / "agents"
     brain_dir = workspace / "brain"
     template_dir = workspace / "templates"
@@ -595,7 +596,8 @@ def _cmd_agent_publish(args: argparse.Namespace) -> int:
 
 def _cmd_agent_bind(args: argparse.Namespace) -> int:
     """Bind an agent to a channel/cron schedule by updating its manifest YAML."""
-    manifest_dir = Path.home() / "robothor" / "docs" / "agents"
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+    manifest_dir = workspace / "docs" / "agents"
     manifest_path = manifest_dir / f"{args.agent_id}.yaml"
 
     if not manifest_path.exists():
@@ -636,7 +638,8 @@ def _cmd_agent_bind(args: argparse.Namespace) -> int:
 
 def _cmd_agent_unbind(args: argparse.Namespace) -> int:
     """Clear cron and set delivery to none for an agent."""
-    manifest_dir = Path.home() / "robothor" / "docs" / "agents"
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+    manifest_dir = workspace / "docs" / "agents"
     manifest_path = manifest_dir / f"{args.agent_id}.yaml"
 
     if not manifest_path.exists():

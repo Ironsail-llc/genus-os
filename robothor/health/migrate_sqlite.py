@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,9 @@ import psycopg2.extras
 
 from robothor.db.connection import get_connection
 
-DEFAULT_SQLITE_PATH = Path.home() / "garmin-sync" / "garmin.db"
+DEFAULT_SQLITE_PATH = Path(
+    os.environ.get("GARMIN_SQLITE_PATH", str(Path.home() / "garmin-sync" / "garmin.db"))
+)
 
 # Table mappings: (sqlite_table, pg_table, columns, key_type)
 # key_type: "ts" = BIGINT PK, "date" = DATE PK, "id" = BIGINT PK, "serial" = auto

@@ -127,7 +127,7 @@
           {"icon": "&#128197;", "title": "Calendar & Scheduling", "desc": "Detects conflicts, preps for meetings, coordinates across time zones.", "detail": stats.meetings|string + " events today"},
           {"icon": "&#128269;", "title": "Research & Intelligence", "desc": "Deep web research, document analysis, competitor monitoring. Three-tier RAG pipeline.", "detail": "Always learning"},
           {"icon": "&#128247;", "title": "Vision & Security", "desc": "24/7 camera monitoring. Unknown person &rarr; Telegram alert in &lt;2 seconds.", "detail": "Mode: " + vision_mode},
-          {"icon": "&#128222;", "title": "Voice & Phone", "desc": "Real phone number, custom voice, real-time Twilio calls.", "detail": "+1 (413) 408-6025"},
+          {"icon": "&#128222;", "title": "Voice & Phone", "desc": "Real phone number, custom voice, real-time Twilio calls.", "detail": phone},
           {"icon": "&#128203;", "title": "CRM & Operations", "desc": "Contact management, task coordination, conversation tracking.", "detail": stats.contacts|string + " contacts tracked"}
         ] %}
         {% for c in capabilities %}
@@ -213,10 +213,10 @@
         <a href="/dashboards/homepage/contact">Contact</a>
       </div>
       <div class="home-footer-contact">
-        <a href="mailto:robothor@ironsail.ai">robothor@ironsail.ai</a> &middot;
-        <a href="tel:+14134086025">+1 (413) 408-6025</a> &middot; Telegram
+        <a href="mailto:{{ email }}">{{ email }}</a> &middot;
+        <a href="tel:{{ phone_raw }}">{{ phone }}</a> &middot; Telegram
       </div>
-      <p style="margin-top:0.5rem;">Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p>
+      <p style="margin-top:0.5rem;">Powered by Genus OS</p>
       <p style="margin-top:0.5rem;font-style:italic;">&ldquo;The internet was built for robots.&rdquo;</p>
     </footer>
   </div>

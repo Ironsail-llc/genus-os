@@ -34,7 +34,7 @@ except ImportError:
 
 # Prefix for test data isolation
 TEST_PREFIX = f"__p1_verify_{uuid.uuid4().hex[:6]}__"
-PG_DSN = "dbname=robothor_memory user=philip host=/var/run/postgresql"
+PG_DSN = "dbname=robothor_memory user=robothor host=/var/run/postgresql"
 
 
 @pytest.fixture(autouse=True)

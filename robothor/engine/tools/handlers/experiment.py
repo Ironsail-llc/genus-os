@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import statistics
 import subprocess
 from datetime import UTC, datetime
@@ -79,7 +80,7 @@ def _resolve_path(path: str, workspace: str) -> Path:
 
 def _run_metric_command(command: str, workspace: str) -> str:
     """Run a metric command and return stdout."""
-    cwd = workspace or str(Path.home() / "robothor")
+    cwd = workspace or os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
     result = subprocess.run(
         command,
         shell=True,
@@ -321,7 +322,7 @@ async def _experiment_measure(args: dict[str, Any], ctx: ToolContext) -> dict[st
     num_samples = args.get("samples") or config.get("measurement_samples", 1)
     num_samples = max(1, min(int(num_samples), 10))  # cap at 10
 
-    workspace = ctx.workspace or str(Path.home() / "robothor")
+    workspace = ctx.workspace or os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
     samples: list[float] = []
     errors: list[str] = []
 
@@ -445,7 +446,9 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
     # Execute revert command if verdict is revert
     revert_output = None
     if verdict == "revert" and config.get("revert_command"):
-        workspace = ctx.workspace or str(Path.home() / "robothor")
+        workspace = ctx.workspace or os.environ.get(
+            "ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")
+        )
         try:
             result = subprocess.run(
                 config["revert_command"],

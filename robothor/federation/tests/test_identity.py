@@ -35,7 +35,7 @@ def fed_config(tmp_path):
         instance_name="test-instance",
         config_dir=config_dir,
         identity_file=config_dir / "identity.json",
-        public_endpoint="https://test.robothor.ai",
+        public_endpoint="https://test.example.com",
     )
 
 
@@ -195,7 +195,7 @@ class TestConsumeInviteToken:
             instance_name="consumer",
             config_dir=consumer_dir,
             identity_file=consumer_dir / "identity.json",
-            public_endpoint="https://consumer.robothor.ai",
+            public_endpoint="https://consumer.example.com",
         )
         init_identity(consumer_config, display_name="Consumer")
 
@@ -293,7 +293,7 @@ class TestTrustMode:
             instance_name="consumer",
             config_dir=consumer_dir,
             identity_file=consumer_dir / "identity.json",
-            public_endpoint="https://consumer.robothor.ai",
+            public_endpoint="https://consumer.example.com",
         )
         init_identity(consumer_config, display_name="Consumer")
 

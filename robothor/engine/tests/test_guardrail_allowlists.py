@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-PROJECT_ROOT = Path("/home/philip/robothor")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AGENTS_DIR = PROJECT_ROOT / "docs" / "agents"
 
 # Command prefixes we look for in instruction files

@@ -21,4 +21,9 @@ IMPETUS_ONE_URL = os.getenv("IMPETUS_ONE_BASE_URL", "http://localhost:8000")
 IMPETUS_ONE_TOKEN = os.getenv("IMPETUS_ONE_API_TOKEN", "")
 
 # Database (used by crm_dal.py for backward compat — new code uses robothor.db.connection)
-PG_DSN = os.getenv("PG_DSN", "dbname=robothor_memory user=philip host=/var/run/postgresql")
+PG_DSN = os.getenv(
+    "PG_DSN",
+    f"dbname={os.getenv('ROBOTHOR_DB_NAME', 'robothor_memory')} "
+    f"user={os.getenv('ROBOTHOR_DB_USER', 'robothor')} "
+    f"host={os.getenv('ROBOTHOR_DB_HOST', '/var/run/postgresql')}",
+)

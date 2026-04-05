@@ -4,7 +4,7 @@ These fixtures are only used by tests marked ``@pytest.mark.integration``.
 They are skipped in pre-commit (``pytest -m "not integration"``).
 
 Configure via environment variables:
-    ROBOTHOR_TEST_DB_DSN     default: dbname=robothor_test user=philip host=/var/run/postgresql
+    ROBOTHOR_TEST_DB_DSN     default: dbname=robothor_test user=robothor host=/var/run/postgresql
     ROBOTHOR_TEST_REDIS_URL  default: redis://localhost:6379/15
 """
 
@@ -22,7 +22,7 @@ def db_dsn() -> str:
     """Database DSN for integration tests."""
     return os.environ.get(
         "ROBOTHOR_TEST_DB_DSN",
-        "dbname=robothor_test user=philip host=/var/run/postgresql",
+        "dbname=robothor_test user=robothor host=/var/run/postgresql",
     )
 
 

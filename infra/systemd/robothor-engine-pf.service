@@ -1,24 +1,23 @@
 [Unit]
-Description=Robothor Agent Engine — Princess Freya (PF)
+Description=Genus OS Agent Engine — Secondary Instance
 After=network-online.target docker.service redis.service
 Wants=network-online.target
 
 [Service]
-User=philip
-Group=philip
-ExecStartPre=/home/philip/robothor/scripts/decrypt-secrets.sh
+User=robothor
+Group=robothor
+EnvironmentFile=/etc/robothor/robothor.env
+ExecStartPre=${ROBOTHOR_WORKSPACE}/scripts/decrypt-secrets.sh
 EnvironmentFile=-/run/robothor/secrets.env
-ExecStart=/home/philip/robothor/.venv/bin/python -m robothor.engine.daemon
-WorkingDirectory=/home/philip/robothor
+ExecStart=${ROBOTHOR_WORKSPACE}/.venv/bin/python -m robothor.engine.daemon
+WorkingDirectory=${ROBOTHOR_WORKSPACE}
 Restart=always
 RestartSec=5
 TimeoutStopSec=15
 KillMode=control-group
-Environment=HOME=/home/philip
-Environment="PATH=/home/philip/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment=ROBOTHOR_ENGINE_PORT=18800
 Environment=ROBOTHOR_TENANT_ID=robothor-pf
-Environment=ROBOTHOR_MANIFEST_DIR=/home/philip/robothor/docs/agents/pf
+Environment=ROBOTHOR_MANIFEST_DIR=${ROBOTHOR_WORKSPACE}/docs/agents/pf
 Environment=ROBOTHOR_MAX_CONCURRENT=2
 Environment=ROBOTHOR_DEFAULT_CHAT_AGENT=pf-helm
 Environment=ROBOTHOR_MAIN_SESSION_KEY=agent:pf-helm:primary

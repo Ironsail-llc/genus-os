@@ -30,9 +30,17 @@ class FederationConfig:
     public_endpoint: str = ""
 
     # Paths
-    config_dir: Path = field(default_factory=lambda: Path.home() / "robothor" / ".robothor")
+    config_dir: Path = field(
+        default_factory=lambda: (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))) / ".robothor"
+        )
+    )
     identity_file: Path = field(
-        default_factory=lambda: Path.home() / "robothor" / ".robothor" / "identity.json"
+        default_factory=lambda: (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+            / ".robothor"
+            / "identity.json"
+        )
     )
 
     @classmethod

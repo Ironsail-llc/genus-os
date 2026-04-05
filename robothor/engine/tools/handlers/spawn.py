@@ -124,7 +124,7 @@ async def _handle_spawn_agent(
     if requested_timeout is not None:
         child_config.timeout_seconds = min(child_config.timeout_seconds, int(requested_timeout))
 
-    # Force delivery to NONE — sub-agents never message Philip
+    # Force delivery to NONE — sub-agents never message the owner
     child_config.delivery_mode = DeliveryMode.NONE
 
     # Disable spawning on child unless explicitly configured

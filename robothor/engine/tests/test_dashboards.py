@@ -238,4 +238,4 @@ class TestRouter:
 
         html = (TEMPLATE_DIR / "privacy.html").read_text()
         assert "Privacy Policy" in html
-        assert "robothor@ironsail.ai" in html
+        assert "{{ email }}" in html

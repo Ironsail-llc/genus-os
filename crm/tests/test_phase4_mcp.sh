@@ -49,9 +49,9 @@ t "T4.6 Chatwoot API accessible" "curl -sf -H \"api_access_token: \${CHATWOOT_AP
 # T4.7: .claude.json has all 3 MCP servers configured
 echo ""
 echo "=== Claude Config ==="
-t "T4.7a robothor-memory in .claude.json" "grep -q 'robothor-memory' /home/philip/.claude.json"
-t "T4.7b twenty-crm in .claude.json" "grep -q 'twenty-crm' /home/philip/.claude.json"
-t "T4.7c chatwoot in .claude.json" "grep -q '\"chatwoot\"' /home/philip/.claude.json"
+t "T4.7a robothor-memory in .claude.json" "grep -q 'robothor-memory' ${HOME}/.claude.json"
+t "T4.7b twenty-crm in .claude.json" "grep -q 'twenty-crm' ${HOME}/.claude.json"
+t "T4.7c chatwoot in .claude.json" "grep -q '\"chatwoot\"' ${HOME}/.claude.json"
 
 # T4.8: Bridge service still healthy
 echo ""

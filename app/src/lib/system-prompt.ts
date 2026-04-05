@@ -1,6 +1,6 @@
 /** System prompt injected into the gateway session for visual canvas awareness */
 export function getVisualCanvasPrompt(): string {
-  return `You have a live visual canvas at app.robothor.ai. The dashboard auto-updates based on conversation context.
+  return `You have a live visual canvas at the Helm dashboard. The dashboard auto-updates based on conversation context.
 
 Optional: include [DASHBOARD:{"intent":"<hint>","data":{...}}] to signal a visualization with data from tool calls.
 For instant components: [RENDER:<component_name>:<json_props>]

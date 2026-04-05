@@ -1,6 +1,6 @@
-# Default: Philip reviews everything
-* @Ironsail-Philip
+# Default: maintainers team reviews everything
+* @genusos/maintainers
 
-# CRM subsystem: Adan as secondary reviewer
-/crm/ @Ironsail-Philip @adan-ironsail
-/robothor/crm/ @Ironsail-Philip @adan-ironsail
+# CRM subsystem
+/crm/ @genusos/maintainers
+/robothor/crm/ @genusos/maintainers

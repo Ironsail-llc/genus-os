@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,9 +12,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 # Audit log location
-AUDIT_DIR = Path.home() / "robothor" / "brain" / "memory" / "desktop-screenshots"
-AUDIT_LOG = Path.home() / "robothor" / "brain" / "memory" / "desktop-audit.jsonl"
+def _get_workspace() -> Path:
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+
+
+AUDIT_DIR = _get_workspace() / "brain" / "memory" / "desktop-screenshots"
+AUDIT_LOG = _get_workspace() / "brain" / "memory" / "desktop-audit.jsonl"
 
 # Auto-purge screenshots older than this
 SCREENSHOT_RETENTION = timedelta(hours=24)

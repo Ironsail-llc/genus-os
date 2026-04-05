@@ -9,16 +9,16 @@ check() {
 }
 
 echo "=== Email Pipeline ==="
-check "email-log.json exists" "[ -f /home/philip/robothor/brain/memory/email-log.json ]"
-check "email-log.json is valid JSON" "python3 -c 'import json; json.load(open(\"/home/philip/robothor/brain/memory/email-log.json\"))'"
-check "email-log has entries" "python3 -c 'import json; d=json.load(open(\"/home/philip/robothor/brain/memory/email-log.json\")); assert len(d.get(\"entries\",{})) > 0'"
+check "email-log.json exists" "[ -f ${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/email-log.json ]"
+check "email-log.json is valid JSON" "python3 -c 'import json; json.load(open(\"${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/email-log.json\"))'"
+check "email-log has entries" "python3 -c 'import json; d=json.load(open(\"${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/email-log.json\")); assert len(d.get(\"entries\",{})) > 0'"
 
 echo ""
 echo "=== Data Quality ==="
 check "No recent null-content entries (24h)" "python3 -c '
 import json
 from datetime import datetime, timedelta
-d=json.load(open(\"/home/philip/robothor/brain/memory/email-log.json\"))
+d=json.load(open(\"${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/email-log.json\"))
 cutoff=(datetime.now()-timedelta(days=1)).isoformat()
 bad=[e for e in d[\"entries\"].values() if e.get(\"fetchedAt\",\"\")>=cutoff and e.get(\"from\") is None and e.get(\"subject\") is None]
 assert len(bad)==0, f\"{len(bad)} null entries found\"
@@ -31,15 +31,15 @@ check "Bridge health" "curl -sf http://localhost:9100/health | grep -q status"
 
 echo ""
 echo "=== Gmail Auth ==="
-check "gog gmail search works" "GOG_KEYRING_PASSWORD=\"\${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD env var required}\" gog gmail search 'is:unread' --account robothor@ironsail.ai --max 1 --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)'"
+check "gog gmail search works" "GOG_KEYRING_PASSWORD=\"\${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD env var required}\" gog gmail search 'is:unread' --account \${ROBOTHOR_AI_EMAIL:?ROBOTHOR_AI_EMAIL env var required} --max 1 --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)'"
 
 echo ""
 echo "=== Worker Status ==="
-check "worker-handoff.json valid" "python3 -c 'import json; json.load(open(\"/home/philip/robothor/brain/memory/worker-handoff.json\"))'"
+check "worker-handoff.json valid" "python3 -c 'import json; json.load(open(\"${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/worker-handoff.json\"))'"
 check "Triage worker ran recently (<60m)" "python3 -c '
 import json
 from datetime import datetime, timedelta
-d=json.load(open(\"/home/philip/robothor/brain/memory/worker-handoff.json\"))
+d=json.load(open(\"${ROBOTHOR_WORKSPACE:-$HOME/robothor}/brain/memory/worker-handoff.json\"))
 lr=d.get(\"lastRunAt\",\"\").replace(\"+00:00\",\"\").replace(\"Z\",\"\")
 assert lr, \"No lastRunAt\"
 dt=datetime.fromisoformat(lr)

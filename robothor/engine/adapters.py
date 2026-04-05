@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)}")
 
-ADAPTER_DIR = Path.home() / ".config" / "robothor" / "adapters"
+ADAPTER_DIR = Path(
+    os.environ.get("ROBOTHOR_ADAPTER_DIR", str(Path.home() / ".config" / "robothor" / "adapters"))
+)
 
 
 @dataclass(frozen=True)

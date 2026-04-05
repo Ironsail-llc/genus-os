@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "robothor"
+name = "genusos"
 version = "0.1.0"
 description = "Genus OS — An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
 readme = "README.md"
@@ -72,16 +72,17 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "robothor[api,vision,rlm,tui,federation,dev]",
+    "genusos[api,vision,rlm,tui,federation,dev]",
 ]
 
 [project.scripts]
+genusos = "robothor.cli:main"
 robothor = "robothor.cli:main"
 
 [project.urls]
-Homepage = "https://robothor.ai"
-Repository = "https://github.com/Ironsail-llc/robothor"
-Issues = "https://github.com/Ironsail-llc/robothor/issues"
+Homepage = "https://genusos.dev"
+Repository = "https://github.com/genusos/genusos"
+Issues = "https://github.com/genusos/genusos/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["robothor"]

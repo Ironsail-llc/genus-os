@@ -8,7 +8,7 @@
       "host": "127.0.0.1",
       "health": "/health",
       "systemd_unit": "robothor-bridge.service",
-      "tunnel_route": "bridge.robothor.ai",
+      "tunnel_route": "bridge.${INSTANCE_DOMAIN}",
       "dependencies": ["postgres", "redis"]
     },
     "orchestrator": {
@@ -17,7 +17,7 @@
       "host": "0.0.0.0",
       "health": "/health",
       "systemd_unit": "robothor-orchestrator.service",
-      "tunnel_route": "orchestrator.robothor.ai",
+      "tunnel_route": "orchestrator.${INSTANCE_DOMAIN}",
       "dependencies": ["postgres", "redis", "ollama"]
     },
     "vision": {
@@ -26,7 +26,7 @@
       "host": "0.0.0.0",
       "health": "/health",
       "systemd_unit": "robothor-vision.service",
-      "tunnel_route": "vision.robothor.ai",
+      "tunnel_route": "vision.${INSTANCE_DOMAIN}",
       "dependencies": ["mediamtx"]
     },
     "helm": {
@@ -35,7 +35,7 @@
       "host": "0.0.0.0",
       "health": "/api/health",
       "systemd_unit": "robothor-app.service",
-      "tunnel_route": "app.robothor.ai",
+      "tunnel_route": "app.${INSTANCE_DOMAIN}",
       "dependencies": ["bridge", "orchestrator"]
     },
     "ollama": {
@@ -54,7 +54,7 @@
       "health": null,
       "extra_ports": { "hls": 8890 },
       "systemd_unit": "mediamtx-webcam.service",
-      "tunnel_route": "cam.robothor.ai",
+      "tunnel_route": "cam.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "redis": {
@@ -81,7 +81,7 @@
       "host": "0.0.0.0",
       "health": "/",
       "systemd_unit": "robothor-status.service",
-      "tunnel_route": "robothor.ai",
+      "tunnel_route": "${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "status_dashboard": {
@@ -90,7 +90,7 @@
       "host": "0.0.0.0",
       "health": "/",
       "systemd_unit": "robothor-status-dashboard.service",
-      "tunnel_route": "status.robothor.ai",
+      "tunnel_route": "status.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "voice": {
@@ -99,7 +99,7 @@
       "host": "0.0.0.0",
       "health": null,
       "systemd_unit": "robothor-voice.service",
-      "tunnel_route": "voice.robothor.ai",
+      "tunnel_route": "voice.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "sms": {
@@ -108,7 +108,7 @@
       "host": "0.0.0.0",
       "health": null,
       "systemd_unit": "robothor-sms.service",
-      "tunnel_route": "sms.robothor.ai",
+      "tunnel_route": "sms.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "searxng": {
@@ -126,7 +126,7 @@
       "host": "127.0.0.1",
       "health": "/api/status-page/heartbeat",
       "systemd_unit": null,
-      "tunnel_route": "monitor.robothor.ai",
+      "tunnel_route": "monitor.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "kokoro_tts": {
@@ -135,7 +135,7 @@
       "host": "127.0.0.1",
       "health": "/v1/models",
       "systemd_unit": null,
-      "tunnel_route": "tts.robothor.ai",
+      "tunnel_route": "tts.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "ops_dashboard": {
@@ -144,7 +144,7 @@
       "host": "0.0.0.0",
       "health": "/",
       "systemd_unit": "robothor-dashboard.service",
-      "tunnel_route": "ops.robothor.ai",
+      "tunnel_route": "ops.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "privacy": {
@@ -153,7 +153,7 @@
       "host": "0.0.0.0",
       "health": "/",
       "systemd_unit": "robothor-privacy.service",
-      "tunnel_route": "privacy.robothor.ai",
+      "tunnel_route": "privacy.${INSTANCE_DOMAIN}",
       "dependencies": []
     }
   }

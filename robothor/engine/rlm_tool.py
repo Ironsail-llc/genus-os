@@ -59,7 +59,12 @@ class DeepReasonConfig:
     log_dir: str = field(
         default_factory=lambda: os.environ.get(
             "ROBOTHOR_RLM_LOG_DIR",
-            str(Path("~/robothor/brain/memory/rlm-traces").expanduser()),
+            str(
+                Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+                / "brain"
+                / "memory"
+                / "rlm-traces"
+            ),
         )
     )
 

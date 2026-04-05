@@ -328,9 +328,12 @@ class TestGwsCalendarCreate:
     def test_create_event(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"e1","summary":"Lunch"}')
 
-        with patch(
-            "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
-        ) as mock_run:
+        with (
+            patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
+            ) as mock_run,
+            patch.dict("os.environ", {"ROBOTHOR_OWNER_EMAIL": "owner@example.com"}),
+        ):
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool(
@@ -351,7 +354,7 @@ class TestGwsCalendarCreate:
             assert body["summary"] == "Lunch"
             assert body["attendees"] == [
                 {"email": "alice@example.com"},
-                {"email": "philip@ironsail.ai"},
+                {"email": "owner@example.com"},
             ]
 
     def test_create_includes_meet_by_default(self):

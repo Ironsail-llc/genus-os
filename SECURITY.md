@@ -4,7 +4,7 @@
 
 **Please do not open a public issue for security vulnerabilities.**
 
-Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/Ironsail-llc/genus-os/security/advisories/new). You will receive a response within 48 hours acknowledging your report, and we will work with you on a fix before any public disclosure.
+Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/genusos/genusos/security/advisories/new). You will receive a response within 48 hours acknowledging your report, and we will work with you on a fix before any public disclosure.
 
 ## Supported Versions
 

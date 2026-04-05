@@ -14,7 +14,7 @@ import pytest
 
 # Point all DB connections to the test database BEFORE importing anything
 os.environ["ROBOTHOR_DB_NAME"] = "robothor_test"
-os.environ.setdefault("ROBOTHOR_DB_USER", os.environ.get("USER", "philip"))
+os.environ.setdefault("ROBOTHOR_DB_USER", os.environ.get("USER", "robothor"))
 
 from robothor.config import reset_config
 

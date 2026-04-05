@@ -148,7 +148,7 @@ async function generateBuffered(systemPrompt: string, userPrompt: string) {
           headers: {
             Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://app.robothor.ai",
+            "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://localhost:3004",
             "X-Title": "Genus OS Dashboard",
           },
           body: JSON.stringify({

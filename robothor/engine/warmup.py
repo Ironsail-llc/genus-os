@@ -13,6 +13,7 @@ Every section wrapped in try/except — never crashes, silently degrades.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -489,7 +490,8 @@ def _travel_status() -> str | None:
 def _weather_context() -> str | None:
     """Read weather status file if present."""
     try:
-        weather_file = Path.home() / "robothor" / "brain" / "memory" / "weather-status.md"
+        _ws = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        weather_file = _ws / "brain" / "memory" / "weather-status.md"
         if weather_file.exists():
             content = weather_file.read_text().strip()
             if content:
@@ -526,7 +528,7 @@ def _git_status_context(config: AgentConfig) -> str | None:
 
     import subprocess
 
-    workspace = Path.home() / "robothor"
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
     parts: list[str] = []
     try:
         status = subprocess.run(

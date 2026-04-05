@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = Path.home() / "robothor" / "brain" / "memory"
-LOGS_DIR = Path.home() / "robothor" / "brain" / "memory_system" / "logs"
+
+def _get_workspace() -> Path:
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+
+
+MEMORY_DIR = _get_workspace() / "brain" / "memory"
+LOGS_DIR = _get_workspace() / "brain" / "memory_system" / "logs"
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:

@@ -25,15 +25,16 @@ _cache: dict = {"data": None, "expires": 0.0}
 CACHE_TTL = 30
 
 # Agent status markdown files
+_WORKSPACE = os.environ.get("ROBOTHOR_WORKSPACE", str(Path("~/robothor").expanduser()))
 STATUS_DIR = os.getenv(
     "AGENT_STATUS_DIR",
-    str(Path("~/robothor/brain/memory").expanduser()),
+    str(Path(_WORKSPACE) / "brain" / "memory"),
 )
 
 # Manifest directory for display names
 MANIFEST_DIR = os.getenv(
     "AGENT_MANIFEST_DIR",
-    str(Path("~/robothor/docs/agents").expanduser()),
+    str(Path(_WORKSPACE) / "docs" / "agents"),
 )
 
 

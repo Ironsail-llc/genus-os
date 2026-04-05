@@ -131,8 +131,8 @@ class TestDetermineScope:
 
 class TestExtractPrUrl:
     def test_from_dict(self):
-        output = {"result": "Created PR at https://github.com/Ironsail-Philip/robothor/pull/42"}
-        assert extract_pr_url(output) == "https://github.com/Ironsail-Philip/robothor/pull/42"
+        output = {"result": "Created PR at https://github.com/test-org/test-repo/pull/42"}
+        assert extract_pr_url(output) == "https://github.com/test-org/test-repo/pull/42"
 
     def test_from_nested(self):
         output = {"steps": [{"output": "https://github.com/org/repo/pull/123"}]}

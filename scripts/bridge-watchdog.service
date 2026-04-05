@@ -4,6 +4,7 @@ After=robothor-bridge.service
 
 [Service]
 Type=oneshot
-ExecStart=/home/philip/robothor/brain/memory_system/venv/bin/python /home/philip/robothor/brain/scripts/bridge_watchdog.py
-User=philip
-WorkingDirectory=/home/philip/robothor/brain
+EnvironmentFile=/etc/robothor/robothor.env
+ExecStart=${ROBOTHOR_WORKSPACE}/brain/memory_system/venv/bin/python ${ROBOTHOR_WORKSPACE}/brain/scripts/bridge_watchdog.py
+User=robothor
+WorkingDirectory=${ROBOTHOR_WORKSPACE}/brain

@@ -18,8 +18,8 @@ class TestPersonToDict:
         row = {
             "id": "abc-123",
             "first_name": "Philip",
-            "last_name": "Ironsail",
-            "email": "philip@example.com",
+            "last_name": "Testuser",
+            "email": "owner@example.com",
             "phone": "+15551234567",
             "job_title": "CEO",
             "city": "New York",
@@ -28,18 +28,18 @@ class TestPersonToDict:
             "additional_emails": ["alt@example.com"],
             "additional_phones": ["+15559876543"],
             "company_id": "comp-456",
-            "company_name": "Ironsail LLC",
+            "company_name": "Example LLC",
             "updated_at": NOW,
             "created_at": NOW,
         }
         result = person_to_dict(row)
         assert result["id"] == "abc-123"
         assert result["name"]["firstName"] == "Philip"
-        assert result["name"]["lastName"] == "Ironsail"
-        assert result["emails"]["primaryEmail"] == "philip@example.com"
+        assert result["name"]["lastName"] == "Testuser"
+        assert result["emails"]["primaryEmail"] == "owner@example.com"
         assert result["phones"]["primaryPhoneNumber"] == "+15551234567"
         assert result["jobTitle"] == "CEO"
-        assert result["company"]["name"] == "Ironsail LLC"
+        assert result["company"]["name"] == "Example LLC"
         assert result["additionalEmails"] == ["alt@example.com"]
 
     def test_minimal_record(self):
@@ -66,18 +66,18 @@ class TestCompanyToDict:
     def test_full_record(self):
         row = {
             "id": "comp-1",
-            "name": "Ironsail LLC",
-            "domain_name": "ironsail.ai",
+            "name": "Example LLC",
+            "domain_name": "example.com",
             "employees": 5,
             "address": "123 Main St",
-            "linkedin_url": "https://linkedin.com/company/ironsail",
+            "linkedin_url": "https://linkedin.com/company/example",
             "ideal_customer_profile": True,
             "updated_at": NOW,
             "created_at": NOW,
         }
         result = company_to_dict(row)
-        assert result["name"] == "Ironsail LLC"
-        assert result["domainName"] == "ironsail.ai"
+        assert result["name"] == "Example LLC"
+        assert result["domainName"] == "example.com"
         assert result["employees"] == 5
         assert result["idealCustomerProfile"] is True
 
@@ -151,7 +151,7 @@ class TestConversationToDict:
             "inbox_name": "Email",
             "messages_count": 5,
             "person_id": "p-1",
-            "person_name": "Philip Ironsail",
+            "person_name": "Test User",
             "metadata": {"source": "email"},
             "last_activity_at": NOW,
             "updated_at": NOW,
@@ -161,7 +161,7 @@ class TestConversationToDict:
         assert result["id"] == 42  # Integer, not UUID
         assert result["status"] == "open"
         assert result["messagesCount"] == 5
-        assert result["personName"] == "Philip Ironsail"
+        assert result["personName"] == "Test User"
 
     def test_minimal(self):
         row = {"id": 1, "updated_at": None, "created_at": None, "last_activity_at": None}

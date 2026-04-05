@@ -21,7 +21,7 @@ Logs: `journalctl -u <unit> -f`
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
 | bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
 | engine-watchdog.timer | — | scripts/ | Self-healing watchdog: checks engine every 2min, direct Telegram alert + auto-restart on 2 failures |
-| robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.robothor.ai) |
+| robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.${INSTANCE_DOMAIN}) |
 | smbd.service | 445 | — | Samba file sharing (local network + Tailscale only) |
 | nmbd.service | 137-138 | — | NetBIOS name service for Samba |
 | robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
@@ -29,8 +29,8 @@ Logs: `journalctl -u <unit> -f`
 | robothor-xvfb.service | — | — | Virtual display server (Xvfb :99, 1280x1024) for computer use |
 | robothor-desktop.service | — | — | Openbox window manager on virtual display :99 |
 | robothor-vnc.service | 5900 | — | x11vnc server for monitoring virtual display (localhost only) |
-| cloudflared.service | — | — | Cloudflare tunnel (robothor.ai) |
-| tailscaled.service | — | — | Tailscale VPN (ironsail tailnet) |
+| cloudflared.service | — | — | Cloudflare tunnel (${INSTANCE_DOMAIN}) |
+| tailscaled.service | — | — | Tailscale VPN (your Tailscale tailnet) |
 
 ## CLI Dependencies
 
@@ -63,7 +63,7 @@ ffmpeg -rtsp_transport tcp -i rtsp://localhost:8554/webcam -frames:v 1 -y /tmp/t
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8890/webcam/ && echo " OK"
 
 # Webcam via Cloudflare tunnel (requires Cloudflare Access auth)
-# Visit: https://cam.robothor.ai/webcam/
+# Visit: https://cam.${INSTANCE_DOMAIN}/webcam/
 
 # Homepage (now via engine)
 curl -s http://localhost:18800/dashboards/homepage > /dev/null && echo "OK"
@@ -90,7 +90,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:3010 && echo " OK"
 redis-cli ping
 
 # Cloudflare tunnel
-curl -s https://robothor.ai > /dev/null && echo "OK"
+curl -s https://${INSTANCE_DOMAIN} > /dev/null && echo "OK"
 
 # Samba
 smbclient -L //localhost -U philip%$SAMBA_PASSWORD -N 2>/dev/null | grep robothor
@@ -109,20 +109,20 @@ psql -d robothor_memory -c "SELECT count(*) FROM long_term_memory;" 2>/dev/null
 
 | Hostname | Backend | Auth | Purpose |
 |----------|---------|------|---------|
-| cam.robothor.ai | localhost:8890 | Cloudflare Access (email OTP) | Webcam HLS live stream |
-| robothor.ai | localhost:3000 | Public | Homepage |
-| status.robothor.ai | localhost:3001 | Public | Status dashboard |
-| dashboard.robothor.ai | localhost:3001 | Public | Dashboard (alias) |
-| privacy.robothor.ai | localhost:3002 | Public | Privacy policy |
-| ops.robothor.ai | localhost:3003 | Cloudflare Access (email OTP) | Ops dashboard |
-| voice.robothor.ai | localhost:8765 | Public | Twilio voice (inbound + outbound) |
-| sms.robothor.ai | localhost:8766 | Public | Twilio SMS webhook |
-| engine.robothor.ai | localhost:18800 | Cloudflare Access (email OTP) | Python Agent Engine |
-| bridge.robothor.ai | localhost:9100 | Cloudflare Access (email OTP) | Bridge service API |
-| orchestrator.robothor.ai | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
-| vision.robothor.ai | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
-| monitor.robothor.ai | localhost:3010 | Cloudflare Access (email OTP) | Uptime Kuma monitoring |
-| app.robothor.ai | localhost:3004 | Cloudflare Access (email OTP) | Helm — live dashboard |
+| cam.${INSTANCE_DOMAIN} | localhost:8890 | Cloudflare Access (email OTP) | Webcam HLS live stream |
+| ${INSTANCE_DOMAIN} | localhost:3000 | Public | Homepage |
+| status.${INSTANCE_DOMAIN} | localhost:3001 | Public | Status dashboard |
+| dashboard.${INSTANCE_DOMAIN} | localhost:3001 | Public | Dashboard (alias) |
+| privacy.${INSTANCE_DOMAIN} | localhost:3002 | Public | Privacy policy |
+| ops.${INSTANCE_DOMAIN} | localhost:3003 | Cloudflare Access (email OTP) | Ops dashboard |
+| voice.${INSTANCE_DOMAIN} | localhost:8765 | Public | Twilio voice (inbound + outbound) |
+| sms.${INSTANCE_DOMAIN} | localhost:8766 | Public | Twilio SMS webhook |
+| engine.${INSTANCE_DOMAIN} | localhost:18800 | Cloudflare Access (email OTP) | Python Agent Engine |
+| bridge.${INSTANCE_DOMAIN} | localhost:9100 | Cloudflare Access (email OTP) | Bridge service API |
+| orchestrator.${INSTANCE_DOMAIN} | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
+| vision.${INSTANCE_DOMAIN} | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
+| monitor.${INSTANCE_DOMAIN} | localhost:3010 | Cloudflare Access (email OTP) | Uptime Kuma monitoring |
+| app.${INSTANCE_DOMAIN} | localhost:3004 | Cloudflare Access (email OTP) | Helm — live dashboard |
 
 All camera/vision ports (`8554`, `8889`, `8890`, `8600`) are bound to `127.0.0.1`. External access to the webcam is only possible through the Cloudflare tunnel with Zero Trust authentication.
 

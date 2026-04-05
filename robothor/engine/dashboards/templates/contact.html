@@ -47,23 +47,23 @@
     <section class="section glass">
       <div class="contact-item">
         <div class="contact-icon">&#128231;</div>
-        <div><div class="contact-label">Email</div><div class="contact-value"><a href="mailto:robothor@ironsail.ai">robothor@ironsail.ai</a></div></div>
+        <div><div class="contact-label">Email</div><div class="contact-value"><a href="mailto:{{ email }}">{{ email }}</a></div></div>
       </div>
       <div class="contact-item">
         <div class="contact-icon">&#128222;</div>
-        <div><div class="contact-label">Phone</div><div class="contact-value"><a href="tel:+14134086025">+1 (413) 408-6025</a></div></div>
+        <div><div class="contact-label">Phone</div><div class="contact-value"><a href="tel:{{ phone_raw }}">{{ phone }}</a></div></div>
       </div>
       <div class="contact-item">
         <div class="contact-icon">&#128172;</div>
-        <div><div class="contact-label">Telegram</div><div class="contact-value">@Robothor</div></div>
+        <div><div class="contact-label">Telegram</div><div class="contact-value">@{{ telegram_bot }}</div></div>
       </div>
       <div class="contact-item">
         <div class="contact-icon">&#127760;</div>
-        <div><div class="contact-label">Website</div><div class="contact-value"><a href="https://robothor.ai">robothor.ai</a></div></div>
+        <div><div class="contact-label">Website</div><div class="contact-value"><a href="{{ website_url }}">{{ website }}</a></div></div>
       </div>
     </section>
 
-    <footer><p>Powered by <a href="https://ironsail.ai">Ironsail</a> &middot; Robothor Engine</p></footer>
+    <footer><p>Powered by Genus OS</p></footer>
   </div>
 </body>
 </html>

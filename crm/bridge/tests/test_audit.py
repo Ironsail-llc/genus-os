@@ -42,7 +42,7 @@ TEST_PREFIX = f"__audit_test_{uuid.uuid4().hex[:6]}__"
 @pytest.fixture(autouse=True)
 def use_real_dsn():
     """Ensure audit module uses real database for integration tests."""
-    audit.set_dsn("dbname=robothor_memory user=philip host=/var/run/postgresql")
+    audit.set_dsn("dbname=robothor_memory user=robothor host=/var/run/postgresql")
     yield
 
 
@@ -356,7 +356,7 @@ def configure_robothor_audit():
     from robothor.audit import logger as oss_audit
 
     oss_audit.set_connection_factory(
-        lambda: psycopg2.connect("dbname=robothor_memory user=philip host=/var/run/postgresql")
+        lambda: psycopg2.connect("dbname=robothor_memory user=robothor host=/var/run/postgresql")
     )
     yield
     oss_audit.reset_connection_factory()
@@ -369,7 +369,7 @@ def cleanup_test_audit_entries():
     try:
         import psycopg2
 
-        conn = psycopg2.connect("dbname=robothor_memory user=philip host=/var/run/postgresql")
+        conn = psycopg2.connect("dbname=robothor_memory user=robothor host=/var/run/postgresql")
         cur = conn.cursor()
         cur.execute("DELETE FROM audit_log WHERE action LIKE %s", (f"%{TEST_PREFIX}%",))
         cur.execute("DELETE FROM audit_log WHERE event_type LIKE 'test.%'")

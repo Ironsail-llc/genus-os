@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from typing import TYPE_CHECKING, Any
 
@@ -163,9 +164,9 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("location"):
             event_body["location"] = args["location"]
         attendees = [{"email": e} for e in args.get("attendees", [])]
-        philip = "philip@ironsail.ai"
-        if not any(a["email"] == philip for a in attendees):
-            attendees.append({"email": philip})
+        owner_email = os.environ.get("ROBOTHOR_OWNER_EMAIL", "")
+        if owner_email and not any(a["email"] == owner_email for a in attendees):
+            attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
 
         with_meet = args.get("with_meet", True)

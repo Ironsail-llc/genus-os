@@ -325,7 +325,7 @@ list_my_tasks(assignedToAgent="email-analyst", status="TODO")
 → resolve_task(id, resolution="Analysis complete: 3 action items identified")
 ```
 
-**Tag vocabulary** for routing: `email`, `reply-needed`, `analytical`, `escalation`, `needs-philip`, `calendar`, `conflict`, `cancellation`, `vision`, `unknown-person`, `crm-hygiene`, `dedup`, `enrichment`, `nightwatch`, `self-improve`.
+**Tag vocabulary** for routing: `email`, `reply-needed`, `analytical`, `escalation`, `needs-owner`, `calendar`, `conflict`, `cancellation`, `vision`, `unknown-person`, `crm-hygiene`, `dedup`, `enrichment`, `nightwatch`, `self-improve`.
 
 ### Memory Blocks for Shared State
 
@@ -535,7 +535,7 @@ tools_allowed:
 
 task_protocol: true
 status_file: brain/memory/email-classifier-status.md
-tags_produced: [email, reply-needed, analytical, escalation, needs-philip]
+tags_produced: [email, reply-needed, analytical, escalation, needs-owner]
 
 warmup:
   memory_blocks: [operational_findings, contacts_summary]
@@ -566,7 +566,7 @@ via CRM tasks. You do NOT reply to emails — you create tasks for downstream un
 3. Create a CRM task for the appropriate handler:
    - `reply-needed` → assignedToAgent="email-responder"
    - `analytical` → assignedToAgent="email-analyst"
-   - `escalation` / `needs-philip` → assignedToAgent="main"
+   - `escalation` / `needs-owner` → assignedToAgent="main"
 4. Write status file.
 ```
 

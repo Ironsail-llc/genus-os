@@ -94,9 +94,9 @@ Classify as one of:
 - "contradiction": The facts make directly opposing claims about the same specific thing.
 
 Examples:
-- "Philip works at Ironsail" vs "Philip attended a meeting at Ironsail" → "new" (different claims about same entity)
+- "Alex works at Acme Corp" vs "Alex attended a meeting at Acme Corp" → "new" (different claims about same entity)
 - "Meeting is at 3pm" vs "Meeting moved to 4pm" → "update" (old time is now wrong)
-- "Philip prefers dark mode" vs "Philip prefers dark mode for coding" → "duplicate" (same preference, minor rewording)
+- "Alex prefers dark mode" vs "Alex prefers dark mode for coding" → "duplicate" (same preference, minor rewording)
 
 IMPORTANT: When two facts mention the same entity but describe different events, actions, or attributes, classify as "new". Only classify as "update" when the old fact would be INCORRECT given the new information.
 

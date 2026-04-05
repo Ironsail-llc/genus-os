@@ -18,7 +18,12 @@ from pathlib import Path
 
 from robothor.health import dal
 
-OUTPUT_PATH = Path("/home/philip/robothor/brain/memory/garmin-health.md")
+OUTPUT_PATH = (
+    Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
+    / "brain"
+    / "memory"
+    / "garmin-health.md"
+)
 
 STRESS_LABELS = [
     (25, "rest"),

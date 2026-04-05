@@ -785,12 +785,14 @@ def create_health_app(
 
     @app.get("/api/config/explain/{agent_id}")
     async def explain_agent_config(agent_id: str) -> dict[str, Any]:
+        import os
         from pathlib import Path
 
         from robothor.engine.config import explain_config
 
-        manifest_dir = Path.home() / "robothor" / "docs" / "agents"
-        workspace = Path.home() / "robothor"
+        _ws = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        manifest_dir = _ws / "docs" / "agents"
+        workspace = _ws
 
         result = explain_config(agent_id, manifest_dir, workspace=workspace)
         if not result.get("merged"):

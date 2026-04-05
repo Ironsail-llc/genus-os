@@ -36,7 +36,7 @@ Most AI platforms force a choice: cloud-hosted convenience or self-hosted comple
 
 ## Highlights
 
-**Governed Agent Platform** — 24 agents defined by declarative YAML manifests with full audit trails. A workflow engine with conditional branching. 110+ registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
+**Governed Agent Platform** — Declarative YAML agent manifests with a template catalog of 24+ blueprints and full audit trails. A workflow engine with conditional branching. 110+ registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
 
 **Enterprise Federation** — Connect Genus OS instances across sites, subsidiaries, and partners into a peer-to-peer mesh. Ed25519 signed invite tokens establish cryptographic trust. Each connection has scoped exports/imports — no implicit access, no transitive trust. Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering across distributed instances. NATS JetStream transport with leaf-node topology handles unreliable networks gracefully. Every instance runs autonomously; federation adds connectivity, not dependency.
 
@@ -56,7 +56,7 @@ Most AI platforms force a choice: cloud-hosted convenience or self-hosted comple
 
 1. **Clone and install:**
    ```bash
-   git clone https://github.com/Ironsail-llc/genus-os.git
+   git clone https://github.com/genusos/genusos.git
    cd genus-os
    python3 -m venv venv && source venv/bin/activate
    pip install -e ".[all]"
@@ -80,7 +80,7 @@ cp docs/AGENT_BUILDER.md .claude/AGENT_BUILDER.md
 ## Quick Start
 
 ```bash
-git clone https://github.com/Ironsail-llc/genus-os.git
+git clone https://github.com/genusos/genusos.git
 cd genus-os
 pip install -e ".[all]"
 robothor init       # Interactive setup: DB, Redis, Ollama, migrations
@@ -465,7 +465,7 @@ robothor federation invite --relationship child --ttl 48
 # → prints a one-time signed token
 
 # On the new instance:
-git clone https://github.com/Ironsail-llc/genus-os.git
+git clone https://github.com/genusos/genusos.git
 cd genus-os && pip install -e ".[all]"
 robothor init
 robothor federation init

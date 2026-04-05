@@ -84,7 +84,7 @@ Native PostgreSQL tables with cross-channel identity:
 - Bridge service (port 9100): contact resolution, webhooks, merge operations
 - Fuzzy name matching for cross-channel identity resolution
 
-### The Helm (app.robothor.ai)
+### The Helm (app.${INSTANCE_DOMAIN})
 Agent-driven live dashboard:
 - Next.js 16 + Dockview, HTML-first rendering (iframe srcdoc)
 - Gemini Flash generates dashboards, Canvas Action Protocol for two-way interaction
@@ -103,7 +103,7 @@ Structured audit trail across all operations:
 |---------|------|-------------|
 | Bridge | 9100 | CRM glue service, contact resolution, webhooks |
 | Orchestrator | 9099 | RAG endpoints, vision proxy |
-| Helm | 3004 | Live dashboard (app.robothor.ai) |
+| Helm | 3004 | Live dashboard (app.${INSTANCE_DOMAIN}) |
 | Engine | 18800 | Python Agent Engine (agents, Telegram, scheduler) |
 | Vision | 8600 | YOLO + InsightFace detection |
 | Voice | 8765 | Twilio ConversationRelay |
@@ -173,4 +173,4 @@ MIT License. See [LICENSE](LICENSE) (coming soon).
 
 ## Related
 
-- **[robothor (pip package)](https://github.com/Ironsail-llc/genus-os)** — Extracted open-source Python package of the core intelligence layer
+- **[robothor (pip package)](https://github.com/genusos/genusos)** — Extracted open-source Python package of the core intelligence layer

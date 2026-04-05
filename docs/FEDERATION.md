@@ -11,7 +11,7 @@ robothor federation invite --relationship child --ttl 48
 # → prints a one-time token
 
 # On the new instance:
-git clone https://github.com/Ironsail-llc/genus-os.git
+git clone https://github.com/genusos/genusos.git
 cd genus-os && pip install -e ".[all]"
 robothor init
 robothor federation init

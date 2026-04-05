@@ -1,6 +1,6 @@
 # Contributing to Genus OS
 
-Thank you for your interest in contributing to Robothor! This document covers the development setup, coding standards, and contribution process.
+Thank you for your interest in contributing to Genus OS! This document covers the development setup, coding standards, and contribution process.
 
 ## Development Setup
 
@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Robothor! This document covers th
 
 ```bash
 # Clone and install
-git clone https://github.com/Ironsail-llc/genus-os.git
+git clone https://github.com/genusos/genusos.git
 cd genus-os
 pip install -e ".[dev]"
 

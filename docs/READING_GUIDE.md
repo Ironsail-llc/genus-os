@@ -8,7 +8,7 @@
 | `robothor/engine/` | In-repo Python package | Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hooks, workflow engine |
 | `robothor/health/` | In-repo Python package | Garmin health data sync (every 15 min → PostgreSQL → daily memory) |
 | `templates/` | (real directory) | Bootstrap templates for new Genus OS instances |
-| `tunnel/` | `~/.cloudflared/` | Cloudflare tunnel config (robothor.ai routes) |
+| `tunnel/` | `~/.cloudflared/` | Cloudflare tunnel config (instance domain routes) |
 | `crm/` | `robothor/crm/` | CRM stack: native PostgreSQL tables, Bridge, Docker Compose |
 
 ## What to Read First
@@ -16,7 +16,7 @@
 | Task | Read first |
 |------|-----------|
 | Working on vision | `brain/VISION.md` |
-| Viewing the webcam | `https://cam.robothor.ai/webcam/` (Cloudflare Access) |
+| Viewing the webcam | `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access) |
 | Changing cron behavior | `brain/CRON_DESIGN.md` + `docs/agents/*.yaml` manifests + `docs/CRON_MAP.md` |
 | Understanding memory/RAG | `brain/memory_system/MEMORY_SYSTEM.md` |
 | Sending emails or calendar | `brain/TOOLS.md` (gws native tools + gog CLI fallback) |

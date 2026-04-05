@@ -4,12 +4,17 @@ Phase 3 tests for agent memory blocks.
 Tests the DB table and MCP tool handlers directly.
 """
 
+import os
 import sys
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-DB = {"dbname": "robothor_memory", "user": "philip", "host": "/var/run/postgresql"}
+DB = {
+    "dbname": os.environ.get("ROBOTHOR_DB_NAME", "robothor_memory"),
+    "user": os.environ.get("ROBOTHOR_DB_USER", "robothor"),
+    "host": os.environ.get("ROBOTHOR_DB_HOST", "/var/run/postgresql"),
+}
 PASS = FAIL = 0
 
 

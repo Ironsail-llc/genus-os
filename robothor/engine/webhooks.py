@@ -225,7 +225,11 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
         config: Webhook configuration. If None, loads from default path.
     """
     if config is None:
-        default_path = Path.home() / "robothor" / "docs" / "webhooks.yaml"
+        default_path = (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+            / "docs"
+            / "webhooks.yaml"
+        )
         config = load_webhook_config(default_path)
 
     router = APIRouter(tags=["webhooks"])

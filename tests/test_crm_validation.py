@@ -32,7 +32,7 @@ class TestScrubNullString:
 
 class TestValidatePersonInput:
     def test_valid_person(self):
-        valid, reason = validate_person_input("Philip", "Ironsail")
+        valid, reason = validate_person_input("Alice", "Testuser")
         assert valid is True
         assert reason == "ok"
 
@@ -60,22 +60,22 @@ class TestValidatePersonInput:
         assert "2 characters" in reason
 
     def test_invalid_email(self):
-        valid, reason = validate_person_input("Philip", "I", email="not-an-email")
+        valid, reason = validate_person_input("Alice", "T", email="not-an-email")
         assert valid is False
         assert "@" in reason
 
     def test_valid_with_email(self):
-        valid, _ = validate_person_input("Philip", "Ironsail", email="philip@example.com")
+        valid, _ = validate_person_input("Alice", "Testuser", email="alice@example.com")
         assert valid is True
 
     def test_none_email_ok(self):
-        valid, _ = validate_person_input("Philip", "Ironsail", email=None)
+        valid, _ = validate_person_input("Alice", "Testuser", email=None)
         assert valid is True
 
 
 class TestValidateCompanyInput:
     def test_valid_company(self):
-        valid, _ = validate_company_input("Ironsail LLC")
+        valid, _ = validate_company_input("Example LLC")
         assert valid is True
 
     def test_blocked_null(self):

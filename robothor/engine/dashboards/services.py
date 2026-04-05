@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,7 +14,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MEMORY_DIR = Path.home() / "robothor" / "brain" / "memory"
+
+def _get_workspace() -> Path:
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+
+
+MEMORY_DIR = _get_workspace() / "brain" / "memory"
 
 
 @dataclass

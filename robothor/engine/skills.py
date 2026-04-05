@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,7 +135,11 @@ def load_skills(skills_dir: Path | None = None) -> dict[str, SkillDefinition]:
     global _skills_cache
 
     if skills_dir is None:
-        skills_dir = Path.home() / "robothor" / "agents" / "skills"
+        skills_dir = (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+            / "agents"
+            / "skills"
+        )
 
     if not skills_dir.exists():
         return {}

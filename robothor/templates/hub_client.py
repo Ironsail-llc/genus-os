@@ -51,7 +51,10 @@ class HubClient:
 
     def _load_api_key(self) -> str | None:
         """Load API key from robothor config."""
-        config_path = Path.home() / "robothor" / "config.yaml"
+        config_path = (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+            / "config.yaml"
+        )
         if not config_path.exists():
             return None
         try:

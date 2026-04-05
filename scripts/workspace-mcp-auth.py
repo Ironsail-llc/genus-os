@@ -11,6 +11,7 @@ Usage:
 
 import json
 import os
+from pathlib import Path
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -38,8 +39,9 @@ CLIENT_CONFIG = {
 }
 
 PORT = 8085
-CREDS_DIR = os.path.expanduser("~/.google_workspace_mcp/credentials")
-CREDS_PATH = os.path.join(CREDS_DIR, "robothor@ironsail.ai.json")
+CREDS_DIR = Path("~/.google_workspace_mcp/credentials").expanduser()
+_ai_email = os.environ.get("ROBOTHOR_AI_EMAIL", "default")
+CREDS_PATH = CREDS_DIR / f"{_ai_email}.json"
 
 
 def main():
@@ -56,16 +58,16 @@ def main():
         authorization_prompt_message=(
             f"Go to this URL in a browser:\n\n"
             f"  {{url}}\n\n"
-            f"Sign in as robothor@ironsail.ai and authorize.\n"
+            f"Sign in as {_ai_email} and authorize.\n"
             f"Waiting for redirect on port {PORT}..."
         ),
         success_message="Authorization complete! You can close this tab.",
-        login_hint="robothor@ironsail.ai",
+        login_hint=_ai_email,
         access_type="offline",
         prompt="consent",
     )
 
-    os.makedirs(CREDS_DIR, exist_ok=True)
+    CREDS_DIR.mkdir(parents=True, exist_ok=True)
     creds_data = {
         "token": creds.token,
         "refresh_token": creds.refresh_token,
@@ -76,7 +78,7 @@ def main():
         "expiry": creds.expiry.isoformat() if creds.expiry else None,
     }
 
-    with open(CREDS_PATH, "w") as f:
+    with CREDS_PATH.open("w") as f:
         json.dump(creds_data, f, indent=2)
 
     print(f"\nCredentials saved to {CREDS_PATH}")

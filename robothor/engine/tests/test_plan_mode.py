@@ -775,7 +775,7 @@ class TestPlanModeSystemPrompt:
         assert "Discovery strategy" in system_msg
         assert "list_directory" in system_msg
         assert "Autonomy (CRITICAL)" in system_msg
-        assert "NEVER ask Philip to run commands" in system_msg
+        assert "NEVER ask the user to run commands" in system_msg
 
         # Suffix (appended after identity)
         assert "PLAN MODE REMINDER" in system_msg

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -1230,7 +1231,7 @@ def resolve_task(
     """Mark a task as DONE with a resolution summary.
 
     Returns dict with error if the task has requires_human=True and the caller
-    is not ``"philip"`` or ``"helm-user"``.
+    is not the instance owner, ``"helm-user"``, or ``"main"``.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1249,14 +1250,11 @@ def resolve_task(
                     "id": task_id,
                 }
 
-            # Guard: requires_human tasks can only be resolved by Philip
-            if (
-                row
-                and row.get("requires_human")
-                and agent_id not in ("philip", "helm-user", "main")
-            ):
+            # Guard: requires_human tasks can only be resolved by the owner
+            _owner = os.environ.get("ROBOTHOR_OWNER_NAME", "owner").lower()
+            if row and row.get("requires_human") and agent_id not in (_owner, "helm-user", "main"):
                 return {
-                    "error": "Task requires human resolution — only Philip can resolve it",
+                    "error": "Task requires human resolution — only the instance owner can resolve it",
                     "id": task_id,
                 }
 

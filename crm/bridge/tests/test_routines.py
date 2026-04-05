@@ -163,7 +163,7 @@ def test_routine_to_dict():
         "active": True,
         "next_run_at": now,
         "last_run_at": None,
-        "created_by": "philip",
+        "created_by": "test-user",
         "created_at": now,
         "updated_at": now,
     }

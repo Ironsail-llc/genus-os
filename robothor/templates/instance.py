@@ -9,6 +9,7 @@ The .robothor/ directory tracks:
 
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ import yaml
 
 def _find_instance_dir() -> Path:
     """Find the .robothor/ directory (workspace root)."""
-    workspace = Path.home() / "robothor"
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
     return workspace / ".robothor"
 
 

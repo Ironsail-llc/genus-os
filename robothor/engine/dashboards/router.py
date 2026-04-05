@@ -27,13 +27,34 @@ public_router = APIRouter(tags=["dashboards-public"])
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
+def _get_instance_identity() -> dict[str, str]:
+    """Instance contact/brand info for dashboard templates. Read from env vars."""
+    import os
+
+    phone = os.environ.get("ROBOTHOR_AI_PHONE", "")
+    return {
+        "email": os.environ.get("ROBOTHOR_AI_EMAIL", ""),
+        "phone": phone,
+        "phone_raw": "".join(c for c in phone if c.isdigit() or c == "+"),
+        "website": os.environ.get("ROBOTHOR_AI_DOMAIN", ""),
+        "website_url": f"https://{os.environ.get('ROBOTHOR_AI_DOMAIN', '')}",
+        "telegram_bot": os.environ.get("ROBOTHOR_TELEGRAM_BOT_NAME", ""),
+        "ai_name": os.environ.get("ROBOTHOR_AI_NAME", "Genus"),
+        "brand_name": os.environ.get("ROBOTHOR_BRAND_NAME", "Genus OS"),
+    }
+
+
 def _render_template(name: str, **context: Any) -> str:
-    """Render a Jinja2 template from the templates directory."""
+    """Render a Jinja2 template from the templates directory.
+
+    Automatically injects instance identity (email, phone, website, etc.)
+    into all template contexts from environment variables.
+    """
     from jinja2 import Environment, FileSystemLoader
 
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=True)
     template = env.get_template(name)
-    return template.render(**context)
+    return template.render(**_get_instance_identity(), **context)
 
 
 # ── Status Dashboard (was port 3001) ─────────────────────────────────────────
@@ -337,9 +358,12 @@ async def homepage_subpage(page: str) -> HTMLResponse:
 @router.get("/privacy", response_class=HTMLResponse)
 async def privacy_policy() -> HTMLResponse:
     """Privacy policy — was brain/privacy-policy on port 3002."""
+    from robothor.engine.dashboards.theme import brand_css
+
     html_path = TEMPLATE_DIR / "privacy.html"
     if html_path.exists():
-        return HTMLResponse(html_path.read_text())
+        html = _render_template("privacy.html", brand_css=brand_css())
+        return HTMLResponse(html)
     return HTMLResponse("<h1>Privacy Policy</h1><p>Not found.</p>", status_code=404)
 
 
@@ -349,21 +373,29 @@ async def privacy_policy() -> HTMLResponse:
 # These routes detect the Host header and serve the correct dashboard.
 # This avoids needing path-based routing in the tunnel config.
 
-_HOST_DASHBOARD_MAP = {
-    "robothor.ai": "homepage",
-    "www.robothor.ai": "homepage",
-    "status.robothor.ai": "status",
-    "dashboard.robothor.ai": "status",
-    "ops.robothor.ai": "ops",
-    "privacy.robothor.ai": "privacy",
-}
+
+def _get_host_dashboard_map() -> dict[str, str]:
+    """Build host→dashboard map from ROBOTHOR_AI_DOMAIN env var."""
+    import os
+
+    domain = os.environ.get("ROBOTHOR_AI_DOMAIN", "")
+    if not domain:
+        return {}
+    return {
+        domain: "homepage",
+        f"www.{domain}": "homepage",
+        f"status.{domain}": "status",
+        f"dashboard.{domain}": "status",
+        f"ops.{domain}": "ops",
+        f"privacy.{domain}": "privacy",
+    }
 
 
 @public_router.get("/", response_class=HTMLResponse)
 async def public_root(request: Request) -> Response:
     """Route based on Host header for Cloudflare tunnel traffic."""
     host = (request.headers.get("host") or "").split(":")[0].lower()
-    dashboard = _HOST_DASHBOARD_MAP.get(host)
+    dashboard = _get_host_dashboard_map().get(host)
 
     if dashboard:
         return RedirectResponse(f"/dashboards/{dashboard}", status_code=307)

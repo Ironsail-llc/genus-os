@@ -50,9 +50,10 @@ def _get_manifest_path() -> str:
             p = ws / "brain" / "agent_capabilities.json"
         return str(p)
     except Exception:
-        p = Path.home() / "robothor" / "agent_capabilities.json"
+        ws = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        p = ws / "agent_capabilities.json"
         if not p.exists():
-            p = Path.home() / "robothor" / "brain" / "agent_capabilities.json"
+            p = ws / "brain" / "agent_capabilities.json"
         return str(p)
 
 

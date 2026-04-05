@@ -9,7 +9,8 @@
 set -uo pipefail
 
 SECRETS_ENV="/run/robothor/secrets.env"
-DECRYPT_SCRIPT="/home/philip/robothor/scripts/decrypt-secrets.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DECRYPT_SCRIPT="${SCRIPT_DIR}/decrypt-secrets.sh"
 
 if [ ! -f "$SECRETS_ENV" ]; then
     "$DECRYPT_SCRIPT" 2>/dev/null || true
@@ -23,7 +24,7 @@ fi
 
 # Cron does not set USER — set it so robothor.config uses the correct DB user.
 # pg_hba.conf uses peer auth on Unix sockets, requiring OS user = PG role.
-export USER="${USER:-philip}"
-export ROBOTHOR_DB_USER="${ROBOTHOR_DB_USER:-philip}"
+export USER="${USER:-robothor}"
+export ROBOTHOR_DB_USER="${ROBOTHOR_DB_USER:-robothor}"
 
 exec "$@"

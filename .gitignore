@@ -5,6 +5,19 @@
 # Business adapters (local MCP server configs — not part of the public repo)
 /adapters/
 
+# Instance data — user-land config created by `genusos init`, never part of platform
+# Agent manifests and instruction files
+brain/*.md
+!brain/README.md
+brain/agents/
+brain/instructions/
+brain/scripts/
+docs/agents/*.yaml
+docs/agents/*.md
+!docs/agents/schema.yaml
+!docs/agents/INSTRUCTION_CONTRACT.md
+docs/CRON_MAP.md
+
 # Backup logs
 scripts/backup.log
 

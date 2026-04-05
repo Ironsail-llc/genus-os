@@ -58,7 +58,7 @@ Genus OS hosts an autonomous AI entity running 24/7 on dedicated hardware. It ma
 │  GPU:    NVIDIA Grace Blackwell GB10                             │
 │  Memory: 128 GB unified                                          │
 │  OS:     Ubuntu Linux 6.14.0-1015-nvidia (ARM64)                 │
-│  VPN:    Tailscale 100.91.221.100 (ironsail tailnet)             │
+│  VPN:    Tailscale (your Tailscale tailnet)                       │
 └──────────────────────────────────────────────────────────────────┘
          │                                    │
     USB Webcam (640x480)               SanDisk SSD 1.8 TB
@@ -156,16 +156,16 @@ All services are **system-level systemd units** (`/etc/systemd/system/`), manage
 | RAG Orchestrator | robothor-orchestrator.service | 9099 | Python/FastAPI | RAG queries, ingestion API, vision proxy |
 | Voice | robothor-voice.service | 8765 | Python | Twilio ConversationRelay + ElevenLabs |
 | SMS | robothor-sms.service | 8766 | Python | Twilio SMS webhooks |
-| Status page | robothor-status.service | 3000 | Node.js | robothor.ai homepage |
-| Dashboard | robothor-status-dashboard.service | 3001 | Node.js | status.robothor.ai |
-| Ops dashboard | robothor-dashboard.service | 3003 | Node.js | ops.robothor.ai |
-| Privacy policy | robothor-privacy.service | 3002 | Node.js | privacy.robothor.ai |
+| Status page | robothor-status.service | 3000 | Node.js | ${INSTANCE_DOMAIN} homepage |
+| Dashboard | robothor-status-dashboard.service | 3001 | Node.js | status.${INSTANCE_DOMAIN} |
+| Ops dashboard | robothor-dashboard.service | 3003 | Node.js | ops.${INSTANCE_DOMAIN} |
+| Privacy policy | robothor-privacy.service | 3002 | Node.js | privacy.${INSTANCE_DOMAIN} |
 | CRM stack | robothor-crm.service | 3010, 8880 | Docker Compose | Uptime Kuma, Kokoro TTS |
 | Bridge | robothor-bridge.service | 9100 | Python/FastAPI | Contact resolution, webhooks, REST proxy |
 | Agent Engine | robothor-engine.service | 18800 | Python/FastAPI | Agent orchestration, Telegram, cron scheduler |
 | Transcript watcher | robothor-transcript.service | — | Python | Voice transcript processing |
 | Tunnel | cloudflared.service | — | Go binary | Cloudflare Tunnel (all external routing) |
-| VPN | tailscaled.service | — | Go binary | Tailscale mesh (ironsail tailnet) |
+| VPN | tailscaled.service | — | Go binary | Tailscale mesh (your Tailscale tailnet) |
 
 ---
 
@@ -177,12 +177,12 @@ All external access routes through a single Cloudflare Tunnel. No ports are expo
 
 | Subdomain | Port | Service |
 |-----------|------|---------|
-| robothor.ai | 3000 | Status homepage |
-| status.robothor.ai | 3001 | Status dashboard |
-| dashboard.robothor.ai | 3001 | Status dashboard (alias) |
-| privacy.robothor.ai | 3002 | Privacy policy |
-| voice.robothor.ai | 8765 | Twilio voice webhooks |
-| sms.robothor.ai | 8766 | Twilio SMS webhooks |
+| ${INSTANCE_DOMAIN} | 3000 | Status homepage |
+| status.${INSTANCE_DOMAIN} | 3001 | Status dashboard |
+| dashboard.${INSTANCE_DOMAIN} | 3001 | Status dashboard (alias) |
+| privacy.${INSTANCE_DOMAIN} | 3002 | Privacy policy |
+| voice.${INSTANCE_DOMAIN} | 8765 | Twilio voice webhooks |
+| sms.${INSTANCE_DOMAIN} | 8766 | Twilio SMS webhooks |
 
 ### Protected Routes (Cloudflare Access — email OTP)
 
@@ -190,12 +190,12 @@ Authorized emails: configured in Cloudflare Access (owner + Robothor service acc
 
 | Subdomain | Port | Service |
 |-----------|------|---------|
-| cam.robothor.ai | 8890 | Live webcam HLS stream |
-| ops.robothor.ai | 3003 | Ops dashboard |
-| bridge.robothor.ai | 9100 | Bridge API |
-| engine.robothor.ai | 18800 | Agent Engine API |
-| orchestrator.robothor.ai | 9099 | RAG orchestrator API |
-| vision.robothor.ai | 8600 | Vision API |
+| cam.${INSTANCE_DOMAIN} | 8890 | Live webcam HLS stream |
+| ops.${INSTANCE_DOMAIN} | 3003 | Ops dashboard |
+| bridge.${INSTANCE_DOMAIN} | 9100 | Bridge API |
+| engine.${INSTANCE_DOMAIN} | 18800 | Agent Engine API |
+| orchestrator.${INSTANCE_DOMAIN} | 9099 | RAG orchestrator API |
+| vision.${INSTANCE_DOMAIN} | 8600 | Vision API |
 
 ### Network Topology
 
@@ -405,7 +405,7 @@ Always-on computer vision with three operational modes:
 - 120-second `PERSON_ALERT_COOLDOWN` prevents alert spam
 - InsightFace runs on CPU (no CUDA provider on this system)
 - Mode switchable at runtime without restart: `POST /mode {"mode": "armed"}`
-- Live stream: `https://cam.robothor.ai/webcam/` (Cloudflare Access protected)
+- Live stream: `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access protected)
 
 ### Endpoints
 
@@ -543,7 +543,7 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 
 | Service | Port | Number |
 |---------|------|--------|
-| Voice server | 8765 | +1 (413) 408-6025 |
+| Voice server | 8765 | (your Twilio number) |
 | SMS webhook | 8766 | Same number |
 
 Voice uses ElevenLabs (Daniel voice) for text-to-speech, Twilio ConversationRelay for call management.
