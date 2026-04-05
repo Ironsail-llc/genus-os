@@ -6,7 +6,7 @@ department: operations
 
 reports_to: main
 creates_tasks_for: []
-receives_tasks_from: [main]
+receives_tasks_from: [main, agent-architect]
 escalates_to: main
 
 tags_produced: [autoresearch, optimization]

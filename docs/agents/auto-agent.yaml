@@ -6,7 +6,7 @@ department: operations
 
 reports_to: main
 creates_tasks_for: [auto-researcher]
-receives_tasks_from: [main, auto-researcher]
+receives_tasks_from: [main, auto-researcher, agent-architect]
 escalates_to: main
 
 tags_produced: [autoagent, harness-optimization]

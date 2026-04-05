@@ -81,6 +81,36 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_002,  # $2/M
         ttft_hint_ms=3000,
     ),
+    # Claude Opus 4.6 via OpenRouter — flagship reasoning model
+    "openrouter/anthropic/claude-opus-4.6": ModelLimits(
+        max_input_tokens=1_000_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_005,  # $5/M
+        output_cost_per_token=0.000_025,  # $25/M
+        cache_write_cost_per_token=0.000_006_25,  # $6.25/M (1.25x input)
+        cache_read_cost_per_token=0.000_000_5,  # $0.50/M (0.1x input)
+        supports_thinking=True,
+        ttft_hint_ms=3000,
+    ),
+    # Gemini 3.1 Pro Preview via OpenRouter
+    "openrouter/google/gemini-3.1-pro-preview": ModelLimits(
+        max_input_tokens=1_000_000,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_002,  # $2/M
+        output_cost_per_token=0.000_012,  # $12/M
+        ttft_hint_ms=2500,
+    ),
+    # GPT-5.4 via OpenRouter
+    "openrouter/openai/gpt-5.4": ModelLimits(
+        max_input_tokens=1_050_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_002_5,  # $2.50/M
+        output_cost_per_token=0.000_015,  # $15/M
+        ttft_hint_ms=2000,
+    ),
     # Gemini 2.5 Pro
     "gemini/gemini-2.5-pro": ModelLimits(
         max_input_tokens=1_048_576,

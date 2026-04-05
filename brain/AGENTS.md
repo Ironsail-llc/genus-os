@@ -47,6 +47,10 @@ Agents coordinate via CRM tasks (`crm_tasks` table). Every run:
 | `shared_working_state` | 10000 | Cross-agent one-liner summaries |
 | `performance_baselines` | 5000 | Fleet performance rolling averages (Nightwatch) |
 | `nightwatch_log` | 5000 | PR outcomes, merge rates, rejection reasons (Nightwatch) |
+| `architect_evolution_log` | 5000 | Weekly fleet health scores, trends, cumulative improvement (Agent Architect) |
+| `architect_dispatch_ledger` | 5000 | Dispatch history with outcomes — agents sent to AutoAgent/AutoResearch and results (Agent Architect) |
+| `autoagent_learnings` | 5000 | Cross-agent optimization findings from AutoAgent benchmark experiments |
+| `autoresearch_learnings` | 5000 | Cross-agent optimization findings from Auto Researcher metric experiments |
 
 Tools: `memory_block_read`, `memory_block_write`, `memory_block_list`, `append_to_block`
 
