@@ -59,7 +59,7 @@ from robothor.engine.prompts import (
 # CodeQL py/log-injection: user-controlled values (model names, error
 # messages) must not inject newlines into log output.
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
-from robothor.engine.session import AgentSession
+from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, update_run
 
@@ -428,7 +428,9 @@ class AgentRunner:
 
                         plan_context = format_plan_context(plan_result)
                         if plan_context:
-                            session.messages.append({"role": "user", "content": plan_context})
+                            session.messages.append(
+                                {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
+                            )
 
                         # Dispatch PLAN_CREATED hook
                         try:
@@ -900,7 +902,7 @@ class AgentRunner:
             if _iteration > 0 and _checkin_interval > 0 and _iteration % _checkin_interval == 0:
                 session.messages.append(
                     {
-                        "role": "user",
+                        "role": ENGINE_CONTEXT_ROLE,
                         "content": (
                             f"[SYSTEM] Progress check-in (iteration {_iteration}): "
                             "Are you making progress toward the goal? If you are stuck "
@@ -944,7 +946,7 @@ class AgentRunner:
                 # Soft enforcement: tell the agent to wrap up
                 session.messages.append(
                     {
-                        "role": "user",
+                        "role": ENGINE_CONTEXT_ROLE,
                         "content": (
                             "[SYSTEM] Budget limit reached. Wrap up your current task "
                             "in this final response. Do not start new tool calls."
@@ -956,7 +958,7 @@ class AgentRunner:
                 budget_warning_sent = True
                 session.messages.append(
                     {
-                        "role": "user",
+                        "role": ENGINE_CONTEXT_ROLE,
                         "content": (
                             "[SYSTEM] Token usage note: you have used >80% of the "
                             "estimated token budget for this run. Begin wrapping up "
@@ -1075,12 +1077,12 @@ class AgentRunner:
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
                 summary = scratchpad.format_summary(plan_steps=plan_steps)
-                session.messages.append({"role": "user", "content": summary})
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": summary})
 
             # ── [TODO REMINDER] Nudge agent to update todo list ──
             if session.todo_list and session.todo_list.should_remind():
                 reminder = session.todo_list.format_reminder()
-                session.messages.append({"role": "user", "content": reminder})
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": reminder})
 
             # ── [PRE-FLIGHT] Hard budget cost projection ──
             if (
@@ -1131,7 +1133,7 @@ class AgentRunner:
                 if readonly_mode and _iteration == 0:
                     session.messages.append(
                         {
-                            "role": "user",
+                            "role": ENGINE_CONTEXT_ROLE,
                             "content": (
                                 "[SYSTEM] You proposed a plan without using any tools to "
                                 "research first. Before finalizing, use your tools to discover "
@@ -1440,7 +1442,7 @@ class AgentRunner:
                     if _tool_failures[tool_name] >= 3:
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": (
                                     f"[SYSTEM] Tool '{tool_name}' has failed "
                                     f"{_tool_failures[tool_name]} times this run. "
@@ -1464,7 +1466,7 @@ class AgentRunner:
                     if result.get("verificationNudgeNeeded"):
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": (
                                     "[SYSTEM] All tasks are marked complete. "
                                     "Before finishing, verify your work by "
@@ -1533,7 +1535,7 @@ class AgentRunner:
                         await asyncio.sleep(action.delay_seconds)
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": f"[SYSTEM] {action.message} Retrying now.",
                             }
                         )
@@ -1542,7 +1544,7 @@ class AgentRunner:
                     elif action.action == "retry":
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": f"[SYSTEM] {action.message}",
                             }
                         )
@@ -1561,7 +1563,7 @@ class AgentRunner:
                             _helper_spawns_used += 1
                             session.messages.append(
                                 {
-                                    "role": "user",
+                                    "role": ENGINE_CONTEXT_ROLE,
                                     "content": (
                                         f"[ERROR RECOVERY — Helper agent result]\n"
                                         f"{helper_result}\n\n"
@@ -1574,7 +1576,7 @@ class AgentRunner:
                     elif action.action == "inject":
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": f"[SYSTEM — Recovery guidance] {action.message}",
                             }
                         )
@@ -1587,7 +1589,7 @@ class AgentRunner:
                 )
                 session.messages.append(
                     {
-                        "role": "user",
+                        "role": ENGINE_CONTEXT_ROLE,
                         "content": (
                             f"[SYSTEM] The following tool calls failed:\n{error_lines}\n\n"
                             "Analyze why these failed. Consider:\n"
@@ -1615,7 +1617,7 @@ class AgentRunner:
                     return
                 esc_msg = escalation.get_escalation_message()
                 if esc_msg:
-                    session.messages.append({"role": "user", "content": esc_msg})
+                    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": esc_msg})
 
             # ── [REPLANNING] Check if mid-run replan is needed ──
             if (
@@ -1660,7 +1662,7 @@ class AgentRunner:
                                 )
                         session.messages.append(
                             {
-                                "role": "user",
+                                "role": ENGINE_CONTEXT_ROLE,
                                 "content": f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}",
                             }
                         )
@@ -1750,7 +1752,7 @@ class AgentRunner:
         session.record_error(reason)
         session.messages.append(
             {
-                "role": "user",
+                "role": ENGINE_CONTEXT_ROLE,
                 "content": (
                     f"[SYSTEM] {reason} You MUST now produce a final summary for the user. "
                     "Describe what you accomplished and what remains to be done. "
@@ -2238,7 +2240,7 @@ class AgentRunner:
 
             # Verification failed — inject feedback and retry once
             feedback = format_verification_feedback(result)
-            session.messages.append({"role": "user", "content": feedback})
+            session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": feedback})
             logger.info("Verification failed, retrying once")
 
             await self._run_loop(
@@ -2441,13 +2443,22 @@ class AgentRunner:
         if broken_models is not None and (
             status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout
         ):
+            # First model to fail = primary model — log at ERROR for visibility
+            is_primary = len(broken_models) == 0
             broken_models.add(model)
             reason = "timeout" if is_timeout else str(status)
-            logger.warning(
-                "Model %s failed (%s), removing from rotation for this run",
-                _sanitize(model),
-                _sanitize(reason),
-            )
+            if is_primary:
+                logger.error(
+                    "PRIMARY model %s failed (%s), falling back — primary_model_fallback=True",
+                    _sanitize(model),
+                    _sanitize(reason),
+                )
+            else:
+                logger.warning(
+                    "Model %s failed (%s), removing from rotation for this run",
+                    _sanitize(model),
+                    _sanitize(reason),
+                )
         else:
             suffix = " (streaming)" if streaming else ""
             logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))

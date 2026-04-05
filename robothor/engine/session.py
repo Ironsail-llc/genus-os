@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Role for engine-injected context (plan, scratchpad, budget warnings, etc.)
+# LiteLLM translates "developer" → "system" for non-OpenAI providers.
+ENGINE_CONTEXT_ROLE = "developer"
+
 # Tools whose output contains untrusted external content — tagged for defense in depth
 EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
     {

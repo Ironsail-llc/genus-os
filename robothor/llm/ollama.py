@@ -155,7 +155,7 @@ async def generate_stream(
         payload["system"] = system
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream("POST", f"{url}/api/generate", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -222,9 +222,9 @@ async def chat(
 
     url = _ollama_url()
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(1):
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(f"{url}/api/chat", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -298,7 +298,7 @@ async def chat_stream(
     }
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream("POST", f"{url}/api/chat", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -354,7 +354,7 @@ async def analyze_image(
     }
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(f"{url}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()

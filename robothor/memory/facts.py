@@ -14,6 +14,7 @@ Dependencies:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -207,6 +208,8 @@ async def extract_facts(content: str, max_retries: int = 3) -> list[dict[str, An
     Retries on empty results because thinking models sometimes exhaust
     their token budget on reasoning before producing content.
 
+    Hard-capped at 45s total to prevent Ollama hangs from blocking agent runs.
+
     Args:
         content: Unstructured text content.
         max_retries: Number of attempts before giving up.
@@ -214,6 +217,18 @@ async def extract_facts(content: str, max_retries: int = 3) -> list[dict[str, An
     Returns:
         List of extracted fact dictionaries, or empty list on failure.
     """
+    try:
+        return await asyncio.wait_for(_extract_facts_inner(content, max_retries), timeout=45.0)
+    except TimeoutError:
+        logger.warning("extract_facts hard timeout (45s) — returning empty")
+        return []
+
+
+async def _extract_facts_inner(
+    content: str,
+    max_retries: int,
+) -> list[dict[str, Any]]:
+    """Inner implementation of extract_facts (no timeout wrapper)."""
     prompt = build_extraction_prompt(content)
     for attempt in range(max_retries):
         try:

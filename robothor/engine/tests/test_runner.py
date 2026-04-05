@@ -462,7 +462,7 @@ class TestBrokenModelTracking:
         checkin_messages = [
             m
             for m in all_messages
-            if m.get("role") == "user" and "Progress check-in" in m.get("content", "")
+            if m.get("role") == "developer" and "Progress check-in" in m.get("content", "")
         ]
         assert len(checkin_messages) >= 2
 
