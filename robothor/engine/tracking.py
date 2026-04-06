@@ -388,6 +388,7 @@ def create_steps_batch(steps: list[RunStep]) -> int:
                     started_at, completed_at, duration_ms,
                     error_message
                 ) VALUES %s
+                ON CONFLICT (id) DO NOTHING
                 """,
                 rows,
             )

@@ -243,28 +243,6 @@ class TestFloodControl:
         last_call = bot.bot.send_message.call_args
         assert last_call.kwargs.get("parse_mode") is None
 
-    @pytest.mark.asyncio
-    async def test_edit_final_retries_on_flood(self, bot):
-        """_edit_final retries on flood control and succeeds."""
-        flood = _make_flood_error(retry_after=0)
-        bot.bot.edit_message_text = AsyncMock(side_effect=[flood, None])
-
-        await bot._edit_final("12345", 42, "Final text")
-        assert bot.bot.edit_message_text.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_edit_final_flood_exhausted_falls_to_plain(self, bot):
-        """When HTML edit exhausts retries, falls back to plain text."""
-        flood = _make_flood_error(retry_after=0)
-        # 3 flood errors for HTML (exhausts retries) → then plain succeeds
-        bot.bot.edit_message_text = AsyncMock(side_effect=[flood, flood, flood, None])
-
-        await bot._edit_final("12345", 42, "Final text")
-        assert bot.bot.edit_message_text.call_count == 4
-        # Last call should be plain text (parse_mode=None)
-        last_call = bot.bot.edit_message_text.call_args
-        assert last_call.kwargs.get("parse_mode") is None
-
 
 class TestDeepCommand:
     """Tests for /deep command in Telegram bot."""

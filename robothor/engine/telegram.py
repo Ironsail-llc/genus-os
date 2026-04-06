@@ -62,9 +62,6 @@ logger = logging.getLogger(__name__)
 # ── Constants ──
 
 MAX_MESSAGE_LENGTH = 4096
-STREAM_CURSOR = " \u258d"  # ▍ block cursor
-STREAM_EDIT_INTERVAL = 0.3  # seconds between message edits
-STREAM_MIN_NEW_CHARS = 15  # min new chars before editing
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
@@ -1791,41 +1788,6 @@ class TelegramBot:
                 await asyncio.sleep(wait)
         logger.error("Telegram flood control: all %d retries exhausted", max_retries)
         raise last_exc  # type: ignore[misc]
-
-    async def _edit_final(self, chat_id: str, message_id: int, text: str) -> None:
-        """Edit a streamed message with the final text. Tries HTML, falls back to plain."""
-        if len(text) > MAX_MESSAGE_LENGTH:
-            with contextlib.suppress(Exception):
-                await self.bot.delete_message(chat_id=int(chat_id), message_id=message_id)
-            await self.send_message(chat_id, text)
-            return
-
-        # Try HTML (converted from markdown) — with flood-control retry
-        try:
-            await self._retry_on_flood(
-                lambda: self.bot.edit_message_text(
-                    chat_id=int(chat_id),
-                    message_id=message_id,
-                    text=_md_to_html(text),
-                    parse_mode=ParseMode.HTML,
-                )
-            )
-            return
-        except Exception:
-            pass
-
-        # Fallback to plain text — with flood-control retry
-        try:
-            await self._retry_on_flood(
-                lambda: self.bot.edit_message_text(
-                    chat_id=int(chat_id),
-                    message_id=message_id,
-                    text=text,
-                    parse_mode=None,
-                )
-            )
-        except Exception as e:
-            logger.error("Failed to edit final message: %s", e)
 
     async def send_message(self, chat_id: str, text: str) -> None:
         """Send a message to a Telegram chat, splitting if needed."""
