@@ -446,20 +446,20 @@ class TestStreamingToolVisibility:
         assert tool_shown, f"Expected 'Searching memory' in edit calls: {edit_calls}"
 
     @pytest.mark.asyncio
-    async def test_tools_done_shows_thinking(self, bot):
-        """When on_status receives tools_done, message shows thinking indicator."""
+    async def test_no_content_streaming_in_telegram(self, bot):
+        """on_content is not passed to execute — no content streaming edits."""
         from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
         sent_msg = MagicMock()
         sent_msg.message_id = 42
         bot.bot.send_message = AsyncMock(return_value=sent_msg)
         bot.bot.edit_message_text = AsyncMock()
+        bot.bot.delete_message = AsyncMock()
         bot.bot.send_chat_action = AsyncMock()
 
         async def fake_execute(**kwargs):
-            on_status = kwargs.get("on_status")
-            if on_status:
-                await on_status({"event": "tools_done", "iteration": 1})
+            # on_content should NOT be passed
+            assert kwargs.get("on_content") is None, "on_content should not be passed"
             return AgentRun(
                 status=RunStatus.COMPLETED,
                 output_text="Done",
@@ -472,41 +472,28 @@ class TestStreamingToolVisibility:
         session = get_shared_session(session_key)
         await bot._run_interactive("12345", session_key, session, "test")
 
-        # Wait for the background task to complete
         task = bot._active_tasks.get("12345")
         if task:
             await task
 
-        # Check that edit_message_text was called with "Thinking" at some point
-        edit_calls = bot.bot.edit_message_text.call_args_list
-        thinking_shown = any("Thinking" in str(call) for call in edit_calls)
-        assert thinking_shown, f"Expected 'Thinking' in edit calls: {edit_calls}"
+        # Final output delivered as new message (send_message), not edit
+        send_calls = bot.bot.send_message.call_args_list
+        final_sent = any("Done" in str(call) for call in send_calls)
+        assert final_sent, f"Expected 'Done' in send_message calls: {send_calls}"
 
     @pytest.mark.asyncio
-    async def test_tool_indicator_cleared_by_content(self, bot):
-        """When on_content fires after tool execution, tool indicator is replaced."""
+    async def test_status_message_deleted_before_final(self, bot):
+        """The thinking/status message is deleted before the final output is sent."""
         from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
         sent_msg = MagicMock()
         sent_msg.message_id = 42
         bot.bot.send_message = AsyncMock(return_value=sent_msg)
         bot.bot.edit_message_text = AsyncMock()
+        bot.bot.delete_message = AsyncMock()
         bot.bot.send_chat_action = AsyncMock()
 
         async def fake_execute(**kwargs):
-            on_tool = kwargs.get("on_tool")
-            on_content = kwargs.get("on_content")
-            if on_tool:
-                await on_tool(
-                    {
-                        "event": "tool_start",
-                        "tool": "search_memory",
-                        "args": {},
-                        "call_id": "c1",
-                    }
-                )
-            if on_content:
-                await on_content("Here are your results")
             return AgentRun(
                 status=RunStatus.COMPLETED,
                 output_text="Here are your results",
@@ -519,14 +506,9 @@ class TestStreamingToolVisibility:
         session = get_shared_session(session_key)
         await bot._run_interactive("12345", session_key, session, "test")
 
-        # Wait for the background task to complete
         task = bot._active_tasks.get("12345")
         if task:
             await task
 
-        # The last edit before the final _edit_final should have content, not tool indicator
-        edit_calls = bot.bot.edit_message_text.call_args_list
-        # The final edit should contain actual content, not "Searching memory"
-        if edit_calls:
-            last_text = str(edit_calls[-1])
-            assert "Searching memory" not in last_text or "Here are your results" in last_text
+        # Status message (id=42) should be deleted
+        bot.bot.delete_message.assert_called_once_with(chat_id=12345, message_id=42)

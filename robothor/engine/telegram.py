@@ -885,82 +885,32 @@ class TelegramBot:
         except Exception:
             stream_msg_id = None
 
-        # ── Streaming state ──
-        last_edit_time: float = 0.0
-        last_edit_len: int = 0
-        first_content = True
-        stream_edit_interval: float = STREAM_EDIT_INTERVAL
-        current_text: str = ""
-
-        async def _edit_status(suffix: str) -> None:
-            """Edit streaming message to show status indicator below current text."""
-            nonlocal stream_msg_id, last_edit_time, stream_edit_interval
-            now = time.monotonic()
-            if (now - last_edit_time) < stream_edit_interval:
-                return  # Rate-limited
-            display = (current_text + suffix)[: MAX_MESSAGE_LENGTH - 5]
-            try:
-                if stream_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=stream_msg_id,
-                        text=display,
-                        parse_mode=None,
-                    )
-                    last_edit_time = now
-            except TelegramRetryAfter as e:
-                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
-            except Exception:
-                pass
-
-        async def on_content(accumulated_text: str) -> None:
-            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-            nonlocal stream_edit_interval, current_text
-
-            current_text = accumulated_text
-            now = time.monotonic()
-            text_len = len(accumulated_text)
-
-            if first_content:
-                first_content = False
-            else:
-                time_ok = (now - last_edit_time) >= stream_edit_interval
-                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
-                if not time_ok and not chars_ok:
-                    return
-
-            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
-
-            try:
-                if stream_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=stream_msg_id,
-                        text=display,
-                        parse_mode=None,
-                    )
-                else:
-                    sent = await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=display,
-                        parse_mode=None,
-                    )
-                    stream_msg_id = sent.message_id
-            except TelegramRetryAfter as e:
-                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
-            except Exception:
-                pass
-
-            last_edit_time = now
-            last_edit_len = text_len
-
+        # ── Status-only updates (no content streaming) ──
+        # Telegram rate-limits editMessageText to ~20/min.  Instead of streaming
+        # content token-by-token, we show brief tool-status edits on the
+        # "Thinking..." message and deliver the final output as a new message.
+        tool_status_interval = 10.0  # max one status edit per 10 seconds
+        last_status_time: float = 0.0
         checklist_msg_id: int | None = None
 
         async def on_tool(event: dict[str, Any]) -> None:
-            nonlocal checklist_msg_id
+            nonlocal last_status_time, checklist_msg_id
             if event.get("event") == "tool_start":
+                now = time.monotonic()
+                if (now - last_status_time) < tool_status_interval:
+                    return
                 label = _friendly_tool_name(event.get("tool", ""))
-                await _edit_status(f"\n\n\U0001f527 {label}...")
+                try:
+                    if stream_msg_id is not None:
+                        await self.bot.edit_message_text(
+                            chat_id=int(chat_id),
+                            message_id=stream_msg_id,
+                            text=f"\U0001f527 {label}...",
+                            parse_mode=None,
+                        )
+                        last_status_time = now
+                except Exception:
+                    pass
             elif event.get("event") == "todo_updated":
                 todos = event.get("todos", [])
                 try:
@@ -995,10 +945,6 @@ class TelegramBot:
                 except Exception:
                     logger.debug("Checklist update failed", exc_info=True)
 
-        async def on_status(event: dict[str, Any]) -> None:
-            if event.get("event") == "tools_done":
-                await _edit_status("\n\n\U0001f4ad Thinking...")
-
         # ── Execute agent ──
         model = self._model_override.get(chat_id)
 
@@ -1014,9 +960,7 @@ class TelegramBot:
                     message=user_text,
                     trigger_type=TriggerType.TELEGRAM,
                     trigger_detail=f"chat:{chat_id}",
-                    on_content=on_content,
                     on_tool=on_tool,
-                    on_status=on_status,
                     model_override=model,
                     conversation_history=history or None,
                 )
@@ -1028,7 +972,6 @@ class TelegramBot:
                     if run.output_text:
                         session.history.append({"role": "assistant", "content": run.output_text})
                     elif run.error_message:
-                        # Record error so the next run knows what failed
                         session.history.append(
                             {
                                 "role": "assistant",
@@ -1054,26 +997,19 @@ class TelegramBot:
                         name=f"tg-save-exchange:{chat_id}",
                     )
 
-                if run.output_text:
-                    if stream_msg_id is not None:
-                        await self._edit_final(chat_id, stream_msg_id, run.output_text)
-                    else:
-                        await self.send_message(chat_id, run.output_text)
-                elif run.error_message:
-                    err = f"Error: {run.error_message}"
-                    if stream_msg_id is not None:
-                        await self._edit_final(chat_id, stream_msg_id, err)
-                    else:
-                        await self.send_message(chat_id, err)
-                else:
-                    if stream_msg_id is not None:
-                        await self._edit_final(
-                            chat_id,
-                            stream_msg_id,
-                            "Done. No output produced.",
+                # Delete status message, deliver final output as new message
+                if stream_msg_id is not None:
+                    with contextlib.suppress(Exception):
+                        await self.bot.delete_message(
+                            chat_id=int(chat_id), message_id=stream_msg_id
                         )
-                    else:
-                        await self.send_message(chat_id, "Done. No output produced.")
+
+                if run.output_text:
+                    await self.send_message(chat_id, run.output_text)
+                elif run.error_message:
+                    await self.send_message(chat_id, f"Error: {run.error_message}")
+                else:
+                    await self.send_message(chat_id, "Done. No output produced.")
 
             except asyncio.CancelledError:
                 # /stop was called during execution
@@ -1144,46 +1080,6 @@ class TelegramBot:
         except Exception:
             stream_msg_id = None
 
-        last_edit_time: float = 0.0
-        last_edit_len: int = 0
-        first_content = True
-        stream_edit_interval: float = STREAM_EDIT_INTERVAL
-
-        async def on_content(accumulated_text: str) -> None:
-            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-            nonlocal stream_edit_interval
-            now = time.monotonic()
-            text_len = len(accumulated_text)
-            if first_content:
-                first_content = False
-            else:
-                time_ok = (now - last_edit_time) >= stream_edit_interval
-                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
-                if not time_ok and not chars_ok:
-                    return
-            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
-            try:
-                if stream_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=stream_msg_id,
-                        text=display,
-                        parse_mode=None,
-                    )
-                else:
-                    sent = await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=display,
-                        parse_mode=None,
-                    )
-                    stream_msg_id = sent.message_id
-            except TelegramRetryAfter as e:
-                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
-            except Exception:
-                pass
-            last_edit_time = now
-            last_edit_len = text_len
-
         try:
             model = self._model_override.get(chat_id)
             history = list(session.history)
@@ -1193,7 +1089,6 @@ class TelegramBot:
                 message=user_text,
                 trigger_type=TriggerType.TELEGRAM,
                 trigger_detail=f"plan:{chat_id}",
-                on_content=on_content,
                 model_override=model,
                 conversation_history=history or None,
                 readonly_mode=True,
@@ -1208,6 +1103,11 @@ class TelegramBot:
                 session.history.append({"role": "assistant", "content": run.output_text})
             if len(session.history) > self._max_history:
                 session.history[:] = session.history[-self._max_history :]
+
+            # Delete thinking message, deliver as new message
+            if stream_msg_id is not None:
+                with contextlib.suppress(Exception):
+                    await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
 
             if plan_text:
                 plan = PlanState(
@@ -1231,11 +1131,7 @@ class TelegramBot:
                     name=f"tg-save-plan:{chat_id}",
                 )
 
-                # Display plan with approval keyboard
-                if stream_msg_id is not None:
-                    await self._edit_final(chat_id, stream_msg_id, plan_text)
-                else:
-                    await self.send_message(chat_id, plan_text)
+                await self.send_message(chat_id, plan_text)
 
                 label = (
                     "<b>Approve this deep plan?</b>" if deep_plan else "<b>Approve this plan?</b>"
@@ -1247,14 +1143,7 @@ class TelegramBot:
                     reply_markup=kb,
                 )
             else:
-                if stream_msg_id is not None:
-                    await self._edit_final(
-                        chat_id,
-                        stream_msg_id,
-                        run.output_text or "No plan produced.",
-                    )
-                else:
-                    await self.send_message(chat_id, run.output_text or "No plan produced.")
+                await self.send_message(chat_id, run.output_text or "No plan produced.")
         except Exception as e:
             logger.error("Plan mode failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Plan mode error: {html.escape(str(e))}")
@@ -1343,37 +1232,25 @@ class TelegramBot:
                     name=f"tg-save-deep:{chat_id}",
                 )
 
-            # Display result
+            # Delete progress message, deliver result as new message
+            if progress_msg_id is not None:
+                with contextlib.suppress(Exception):
+                    await self.bot.delete_message(chat_id=int(chat_id), message_id=progress_msg_id)
+
             if run.output_text:
-                # Cost/time footer
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
                 footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
-
-                result_text = run.output_text
-                if progress_msg_id is not None:
-                    # Edit the progress message with the full result
-                    await self._edit_final(chat_id, progress_msg_id, result_text)
-                    # Send cost footer as separate message (final text may be at Telegram limit)
-                    await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=footer,
-                    )
-                else:
-                    await self.send_message(chat_id, result_text + footer)
+                await self.send_message(chat_id, run.output_text)
+                await self.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=footer,
+                )
             elif run.error_message:
-                error_text = f"\u274c Deep reasoning failed: {html.escape(run.error_message)}"
-                if progress_msg_id is not None:
-                    try:
-                        await self.bot.edit_message_text(
-                            chat_id=int(chat_id),
-                            message_id=progress_msg_id,
-                            text=error_text,
-                        )
-                    except Exception:
-                        await self.send_message(chat_id, error_text)
-                else:
-                    await self.send_message(chat_id, error_text)
+                await self.send_message(
+                    chat_id,
+                    f"\u274c Deep reasoning failed: {html.escape(run.error_message)}",
+                )
         except Exception as e:
             logger.error("Deep mode failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
@@ -1634,30 +1511,22 @@ class TelegramBot:
                 name=f"tg-clear-deep-exec:{chat_id}",
             )
 
-            # Display result
+            # Delete progress message, deliver result as new message
+            if progress_msg_id is not None:
+                with contextlib.suppress(Exception):
+                    await self.bot.delete_message(chat_id=int(chat_id), message_id=progress_msg_id)
+
             if run.output_text:
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
                 footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
-
-                if progress_msg_id is not None:
-                    await self._edit_final(chat_id, progress_msg_id, run.output_text)
-                    await self.bot.send_message(chat_id=int(chat_id), text=footer)
-                else:
-                    await self.send_message(chat_id, run.output_text + footer)
+                await self.send_message(chat_id, run.output_text)
+                await self.bot.send_message(chat_id=int(chat_id), text=footer)
             elif run.error_message:
-                error_text = f"\u274c Deep reasoning failed: {html.escape(run.error_message)}"
-                if progress_msg_id is not None:
-                    try:
-                        await self.bot.edit_message_text(
-                            chat_id=int(chat_id),
-                            message_id=progress_msg_id,
-                            text=error_text,
-                        )
-                    except Exception:
-                        await self.send_message(chat_id, error_text)
-                else:
-                    await self.send_message(chat_id, error_text)
+                await self.send_message(
+                    chat_id,
+                    f"\u274c Deep reasoning failed: {html.escape(run.error_message)}",
+                )
         except Exception as e:
             logger.error("Deep plan execution failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
@@ -1720,46 +1589,6 @@ class TelegramBot:
         except Exception:
             stream_msg_id = None
 
-        last_edit_time: float = 0.0
-        last_edit_len: int = 0
-        first_content = True
-        stream_edit_interval: float = STREAM_EDIT_INTERVAL
-
-        async def on_content(accumulated_text: str) -> None:
-            nonlocal stream_msg_id, last_edit_time, last_edit_len, first_content
-            nonlocal stream_edit_interval
-            now = time.monotonic()
-            text_len = len(accumulated_text)
-            if first_content:
-                first_content = False
-            else:
-                time_ok = (now - last_edit_time) >= stream_edit_interval
-                chars_ok = (text_len - last_edit_len) >= STREAM_MIN_NEW_CHARS
-                if not time_ok and not chars_ok:
-                    return
-            display = accumulated_text[: MAX_MESSAGE_LENGTH - 5] + STREAM_CURSOR
-            try:
-                if stream_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=stream_msg_id,
-                        text=display,
-                        parse_mode=None,
-                    )
-                else:
-                    sent = await self.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=display,
-                        parse_mode=None,
-                    )
-                    stream_msg_id = sent.message_id
-            except TelegramRetryAfter as e:
-                stream_edit_interval = max(stream_edit_interval, e.retry_after + 1.0)
-            except Exception:
-                pass
-            last_edit_time = now
-            last_edit_len = text_len
-
         try:
             model = self._model_override.get(chat_id)
 
@@ -1782,7 +1611,6 @@ class TelegramBot:
                 message=iteration_message,
                 trigger_type=TriggerType.TELEGRAM,
                 trigger_detail=f"plan-revise:{chat_id}",
-                on_content=on_content,
                 model_override=model,
                 conversation_history=history or None,
                 readonly_mode=True,
@@ -1797,16 +1625,17 @@ class TelegramBot:
             if len(session.history) > self._max_history:
                 session.history[:] = session.history[-self._max_history :]
 
+            # Delete thinking message, deliver as new message
+            if stream_msg_id is not None:
+                with contextlib.suppress(Exception):
+                    await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
+
             if revised_plan_text:
                 # Update plan in-place (same plan_id)
                 plan.plan_text = revised_plan_text
 
-                # Display revised plan with approval keyboard
                 revision_label = f"<b>Plan v{plan.revision_count + 1}</b>"
-                if stream_msg_id is not None:
-                    await self._edit_final(chat_id, stream_msg_id, revised_plan_text)
-                else:
-                    await self.send_message(chat_id, revised_plan_text)
+                await self.send_message(chat_id, revised_plan_text)
 
                 kb = self._build_plan_keyboard(plan.plan_id, plan.revision_count)
                 await self.bot.send_message(
@@ -1825,15 +1654,7 @@ class TelegramBot:
                     name=f"tg-save-plan-revision:{chat_id}",
                 )
             else:
-                # Agent didn't produce a revised plan
-                if stream_msg_id is not None:
-                    await self._edit_final(
-                        chat_id,
-                        stream_msg_id,
-                        run.output_text or "No revised plan produced.",
-                    )
-                else:
-                    await self.send_message(chat_id, run.output_text or "No revised plan produced.")
+                await self.send_message(chat_id, run.output_text or "No revised plan produced.")
         except Exception as e:
             logger.error("Plan iteration failed: %s", e, exc_info=True)
             await self.send_message(chat_id, f"Revision error: {html.escape(str(e))}")

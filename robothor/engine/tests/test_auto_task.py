@@ -75,7 +75,7 @@ class TestAutoTaskCreation:
 class TestAutoTaskResolution:
     """Auto-task should resolve CRM task based on run outcome."""
 
-    def test_finish_run_resolves_on_success(self, engine_config):
+    def test_persist_run_resolves_on_success(self, engine_config):
         from robothor.engine.runner import AgentRunner
 
         runner = AgentRunner(engine_config)
@@ -90,17 +90,17 @@ class TestAutoTaskResolution:
         mock_resolve = MagicMock(return_value=True)
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.runner.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):
-            runner._finish_run(run)
+            runner._persist_run_sync(run)
             mock_resolve.assert_called_once_with(
                 "task-uuid-123",
                 resolution="Run completed: All done!",
                 agent_id="test-agent",
             )
 
-    def test_finish_run_sets_todo_on_failure(self, engine_config):
+    def test_persist_run_sets_todo_on_failure(self, engine_config):
         from robothor.engine.runner import AgentRunner
 
         runner = AgentRunner(engine_config)
@@ -114,16 +114,16 @@ class TestAutoTaskResolution:
         mock_update = MagicMock(return_value=True)
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.runner.create_steps_batch"),
             patch("robothor.crm.dal.update_task", mock_update),
         ):
-            runner._finish_run(run)
+            runner._persist_run_sync(run)
             mock_update.assert_called_once()
             call_kwargs = mock_update.call_args.kwargs
             assert call_kwargs["status"] == "TODO"
             assert "failed" in call_kwargs["tags"]
 
-    def test_finish_run_no_task_id_skips_resolution(self, engine_config):
+    def test_persist_run_no_task_id_skips_resolution(self, engine_config):
         from robothor.engine.runner import AgentRunner
 
         runner = AgentRunner(engine_config)
@@ -137,10 +137,10 @@ class TestAutoTaskResolution:
         mock_resolve = MagicMock()
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.runner.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):
-            runner._finish_run(run)
+            runner._persist_run_sync(run)
             mock_resolve.assert_not_called()
 
 
