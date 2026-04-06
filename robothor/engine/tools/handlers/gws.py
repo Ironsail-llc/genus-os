@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 from typing import TYPE_CHECKING, Any
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from robothor.engine.tools.dispatch import ToolContext
+
+logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
@@ -66,6 +69,115 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
         return {"error": "Either message_id or thread_id is required"}
 
+    if name == "gws_gmail_reply":
+        import base64
+        import re
+        from email.mime.text import MIMEText
+
+        thread_id = args.get("thread_id", "")
+        body = args.get("body", "")
+        extra_cc = args.get("cc", "")
+
+        if not thread_id:
+            return {"error": "thread_id is required — get it from the task body"}
+        if not body:
+            return {"error": "body is required"}
+
+        # Fetch thread to extract headers, recipients, and Message-ID
+        fetch_params = {
+            "userId": "me",
+            "id": thread_id,
+            "format": "metadata",
+            "metadataHeaders": ["From", "To", "Cc", "Subject", "Message-ID"],
+        }
+        thread_data = _run_gws(
+            ["gmail", "users", "threads", "get", "--params", _json.dumps(fetch_params)]
+        )
+        if isinstance(thread_data, str):
+            try:
+                thread_data = _json.loads(thread_data)
+            except _json.JSONDecodeError:
+                return {"error": f"Failed to parse thread data: {thread_data[:200]}"}
+        if isinstance(thread_data, dict) and "error" in thread_data:
+            return thread_data
+
+        messages = thread_data.get("messages", []) if isinstance(thread_data, dict) else []
+        if not messages:
+            return {"error": f"Thread {thread_id} has no messages"}
+
+        last_msg = messages[-1]
+        last_headers: dict[str, str] = {}
+        for h in last_msg.get("payload", {}).get("headers", []):
+            last_headers[h["name"]] = h["value"]
+
+        # Duplicate guard: skip if last message is already from us
+        last_from = last_headers.get("From", "")
+        if "robothor@ironsail.ai" in last_from:
+            return {
+                "status": "skipped",
+                "reason": "Already replied to this thread — last message is from robothor",
+            }
+
+        # Extract Message-ID for In-Reply-To / References
+        message_id_header = last_headers.get("Message-ID", "")
+
+        # Extract subject (auto-prefix Re: if needed)
+        original_subject = last_headers.get("Subject", "")
+        if original_subject.lower().startswith("re:"):
+            subject = original_subject
+        else:
+            subject = f"Re: {original_subject}"
+
+        # Collect all recipients from entire thread (reply-all)
+        _email_re = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+        all_addresses: set[str] = set()
+        for m in messages:
+            for h in m.get("payload", {}).get("headers", []):
+                if h["name"] in ("From", "To", "Cc"):
+                    all_addresses.update(_email_re.findall(h["value"]))
+
+        # Remove our own address from recipients
+        all_addresses.discard("robothor@ironsail.ai")
+
+        # Add any extra CC from args
+        extra_addrs: set[str] = set()
+        if extra_cc:
+            extra_addrs.update(_email_re.findall(extra_cc))
+            extra_addrs.discard("robothor@ironsail.ai")
+
+        to_addresses = sorted(all_addresses)
+        cc_addresses = sorted(extra_addrs - all_addresses)
+
+        if not to_addresses and not cc_addresses:
+            return {"error": "No recipients found in thread"}
+
+        # Build MIME message with proper threading headers
+        msg = MIMEText(body)
+        msg["To"] = ", ".join(to_addresses)
+        msg["Subject"] = subject
+        if cc_addresses:
+            msg["Cc"] = ", ".join(cc_addresses)
+        if message_id_header:
+            msg["In-Reply-To"] = message_id_header
+            msg["References"] = message_id_header
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+        reply_json: dict[str, Any] = {"raw": raw, "threadId": thread_id}
+
+        return _run_gws(
+            [
+                "gmail",
+                "users",
+                "messages",
+                "send",
+                "--params",
+                '{"userId":"me"}',
+                "--json",
+                _json.dumps(reply_json),
+            ],
+            timeout=30,
+        )
+
     if name == "gws_gmail_send":
         import base64
         from email.mime.text import MIMEText
@@ -77,6 +189,54 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         thread_id = args.get("thread_id")
         in_reply_to = args.get("in_reply_to", "")
 
+        # Warn if this looks like a reply but has no thread_id
+        if not thread_id and subject.lower().startswith("re:"):
+            logger.warning(
+                "gws_gmail_send: subject starts with 'Re:' but no thread_id provided — "
+                "this will create a new thread. Use gws_gmail_reply instead. to=%s subject=%s",
+                to,
+                subject,
+            )
+
+        # Guard: prevent duplicate replies to the same thread
+        if thread_id:
+            try:
+                check_params = {
+                    "userId": "me",
+                    "id": thread_id,
+                    "format": "metadata",
+                    "metadataHeaders": ["From"],
+                }
+                thread_data = _run_gws(
+                    [
+                        "gmail",
+                        "users",
+                        "threads",
+                        "get",
+                        "--params",
+                        _json.dumps(check_params),
+                    ]
+                )
+                if isinstance(thread_data, str):
+                    thread_data = _json.loads(thread_data)
+                if isinstance(thread_data, dict):
+                    messages = thread_data.get("messages", [])
+                    if messages:
+                        last_msg = messages[-1]
+                        headers = {
+                            h["name"]: h["value"]
+                            for h in last_msg.get("payload", {}).get("headers", [])
+                            if h.get("name") == "From"
+                        }
+                        last_from = headers.get("From", "")
+                        if "robothor@ironsail.ai" in last_from:
+                            return {
+                                "status": "skipped",
+                                "reason": "Already replied to this thread — last message is from robothor",
+                            }
+            except Exception:
+                pass  # Don't block send on guard failure
+
         msg = MIMEText(body)
         msg["To"] = to
         msg["Subject"] = subject
@@ -87,11 +247,11 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             msg["References"] = in_reply_to
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
-        json_body: dict[str, Any] = {"raw": raw}
+        send_json: dict[str, Any] = {"raw": raw}
         if thread_id:
-            json_body["threadId"] = thread_id
+            send_json["threadId"] = thread_id
 
-        return _run_gws(
+        result = _run_gws(
             [
                 "gmail",
                 "users",
@@ -100,10 +260,25 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "--params",
                 '{"userId":"me"}',
                 "--json",
-                _json.dumps(json_body),
+                _json.dumps(send_json),
             ],
             timeout=30,
         )
+
+        # Add warning to result if threading was likely intended but missing
+        if (
+            not thread_id
+            and subject.lower().startswith("re:")
+            and isinstance(result, dict)
+            and "error" not in result
+        ):
+            result["_warning"] = (
+                "No thread_id was provided but subject starts with 'Re:'. "
+                "This message was sent as a new thread, not a reply. "
+                "Use gws_gmail_reply to reply within existing conversations."
+            )
+
+        return result
 
     if name == "gws_gmail_modify":
         message_id = args.get("message_id", "")
@@ -270,6 +445,7 @@ async def _gws_handler(
 for _tool_name in (
     "gws_gmail_search",
     "gws_gmail_get",
+    "gws_gmail_reply",
     "gws_gmail_send",
     "gws_gmail_modify",
     "gws_calendar_list",

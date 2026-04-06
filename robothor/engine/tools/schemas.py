@@ -616,11 +616,44 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["gws_gmail_reply"] = {
+        "type": "function",
+        "function": {
+            "name": "gws_gmail_reply",
+            "description": (
+                "Reply to an existing email thread. Automatically threads correctly "
+                "(sets In-Reply-To/References headers and threadId), includes all "
+                "original recipients (reply-all), and prevents duplicate replies. "
+                "Use this instead of gws_gmail_send for all replies."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Gmail thread ID (from task body) — REQUIRED to keep reply in the existing conversation",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Reply body (plain text)",
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "Additional CC recipients beyond those already in the thread, comma-separated",
+                    },
+                },
+                "required": ["thread_id", "body"],
+            },
+        },
+    }
     schemas["gws_gmail_send"] = {
         "type": "function",
         "function": {
             "name": "gws_gmail_send",
-            "description": "Send an email or reply to a thread. Composes and sends via Gmail API.",
+            "description": (
+                "Send a NEW email (not a reply). For replies to existing threads, "
+                "use gws_gmail_reply instead — it handles threading automatically."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -15,6 +15,7 @@ GWS_TOOLS = frozenset(
     {
         "gws_gmail_search",
         "gws_gmail_get",
+        "gws_gmail_reply",
         "gws_gmail_send",
         "gws_gmail_modify",
         "gws_calendar_list",

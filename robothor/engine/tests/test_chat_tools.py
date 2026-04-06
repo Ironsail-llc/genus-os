@@ -30,7 +30,7 @@ class TestChatToolSchemas:
 
         assert "gws_chat_list_spaces" in GWS_TOOLS
         assert "gws_chat_list_messages" in GWS_TOOLS
-        assert len(GWS_TOOLS) == 10
+        assert len(GWS_TOOLS) == 11
 
     def test_chat_send_not_readonly(self):
         from robothor.engine.tools import READONLY_TOOLS

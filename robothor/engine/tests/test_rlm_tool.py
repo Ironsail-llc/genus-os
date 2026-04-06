@@ -5,6 +5,7 @@ All tests mock the rlms library — no API calls or rlms install needed.
 
 from __future__ import annotations
 
+import inspect
 import json
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,23 @@ from robothor.engine.rlm_tool import (
     _make_web_search_fn,
     execute_deep_reason,
 )
+
+
+def _closing_asyncio_run(return_value):
+    """Return a side_effect for asyncio.run that closes the coroutine before returning.
+
+    Without this, patching asyncio.run while the real async function is still
+    imported causes 'coroutine was never awaited' warnings — leaked coroutines
+    that can trigger flaky GC-related failures.
+    """
+
+    def _side_effect(coro, **_kwargs):
+        if inspect.iscoroutine(coro):
+            coro.close()
+        return return_value
+
+    return _side_effect
+
 
 # ─── Config tests ────────────────────────────────────────────────────
 
@@ -81,14 +99,16 @@ class TestLoadContextSource:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_memory_source(self, mock_run):
-        mock_run.return_value = [
-            {
-                "fact_text": "Philip likes coffee",
-                "category": "personal",
-                "confidence": 0.9,
-                "similarity": 0.85,
-            }
-        ]
+        mock_run.side_effect = _closing_asyncio_run(
+            [
+                {
+                    "fact_text": "Philip likes coffee",
+                    "category": "personal",
+                    "confidence": 0.9,
+                    "similarity": 0.85,
+                }
+            ]
+        )
         result = _load_context_source({"type": "memory", "query": "coffee"}, "")
         assert result is not None
         assert "Philip likes coffee" in result
@@ -96,7 +116,7 @@ class TestLoadContextSource:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_memory_source_empty_results(self, mock_run):
-        mock_run.return_value = []
+        mock_run.side_effect = _closing_asyncio_run([])
         result = _load_context_source({"type": "memory", "query": "nonexistent"}, "")
         assert result is None
 
@@ -124,11 +144,13 @@ class TestLoadContextSource:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_entity_source(self, mock_run):
-        mock_run.return_value = {
-            "name": "Philip",
-            "entity_type": "person",
-            "relations": [{"type": "owns", "target": "Robothor"}],
-        }
+        mock_run.side_effect = _closing_asyncio_run(
+            {
+                "name": "Philip",
+                "entity_type": "person",
+                "relations": [{"type": "owns", "target": "Robothor"}],
+            }
+        )
         result = _load_context_source({"type": "entity", "name": "Philip"}, "")
         assert result is not None
         assert "## Entity: Philip" in result
@@ -136,7 +158,7 @@ class TestLoadContextSource:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_entity_source_not_found(self, mock_run):
-        mock_run.return_value = None
+        mock_run.side_effect = _closing_asyncio_run(None)
         result = _load_context_source({"type": "entity", "name": "nobody"}, "")
         assert result is None
 
@@ -151,14 +173,16 @@ class TestLoadContextSource:
 class TestCustomToolWrappers:
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_search_memory_fn(self, mock_run):
-        mock_run.return_value = [
-            {
-                "fact_text": "Test fact",
-                "category": "test",
-                "confidence": 0.8,
-                "similarity": 0.9,
-            }
-        ]
+        mock_run.side_effect = _closing_asyncio_run(
+            [
+                {
+                    "fact_text": "Test fact",
+                    "category": "test",
+                    "confidence": 0.8,
+                    "similarity": 0.9,
+                }
+            ]
+        )
         fn = _make_search_memory_fn()
         result = fn("test query")
         parsed = json.loads(result)
@@ -167,7 +191,7 @@ class TestCustomToolWrappers:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_get_entity_fn(self, mock_run):
-        mock_run.return_value = {"name": "Philip", "entity_type": "person"}
+        mock_run.side_effect = _closing_asyncio_run({"name": "Philip", "entity_type": "person"})
         fn = _make_get_entity_fn()
         result = fn("Philip")
         parsed = json.loads(result)
@@ -175,7 +199,7 @@ class TestCustomToolWrappers:
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_get_entity_fn_not_found(self, mock_run):
-        mock_run.return_value = None
+        mock_run.side_effect = _closing_asyncio_run(None)
         fn = _make_get_entity_fn()
         result = fn("nobody")
         parsed = json.loads(result)
