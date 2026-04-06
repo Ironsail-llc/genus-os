@@ -22,9 +22,11 @@ logger = logging.getLogger(__name__)
 
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
-# Bootstrap file limits
-BOOTSTRAP_MAX_CHARS_PER_FILE = 12_000
-BOOTSTRAP_TOTAL_MAX_CHARS = 30_000
+# Bootstrap safety limit — sanity check against accidentally loading huge files.
+# Files are NEVER truncated. If the total prompt exceeds this limit, the build
+# raises ValueError so the run fails loudly instead of silently losing instructions.
+# Silent truncation caused data corruption (email-log.json wipe, Apr 2026).
+BOOTSTRAP_TOTAL_MAX_CHARS = 100_000
 
 
 @dataclass(frozen=True)
@@ -711,13 +713,6 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
                 )
             elif instruction_path.exists():
                 content = instruction_path.read_text()
-                if len(content) > BOOTSTRAP_MAX_CHARS_PER_FILE:
-                    content = content[:BOOTSTRAP_MAX_CHARS_PER_FILE]
-                    logger.warning(
-                        "Instruction file %s truncated to %d chars",
-                        config.instruction_file,
-                        BOOTSTRAP_MAX_CHARS_PER_FILE,
-                    )
                 parts.append(content)
                 total_chars += len(content)
             else:
@@ -725,23 +720,22 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
 
         # Load bootstrap files
         for bs_file in config.bootstrap_files:
-            if total_chars >= BOOTSTRAP_TOTAL_MAX_CHARS:
-                logger.warning("Bootstrap total limit reached, skipping remaining files")
-                break
-
             bs_path = workspace / bs_file
             if not bs_path.exists():
                 logger.warning("Bootstrap file not found: %s", bs_path)
                 continue
 
             content = bs_path.read_text()
-            remaining = BOOTSTRAP_TOTAL_MAX_CHARS - total_chars
-            max_this_file = min(BOOTSTRAP_MAX_CHARS_PER_FILE, remaining)
-            if len(content) > max_this_file:
-                content = content[:max_this_file]
-                logger.warning("Bootstrap file %s truncated to %d chars", bs_file, max_this_file)
             parts.append(content)
             total_chars += len(content)
+
+        # Hard limit: fail loudly rather than silently losing instructions
+        if total_chars > BOOTSTRAP_TOTAL_MAX_CHARS:
+            raise ValueError(
+                f"Agent {config.id} system prompt is {total_chars} chars "
+                f"(limit {BOOTSTRAP_TOTAL_MAX_CHARS}). Trim instruction/bootstrap "
+                f"files instead of silently truncating."
+            )
 
         # Skill catalog (if skills exist)
         try:

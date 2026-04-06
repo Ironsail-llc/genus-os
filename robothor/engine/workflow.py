@@ -229,12 +229,28 @@ class WorkflowEngine:
         correlation_id: str | None = None,
     ) -> WorkflowRun:
         """Execute a workflow by ID."""
+        from robothor.engine.dedup import release, try_acquire
+
         wf = self._workflows.get(workflow_id)
         if not wf:
             run = WorkflowRun(
                 workflow_id=workflow_id,
                 status=RunStatus.FAILED,
                 error_message=f"Workflow not found: {workflow_id}",
+            )
+            return run
+
+        # Prevent concurrent runs of the same workflow
+        dedup_key = f"workflow:{workflow_id}"
+        if not await try_acquire(dedup_key):
+            logger.info(
+                "Workflow %s already running, skipping duplicate",
+                _sanitize(workflow_id),
+            )
+            run = WorkflowRun(
+                workflow_id=workflow_id,
+                status=RunStatus.COMPLETED,
+                error_message="Skipped: workflow already running",
             )
             return run
 
@@ -261,43 +277,46 @@ class WorkflowEngine:
         )
 
         try:
-            async with asyncio.timeout(wf.timeout_seconds):
-                await self._execute_steps(run, wf)
-        except TimeoutError:
-            run.status = RunStatus.TIMEOUT
-            run.error_message = f"Timed out after {wf.timeout_seconds}s"
-            logger.warning("Workflow %s timed out", _sanitize(workflow_id))
-        except Exception as e:
-            run.status = RunStatus.FAILED
-            run.error_message = str(e)
-            logger.error(
-                "Workflow %s failed: %s",
+            try:
+                async with asyncio.timeout(wf.timeout_seconds):
+                    await self._execute_steps(run, wf)
+            except TimeoutError:
+                run.status = RunStatus.TIMEOUT
+                run.error_message = f"Timed out after {wf.timeout_seconds}s"
+                logger.warning("Workflow %s timed out", _sanitize(workflow_id))
+            except Exception as e:
+                run.status = RunStatus.FAILED
+                run.error_message = str(e)
+                logger.error(
+                    "Workflow %s failed: %s",
+                    _sanitize(workflow_id),
+                    _sanitize(e),
+                    exc_info=True,
+                )
+
+            # Finalize
+            run.completed_at = datetime.now(UTC)
+            if run.started_at:
+                run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+
+            # Set final status if not already failed/timed out
+            if run.status == RunStatus.RUNNING:
+                failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
+                run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
+
+            self._persist_run_end(run)
+
+            logger.info(
+                "Workflow complete: %s status=%s duration=%dms steps=%d",
                 _sanitize(workflow_id),
-                _sanitize(e),
-                exc_info=True,
+                run.status.value,
+                run.duration_ms,
+                len(run.step_results),
             )
 
-        # Finalize
-        run.completed_at = datetime.now(UTC)
-        if run.started_at:
-            run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
-
-        # Set final status if not already failed/timed out
-        if run.status == RunStatus.RUNNING:
-            failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
-            run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
-
-        self._persist_run_end(run)
-
-        logger.info(
-            "Workflow complete: %s status=%s duration=%dms steps=%d",
-            _sanitize(workflow_id),
-            run.status.value,
-            run.duration_ms,
-            len(run.step_results),
-        )
-
-        return run
+            return run
+        finally:
+            await release(dedup_key)
 
     async def _execute_steps(self, run: WorkflowRun, wf: WorkflowDef) -> None:
         """Execute workflow steps sequentially with flow control."""
@@ -391,6 +410,7 @@ class WorkflowEngine:
     ) -> None:
         """Execute an agent step via runner.execute()."""
         from robothor.engine.config import load_agent_config
+        from robothor.engine.dedup import release, try_acquire
         from robothor.engine.delivery import deliver
 
         agent_config = load_agent_config(step.agent_id, self.config.manifest_dir)
@@ -399,29 +419,43 @@ class WorkflowEngine:
             result.error_message = f"Agent config not found: {step.agent_id}"
             return
 
-        # Render message template — warmup handled centrally by runner.execute()
-        message = _render_template(step.message, run.context)
-
-        agent_run = await self.runner.execute(
-            agent_id=step.agent_id,
-            message=message,
-            trigger_type=TriggerType.WORKFLOW,
-            trigger_detail=f"workflow:{run.workflow_id}:{step.id}",
-            correlation_id=run.correlation_id or run.id,
-            agent_config=agent_config,
-        )
-
-        # Deliver agent output
-        await deliver(agent_config, agent_run)
-
-        result.agent_run_id = agent_run.id
-        result.output_text = agent_run.output_text
-
-        if agent_run.status.value == "completed":
-            result.status = WorkflowStepStatus.COMPLETED
-        else:
+        # Prevent overlap with cron-triggered or other workflow-triggered runs
+        if not await try_acquire(step.agent_id):
+            logger.info(
+                "Agent %s already running, skipping workflow step %s",
+                step.agent_id,
+                step.id,
+            )
             result.status = WorkflowStepStatus.FAILED
-            result.error_message = agent_run.error_message or agent_run.status.value
+            result.error_message = f"Agent {step.agent_id} already running"
+            return
+
+        try:
+            # Render message template — warmup handled centrally by runner.execute()
+            message = _render_template(step.message, run.context)
+
+            agent_run = await self.runner.execute(
+                agent_id=step.agent_id,
+                message=message,
+                trigger_type=TriggerType.WORKFLOW,
+                trigger_detail=f"workflow:{run.workflow_id}:{step.id}",
+                correlation_id=run.correlation_id or run.id,
+                agent_config=agent_config,
+            )
+
+            # Deliver agent output
+            await deliver(agent_config, agent_run)
+
+            result.agent_run_id = agent_run.id
+            result.output_text = agent_run.output_text
+
+            if agent_run.status.value == "completed":
+                result.status = WorkflowStepStatus.COMPLETED
+            else:
+                result.status = WorkflowStepStatus.FAILED
+                result.error_message = agent_run.error_message or agent_run.status.value
+        finally:
+            await release(step.agent_id)
 
     async def _run_tool_step(
         self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult

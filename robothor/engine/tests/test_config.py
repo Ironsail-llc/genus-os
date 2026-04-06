@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from robothor.engine.config import (
-    BOOTSTRAP_MAX_CHARS_PER_FILE,
     BOOTSTRAP_TOTAL_MAX_CHARS,
     EngineConfig,
     _resolve_env_vars,
@@ -324,34 +323,32 @@ class TestBuildSystemPrompt:
         # Only the time context is present when instruction file is missing
         assert "Current time:" in prompt
 
-    def test_truncation(self, tmp_path):
-        big_content = "x" * (BOOTSTRAP_MAX_CHARS_PER_FILE + 1000)
+    def test_large_file_loads_fully(self, tmp_path):
+        """Large instruction files are loaded in full — never truncated."""
+        big_content = "HEADER\n" + "x" * 20_000 + "\nFOOTER"
         (tmp_path / "big.md").write_text(big_content)
         config = AgentConfig(id="t", name="t", instruction_file="big.md")
         parts = build_system_prompt(config, tmp_path)
         prompt = parts.full_text()
-        # Instruction content is truncated; time context is appended after
-        assert "x" * 100 in prompt
+        assert "HEADER" in prompt
+        assert "FOOTER" in prompt  # Would be lost under old truncation
         assert "Current time:" in prompt
 
-    def test_total_limit(self, tmp_path):
-        # Create files that together exceed total limit
-        half = BOOTSTRAP_TOTAL_MAX_CHARS // 2 + 100
-        (tmp_path / "instr.md").write_text("i" * half)
-        (tmp_path / "bs1.md").write_text("b" * half)
-        (tmp_path / "bs2.md").write_text("c" * half)
+    def test_total_limit_raises(self, tmp_path):
+        """Exceeding the total char limit raises ValueError, not silent truncation."""
+        import pytest
+
+        overflow = BOOTSTRAP_TOTAL_MAX_CHARS // 2 + 100
+        (tmp_path / "instr.md").write_text("i" * overflow)
+        (tmp_path / "bs1.md").write_text("b" * overflow)
         config = AgentConfig(
             id="t",
             name="t",
             instruction_file="instr.md",
-            bootstrap_files=["bs1.md", "bs2.md"],
+            bootstrap_files=["bs1.md"],
         )
-        parts = build_system_prompt(config, tmp_path)
-        prompt = parts.full_text()
-        # Budget covers instruction + bootstrap content; security preamble, behavioral
-        # rules, separators (\n\n---\n\n × N), and time context string are outside budget.
-        # Allow 2500 chars overhead for those fixed additions.
-        assert len(prompt) <= BOOTSTRAP_TOTAL_MAX_CHARS + 2500
+        with pytest.raises(ValueError, match="system prompt is .* chars"):
+            build_system_prompt(config, tmp_path)
 
     def test_no_files(self):
         config = AgentConfig(id="t", name="t")

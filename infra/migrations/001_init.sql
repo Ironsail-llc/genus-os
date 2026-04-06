@@ -518,7 +518,7 @@ CREATE TABLE IF NOT EXISTS crm_agent_notifications (
     notification_type TEXT NOT NULL CHECK (notification_type IN (
         'task_assigned', 'review_requested', 'review_approved',
         'review_rejected', 'blocked', 'unblocked',
-        'agent_error', 'info', 'custom'
+        'agent_error', 'info', 'custom', 'escalation'
     )),
     subject TEXT NOT NULL,
     body TEXT,
