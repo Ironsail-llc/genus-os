@@ -668,6 +668,220 @@ class TestGwsGmailReply:
             )
             assert "error" in result
 
+    def test_reply_case_insensitive_duplicate_guard(self):
+        """Duplicate guard works even when From header has different casing."""
+        thread_json = self._thread_response(last_from="Robothor@Ironsail.AI")
+        thread_result = MagicMock(returncode=0, stdout=thread_json)
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            return_value=thread_result,
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_reply",
+                {"thread_id": "t1", "body": "Reply"},
+            )
+            assert result.get("status") == "skipped"
+
+    def test_reply_missing_message_id(self):
+        """Reply still sends when last message has no Message-ID header."""
+        thread_json = json.dumps(
+            {
+                "id": "t1",
+                "messages": [
+                    {
+                        "id": "msg1",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "alice@example.com"},
+                                {"name": "To", "value": "robothor@ironsail.ai"},
+                                {"name": "Subject", "value": "Hello"},
+                            ]
+                        },
+                    },
+                ],
+            }
+        )
+        thread_result = MagicMock(returncode=0, stdout=thread_json)
+        send_result = MagicMock(returncode=0, stdout='{"id":"s1","threadId":"t1"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[thread_result, send_result],
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_reply",
+                {"thread_id": "t1", "body": "Reply"},
+            )
+            assert "error" not in result
+
+    def test_reply_no_recipients_after_filtering(self):
+        """Returns error when only participant is robothor."""
+        only_robothor = json.dumps(
+            {
+                "id": "t1",
+                "messages": [
+                    {
+                        "id": "msg1",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "someone@example.com"},
+                                {"name": "To", "value": "robothor@ironsail.ai"},
+                                {"name": "Subject", "value": "Hello"},
+                                {"name": "Message-ID", "value": "<m1@mail>"},
+                            ]
+                        },
+                    },
+                    {
+                        "id": "msg2",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "robothor@ironsail.ai"},
+                                {"name": "To", "value": "someone@example.com"},
+                                {"name": "Subject", "value": "Re: Hello"},
+                                {"name": "Message-ID", "value": "<m2@mail>"},
+                            ]
+                        },
+                    },
+                ],
+            }
+        )
+        # Last message is from robothor, so duplicate guard triggers
+        thread_result = MagicMock(returncode=0, stdout=only_robothor)
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            return_value=thread_result,
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_reply",
+                {"thread_id": "t1", "body": "Reply"},
+            )
+            assert result.get("status") == "skipped"
+
+    def test_reply_case_insensitive_address_filtering(self):
+        """Mixed-case robothor address in To header is filtered from recipients."""
+        thread_json = json.dumps(
+            {
+                "id": "t1",
+                "messages": [
+                    {
+                        "id": "msg1",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "alice@example.com"},
+                                {"name": "To", "value": "Robothor@Ironsail.AI, bob@example.com"},
+                                {"name": "Subject", "value": "Hello"},
+                                {"name": "Message-ID", "value": "<m1@mail>"},
+                            ]
+                        },
+                    },
+                ],
+            }
+        )
+        thread_result = MagicMock(returncode=0, stdout=thread_json)
+        send_result = MagicMock(returncode=0, stdout='{"id":"s1","threadId":"t1"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[thread_result, send_result],
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_reply",
+                {"thread_id": "t1", "body": "Reply"},
+            )
+            assert "error" not in result
+            # Decode the sent MIME to verify robothor is not in recipients
+            import base64
+
+            # Check the subprocess call — second call is the send
+            from robothor.engine.tools.handlers.gws import subprocess
+
+            send_call = subprocess.run.call_args_list[1]
+            json_arg = send_call[0][0][-1]  # last arg is the JSON body
+            raw = json.loads(json_arg)["raw"]
+            mime_bytes = base64.urlsafe_b64decode(raw)
+            mime_text = mime_bytes.decode("utf-8")
+            assert "robothor@ironsail.ai" not in mime_text.lower().split("to:")[1].split("\n")[0]
+
+    def test_reply_multi_message_thread(self):
+        """Reply-all collects addresses from all messages in the thread."""
+        thread_json = json.dumps(
+            {
+                "id": "t1",
+                "messages": [
+                    {
+                        "id": "msg1",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "alice@example.com"},
+                                {"name": "To", "value": "robothor@ironsail.ai"},
+                                {"name": "Subject", "value": "Hello"},
+                                {"name": "Message-ID", "value": "<m1@mail>"},
+                            ]
+                        },
+                    },
+                    {
+                        "id": "msg2",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "robothor@ironsail.ai"},
+                                {"name": "To", "value": "alice@example.com"},
+                                {"name": "Cc", "value": "bob@example.com"},
+                                {"name": "Subject", "value": "Re: Hello"},
+                                {"name": "Message-ID", "value": "<m2@mail>"},
+                            ]
+                        },
+                    },
+                    {
+                        "id": "msg3",
+                        "payload": {
+                            "headers": [
+                                {"name": "From", "value": "charlie@example.com"},
+                                {"name": "To", "value": "robothor@ironsail.ai, alice@example.com"},
+                                {"name": "Subject", "value": "Re: Hello"},
+                                {"name": "Message-ID", "value": "<m3@mail>"},
+                            ]
+                        },
+                    },
+                ],
+            }
+        )
+        thread_result = MagicMock(returncode=0, stdout=thread_json)
+        send_result = MagicMock(returncode=0, stdout='{"id":"s1","threadId":"t1"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[thread_result, send_result],
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_reply",
+                {"thread_id": "t1", "body": "Reply to all"},
+            )
+            assert "error" not in result
+            # Verify all 3 external addresses are collected
+            import base64
+
+            from robothor.engine.tools.handlers.gws import subprocess
+
+            send_call = subprocess.run.call_args_list[1]
+            json_arg = send_call[0][0][-1]
+            raw = json.loads(json_arg)["raw"]
+            mime_text = base64.urlsafe_b64decode(raw).decode("utf-8")
+            assert "alice@example.com" in mime_text
+            assert "bob@example.com" in mime_text
+            assert "charlie@example.com" in mime_text
+            assert "robothor@ironsail.ai" not in mime_text.split("To:")[1].split("\n")[0]
+
 
 class TestGwsGmailSendWarning:
     """Test the Re: subject warning when thread_id is missing."""
@@ -791,6 +1005,29 @@ class TestGwsGmailSendDuplicateGuard:
                 },
             )
             assert result.get("id") == "s2"
+
+    def test_guard_case_insensitive(self):
+        """Guard catches mixed-case robothor email in From header."""
+        thread_result = MagicMock(
+            returncode=0,
+            stdout=self._thread_response(last_from="Robothor@Ironsail.AI"),
+        )
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            return_value=thread_result,
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_gmail_send",
+                {
+                    "to": "alice@example.com",
+                    "subject": "Re: Hello",
+                    "body": "Reply",
+                    "thread_id": "t1",
+                },
+            )
+            assert result.get("status") == "skipped"
 
 
 # ─── Unknown gws tool ───────────────────────────────────────────────

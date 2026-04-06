@@ -115,7 +115,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
         # Duplicate guard: skip if last message is already from us
         last_from = last_headers.get("From", "")
-        if ROBOTHOR_EMAIL in last_from:
+        if ROBOTHOR_EMAIL in last_from.lower():
             return {
                 "status": "skipped",
                 "reason": "Already replied to this thread — last message is from robothor",
@@ -136,7 +136,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         for m in messages:
             for h in m.get("payload", {}).get("headers", []):
                 if h["name"] in ("From", "To", "Cc"):
-                    all_addresses.update(_EMAIL_RE.findall(h["value"]))
+                    all_addresses.update(a.lower() for a in _EMAIL_RE.findall(h["value"]))
 
         # Remove our own address from recipients
         all_addresses.discard(ROBOTHOR_EMAIL)
@@ -144,7 +144,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         # Add any extra CC from args
         extra_addrs: set[str] = set()
         if extra_cc:
-            extra_addrs.update(_EMAIL_RE.findall(extra_cc))
+            extra_addrs.update(a.lower() for a in _EMAIL_RE.findall(extra_cc))
             extra_addrs.discard(ROBOTHOR_EMAIL)
 
         to_addresses = sorted(all_addresses)
@@ -231,7 +231,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                             if h.get("name") == "From"
                         }
                         last_from = headers.get("From", "")
-                        if ROBOTHOR_EMAIL in last_from:
+                        if ROBOTHOR_EMAIL in last_from.lower():
                             return {
                                 "status": "skipped",
                                 "reason": "Already replied to this thread — last message is from robothor",
