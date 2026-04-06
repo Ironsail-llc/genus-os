@@ -338,6 +338,72 @@ def create_step(step: RunStep) -> str:
     )
 
 
+def create_steps_batch(steps: list[RunStep]) -> int:
+    """Insert multiple run steps in a single DB round-trip. Returns count inserted.
+
+    Uses psycopg2 execute_values for efficiency — one INSERT instead of N.
+    Retries up to 3 times on transient DB errors (matching create_step pattern).
+    """
+    if not steps:
+        return 0
+
+    from robothor.engine.retry import retry_sync
+
+    def _insert_batch() -> int:
+        rows = [
+            (
+                step.id,
+                step.run_id,
+                step.step_number,
+                step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
+                step.tool_name,
+                json.dumps(step.tool_input, default=str) if step.tool_input else None,
+                json.dumps(_truncate_json(step.tool_output), default=str)
+                if step.tool_output
+                else None,
+                step.model,
+                step.input_tokens,
+                step.output_tokens,
+                step.cache_creation_tokens,
+                step.cache_read_tokens,
+                step.started_at,
+                step.completed_at,
+                step.duration_ms,
+                step.error_message,
+            )
+            for step in steps
+        ]
+        with get_connection() as conn:
+            cur = conn.cursor()
+            from psycopg2.extras import execute_values
+
+            execute_values(
+                cur,
+                """
+                INSERT INTO agent_run_steps (
+                    id, run_id, step_number, step_type,
+                    tool_name, tool_input, tool_output,
+                    model, input_tokens, output_tokens,
+                    cache_creation_tokens, cache_read_tokens,
+                    started_at, completed_at, duration_ms,
+                    error_message
+                ) VALUES %s
+                ON CONFLICT (id) DO NOTHING
+                """,
+                rows,
+            )
+            return len(rows)
+
+    import psycopg2
+
+    return retry_sync(
+        _insert_batch,
+        max_attempts=3,
+        backoff_base=0.5,
+        retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
+    )
+
+
 def list_steps(run_id: str) -> list[dict[str, Any]]:
     """List all steps for a run, ordered by step number."""
     with get_connection() as conn:

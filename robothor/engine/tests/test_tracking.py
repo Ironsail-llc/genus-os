@@ -12,6 +12,7 @@ from robothor.engine.tracking import (
     _truncate_json,
     create_run,
     create_step,
+    create_steps_batch,
     delete_stale_schedules,
     get_agent_stats,
     get_run,
@@ -199,6 +200,36 @@ class TestCreateStep:
         output_json = call_args[6]  # tool_output is at index 6
         parsed = json.loads(output_json)
         assert parsed.get("_truncated") is True
+
+
+class TestCreateStepsBatch:
+    def test_batch_inserts_multiple_steps(self, mock_db):
+        steps = [
+            RunStep(run_id="run-1", step_number=1, step_type=StepType.LLM_CALL, model="m1"),
+            RunStep(run_id="run-1", step_number=2, step_type=StepType.TOOL_CALL, tool_name="t1"),
+        ]
+        from unittest.mock import patch as _patch
+
+        with _patch("psycopg2.extras.execute_values") as mock_ev:
+            result = create_steps_batch(steps)
+        assert result == 2
+        mock_ev.assert_called_once()
+
+    def test_batch_empty_list_returns_zero(self, mock_db):
+        result = create_steps_batch([])
+        assert result == 0
+        mock_db["cursor"].execute.assert_not_called()
+
+    def test_batch_sql_has_on_conflict(self, mock_db):
+        steps = [
+            RunStep(run_id="run-1", step_number=1, step_type=StepType.LLM_CALL, model="m1"),
+        ]
+        from unittest.mock import patch as _patch
+
+        with _patch("psycopg2.extras.execute_values") as mock_ev:
+            create_steps_batch(steps)
+        sql = mock_ev.call_args[0][1]
+        assert "ON CONFLICT" in sql
 
 
 class TestListSteps:

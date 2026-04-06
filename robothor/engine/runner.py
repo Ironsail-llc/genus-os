@@ -61,7 +61,7 @@ from robothor.engine.prompts import (
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.tools import get_registry
-from robothor.engine.tracking import create_run, create_step, update_run
+from robothor.engine.tracking import create_run, create_step, create_steps_batch, update_run
 
 # Max seconds to wait for the next streaming chunk before aborting and
 # falling back to the next model.  Prevents stalled streams from hanging
@@ -2668,15 +2668,17 @@ class AgentRunner:
         return None
 
     def _finish_run(self, run: AgentRun, trace: Any = None) -> AgentRun:
-        """Persist the final run state to the database."""
+        """Finalize run and spawn background DB persistence.
+
+        Returns the AgentRun immediately — DB writes happen asynchronously
+        so callers (especially interactive Telegram sessions) are not blocked.
+        """
         # ── [HOOKS] AGENT_END lifecycle hook (fire-and-forget) ──
         try:
             from robothor.engine.hook_registry import HookContext, HookEvent, get_hook_registry
 
             hr = get_hook_registry()
             if hr:
-                import asyncio
-
                 end_ctx = HookContext(
                     event=HookEvent.AGENT_END,
                     agent_id=run.agent_id,
@@ -2689,9 +2691,8 @@ class AgentRunner:
                         else str(run.status),
                     },
                 )
-                # Dispatch as fire-and-forget if we're in an event loop
                 try:
-                    asyncio.get_running_loop()  # verify loop exists
+                    asyncio.get_running_loop()
                     from robothor.engine.task_registry import get_task_registry
 
                     get_task_registry().spawn(
@@ -2699,10 +2700,32 @@ class AgentRunner:
                         name=f"agent-end-hook:{run.agent_id}",
                     )
                 except RuntimeError:
-                    pass  # No event loop — skip async dispatch
+                    pass
         except Exception as e:
             logger.warning("AGENT_END hook error: %s", _sanitize(e))
 
+        # Spawn DB persistence as a background task so the caller gets the run back immediately.
+        try:
+            asyncio.get_running_loop()
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                self._persist_run(run),
+                name=f"persist-run:{run.id}",
+            )
+        except RuntimeError:
+            # No event loop (CLI, tests) — persist synchronously
+            self._persist_run_sync(run)
+
+        return run
+
+    async def _persist_run(self, run: AgentRun) -> None:
+        """Persist run state and steps to the database in a background thread."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._persist_run_sync, run)
+
+    def _persist_run_sync(self, run: AgentRun) -> None:
+        """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
         try:
             update_run(
                 run.id,
@@ -2726,16 +2749,18 @@ class AgentRunner:
                 cost_budget_usd=run.cost_budget_usd or None,
                 budget_exhausted=run.budget_exhausted or None,
             )
-            # Record steps
-            for step in run.steps:
+            if run.steps:
                 try:
-                    create_step(step)
-                except Exception as e:
-                    logger.warning("Failed to record step: %s", _sanitize(e))
+                    create_steps_batch(run.steps)
+                except Exception:
+                    for step in run.steps:
+                        try:
+                            create_step(step)
+                        except Exception as e:
+                            logger.warning("Failed to record step: %s", _sanitize(e))
         except Exception as e:
             logger.warning("Failed to update run in database: %s", _sanitize(e))
 
-        # Auto-resolve CRM task linked to this run
         if run.task_id:
             try:
                 from robothor.crm.dal import resolve_task as dal_resolve_task
@@ -2756,5 +2781,3 @@ class AgentRunner:
                     )
             except Exception as e:
                 logger.warning("Auto-task update failed: %s", _sanitize(e))
-
-        return run
