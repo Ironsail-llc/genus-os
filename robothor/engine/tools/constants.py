@@ -95,6 +95,37 @@ APOLLO_TOOLS = frozenset(
     }
 )
 
+# JIRA Cloud API tools (dev team operations)
+JIRA_TOOLS = frozenset(
+    {
+        "jira_search",
+        "jira_get_issue",
+        "jira_get_sprint",
+        "jira_get_board_velocity",
+        "jira_list_boards",
+    }
+)
+
+# GitHub REST API tools (dev team operations)
+GITHUB_API_TOOLS = frozenset(
+    {
+        "github_list_prs",
+        "github_get_pr",
+        "github_pr_stats",
+        "github_commit_activity",
+        "github_review_stats",
+    }
+)
+
+# DevOps metrics tools (build/deploy/incident tracking)
+DEVOPS_METRICS_TOOLS = frozenset(
+    {
+        "devops_get_deployments",
+        "devops_get_incidents",
+        "devops_get_metrics_summary",
+    }
+)
+
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 

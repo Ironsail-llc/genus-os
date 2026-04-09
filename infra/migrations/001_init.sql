@@ -39,7 +39,6 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE IF NOT EXISTS memory_facts (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     fact_text TEXT NOT NULL,
     category VARCHAR(50) NOT NULL,
     entities TEXT[] DEFAULT '{}',
@@ -71,13 +70,11 @@ CREATE INDEX IF NOT EXISTS idx_facts_importance ON memory_facts (importance_scor
 CREATE INDEX IF NOT EXISTS idx_facts_entities ON memory_facts USING GIN (entities);
 CREATE INDEX IF NOT EXISTS idx_facts_created ON memory_facts (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_facts_tsv ON memory_facts USING GIN(tsv);
-CREATE INDEX IF NOT EXISTS idx_facts_tenant ON memory_facts(tenant_id) WHERE is_active = TRUE;
 
 -- ── Entity Knowledge Graph ─────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS memory_entities (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     name VARCHAR(255) NOT NULL,
     entity_type VARCHAR(50) NOT NULL,
     aliases TEXT[] DEFAULT '{}',
@@ -85,17 +82,15 @@ CREATE TABLE IF NOT EXISTS memory_entities (
     first_seen TIMESTAMPTZ DEFAULT NOW(),
     last_seen TIMESTAMPTZ DEFAULT NOW(),
     mention_count INTEGER DEFAULT 1,
-    UNIQUE(tenant_id, name, entity_type)
+    UNIQUE(name, entity_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_entities_type ON memory_entities (entity_type);
 CREATE INDEX IF NOT EXISTS idx_entities_name ON memory_entities (name);
 CREATE INDEX IF NOT EXISTS idx_entities_mention ON memory_entities (mention_count DESC);
-CREATE INDEX IF NOT EXISTS idx_entities_tenant ON memory_entities(tenant_id);
 
 CREATE TABLE IF NOT EXISTS memory_relations (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     source_entity_id INTEGER REFERENCES memory_entities(id) ON DELETE CASCADE,
     target_entity_id INTEGER REFERENCES memory_entities(id) ON DELETE CASCADE,
     relation_type VARCHAR(100) NOT NULL,
@@ -103,7 +98,7 @@ CREATE TABLE IF NOT EXISTS memory_relations (
     fact_id INTEGER REFERENCES memory_facts(id),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     confidence FLOAT DEFAULT 1.0,
-    UNIQUE(tenant_id, source_entity_id, target_entity_id, relation_type)
+    UNIQUE(source_entity_id, target_entity_id, relation_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_relations_source ON memory_relations (source_entity_id);
@@ -114,7 +109,6 @@ CREATE INDEX IF NOT EXISTS idx_relations_type ON memory_relations (relation_type
 
 CREATE TABLE IF NOT EXISTS contact_identifiers (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     channel VARCHAR(50) NOT NULL,
     identifier VARCHAR(255) NOT NULL,
     display_name TEXT,
@@ -122,7 +116,7 @@ CREATE TABLE IF NOT EXISTS contact_identifiers (
     memory_entity_id INTEGER REFERENCES memory_entities(id),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(tenant_id, channel, identifier)
+    UNIQUE(channel, identifier)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ci_person ON contact_identifiers (person_id);
@@ -133,52 +127,47 @@ CREATE INDEX IF NOT EXISTS idx_ci_channel ON contact_identifiers (channel);
 
 CREATE TABLE IF NOT EXISTS agent_memory_blocks (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
-    block_name VARCHAR(100) NOT NULL,
+    block_name VARCHAR(100) NOT NULL UNIQUE,
     block_type VARCHAR(50) NOT NULL DEFAULT 'text',
     content TEXT DEFAULT '',
     max_chars INTEGER DEFAULT 5000,
     last_written_at TIMESTAMPTZ DEFAULT NOW(),
     last_read_at TIMESTAMPTZ,
     read_count INTEGER DEFAULT 0,
-    write_count INTEGER DEFAULT 0,
-    UNIQUE(tenant_id, block_name)
+    write_count INTEGER DEFAULT 0
 );
 
 -- Seed default memory blocks
-INSERT INTO agent_memory_blocks (tenant_id, block_name, block_type, max_chars) VALUES
-    ('robothor-primary', 'persona', 'system', 3000),
-    ('robothor-primary', 'user_profile', 'system', 5000),
-    ('robothor-primary', 'working_context', 'ephemeral', 5000),
-    ('robothor-primary', 'operational_findings', 'persistent', 5000),
-    ('robothor-primary', 'contacts_summary', 'persistent', 5000)
-ON CONFLICT (tenant_id, block_name) DO NOTHING;
+INSERT INTO agent_memory_blocks (block_name, block_type, max_chars) VALUES
+    ('persona', 'system', 3000),
+    ('user_profile', 'system', 5000),
+    ('working_context', 'ephemeral', 5000),
+    ('operational_findings', 'persistent', 5000),
+    ('contacts_summary', 'persistent', 5000)
+ON CONFLICT (block_name) DO NOTHING;
 
 -- ── Ingestion Dedup and Watermarks ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS ingested_items (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     source_name VARCHAR(100) NOT NULL,
     item_id VARCHAR(255) NOT NULL,
     content_hash VARCHAR(64) NOT NULL,
     fact_ids INTEGER[] DEFAULT '{}',
     ingested_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(tenant_id, source_name, item_id)
+    UNIQUE(source_name, item_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingested_source ON ingested_items (source_name);
 CREATE INDEX IF NOT EXISTS idx_ingested_at ON ingested_items (ingested_at);
 
 CREATE TABLE IF NOT EXISTS ingestion_watermarks (
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
-    source_name VARCHAR(100) NOT NULL,
+    source_name VARCHAR(100) PRIMARY KEY,
     last_ingested_at TIMESTAMPTZ,
     items_ingested INTEGER DEFAULT 0,
     last_error TEXT,
     error_count INTEGER DEFAULT 0,
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (tenant_id, source_name)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -380,7 +369,6 @@ CREATE INDEX IF NOT EXISTS idx_facts_embedding
 
 CREATE TABLE IF NOT EXISTS memory_insights (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary' REFERENCES crm_tenants(id),
     insight_text TEXT NOT NULL,
     source_fact_ids INTEGER[] NOT NULL DEFAULT '{}',
     categories TEXT[] DEFAULT '{}',
@@ -394,7 +382,6 @@ CREATE TABLE IF NOT EXISTS memory_insights (
 CREATE INDEX IF NOT EXISTS idx_insights_active ON memory_insights (is_active)
     WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_insights_created ON memory_insights (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_insights_tenant ON memory_insights(tenant_id) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_insights_embedding
     ON memory_insights USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=200);
 
@@ -494,23 +481,6 @@ CREATE INDEX IF NOT EXISTS idx_tenants_active ON crm_tenants(active) WHERE activ
 INSERT INTO crm_tenants (id, display_name)
 VALUES ('robothor-primary', 'Robothor Primary')
 ON CONFLICT (id) DO NOTHING;
-
--- ── Tenant Users (per-user tenant routing) ────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS tenant_users (
-    id SERIAL PRIMARY KEY,
-    telegram_user_id TEXT,
-    telegram_username TEXT,
-    display_name TEXT NOT NULL,
-    tenant_id TEXT NOT NULL REFERENCES crm_tenants(id),
-    role TEXT NOT NULL DEFAULT 'user',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(telegram_user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant ON tenant_users(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_tenant_users_active ON tenant_users(is_active) WHERE is_active = TRUE;
 
 ALTER TABLE crm_people ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'robothor-primary' REFERENCES crm_tenants(id);
 CREATE INDEX IF NOT EXISTS idx_people_tenant ON crm_people(tenant_id) WHERE deleted_at IS NULL;
@@ -740,9 +710,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     cost_budget_usd NUMERIC(10, 6) DEFAULT 0,
     budget_exhausted BOOLEAN DEFAULT FALSE,
 
-    outcome_assessment TEXT,
-    outcome_notes TEXT,
-
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -779,7 +746,6 @@ CREATE TABLE IF NOT EXISTS agent_run_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps(run_id, step_number);
-CREATE INDEX IF NOT EXISTS idx_agent_run_steps_created ON agent_run_steps(created_at);
 
 CREATE TABLE IF NOT EXISTS agent_schedules (
     agent_id TEXT PRIMARY KEY,
@@ -824,8 +790,6 @@ CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
 
 CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run
     ON agent_run_checkpoints(run_id, step_number DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_created
-    ON agent_run_checkpoints(created_at);
 
 -- ── Guardrail audit trail (from migration 014) ──────────────────────────
 
@@ -842,8 +806,6 @@ CREATE TABLE IF NOT EXISTS agent_guardrail_events (
 
 CREATE INDEX IF NOT EXISTS idx_agent_guardrail_events_run
     ON agent_guardrail_events(run_id);
-CREATE INDEX IF NOT EXISTS idx_agent_guardrail_events_created
-    ON agent_guardrail_events(created_at);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- WORKFLOW ENGINE (from migration 013)
@@ -963,9 +925,5 @@ CREATE INDEX IF NOT EXISTS idx_fed_events_conn_channel
 CREATE INDEX IF NOT EXISTS idx_fed_events_unsynced
     ON federation_events(connection_id, channel)
     WHERE synced_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_fed_events_cleanup
-    ON federation_events(created_at)
-    WHERE synced_at IS NOT NULL;
 
 COMMIT;

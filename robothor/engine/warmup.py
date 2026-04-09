@@ -181,9 +181,7 @@ def _build_history_section(agent_id: str) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _build_memory_blocks_section(
-    block_names: list[str], tenant_id: str = "robothor-primary"
-) -> str:
+def _build_memory_blocks_section(block_names: list[str], tenant_id: str = DEFAULT_TENANT) -> str:
     """Read memory blocks and format them, flagging stale ones."""
     if not block_names:
         return ""
@@ -258,7 +256,7 @@ def build_interactive_preamble(
     agent_id: str,
     user_message: str = "",
     include_blocks: bool = True,
-    tenant_id: str = "robothor-primary",
+    tenant_id: str = DEFAULT_TENANT,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -316,7 +314,7 @@ def build_interactive_preamble(
 MAX_ENTITY_CONTEXT_CHARS = 1000
 
 
-def _build_entity_context(user_message: str, tenant_id: str = "robothor-primary") -> str:
+def _build_entity_context(user_message: str, tenant_id: str = DEFAULT_TENANT) -> str:
     """Extract entities from user message and pull relevant facts.
 
     Looks for capitalized proper nouns in the message and searches
@@ -482,7 +480,7 @@ def _travel_status() -> str | None:
     try:
         from robothor.memory.blocks import read_block
 
-        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary")
+        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
         result = read_block("travel_status", tenant_id=_tid)
         content = (
             result.get("content", "") if isinstance(result, dict) else str(result) if result else ""
@@ -571,7 +569,7 @@ def _buddy_status_context(config: AgentConfig) -> str | None:
     try:
         from robothor.memory.blocks import read_block
 
-        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary")
+        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
         result = read_block("buddy_status", tenant_id=_tid)
         content = result.get("content", "") if isinstance(result, dict) else ""
         if content and content.strip():

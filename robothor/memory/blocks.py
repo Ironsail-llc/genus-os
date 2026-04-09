@@ -17,11 +17,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db import get_connection
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 DEFAULT_BLOCK_SEEDS = [
     ("persona", "system", 3000),
