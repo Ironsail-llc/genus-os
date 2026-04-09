@@ -45,6 +45,30 @@ def get_telegram_sender() -> Callable[..., Any] | None:
     return get_platform_sender("telegram")
 
 
+async def _persist_delivery_status(run: AgentRun) -> None:
+    """Persist delivery status to DB after deliver() modifies the in-memory run.
+
+    This is needed because _persist_run() in the runner may have already saved the
+    run to DB before deliver() sets delivery_status/delivered_at/delivery_channel.
+    Idempotent — safe to call even if the run hasn't been persisted yet.
+    """
+    if not run.id or not run.delivery_status:
+        return
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE agent_runs
+                   SET delivery_status = %s, delivered_at = %s, delivery_channel = %s
+                   WHERE id = %s""",
+                (run.delivery_status, run.delivered_at, run.delivery_channel, run.id),
+            )
+            conn.commit()
+    except Exception:
+        logger.warning("Failed to persist delivery status for run %s", run.id)
+
+
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     """Deliver agent output based on the delivery mode.
 
@@ -54,6 +78,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     if run.parent_run_id is not None:
         logger.debug("Suppressing delivery for sub-agent run %s", run.id)
         run.delivery_status = "suppressed_sub_agent"
+        await _persist_delivery_status(run)
         return True
 
     # ── [HOOKS] PRE_DELIVERY lifecycle hook ──
@@ -77,6 +102,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
             if pre_result.action == HookAction.BLOCK:
                 logger.info("Delivery blocked by hook for %s: %s", config.id, pre_result.reason)
                 run.delivery_status = f"blocked_by_hook:{pre_result.reason}"
+                await _persist_delivery_status(run)
                 return True
     except Exception as e:
         logger.warning("PRE_DELIVERY hook error: %s", e)
@@ -88,6 +114,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         else:
             logger.debug("No output to deliver for %s", config.id)
             run.delivery_status = "no_output"
+            await _persist_delivery_status(run)
             return True
 
     # Strip any trailing HEARTBEAT_OK the LLM may hallucinate
@@ -96,6 +123,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     if not text:
         logger.debug("Output was only HEARTBEAT_OK for %s, treating as no output", config.id)
         run.delivery_status = "no_output"
+        await _persist_delivery_status(run)
         return True
 
     mode = config.delivery_mode
@@ -103,16 +131,22 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     if mode == DeliveryMode.NONE:
         logger.debug("Delivery mode=none for %s, skipping", config.id)
         run.delivery_status = "silent"
+        await _persist_delivery_status(run)
         return True
 
     if mode == DeliveryMode.ANNOUNCE:
-        return await _deliver_telegram(config, text, run)
+        result = await _deliver_telegram(config, text, run)
+        await _persist_delivery_status(run)
+        return result
 
     if mode == DeliveryMode.LOG:
-        return await _deliver_event_bus(config, text, run)
+        result = await _deliver_event_bus(config, text, run)
+        await _persist_delivery_status(run)
+        return result
 
     logger.warning("Unknown delivery mode %s for %s", mode, config.id)
     run.delivery_status = f"unknown_mode:{mode}"
+    await _persist_delivery_status(run)
     return False
 
 
