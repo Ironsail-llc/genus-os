@@ -109,6 +109,33 @@ def _get_handlers() -> dict[str, Any]:
     return _handler_map
 
 
+def _audit_tool_call(
+    tool_name: str,
+    agent_id: str,
+    tenant_id: str,
+    *,
+    status: str = "ok",
+    error: str | None = None,
+) -> None:
+    """Record a tool invocation in the audit log (non-blocking, never raises)."""
+    try:
+        from robothor.audit.logger import log_event
+
+        details: dict[str, Any] = {"tenant_id": tenant_id}
+        if error:
+            details["error"] = error[:500]
+        log_event(
+            event_type="agent.tool_call",
+            action=tool_name,
+            category="agent",
+            actor=agent_id or "unknown",
+            details=details,
+            status=status,
+        )
+    except Exception:
+        pass
+
+
 async def _execute_tool(
     name: str,
     args: dict[str, Any],
@@ -122,7 +149,6 @@ async def _execute_tool(
     Checks adapter-provided tools first (dynamic MCP servers), then falls
     through to hardcoded engine handlers.
     """
-    # Check if this tool is provided by a business adapter
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -133,9 +159,11 @@ async def _execute_tool(
             pool = get_mcp_client_pool()
             session = await pool.get_session(route)
             result: dict[str, Any] = await session.call_tool(name, args)
+            _audit_tool_call(name, agent_id, tenant_id)
             return result
         except Exception as e:
             logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
+            _audit_tool_call(name, agent_id, tenant_id, status="error", error=str(e))
             return {"error": f"Adapter tool '{name}' failed: {e}"}
 
     ctx = ToolContext(agent_id=agent_id, tenant_id=tenant_id, workspace=workspace)
@@ -143,4 +171,10 @@ async def _execute_tool(
     handler = handlers.get(name)
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
-    return cast("dict[str, Any]", await handler(args, ctx))
+
+    result = cast("dict[str, Any]", await handler(args, ctx))
+    if isinstance(result, dict) and "error" in result:
+        _audit_tool_call(name, agent_id, tenant_id, status="error", error=result["error"])
+    else:
+        _audit_tool_call(name, agent_id, tenant_id)
+    return result
