@@ -539,6 +539,18 @@ def create_workspace(path: Path) -> None:
             if src.exists() and not dst.exists():
                 dst.write_text(src.read_text())
 
+        # Snapshot template hashes so `robothor upgrade` can detect changes
+        from robothor.cli.upgrade import _save_state, _snapshot_template_hashes
+
+        state_data: dict = {}
+        state_file = path / ".robothor" / "migrations_applied.yaml"
+        if state_file.exists():
+            import yaml
+
+            state_data = yaml.safe_load(state_file.read_text()) or {}
+        state_data["template_hashes"] = _snapshot_template_hashes()
+        _save_state(state_data)
+
 
 def _find_template_dir() -> Path | None:
     """Locate the templates/ directory (bundled or in-repo)."""

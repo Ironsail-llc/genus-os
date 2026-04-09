@@ -5,6 +5,7 @@ Instance configuration (brain/, docs/agents/*.yaml, .env) is never touched.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -37,10 +38,10 @@ def _load_applied() -> list[str]:
 
 
 def _save_applied(migrations: list[dict[str, Any]]) -> None:
-    """Write migration tracking state."""
-    state = _state_file()
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(yaml.dump({"migrations": migrations}, default_flow_style=False))
+    """Write migration tracking state (legacy helper for seed)."""
+    state_data = _load_state()
+    state_data["migrations"] = migrations
+    _save_state(state_data)
 
 
 def _discover_migrations() -> list[Path]:
@@ -150,31 +151,65 @@ def _apply_migration(path: Path, dry_run: bool) -> bool:
         return False
 
 
-def _check_template_updates() -> list[tuple[str, str]]:
-    """Check if templates have been updated since instance files were created."""
-    workspace = _workspace()
-    updates = []
+# Template source name → instance destination (relative to brain/)
+TEMPLATE_CHECKS = {
+    "brain-CLAUDE.md": "CLAUDE.md",
+    "SOUL.md": "SOUL.md",
+    "IDENTITY.md": "IDENTITY.md",
+    "USER.md": "USER.md",
+}
 
-    # Template source → instance destination
-    checks = {
-        "SOUL.md": workspace / "brain" / "SOUL.md",
-        "IDENTITY.md": workspace / "brain" / "IDENTITY.md",
-        "USER.md": workspace / "brain" / "USER.md",
-    }
 
+def _hash_file(path: Path) -> str:
+    """SHA-256 hex digest of a file's content."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_state() -> dict[str, Any]:
+    """Load full upgrade state (migrations + template hashes)."""
+    state = _state_file()
+    if not state.exists():
+        return {}
+    return yaml.safe_load(state.read_text()) or {}
+
+
+def _save_state(data: dict[str, Any]) -> None:
+    """Write full upgrade state."""
+    state = _state_file()
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(yaml.dump(data, default_flow_style=False))
+
+
+def _snapshot_template_hashes() -> dict[str, str]:
+    """Compute current SHA-256 hashes for all known templates."""
     from robothor.setup import _find_template_dir
 
     template_dir = _find_template_dir()
     if not template_dir:
-        return updates
-
-    for src_name, dst_path in checks.items():
+        return {}
+    hashes = {}
+    for src_name in TEMPLATE_CHECKS:
         src_path = template_dir / src_name
-        if (
-            src_path.exists()
-            and dst_path.exists()
-            and src_path.stat().st_mtime > dst_path.stat().st_mtime
-        ):
+        if src_path.exists():
+            hashes[src_name] = _hash_file(src_path)
+    return hashes
+
+
+def _check_template_updates() -> list[tuple[str, str]]:
+    """Check if templates have been updated since last upgrade/init."""
+    workspace = _workspace()
+    state = _load_state()
+    stored_hashes = state.get("template_hashes", {})
+    current_hashes = _snapshot_template_hashes()
+    updates = []
+
+    for src_name, dst_name in TEMPLATE_CHECKS.items():
+        dst_path = workspace / "brain" / dst_name
+        if not dst_path.exists():
+            continue  # Instance file doesn't exist — nothing to update
+        current = current_hashes.get(src_name)
+        stored = stored_hashes.get(src_name)
+        if current and current != stored:
             updates.append((src_name, str(dst_path)))
 
     return updates
@@ -212,16 +247,15 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             print(f"  {len(new_migrations)} new migration(s):")
             from datetime import UTC, datetime
 
-            # Reload current state to preserve existing entries
-            state_data = yaml.safe_load(_state_file().read_text()) or {}
+            state_data = _load_state()
             entries = state_data.get("migrations", [])
             for m in new_migrations:
                 if not _apply_migration(m, dry_run):
                     return 1
                 if not dry_run:
                     entries.append({"file": m.name, "applied_at": datetime.now(UTC).isoformat()})
-            if not dry_run:
-                _save_applied(entries)
+                    state_data["migrations"] = entries
+                    _save_state(state_data)
         else:
             print("  All migrations already applied.")
     else:
@@ -240,7 +274,13 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         print("  No template updates.")
     print()
 
-    # 4. Summary
+    # 4. Save current template hashes for next upgrade comparison
+    if not dry_run:
+        state_data = _load_state()
+        state_data["template_hashes"] = _snapshot_template_hashes()
+        _save_state(state_data)
+
+    # 5. Summary
     if dry_run:
         print("Dry run complete — no changes made.")
     else:
