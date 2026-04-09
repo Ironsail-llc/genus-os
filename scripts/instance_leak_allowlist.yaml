@@ -1,0 +1,22 @@
+# Patterns that are safe to appear in platform code.
+# One pattern per line. Lines starting with # are comments.
+# If any pattern appears in a line, that line is skipped.
+
+# Co-authored-by lines in commit messages
+noreply@anthropic.com
+
+# Test fixture safe domains (already excluded by SAFE_EMAIL_DOMAINS)
+# Listed here for documentation completeness
+
+# Documentation URLs and references
+linkedin.com/in/
+github.com/
+
+# Generic names used in examples and docs
+alice@example.com
+bob@example.com
+agent@example.com
+
+# Path patterns that are references, not hardcoded usage
+Path.home()
+ROBOTHOR_WORKSPACE

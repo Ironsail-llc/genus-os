@@ -16,6 +16,12 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
+      - id: check-instance-leak
+        name: check for instance data in platform files
+        entry: python3 scripts/check_instance_leak.py
+        language: system
+        always_run: true
+        pass_filenames: false
       - id: validate-agents
         name: validate agent manifests
         entry: python3 scripts/validate_agents.py
