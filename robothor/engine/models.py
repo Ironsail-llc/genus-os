@@ -333,6 +333,10 @@ class AgentRun:
     # CRM task linkage (auto-task)
     task_id: str | None = None
 
+    # Outcome assessment (interactive runs only)
+    outcome_assessment: str | None = None  # "successful" | "partial" | "incorrect" | "abandoned"
+    outcome_notes: str | None = None
+
     steps: list[RunStep] = field(default_factory=list)
 
 
