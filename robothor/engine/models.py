@@ -25,6 +25,7 @@ class TriggerType(StrEnum):
     MANUAL = "manual"
     TELEGRAM = "telegram"
     WEBCHAT = "webchat"
+    SLACK = "slack"
     WORKFLOW = "workflow"
     SUB_AGENT = "sub_agent"
     FEDERATION = "federation"

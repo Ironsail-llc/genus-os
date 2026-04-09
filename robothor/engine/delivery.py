@@ -20,19 +20,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Will be set by daemon when TelegramBot initializes
-_telegram_send = None
+# Platform sender registry — populated by daemon on startup.
+_platform_senders: dict[str, Any] = {}
+
+
+def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> None:
+    """Register a send function for a delivery platform."""
+    _platform_senders[platform] = send_func
+    logger.info("Registered platform sender: %s", platform)
+
+
+def get_platform_sender(platform: str) -> Any | None:
+    """Get the registered send function for a platform."""
+    return _platform_senders.get(platform)
 
 
 def set_telegram_sender(send_func: Callable[..., Any]) -> None:
     """Register the Telegram send function (called by daemon on startup)."""
-    global _telegram_send
-    _telegram_send = send_func
+    register_platform_sender("telegram", send_func)
 
 
 def get_telegram_sender() -> Callable[..., Any] | None:
     """Get the registered Telegram send function (or None)."""
-    return _telegram_send
+    return get_platform_sender("telegram")
 
 
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
@@ -107,8 +117,9 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
 
 
 async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bool:
-    """Send output to Telegram."""
-    if _telegram_send is None:
+    """Send output to Telegram (uses platform registry)."""
+    sender = get_platform_sender("telegram")
+    if sender is None:
         logger.warning("Telegram sender not initialized, can't deliver for %s", config.id)
         return False
 
@@ -121,11 +132,10 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
         return False
 
     try:
-        # Prefix with agent name for context
         header = f"*{config.name}*\n\n"
         full_text = header + text
 
-        await _telegram_send(chat_id, full_text)
+        await sender(chat_id, full_text)
 
         run.delivery_status = "delivered"
         run.delivered_at = datetime.now(UTC)
