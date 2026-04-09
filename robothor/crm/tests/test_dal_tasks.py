@@ -190,7 +190,7 @@ class TestTaskToDictRequiresHuman:
             "sla_deadline_at": None,
             "escalation_count": 0,
             "started_at": None,
-            "tenant_id": "robothor-primary",
+            "tenant_id": "test-tenant",
             "updated_at": None,
             "created_at": None,
             "requires_human": True,
@@ -219,7 +219,7 @@ class TestTaskToDictRequiresHuman:
             "sla_deadline_at": None,
             "escalation_count": 0,
             "started_at": None,
-            "tenant_id": "robothor-primary",
+            "tenant_id": "test-tenant",
             "updated_at": None,
             "created_at": None,
             # requires_human not present — should default to False

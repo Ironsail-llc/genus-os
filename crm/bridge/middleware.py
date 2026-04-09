@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
-from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from robothor.audit.logger import log_event
+
+if TYPE_CHECKING:
+    from fastapi import Request
+    from starlette.middleware.base import RequestResponseEndpoint
+    from starlette.responses import Response
 from robothor.events.capabilities import check_endpoint_access, load_capabilities
 
 # Load the agent capabilities manifest once at import time
@@ -19,11 +23,13 @@ load_capabilities()
 class TenantMiddleware(BaseHTTPMiddleware):
     """Extract X-Tenant-Id header and set request.state.tenant_id.
 
-    Defaults to 'robothor-primary' when the header is absent.
+    Defaults to ROBOTHOR_DEFAULT_TENANT env var (or 'default') when the header is absent.
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        tenant_id = request.headers.get("x-tenant-id", "robothor-primary")
+        from robothor.constants import DEFAULT_TENANT
+
+        tenant_id = request.headers.get("x-tenant-id", DEFAULT_TENANT)
         request.state.tenant_id = tenant_id
         response = await call_next(request)
         response.headers["X-Tenant-Id"] = tenant_id

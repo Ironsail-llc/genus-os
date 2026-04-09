@@ -11,11 +11,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.vault.crypto import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 
 def _get_conn() -> Any:

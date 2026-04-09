@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -73,7 +75,7 @@ def _run_context_hooks() -> str:
 def build_warmth_preamble(
     config: AgentConfig,
     workspace: Path,
-    tenant_id: str = "robothor-primary",
+    tenant_id: str = DEFAULT_TENANT,
 ) -> str:
     """Build a warmth preamble string for an agent run.
 

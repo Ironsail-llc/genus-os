@@ -173,7 +173,7 @@ class ToolRegistry:
         arguments: dict[str, Any],
         *,
         agent_id: str = "",
-        tenant_id: str = "robothor-primary",
+        tenant_id: str = "",
         workspace: str = "",
         timeout: int = 120,
     ) -> dict[str, Any]:

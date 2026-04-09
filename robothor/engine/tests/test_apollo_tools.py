@@ -17,7 +17,7 @@ from robothor.engine.tools.handlers.apollo import (
 
 # ─── Fixtures ─────────────────────────────────────────────────────
 
-CTX = ToolContext(agent_id="test", tenant_id="robothor-primary")
+CTX = ToolContext(agent_id="test", tenant_id="test-tenant")
 
 SAMPLE_PERSON = {
     "id": "p-1",

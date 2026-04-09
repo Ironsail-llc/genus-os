@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.vault.crypto import get_master_key, init_master_key
 from robothor.vault.dal import (
     delete_secret,
@@ -24,8 +25,6 @@ from robothor.vault.dal import (
 
 if TYPE_CHECKING:
     import builtins
-
-DEFAULT_TENANT = "robothor-primary"
 
 
 def get(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:

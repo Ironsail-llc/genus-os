@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
+
 
 def person_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_people row to API response shape.
@@ -46,7 +48,7 @@ def person_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         }
         if row.get("company_id")
         else None,
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }
@@ -62,7 +64,7 @@ def company_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "address": row.get("address") or "",
         "linkedinUrl": row.get("linkedin_url") or "",
         "idealCustomerProfile": row.get("ideal_customer_profile", False),
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }
@@ -76,7 +78,7 @@ def note_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "body": row.get("body") or "",
         "personId": str(row["person_id"]) if row.get("person_id") else None,
         "companyId": str(row["company_id"]) if row.get("company_id") else None,
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }
@@ -102,7 +104,7 @@ def task_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "slaDeadlineAt": row["sla_deadline_at"].isoformat() if row.get("sla_deadline_at") else None,
         "escalationCount": row.get("escalation_count") or 0,
         "startedAt": row["started_at"].isoformat() if row.get("started_at") else None,
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
         "requiresHuman": bool(row.get("requires_human", False)),
@@ -119,7 +121,7 @@ def history_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "changedBy": row.get("changed_by") or "",
         "reason": row.get("reason") or "",
         "metadata": row.get("metadata") or {},
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }
 
@@ -141,7 +143,7 @@ def routine_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "nextRunAt": row["next_run_at"].isoformat() if row.get("next_run_at") else None,
         "lastRunAt": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
         "createdBy": row.get("created_by") or "",
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
     }
@@ -157,7 +159,7 @@ def conversation_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "personId": str(row["person_id"]) if row.get("person_id") else None,
         "personName": row.get("person_name") or row.get("display_name") or "",
         "metadata": row.get("metadata") or {},
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "lastActivityAt": row["last_activity_at"].isoformat()
         if row.get("last_activity_at")
         else None,
@@ -183,7 +185,7 @@ def notification_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a crm_agent_notifications row to API response shape."""
     return {
         "id": str(row["id"]),
-        "tenantId": row.get("tenant_id") or "robothor-primary",
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "fromAgent": row.get("from_agent") or "",
         "toAgent": row.get("to_agent") or "",
         "notificationType": row.get("notification_type") or "",

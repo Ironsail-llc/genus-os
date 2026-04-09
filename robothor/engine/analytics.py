@@ -18,11 +18,10 @@ if TYPE_CHECKING:
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 
 def get_agent_stats(

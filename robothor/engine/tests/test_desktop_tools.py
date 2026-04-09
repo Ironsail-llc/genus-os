@@ -15,9 +15,7 @@ from robothor.engine.tools.dispatch import ToolContext
 
 @pytest.fixture
 def ctx():
-    return ToolContext(
-        agent_id="computer-use", tenant_id="robothor-primary", workspace=str(Path.cwd())
-    )
+    return ToolContext(agent_id="computer-use", tenant_id="test-tenant", workspace=str(Path.cwd()))
 
 
 @pytest.fixture

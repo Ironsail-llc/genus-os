@@ -4,7 +4,7 @@ CRM Data Access Layer — PostgreSQL CRUD for all CRM entities.
 All operations use soft deletes (deleted_at). All mutations are audit-logged.
 Response shapes are defined in robothor.crm.models.
 
-Multi-tenant: every function accepts ``tenant_id`` (default ``"robothor-primary"``).
+Multi-tenant: every function accepts ``tenant_id`` (default from ``ROBOTHOR_DEFAULT_TENANT`` env var).
 
 Usage:
     from robothor.crm.dal import create_person, search_people, get_person
@@ -24,6 +24,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.crm.models import (
     company_to_dict,
     conversation_to_dict,
@@ -44,8 +45,6 @@ from robothor.crm.validation import (
 from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 
 def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwargs: Any) -> None:

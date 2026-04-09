@@ -27,6 +27,14 @@ from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
 
+
+def _default_tenant() -> str:
+    """Lazy import to avoid circular dependency."""
+    from robothor.constants import DEFAULT_TENANT
+
+    return DEFAULT_TENANT
+
+
 from middleware import CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agents import router as agents_router
 from routers.audit import router as audit_router
@@ -69,7 +77,7 @@ async def _routine_trigger_loop():
                     person_id=routine.get("personId"),
                     company_id=routine.get("companyId"),
                     created_by_agent="routine-trigger",
-                    tenant_id=routine.get("tenantId", "robothor-primary"),
+                    tenant_id=routine.get("tenantId", _default_tenant()),
                 )
                 if task_id:
                     advance_routine(routine["id"])

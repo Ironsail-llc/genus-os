@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
+
+from robothor.constants import DEFAULT_TENANT
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -17,7 +19,7 @@ class ToolContext:
     """Context passed to every tool handler."""
 
     agent_id: str = ""
-    tenant_id: str = "robothor-primary"
+    tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     workspace: str = ""
 
 
@@ -30,17 +32,20 @@ def _cfg() -> Config:
 
 def _collect_handlers() -> dict[str, Any]:
     """Collect all HANDLERS dicts from handler modules."""
-    from robothor.engine.tools.handlers import (
+    from robothor.engine.tools.handlers import (  # noqa: E501
         apollo,
         benchmark,
         browser,
         crm,
         desktop,
+        devops_metrics,
         experiment,
         federation,
         filesystem,
         git,
+        github_api,
         gws,
+        jira,
         mcp_client,
         memory,
         messaging,
@@ -82,6 +87,9 @@ def _collect_handlers() -> dict[str, Any]:
         pf,
         messaging,
         skills,
+        jira,
+        github_api,
+        devops_metrics,
         mcp_client,
         timing,
         todolist,
@@ -106,7 +114,7 @@ async def _execute_tool(
     args: dict[str, Any],
     *,
     agent_id: str = "",
-    tenant_id: str = "robothor-primary",
+    tenant_id: str = "",
     workspace: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.

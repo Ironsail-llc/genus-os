@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
+
+def _default_tenant() -> str:
+    """Lazy import to avoid circular dependency with robothor.constants."""
+    from robothor.constants import DEFAULT_TENANT
+
+    return DEFAULT_TENANT
+
+
 # Bootstrap safety limit — sanity check against accidentally loading huge files.
 # Files are NEVER truncated. If the total prompt exceeds this limit, the build
 # raises ValueError so the run fails loudly instead of silently losing instructions.
@@ -39,7 +47,7 @@ class EngineConfig:
 
     # Engine
     port: int = 18800
-    tenant_id: str = "robothor-primary"
+    tenant_id: str = ""  # Set from env in from_env(); empty = use DEFAULT_TENANT
 
     # Paths
     workspace: Path = field(default_factory=lambda: Path.home() / "robothor")
@@ -79,7 +87,7 @@ class EngineConfig:
             default_chat_id=os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
             or os.environ.get("TELEGRAM_CHAT_ID", ""),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
-            tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary"),
+            tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "") or _default_tenant(),
             workspace=workspace,
             manifest_dir=Path(
                 os.environ.get("ROBOTHOR_MANIFEST_DIR", workspace / "docs" / "agents")

@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 
 if TYPE_CHECKING:
@@ -51,7 +52,7 @@ class AgentSession:
         agent_id: str,
         trigger_type: TriggerType = TriggerType.MANUAL,
         trigger_detail: str | None = None,
-        tenant_id: str = "robothor-primary",
+        tenant_id: str = DEFAULT_TENANT,
         correlation_id: str | None = None,
         tool_offload_threshold: int = 0,
     ) -> None:

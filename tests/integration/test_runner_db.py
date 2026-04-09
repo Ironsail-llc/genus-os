@@ -21,7 +21,7 @@ class TestRunnerDB:
 
         run = AgentRun(
             id="test-run-001",
-            tenant_id="robothor-primary",
+            tenant_id="test-tenant",
             agent_id="test-agent",
             trigger_type=TriggerType.CRON,
             trigger_detail="manual test",
@@ -45,7 +45,7 @@ class TestRunnerDB:
 
         run = AgentRun(
             id="test-run-002",
-            tenant_id="robothor-primary",
+            tenant_id="test-tenant",
             agent_id="test-agent",
             trigger_type=TriggerType.CRON,
             status=RunStatus.RUNNING,

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -287,7 +289,7 @@ class AgentRun:
     """Represents a single agent execution attempt."""
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    tenant_id: str = "robothor-primary"
+    tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     agent_id: str = ""
 
     trigger_type: TriggerType = TriggerType.MANUAL
@@ -535,7 +537,7 @@ class WorkflowRun:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     workflow_id: str = ""
-    tenant_id: str = "robothor-primary"
+    tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     trigger_type: str = "manual"
     trigger_detail: str = ""
     correlation_id: str | None = None

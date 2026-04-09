@@ -11,14 +11,16 @@ import pytest
 @pytest.mark.asyncio
 async def test_default_tenant_header(test_client):
     """Requests without X-Tenant-Id get default tenant."""
+    from robothor.constants import DEFAULT_TENANT
+
     with patch("routers.people.list_people", return_value=[]) as mock:
         res = await test_client.get("/api/people")
         assert res.status_code == 200
         mock.assert_called_once()
         _, kwargs = mock.call_args
-        assert kwargs["tenant_id"] == "robothor-primary"
+        assert kwargs["tenant_id"] == DEFAULT_TENANT
         # Response includes tenant header
-        assert res.headers.get("x-tenant-id") == "robothor-primary"
+        assert res.headers.get("x-tenant-id") == DEFAULT_TENANT
 
 
 @pytest.mark.asyncio

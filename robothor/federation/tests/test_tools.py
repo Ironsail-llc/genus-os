@@ -18,7 +18,7 @@ from robothor.federation.models import Connection, ConnectionState, Relationship
 
 @pytest.fixture()
 def ctx():
-    return ToolContext(agent_id="main", tenant_id="robothor-primary", workspace="/home/test")
+    return ToolContext(agent_id="main", tenant_id="test-tenant", workspace="/home/test")
 
 
 def _mock_load_connections(connections: list[Connection]):

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import Request
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 
 def get_tenant_id(request: Request) -> str:
     """Extract tenant ID from request state (set by TenantMiddleware).
 
-    Falls back to 'robothor-primary' if not set.
+    Falls back to DEFAULT_TENANT if not set.
     """
-    return getattr(request.state, "tenant_id", "robothor-primary")
+    from robothor.constants import DEFAULT_TENANT
+
+    return getattr(request.state, "tenant_id", DEFAULT_TENANT)

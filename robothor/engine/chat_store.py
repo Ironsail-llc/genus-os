@@ -18,11 +18,10 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 
 # ── Sync functions (called from async wrappers via run_in_executor) ──

@@ -26,7 +26,9 @@ class TestEngineConfig:
         monkeypatch.delenv("ROBOTHOR_ENGINE_PORT", raising=False)
         config = EngineConfig.from_env()
         assert config.port == 18800
-        assert config.tenant_id == "robothor-primary"
+        from robothor.constants import DEFAULT_TENANT
+
+        assert config.tenant_id == DEFAULT_TENANT
         assert config.max_iterations == 20
         assert config.bot_token == ""
         assert config.default_chat_id == ""

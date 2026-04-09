@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 
 if TYPE_CHECKING:
@@ -21,8 +22,6 @@ if TYPE_CHECKING:
     from robothor.engine.models import AgentRun, RunStep
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TENANT = "robothor-primary"
 
 # Max chars for tool output stored in steps (prevent bloat)
 MAX_TOOL_OUTPUT_CHARS = 4000
