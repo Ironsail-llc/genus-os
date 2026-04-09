@@ -117,12 +117,27 @@ GITHUB_API_TOOLS = frozenset(
     }
 )
 
-# DevOps metrics tools (build/deploy/incident tracking)
+# DevOps metrics storage tools
 DEVOPS_METRICS_TOOLS = frozenset(
     {
-        "devops_get_deployments",
-        "devops_get_incidents",
-        "devops_get_metrics_summary",
+        "devops_store_metric",
+        "devops_query_metrics",
+    }
+)
+
+# Identity mapping tools (CRM contact_identifiers)
+IDENTITY_TOOLS = frozenset(
+    {
+        "link_identity",
+        "resolve_identities",
+    }
+)
+
+# Report rendering tools
+REPORT_TOOLS = frozenset(
+    {
+        "render_report",
+        "render_devops_report",
     }
 )
 
@@ -208,5 +223,21 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # MCP client read-only tools
         "mcp_list_servers",
         "mcp_list_tools",
+        # JIRA read-only tools
+        "jira_search",
+        "jira_get_issue",
+        "jira_get_sprint",
+        "jira_get_board_velocity",
+        "jira_list_boards",
+        # GitHub API read-only tools
+        "github_list_prs",
+        "github_get_pr",
+        "github_pr_stats",
+        "github_commit_activity",
+        "github_review_stats",
+        # DevOps metrics read-only tools
+        "devops_query_metrics",
+        # Identity read-only tools
+        "resolve_identities",
     }
 )

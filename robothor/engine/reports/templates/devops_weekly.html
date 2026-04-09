@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#172b4d;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:20px 0;">
+<tr><td align="center">
+<table width="680" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.12);">
+
+<!-- Header -->
+<tr><td style="background:#0052cc;padding:24px 32px;">
+  <h1 style="margin:0;color:#fff;font-size:22px;font-weight:600;">Dev Team Operations Report</h1>
+  <p style="margin:6px 0 0;color:#b3d4ff;font-size:14px;">{{ period }} &middot; Generated {{ generated_at }}</p>
+</td></tr>
+
+<!-- Executive Summary -->
+<tr><td style="padding:24px 32px;">
+  <h2 style="margin:0 0 16px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Executive Summary</h2>
+  <table width="100%" cellpadding="0" cellspacing="0">
+  <tr>
+    {% for card in [
+      ("Tickets Resolved", executive_summary.tickets_resolved),
+      ("PRs Merged", executive_summary.prs_merged),
+      ("PR/Ticket Ratio", executive_summary.pr_to_ticket_ratio),
+      ("Open Backlog", executive_summary.open_backlog)
+    ] %}
+    <td width="25%" style="padding:8px;">
+      <div style="background:#f4f5f7;border-radius:6px;padding:16px;text-align:center;">
+        <div style="font-size:28px;font-weight:700;color:#172b4d;">{{ card[1] }}</div>
+        <div style="font-size:11px;color:#6b778c;margin-top:4px;text-transform:uppercase;">{{ card[0] }}</div>
+      </div>
+    </td>
+    {% endfor %}
+  </tr>
+  </table>
+  {% if executive_summary.throughput_rate %}
+  <p style="margin:12px 0 0;font-size:13px;color:#6b778c;">Throughput: {{ executive_summary.throughput_rate }}</p>
+  {% endif %}
+</td></tr>
+
+<!-- JIRA Section -->
+{% if jira and jira.resolved %}
+<tr><td style="padding:0 32px 24px;">
+  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">JIRA Ticket Analysis</h2>
+
+  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="background:#f4f5f7;">
+      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Project</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Resolved</th>
+      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Types</th>
+      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Top Contributors</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in jira.resolved %}
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:600;">{{ row.project }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ row.count }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;">{{ row.types }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;">{{ row.top_contributors }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  </table>
+
+  {% if jira.stale_tickets %}
+  <p style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#de350b;">&#9888; {{ jira.stale_tickets | length }}+ Stale Tickets (open, no updates 14+ days)</p>
+  <table width="100%" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
+    {% for t in jira.stale_tickets[:10] %}
+    <tr>
+      <td style="padding:4px 8px;color:#0052cc;font-weight:500;">{{ t.key }}</td>
+      <td style="padding:4px 8px;">{{ t.status }}</td>
+      <td style="padding:4px 8px;">{{ t.assignee }}</td>
+      <td style="padding:4px 8px;color:#6b778c;">{{ t.summary }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</td></tr>
+{% endif %}
+
+<!-- GitHub Section -->
+{% if github and github.repo_stats %}
+<tr><td style="padding:0 32px 24px;">
+  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">GitHub PR Metrics</h2>
+
+  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="background:#f4f5f7;">
+      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Repo</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Merged</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Avg Cycle</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Median</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for repo in github.repo_stats %}
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ repo.name }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ repo.merged }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;{% if repo.avg_cycle_hours and repo.avg_cycle_hours > 48 %}color:#de350b;font-weight:700;{% endif %}">{{ repo.avg_cycle }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ repo.median_cycle }}</td>
+    </tr>
+    {% endfor %}
+    <tr style="background:#f4f5f7;font-weight:700;">
+      <td style="padding:8px;">TOTAL</td>
+      <td style="padding:8px;text-align:right;">{{ github.total_merged }}</td>
+      <td style="padding:8px;"></td>
+      <td style="padding:8px;"></td>
+    </tr>
+  </tbody>
+  </table>
+
+  {% if github.review_coverage is defined %}
+  <p style="margin:12px 0 4px;font-size:13px;">
+    Code Review Coverage:
+    <span style="font-weight:700;{% if github.review_coverage < 30 %}color:#de350b;{% elif github.review_coverage < 70 %}color:#ff8b00;{% else %}color:#00875a;{% endif %}">
+      {{ github.review_coverage }}%
+    </span>
+    ({{ github.total_reviews }} reviews / {{ github.total_merged }} PRs)
+  </p>
+  {% endif %}
+
+  {% if github.no_review_repos %}
+  <p style="margin:8px 0 0;font-size:12px;color:#de350b;">&#9888; Repos with no human code reviews: {{ github.no_review_repos | join(', ') }}</p>
+  {% endif %}
+</td></tr>
+{% endif %}
+
+<!-- Individual Productivity -->
+{% if people %}
+<tr><td style="padding:0 32px 24px;">
+  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Individual Productivity</h2>
+
+  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="background:#f4f5f7;">
+      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Name</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Tickets</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">PRs</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Reviews</th>
+      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">PR/Ticket</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in people %}
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ p.name }}{% if p.note %} <span style="font-size:11px;color:#6b778c;">({{ p.note }})</span>{% endif %}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.tickets }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.prs }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.reviews }}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.pr_per_ticket }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  </table>
+</td></tr>
+{% endif %}
+
+<!-- Bottlenecks -->
+{% if bottlenecks %}
+<tr><td style="padding:0 32px 24px;">
+  <h2 style="margin:0 0 12px;font-size:16px;color:#de350b;text-transform:uppercase;letter-spacing:0.5px;">Bottlenecks &amp; Recommendations</h2>
+
+  {% for b in bottlenecks %}
+  <div style="margin-bottom:12px;padding:12px 16px;background:{% if b.severity == 'high' %}#ffebe6{% else %}#fffae6{% endif %};border-left:4px solid {% if b.severity == 'high' %}#de350b{% else %}#ff8b00{% endif %};border-radius:0 4px 4px 0;">
+    <p style="margin:0;font-size:13px;font-weight:600;color:#172b4d;">{{ loop.index }}. {{ b.text }}</p>
+    {% if b.recommendation %}
+    <p style="margin:6px 0 0;font-size:12px;color:#6b778c;">&#x2192; {{ b.recommendation }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</td></tr>
+{% endif %}
+
+<!-- Footer -->
+<tr><td style="padding:16px 32px;background:#f4f5f7;border-top:1px solid #dfe1e6;">
+  <p style="margin:0;font-size:11px;color:#6b778c;text-align:center;">
+    Automated report generated by Genus OS DevOps Manager
+  </p>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>

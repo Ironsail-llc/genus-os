@@ -662,7 +662,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Recipient email address(es), comma-separated",
                     },
                     "subject": {"type": "string", "description": "Email subject line"},
-                    "body": {"type": "string", "description": "Email body (plain text)"},
+                    "body": {
+                        "type": "string",
+                        "description": "Email body text (plain or HTML depending on content_type)",
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Content type: 'text' (default) or 'html' for HTML emails",
+                    },
                     "cc": {"type": "string", "description": "CC recipients, comma-separated"},
                     "thread_id": {
                         "type": "string",
@@ -2031,6 +2038,345 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                 },
                 "required": ["todos"],
+            },
+        },
+    }
+
+    # ── Identity mapping tools ──
+
+    schemas["link_identity"] = {
+        "type": "function",
+        "function": {
+            "name": "link_identity",
+            "description": "Link a channel identity (github, jira, slack, etc.) to a CRM person. Upserts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "person_id": {"type": "string", "description": "CRM person UUID"},
+                    "channel": {
+                        "type": "string",
+                        "description": "Channel name: 'github', 'jira', 'jira_display_name', 'slack', etc.",
+                    },
+                    "identifier": {
+                        "type": "string",
+                        "description": "The handle/username on that channel",
+                    },
+                    "display_name": {
+                        "type": "string",
+                        "description": "Human-readable label (optional)",
+                    },
+                },
+                "required": ["person_id", "channel", "identifier"],
+            },
+        },
+    }
+    schemas["resolve_identities"] = {
+        "type": "function",
+        "function": {
+            "name": "resolve_identities",
+            "description": "Look up all known identities for a person across all channels. Returns github, jira, email, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "description": "CRM person UUID (provide this OR channel+identifier)",
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": "Channel to look up (used with identifier)",
+                    },
+                    "identifier": {
+                        "type": "string",
+                        "description": "Handle on the channel (used with channel)",
+                    },
+                },
+            },
+        },
+    }
+
+    # ── Report rendering tools ──
+
+    schemas["render_report"] = {
+        "type": "function",
+        "function": {
+            "name": "render_report",
+            "description": "Render any report type as HTML. Template must exist at reports/templates/{report_type}.html.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_type": {
+                        "type": "string",
+                        "description": "Template name without extension (e.g. 'devops_weekly', 'sales_pipeline')",
+                    },
+                    "report_data": {
+                        "description": "Report data as JSON object or string — passed as template context",
+                    },
+                },
+                "required": ["report_type", "report_data"],
+            },
+        },
+    }
+    schemas["render_devops_report"] = {
+        "type": "function",
+        "function": {
+            "name": "render_devops_report",
+            "description": "Render the devops weekly report as HTML (shortcut for render_report with type='devops_weekly').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_data": {
+                        "description": "Structured report data with keys: period, executive_summary, jira, github, people, bottlenecks",
+                    },
+                },
+                "required": ["report_data"],
+            },
+        },
+    }
+
+    # ── JIRA Cloud API tools ──
+
+    schemas["jira_search"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_search",
+            "description": "Search JIRA issues using JQL. Returns key, summary, status, assignee, story points, and dates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "jql": {"type": "string", "description": "JQL query string"},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results (default 50, max 100)",
+                    },
+                },
+                "required": ["jql"],
+            },
+        },
+    }
+    schemas["jira_get_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_get_issue",
+            "description": "Get a single JIRA issue with changelog for cycle time analysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key (e.g. 'ENG-123')"},
+                },
+                "required": ["issue_key"],
+            },
+        },
+    }
+    schemas["jira_get_sprint"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_get_sprint",
+            "description": "Get active or recent sprint info for a board with completion rate.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "integer", "description": "JIRA board ID"},
+                    "state": {
+                        "type": "string",
+                        "description": "Sprint state: 'active', 'closed', 'future' (default: active)",
+                    },
+                },
+                "required": ["board_id"],
+            },
+        },
+    }
+    schemas["jira_get_board_velocity"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_get_board_velocity",
+            "description": "Get velocity data for last N closed sprints.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "integer", "description": "JIRA board ID"},
+                    "num_sprints": {
+                        "type": "integer",
+                        "description": "Past sprints to include (default 5, max 10)",
+                    },
+                },
+                "required": ["board_id"],
+            },
+        },
+    }
+    schemas["jira_list_boards"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_list_boards",
+            "description": "List available JIRA boards, optionally filtered by project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_key": {
+                        "type": "string",
+                        "description": "Filter by project key (optional)",
+                    },
+                },
+            },
+        },
+    }
+
+    # ── GitHub REST API tools ──
+
+    schemas["github_list_prs"] = {
+        "type": "function",
+        "function": {
+            "name": "github_list_prs",
+            "description": "List pull requests for a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in owner/repo format"},
+                    "state": {
+                        "type": "string",
+                        "description": "Filter: 'open', 'closed', or 'all' (default: all)",
+                    },
+                    "sort": {
+                        "type": "string",
+                        "description": "Sort: 'created', 'updated', 'popularity' (default: updated)",
+                    },
+                    "per_page": {
+                        "type": "integer",
+                        "description": "Results per page (default 30, max 100)",
+                    },
+                    "max_pages": {"type": "integer", "description": "Max pages (default 3, max 5)"},
+                },
+                "required": ["repo"],
+            },
+        },
+    }
+    schemas["github_get_pr"] = {
+        "type": "function",
+        "function": {
+            "name": "github_get_pr",
+            "description": "Get a single PR with review timeline and time-to-first-review.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in owner/repo format"},
+                    "pr_number": {"type": "integer", "description": "Pull request number"},
+                },
+                "required": ["repo", "pr_number"],
+            },
+        },
+    }
+    schemas["github_pr_stats"] = {
+        "type": "function",
+        "function": {
+            "name": "github_pr_stats",
+            "description": "Aggregated PR metrics: avg/median cycle time, merge count, author breakdown.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in owner/repo format"},
+                    "days": {
+                        "type": "integer",
+                        "description": "Look-back days (default 30, max 90)",
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    }
+    schemas["github_commit_activity"] = {
+        "type": "function",
+        "function": {
+            "name": "github_commit_activity",
+            "description": "Commit frequency by contributor for a repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in owner/repo format"},
+                    "weeks": {
+                        "type": "integer",
+                        "description": "Recent weeks to show (default 12, max 52)",
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    }
+    schemas["github_review_stats"] = {
+        "type": "function",
+        "function": {
+            "name": "github_review_stats",
+            "description": "Code review participation: reviews given, approvals, turnaround per reviewer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in owner/repo format"},
+                    "days": {
+                        "type": "integer",
+                        "description": "Look-back days (default 30, max 90)",
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    }
+
+    # ── DevOps metrics storage tools ──
+
+    schemas["devops_store_metric"] = {
+        "type": "function",
+        "function": {
+            "name": "devops_store_metric",
+            "description": "Store a devops metric snapshot for trend analysis. Upserts by date + source + type + scope.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Data source: 'jira', 'github', or 'claude_teams'",
+                    },
+                    "metric_type": {
+                        "type": "string",
+                        "description": "Metric type (e.g. 'sprint_velocity', 'pr_cycle_time')",
+                    },
+                    "value": {"description": "Metric value — number, string, or JSON object"},
+                    "snapshot_date": {
+                        "type": "string",
+                        "description": "Date YYYY-MM-DD (default: today)",
+                    },
+                    "scope": {"type": "string", "description": "Metric scope (default: 'team')"},
+                    "scope_key": {
+                        "type": "string",
+                        "description": "Scope identifier (e.g. repo name)",
+                    },
+                },
+                "required": ["source", "metric_type", "value"],
+            },
+        },
+    }
+    schemas["devops_query_metrics"] = {
+        "type": "function",
+        "function": {
+            "name": "devops_query_metrics",
+            "description": "Query stored devops metrics for trend analysis. Returns snapshots ordered by date descending.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Data source: 'jira', 'github', or 'claude_teams'",
+                    },
+                    "metric_type": {"type": "string", "description": "Metric type to query"},
+                    "days": {
+                        "type": "integer",
+                        "description": "Look-back period in days (default 30, max 90)",
+                    },
+                    "scope": {"type": "string", "description": "Filter by scope (optional)"},
+                    "scope_key": {
+                        "type": "string",
+                        "description": "Filter by scope key (optional)",
+                    },
+                },
+                "required": ["source", "metric_type"],
             },
         },
     }
