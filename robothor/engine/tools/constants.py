@@ -239,5 +239,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "devops_query_metrics",
         # Identity read-only tools
         "resolve_identities",
+        # Report rendering (pure output, no side effects)
+        "render_report",
+        "render_devops_report",
     }
 )

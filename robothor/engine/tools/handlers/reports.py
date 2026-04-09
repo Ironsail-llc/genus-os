@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -38,6 +39,8 @@ async def _render_report(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     report_type = args.get("report_type", "")
     if not report_type:
         return {"error": "report_type is required (e.g. 'devops_weekly')"}
+    if not re.match(r"^[a-zA-Z0-9_]+$", report_type):
+        return {"error": "report_type must be alphanumeric with underscores only"}
 
     try:
         report_data = _parse_data(args)

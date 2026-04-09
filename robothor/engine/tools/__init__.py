@@ -21,6 +21,7 @@ from robothor.engine.tools.constants import (
     PF_TOOLS,
     PROTECTED_BRANCHES,
     READONLY_TOOLS,
+    REPORT_TOOLS,
     SPAWN_TOOLS,
 )
 from robothor.engine.tools.dispatch import _execute_tool
@@ -55,6 +56,7 @@ __all__ = [
     "PF_TOOLS",
     "PROTECTED_BRANCHES",
     "READONLY_TOOLS",
+    "REPORT_TOOLS",
     "SPAWN_TOOLS",
     # Registry
     "ToolRegistry",
