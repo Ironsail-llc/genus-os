@@ -59,7 +59,7 @@ FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federat
 PF_TOOLS = frozenset({"pf_system_status"})
 
 # Skill tools
-SKILL_TOOLS = frozenset({"invoke_skill", "list_skills"})
+SKILL_TOOLS = frozenset({"invoke_skill", "list_skills", "create_skill", "update_skill"})
 
 # MCP client tools (call external MCP servers)
 MCP_CLIENT_TOOLS = frozenset(
@@ -203,8 +203,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "benchmark_compare",
         # Apollo read-only tools (search is free, no side effects)
         "apollo_search_people",
-        # Skill tools (read-only — skills are just instructions)
-        "invoke_skill",
+        # Skill tools (list is read-only; invoke_skill writes usage metadata)
         "list_skills",
         # MCP client read-only tools
         "mcp_list_servers",

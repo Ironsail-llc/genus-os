@@ -1735,6 +1735,100 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["create_skill"] = {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": (
+                "Create a new reusable skill from a multi-step procedure you just performed. "
+                "The skill becomes available to all agents via invoke_skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill identifier (kebab-case, 3-60 chars, e.g. 'deploy-staging')",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-line description of what the skill does",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full markdown body with step-by-step instructions (max 10,000 chars)",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Categorization tags (e.g. ['devops', 'deployment'])",
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "type": {"type": "string", "default": "string"},
+                                "description": {"type": "string"},
+                                "required": {"type": "boolean", "default": False},
+                                "default": {},
+                            },
+                            "required": ["name"],
+                        },
+                        "description": "Typed parameters the skill accepts",
+                    },
+                    "tools_required": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tools this skill needs (e.g. ['exec', 'gws_gmail_send'])",
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["text", "json"],
+                        "description": "Expected output format (default: text)",
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "If true, overwrite an existing skill with the same name",
+                    },
+                },
+                "required": ["name", "description", "content"],
+            },
+        },
+    }
+    schemas["update_skill"] = {
+        "type": "function",
+        "function": {
+            "name": "update_skill",
+            "description": (
+                "Update an existing skill with an improved version. "
+                "The previous version is archived in the skill's revision history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the existing skill to update",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New markdown body with improved instructions (max 10,000 chars)",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Updated one-line description (optional, keeps existing if omitted)",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the skill was improved (recorded in revision history)",
+                    },
+                },
+                "required": ["name", "content"],
+            },
+        },
+    }
 
     # ── Timing ────────────────────────────────────────────────────────
     schemas["wait_seconds"] = {
