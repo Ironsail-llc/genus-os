@@ -1545,6 +1545,12 @@ def send_message(
                 (conversation_id,),
             )
             conn.commit()
+            _safe_audit(
+                "create",
+                "message",
+                str(msg["id"]) if msg else None,
+                details={"conversation_id": conversation_id, "type": message_type},
+            )
             return dict(msg) if msg else None
         except Exception as e:
             conn.rollback()
@@ -1565,6 +1571,10 @@ def toggle_conversation_status(
             )
             ok: bool = cur.rowcount > 0
             conn.commit()
+            if ok:
+                _safe_audit(
+                    "update", "conversation", str(conversation_id), details={"status": status}
+                )
             return ok
         except Exception as e:
             conn.rollback()
@@ -1773,6 +1783,12 @@ def advance_routine(routine_id: str) -> bool:
                 (next_run, routine_id),
             )
             conn.commit()
+            _safe_audit(
+                "update",
+                "routine",
+                routine_id,
+                details={"action": "advance", "next_run_at": str(next_run)},
+            )
             return True
         except Exception as e:
             conn.rollback()
@@ -1868,6 +1884,8 @@ def mark_notification_read(notification_id: str, tenant_id: str = DEFAULT_TENANT
             )
             ok: bool = cur.rowcount > 0
             conn.commit()
+            if ok:
+                _safe_audit("update", "notification", notification_id, details={"action": "read"})
             return ok
         except Exception as e:
             conn.rollback()
@@ -1888,6 +1906,10 @@ def acknowledge_notification(notification_id: str, tenant_id: str = DEFAULT_TENA
             )
             ok: bool = cur.rowcount > 0
             conn.commit()
+            if ok:
+                _safe_audit(
+                    "update", "notification", notification_id, details={"action": "acknowledge"}
+                )
             return ok
         except Exception as e:
             conn.rollback()

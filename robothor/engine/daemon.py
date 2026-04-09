@@ -340,6 +340,25 @@ async def main() -> None:
     logger.info("Engine stopped")
 
 
+def _record_watchdog_event(event_type: str, detail: str) -> None:
+    """Append a watchdog event to the watchdog_log memory block."""
+    try:
+        from datetime import UTC, datetime
+
+        from robothor.memory.blocks import read_block, write_block
+
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        entry = f"[{ts}] {event_type}: {detail}"
+        existing = read_block("watchdog_log")
+        content = existing.get("content", "") if "error" not in existing else ""
+        lines = [ln for ln in content.strip().splitlines() if ln] if content else []
+        lines.append(entry)
+        lines = lines[-50:]
+        write_block("watchdog_log", "\n".join(lines))
+    except Exception:
+        pass
+
+
 async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
     pg_failures = 0
@@ -367,6 +386,8 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
         except Exception as e:
             pg_failures += 1
             logger.warning("Watchdog: PostgreSQL ping failed (%d): %s", pg_failures, e)
+            if pg_failures in (1, 3, 10):
+                _record_watchdog_event("pg_failure", f"consecutive={pg_failures}: {e}")
 
         # Ping Redis (with timeout to prevent event loop blocking)
         try:
@@ -392,6 +413,8 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
         except Exception as e:
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
+            if redis_failures in (1, 3, 10):
+                _record_watchdog_event("redis_failure", f"consecutive={redis_failures}: {e}")
 
         # Schedule reconciliation (every 10 ticks = 5 minutes)
         if tick_count % 10 == 0:
@@ -424,6 +447,26 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     logger.info("Watchdog: cleaned up %d stale chat sessions", deleted)
             except Exception as e:
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
+
+        # Data retention cleanup (every 2880 ticks = 24h)
+        if tick_count % 2880 == 0:
+            try:
+                from robothor.engine.retention import run_retention_cleanup
+
+                loop = asyncio.get_running_loop()
+                results = await asyncio.wait_for(
+                    loop.run_in_executor(None, run_retention_cleanup),
+                    timeout=300.0,
+                )
+                total = sum(v for v in results.values() if v > 0)
+                if total > 0:
+                    logger.info("Watchdog: retention cleanup deleted %d rows: %s", total, results)
+                    _record_watchdog_event("retention_cleanup", f"deleted {total} rows")
+            except TimeoutError:
+                logger.warning("Watchdog: retention cleanup timed out after 300s")
+                _record_watchdog_event("retention_timeout", "cleanup exceeded 300s")
+            except Exception as e:
+                logger.warning("Watchdog: retention cleanup failed: %s", e)
 
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
