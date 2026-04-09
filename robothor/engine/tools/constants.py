@@ -59,7 +59,7 @@ FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federat
 PF_TOOLS = frozenset({"pf_system_status"})
 
 # Skill tools
-SKILL_TOOLS = frozenset({"invoke_skill", "list_skills"})
+SKILL_TOOLS = frozenset({"invoke_skill", "list_skills", "create_skill", "update_skill"})
 
 # MCP client tools (call external MCP servers)
 MCP_CLIENT_TOOLS = frozenset(

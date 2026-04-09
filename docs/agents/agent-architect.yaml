@@ -1,0 +1,107 @@
+id: agent-architect
+name: Agent Architect
+description: Strategic fleet evolution — monitors health, prioritizes optimization, dispatches to AutoAgent/AutoResearch, cross-pollinates learnings
+version: "2026-04-05"
+department: operations
+
+reports_to: main
+creates_tasks_for: [auto-agent, auto-researcher]
+receives_tasks_from: [main]
+escalates_to: main
+
+tags_produced: [architect, fleet-evolution, cross-system]
+tags_consumed: [architect]
+
+model:
+  primary: openrouter/anthropic/claude-opus-4.6
+  fallbacks:
+    - openrouter/google/gemini-3.1-pro-preview
+    - openrouter/openai/gpt-5.4
+    - openrouter/anthropic/claude-sonnet-4.6
+
+schedule:
+  cron: "0 3 * * 1,4"  # Monday + Thursday at 3 AM ET
+  timezone: America/New_York
+  timeout_seconds: 900
+  max_iterations: 25
+  session_target: isolated
+
+delivery:
+  mode: announce
+  channel: telegram
+  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
+
+tools_allowed:
+  - read_file
+  - write_file
+  - list_directory
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - append_to_block
+  - experiment_status
+  - get_agent_stats
+  - list_agent_runs
+  - list_tasks
+  - list_my_tasks
+  - create_task
+  - resolve_task
+  - deep_reason
+  - search_memory
+  # Skills (read + create for capturing optimization patterns)
+  - invoke_skill
+  - list_skills
+  - create_skill
+  - update_skill
+
+tools_denied:
+  - exec
+  - experiment_create
+  - experiment_measure
+  - experiment_commit
+  - benchmark_define
+  - benchmark_run
+
+streams:
+  read: [agent, system]
+  write: [agent]
+
+task_protocol: true
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/agent-architect-status.md
+shared_working_state: false
+
+warmup:
+  context_files:
+    - brain/memory/agent-architect-status.md
+  memory_blocks:
+    - architect_evolution_log
+    - architect_dispatch_ledger
+    - autoagent_learnings
+    - autoresearch_learnings
+    - performance_baselines
+    - watchdog_log
+    - autodream_log
+
+instruction_file: brain/agents/AGENT_ARCHITECT.md
+bootstrap_files:
+  - brain/AGENTS.md
+
+v2:
+  error_feedback: true
+  planning_enabled: true
+  scratchpad_enabled: true
+  can_spawn_agents: false
+  max_cost_usd: 10.00
+  guardrails:
+    - no_destructive_writes
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/agent-architect-status.md"
+
+changelog:
+  - date: "2026-04-05"
+    change: "Initial creation — fleet evolution orchestrator powered by Opus 4.6"
+  - date: "2026-04-05"
+    change: "Frequency: weekly → Mon+Thu 3AM. Avoids 2AM Nightwatch slot, predictable 3-4 day gaps."

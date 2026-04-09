@@ -10,16 +10,22 @@ The LLM is the orchestrator — skills are just instructions, not automated pipe
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _skills_cache: tuple[float, dict[str, SkillDefinition]] | None = None
+
+_KEBAB_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])?$")
+_MAX_CONTENT_LEN = 10_000
 
 
 @dataclass(frozen=True)
@@ -135,11 +141,7 @@ def load_skills(skills_dir: Path | None = None) -> dict[str, SkillDefinition]:
     global _skills_cache
 
     if skills_dir is None:
-        skills_dir = (
-            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
-            / "agents"
-            / "skills"
-        )
+        skills_dir = _skills_dir()
 
     if not skills_dir.exists():
         return {}
@@ -200,3 +202,116 @@ def build_skill_catalog(skills: dict[str, SkillDefinition] | None = None) -> str
         lines.append(f"- **{defn.name}**{sig}: {defn.description}{trigger}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Skill authoring helpers (used by create_skill / update_skill tools)
+# ---------------------------------------------------------------------------
+
+
+def _skills_dir() -> Path:
+    """Return canonical skills directory path."""
+    return (
+        Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        / "agents"
+        / "skills"
+    )
+
+
+def _meta_path(skill_name: str, base: Path | None = None) -> Path:
+    base = base or _skills_dir()
+    return base / skill_name / "meta.json"
+
+
+def _skill_path(skill_name: str, base: Path | None = None) -> Path:
+    base = base or _skills_dir()
+    return base / skill_name / "SKILL.md"
+
+
+def validate_skill_name(name: str) -> str | None:
+    """Return an error message if *name* is invalid, else None."""
+    if not name:
+        return "name is required"
+    if not _KEBAB_RE.match(name):
+        return (
+            f"name must be kebab-case (lowercase letters, digits, hyphens), "
+            f"3-60 chars, got: {name!r}"
+        )
+    return None
+
+
+def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | None:
+    """Read meta.json sidecar for a skill, or None if missing."""
+    path = _meta_path(name, base)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception as e:
+        logger.warning("Failed to read skill meta %s: %s", path, e)
+        return None
+
+
+def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
+    """Write meta.json sidecar for a skill."""
+    path = _meta_path(name, base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(meta, indent=2, default=str) + "\n")
+
+
+def write_skill_file(
+    name: str,
+    frontmatter: dict[str, Any],
+    body: str,
+    base: Path | None = None,
+) -> Path:
+    """Write a SKILL.md file with YAML frontmatter and markdown body.
+
+    Returns the path to the written file.
+    """
+    import yaml
+
+    path = _skill_path(name, base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fm_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False).strip()
+    content = f"---\n{fm_text}\n---\n\n{body.strip()}\n"
+    path.write_text(content)
+
+    # Invalidate cache so hot-reload picks up the new file
+    global _skills_cache
+    _skills_cache = None
+
+    return path
+
+
+def increment_usage(name: str, base: Path | None = None) -> None:
+    """Increment usage_count in a skill's meta.json (if it exists)."""
+    meta = read_skill_meta(name, base)
+    if meta is None:
+        return
+    meta["usage_count"] = meta.get("usage_count", 0) + 1
+    meta["last_used"] = datetime.now(UTC).isoformat()
+    write_skill_meta(name, meta, base)
+
+
+def create_skill_meta(
+    *,
+    created_by: str = "",
+    created_from_run: str = "",
+) -> dict[str, Any]:
+    """Build initial meta.json for a newly created skill."""
+    return {
+        "auto_generated": True,
+        "created_by": created_by,
+        "created_from_run": created_from_run,
+        "created_at": datetime.now(UTC).isoformat(),
+        "revision": 1,
+        "usage_count": 0,
+        "last_used": None,
+        "revision_history": [],
+    }
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
