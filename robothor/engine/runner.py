@@ -270,9 +270,17 @@ class AgentRunner:
         elif warmup_kind == "interactive":
             from robothor.engine.warmup import build_interactive_preamble
 
+            _extra_blocks = agent_config.warmup_memory_blocks or []
+            _tenant = self.config.tenant_id
             warmup_future = loop.run_in_executor(
                 None,
-                lambda: build_interactive_preamble(agent_id, message, include_blocks=True),
+                lambda: build_interactive_preamble(
+                    agent_id,
+                    message,
+                    include_blocks=True,
+                    extra_memory_blocks=_extra_blocks,
+                    tenant_id=_tenant,
+                ),
             )
 
         # Await both concurrently

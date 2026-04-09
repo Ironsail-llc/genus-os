@@ -23,6 +23,20 @@ class ToolContext:
     workspace: str = ""
 
 
+def get_db():
+    """Standard DB connection for tool handlers.
+
+    Usage::
+
+        with get_db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            conn.commit()
+    """
+    from robothor.db.connection import get_connection
+
+    return get_connection()
+
+
 def _cfg() -> Config:
     """Lazy config access (not module-level to avoid import-time side effects)."""
     from robothor.config import get_config
@@ -45,6 +59,7 @@ def _collect_handlers() -> dict[str, Any]:
         git,
         github_api,
         gws,
+        identity,
         jira,
         mcp_client,
         memory,
@@ -53,6 +68,7 @@ def _collect_handlers() -> dict[str, Any]:
         pdf,
         pf,
         reasoning,
+        reports,
         skills,
         spawn,
         timing,
@@ -90,6 +106,8 @@ def _collect_handlers() -> dict[str, Any]:
         jira,
         github_api,
         devops_metrics,
+        identity,
+        reports,
         mcp_client,
         timing,
         todolist,

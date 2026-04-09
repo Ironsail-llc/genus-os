@@ -443,7 +443,7 @@ class WorkflowEngine:
                 agent_config=agent_config,
             )
 
-            # Deliver agent output
+            # Deliver agent output (delivery.py now handles its own DB persistence)
             await deliver(agent_config, agent_run)
 
             result.agent_run_id = agent_run.id

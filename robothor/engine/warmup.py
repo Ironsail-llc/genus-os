@@ -257,6 +257,7 @@ def build_interactive_preamble(
     user_message: str = "",
     include_blocks: bool = True,
     tenant_id: str = DEFAULT_TENANT,
+    extra_memory_blocks: list[str] | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -278,6 +279,9 @@ def build_interactive_preamble(
     # Core memory blocks — only for new sessions (no prior history)
     if include_blocks:
         core_blocks = ["persona", "user_profile", "user_model", "working_context"]
+        # Also include agent-configured warmup blocks (e.g. devops_latest_report)
+        if extra_memory_blocks:
+            core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
         try:
             blocks_section = _build_memory_blocks_section(core_blocks, tenant_id=tenant_id)
             if blocks_section:
