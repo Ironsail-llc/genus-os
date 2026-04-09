@@ -49,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--skip-db", action="store_true", help="Skip database migration")
     init_parser.add_argument("--workspace", type=str, help="Workspace dir (default: ~/robothor)")
 
+    # upgrade
+    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade platform to latest version")
+    upgrade_parser.add_argument("--dry-run", action="store_true", help="Show what would change")
+    upgrade_parser.add_argument("--skip-pull", action="store_true", help="Skip git pull")
+    upgrade_parser.add_argument(
+        "--skip-migrations", action="store_true", help="Skip database migrations"
+    )
+
     # migrate
     migrate_parser = subparsers.add_parser("migrate", help="Run database migrations")
     migrate_parser.add_argument(
@@ -293,6 +301,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_init
 
         return cmd_init(args)
+    if args.command == "upgrade":
+        from robothor.cli.upgrade import cmd_upgrade
+
+        return cmd_upgrade(args)
     if args.command == "migrate":
         from robothor.cli.admin import cmd_migrate
 
