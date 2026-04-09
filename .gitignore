@@ -11,15 +11,23 @@
 # Instance data — user-land config created by `genusos init`, never part of platform
 # Agent manifests and instruction files
 brain/*.md
+brain/*.bak
 !brain/README.md
 brain/agents/
 brain/instructions/
 brain/scripts/
+brain/memory/
 docs/agents/*.yaml
 docs/agents/*.md
+docs/agents/retired/
 !docs/agents/schema.yaml
 !docs/agents/INSTRUCTION_CONTRACT.md
 docs/CRON_MAP.md
+docs/experiments/
+docs/workflows/retired/
+
+# Instance runtime state (root memory/ is agent working data)
+memory/
 
 # Backup logs
 scripts/backup.log
@@ -80,13 +88,9 @@ secrets.json
 secrets.enc.json
 credentials.json
 
-# RLM trajectory logs
-brain/memory/rlm-traces/
-
 # Runtime state (agent status files, analysis cache)
 status/
 !app/src/app/api/**/status/
-memory/response-analysis.json
 
 # Instance-specific data and local overrides
 .robothor/
@@ -100,9 +104,7 @@ crm/migrate_contacts.py
 brain/memory_system/venv/
 brain/voice-server-env/
 
-# Brain runtime artifacts
-brain/memory/snapshots/
-brain/memory/rlm-traces/
+# Brain runtime artifacts (brain/memory/ covered above)
 brain/logs/
 brain/memory_system/logs/
 brain/memory_system/*.log
@@ -121,27 +123,7 @@ brain/dashboard/node_modules/
 brain/gap-analysis/
 brain/glm-test/
 
-# Brain runtime state files (volatile, not source)
-brain/memory/response-analysis*.json
-brain/memory/triage-inbox.json
-brain/memory/triage-prep-state.json
-brain/memory/response-queue.json
-brain/memory/response-inbox.json
-brain/memory/email-drafts.json
-brain/memory/email-log.json
-brain/memory/email-tracking.json
-brain/memory/sms-log.json
-brain/memory/maintenance-status.json
-brain/memory/evening-winddown-status.json
-brain/memory/contacts.json
-brain/memory/tasks.json
-brain/memory/overnight-pr-status.md
-brain/memory/worker-handoff.json
-brain/memory/meet-transcripts.json
-brain/memory/meet-transcript-state.json
-brain/memory/cron-health-status.md
-brain/memory/garmin-health.md
-brain/memory/.meet-transcript.lock
+# Brain memory_system runtime (brain/memory/ covered above)
 brain/memory_system/locks/
 
 # Vault master key
@@ -150,8 +132,7 @@ brain/memory_system/locks/
 # Dev session history
 brain/.aider.chat.history.md
 
-# Personal business data
-brain/memory/enterprise-outreach-emails.md
+# Personal business data (brain/memory/ covered above)
 
 # Claude Code artifacts
 .claude/
