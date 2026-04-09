@@ -94,7 +94,7 @@ def build_warmth_preamble(
 
     # 2. Memory blocks
     try:
-        blocks = _build_memory_blocks_section(config.warmup_memory_blocks)
+        blocks = _build_memory_blocks_section(config.warmup_memory_blocks, tenant_id=tenant_id)
         if blocks:
             sections.append(blocks)
     except Exception as e:
@@ -181,7 +181,9 @@ def _build_history_section(agent_id: str) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _build_memory_blocks_section(block_names: list[str]) -> str:
+def _build_memory_blocks_section(
+    block_names: list[str], tenant_id: str = "robothor-primary"
+) -> str:
     """Read memory blocks and format them, flagging stale ones."""
     if not block_names:
         return ""
@@ -191,7 +193,7 @@ def _build_memory_blocks_section(block_names: list[str]) -> str:
     lines = ["--- MEMORY BLOCKS ---"]
     for name in block_names:
         try:
-            result = read_block(name)
+            result = read_block(name, tenant_id=tenant_id)
             content = (
                 result.get("content", "")
                 if isinstance(result, dict)
@@ -256,6 +258,7 @@ def build_interactive_preamble(
     agent_id: str,
     user_message: str = "",
     include_blocks: bool = True,
+    tenant_id: str = "robothor-primary",
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -276,9 +279,9 @@ def build_interactive_preamble(
 
     # Core memory blocks — only for new sessions (no prior history)
     if include_blocks:
-        core_blocks = ["persona", "user_profile", "working_context"]
+        core_blocks = ["persona", "user_profile", "user_model", "working_context"]
         try:
-            blocks_section = _build_memory_blocks_section(core_blocks)
+            blocks_section = _build_memory_blocks_section(core_blocks, tenant_id=tenant_id)
             if blocks_section:
                 sections.append(blocks_section)
         except Exception as e:
@@ -287,7 +290,7 @@ def build_interactive_preamble(
     # Entity-aware context — if user mentions a name, pull relevant facts
     if user_message and len(user_message) > 5:
         try:
-            context = _build_entity_context(user_message)
+            context = _build_entity_context(user_message, tenant_id=tenant_id)
             if context:
                 sections.append(context)
         except Exception as e:
@@ -313,7 +316,7 @@ def build_interactive_preamble(
 MAX_ENTITY_CONTEXT_CHARS = 1000
 
 
-def _build_entity_context(user_message: str) -> str:
+def _build_entity_context(user_message: str, tenant_id: str = "robothor-primary") -> str:
     """Extract entities from user message and pull relevant facts.
 
     Looks for capitalized proper nouns in the message and searches
@@ -370,10 +373,11 @@ def _build_entity_context(user_message: str) -> str:
                 SELECT fact_text, category, importance_score
                 FROM memory_facts
                 WHERE is_active = TRUE AND %s = ANY(entities)
+                  AND tenant_id = %s
                 ORDER BY importance_score DESC, created_at DESC
                 LIMIT 3
                 """,
-                (entity_name,),
+                (entity_name, tenant_id),
             )
             facts = cur.fetchall()
             for f in facts:
@@ -478,7 +482,8 @@ def _travel_status() -> str | None:
     try:
         from robothor.memory.blocks import read_block
 
-        result = read_block("travel_status")
+        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary")
+        result = read_block("travel_status", tenant_id=_tid)
         content = (
             result.get("content", "") if isinstance(result, dict) else str(result) if result else ""
         )
@@ -566,7 +571,8 @@ def _buddy_status_context(config: AgentConfig) -> str | None:
     try:
         from robothor.memory.blocks import read_block
 
-        result = read_block("buddy_status")
+        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "robothor-primary")
+        result = read_block("buddy_status", tenant_id=_tid)
         content = result.get("content", "") if isinstance(result, dict) else ""
         if content and content.strip():
             return f"[BUDDY] {content.strip()}"

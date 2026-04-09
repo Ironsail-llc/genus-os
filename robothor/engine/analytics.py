@@ -104,6 +104,35 @@ def get_agent_stats(
         )
         stats["top_error_types"] = [dict(r) for r in cur.fetchall()]
 
+        # Outcome assessment distribution (interactive runs only)
+        cur.execute(
+            """
+            SELECT
+                outcome_assessment,
+                COUNT(*) as count
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND created_at > NOW() - make_interval(days := %s)
+              AND parent_run_id IS NULL
+              AND outcome_assessment IS NOT NULL
+            GROUP BY outcome_assessment
+            ORDER BY count DESC
+            """,
+            (agent_id, tenant_id, days),
+        )
+        outcome_rows = cur.fetchall()
+        outcome_dist = {r["outcome_assessment"]: r["count"] for r in outcome_rows}
+        stats["outcome_distribution"] = outcome_dist
+
+        successful = outcome_dist.get("successful", 0)
+        unsatisfied = sum(outcome_dist.get(k, 0) for k in ("partial", "incorrect"))
+        stats["satisfaction_rate"] = (
+            round(successful / (successful + unsatisfied), 4)
+            if (successful + unsatisfied) > 0
+            else None
+        )
+
     return stats
 
 
