@@ -35,6 +35,19 @@ REPOS: list[str] = [r.strip() for r in _repos_env.split(",") if r.strip()]
 CTX = ToolContext(agent_id="devops-manager")
 
 
+def _week_windows(now: datetime) -> tuple[int, int]:
+    """Calculate day counts for dual-window collection.
+
+    Returns (current_week_days, last_week_days) where:
+    - current_week_days: days since Monday 00:00 UTC + 1 (to include today)
+    - last_week_days: 7 (last full week, rolling 7-day lookback)
+    """
+    days_since_monday = now.weekday()  # 0=Mon, 6=Sun
+    current_week_days = days_since_monday + 1
+    last_week_days = 7
+    return current_week_days, last_week_days
+
+
 async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list]:
     """Collect data for a single repo. Returns (short_name, repo_data, stale_prs, errors)."""
     short = repo.split("/")[-1]
@@ -42,6 +55,35 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
     stale: list = []
     errors: list = []
 
+    current_week_days, last_week_days = _week_windows(now)
+
+    # --- Current week PR stats ---
+    result = await _github_pr_stats({"repo": repo, "days": current_week_days}, CTX)
+    if "error" in result:
+        errors.append(f"{short}/pr_stats_current_week: {result['error']}")
+    else:
+        repo_data["pr_stats_current_week"] = {
+            "merged_count": result.get("merged_count", 0),
+            "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
+            "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
+            "authors": result.get("authors", {}),
+            "merged_by": result.get("merged_by", {}),
+        }
+
+    # --- Last week PR stats (rolling 7-day window) ---
+    result = await _github_pr_stats({"repo": repo, "days": last_week_days}, CTX)
+    if "error" in result:
+        errors.append(f"{short}/pr_stats_last_week: {result['error']}")
+    else:
+        repo_data["pr_stats_last_week"] = {
+            "merged_count": result.get("merged_count", 0),
+            "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
+            "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
+            "authors": result.get("authors", {}),
+            "merged_by": result.get("merged_by", {}),
+        }
+
+    # --- Legacy 30-day stats (for backward compat during transition) ---
     result = await _github_pr_stats({"repo": repo, "days": 30}, CTX)
     if "error" in result:
         errors.append(f"{short}/pr_stats: {result['error']}")
@@ -51,8 +93,10 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
             "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
             "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
             "authors": result.get("authors", {}),
+            "merged_by": result.get("merged_by", {}),
         }
 
+    # --- Review stats (30-day, unchanged) ---
     result = await _github_review_stats({"repo": repo, "days": 30}, CTX)
     if "error" in result:
         errors.append(f"{short}/review_stats: {result['error']}")
@@ -73,6 +117,7 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
             "reviewers": reviewers,
         }
 
+    # --- Stale open PRs ---
     result = await _github_list_prs(
         {"repo": repo, "state": "open", "per_page": 50, "max_pages": 1}, CTX
     )

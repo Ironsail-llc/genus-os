@@ -56,6 +56,7 @@ def _slim_pr(pr: dict[str, Any]) -> dict[str, Any]:
         "deletions": pr.get("deletions"),
         "changed_files": pr.get("changed_files"),
         "review_decision": pr.get("review_decision"),
+        "merged_by": (pr.get("merged_by") or {}).get("login", ""),
         "labels": [label.get("name", "") for label in (pr.get("labels") or [])],
     }
 
@@ -224,7 +225,7 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     except Exception as e:
         return {"error": f"GitHub request failed: {e}"}
 
-    # Filter to merged PRs within date range
+    # Filter to merged PRs within date range (skip closed-but-not-merged)
     merged_prs = []
     for pr in prs:
         merged_at = pr.get("merged_at")
@@ -242,12 +243,15 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
             "message": "No merged PRs in this period",
         }
 
-    # Calculate metrics
+    # Calculate metrics — exclude drafts from cycle time to avoid inflation
     cycle_times_hours = []
     sizes = []
     for pr in merged_prs:
         created = datetime.fromisoformat(pr["created_at"])
         merged = datetime.fromisoformat(pr["merged_at"])
+        # Skip drafts from cycle time calc (they inflate averages)
+        if pr.get("draft"):
+            continue
         cycle_times_hours.append((merged - created).total_seconds() / 3600)
         sizes.append((pr.get("additions") or 0) + (pr.get("deletions") or 0))
 
@@ -257,14 +261,25 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         author = (pr.get("user") or {}).get("login", "unknown")
         author_counts[author] = author_counts.get(author, 0) + 1
 
+    # Merged-by breakdown (who actually clicked merge)
+    merged_by_counts: dict[str, int] = {}
+    for pr in merged_prs:
+        merger = (pr.get("merged_by") or {}).get("login", "unknown")
+        merged_by_counts[merger] = merged_by_counts.get(merger, 0) + 1
+
     return {
         "repo": repo,
         "days": days,
         "merged_count": len(merged_prs),
-        "avg_cycle_time_hours": round(sum(cycle_times_hours) / len(cycle_times_hours), 1),
-        "median_cycle_time_hours": round(sorted(cycle_times_hours)[len(cycle_times_hours) // 2], 1),
+        "avg_cycle_time_hours": round(sum(cycle_times_hours) / len(cycle_times_hours), 1)
+        if cycle_times_hours
+        else 0,
+        "median_cycle_time_hours": round(sorted(cycle_times_hours)[len(cycle_times_hours) // 2], 1)
+        if cycle_times_hours
+        else 0,
         "avg_size_lines": round(sum(sizes) / len(sizes)) if sizes else 0,
         "authors": author_counts,
+        "merged_by": merged_by_counts,
     }
 
 
