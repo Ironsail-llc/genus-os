@@ -5,8 +5,8 @@
 # Business adapters (local MCP server configs — not part of the public repo)
 /adapters/
 
-# Instance identity (personal CLAUDE.md — platform version is CLAUDE.platform.md)
-CLAUDE.md
+# Instance CLAUDE.md lives at brain/CLAUDE.md (covered by brain/*.md pattern below)
+# Root CLAUDE.md is the tracked platform rules file.
 
 # Instance data — user-land config created by `genusos init`, never part of platform
 # Agent manifests and instruction files
