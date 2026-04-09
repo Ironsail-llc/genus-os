@@ -18,7 +18,9 @@ from typing import Any
 
 def cmd_export(args: argparse.Namespace) -> int:
     """Export Robothor configuration as a portable bundle."""
-    tenant_id = getattr(args, "tenant", "robothor-primary")
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = getattr(args, "tenant", DEFAULT_TENANT)
     output_dir = Path(getattr(args, "output", None) or f"./robothor-export-{tenant_id}")
     include_memory = getattr(args, "include_memory", False)
 

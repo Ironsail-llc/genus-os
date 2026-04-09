@@ -114,10 +114,10 @@ def _finalize_onboarding(telegram_user_id: str, session: dict[str, Any]) -> str:
             display_name,
             telegram_user_id,
         )
-    except Exception as e:
-        logger.error("Onboarding failed for %s: %s", telegram_user_id, e)
+    except Exception:
+        logger.exception("Onboarding failed for %s", telegram_user_id)
         _cancel_onboarding(telegram_user_id)
-        return f"Something went wrong during setup: {e}\nPlease try again later."
+        return "Something went wrong during setup. Please try again later."
 
     _cancel_onboarding(telegram_user_id)
     return (

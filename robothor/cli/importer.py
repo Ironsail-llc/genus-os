@@ -250,7 +250,9 @@ def cmd_import(args: argparse.Namespace) -> int:
     """Run a platform import."""
     platform = getattr(args, "platform", "auto")
     source_str = getattr(args, "source", None)
-    tenant_id = getattr(args, "tenant", "robothor-primary")
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = getattr(args, "tenant", DEFAULT_TENANT)
 
     # Default source paths per platform
     if source_str:
