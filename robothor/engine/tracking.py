@@ -123,6 +123,8 @@ def update_run(
     token_budget: int | None = None,
     cost_budget_usd: float | None = None,
     budget_exhausted: bool | None = None,
+    outcome_assessment: str | None = None,
+    outcome_notes: str | None = None,
 ) -> bool:
     """Update an existing run with new fields."""
     updates: list[str] = []
@@ -148,6 +150,8 @@ def update_run(
         "token_budget": token_budget,
         "cost_budget_usd": cost_budget_usd,
         "budget_exhausted": budget_exhausted,
+        "outcome_assessment": outcome_assessment,
+        "outcome_notes": outcome_notes,
     }
 
     for col, val in field_map.items():

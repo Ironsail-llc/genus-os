@@ -196,6 +196,7 @@ class AgentRunner:
         readonly_mode: bool = False,
         execution_mode: bool = False,
         deep_plan: bool = False,
+        tenant_id: str | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -204,12 +205,14 @@ class AgentRunner:
                 system prompt to enforce plan execution (no re-planning).
         Returns the completed AgentRun with full metadata.
         """
+        resolved_tenant = tenant_id or self.config.tenant_id
+
         # Load agent config from manifest if not provided
         if agent_config is None:
             agent_config = load_agent_config(agent_id, self.config.manifest_dir)
         if agent_config is None:
             logger.error("Agent config not found: %s", _sanitize(agent_id))
-            session = AgentSession(agent_id, trigger_type, trigger_detail, self.config.tenant_id)
+            session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
             session.start("", message, [])
             return session.fail(f"Agent config not found: {agent_id}")
 
@@ -218,7 +221,7 @@ class AgentRunner:
             agent_id=agent_id,
             trigger_type=trigger_type,
             trigger_detail=trigger_detail,
-            tenant_id=self.config.tenant_id,
+            tenant_id=resolved_tenant,
             correlation_id=correlation_id,
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
@@ -1094,6 +1097,9 @@ class AgentRunner:
                 tool_schemas = []  # force text-only final response
 
             # ── LLM call ──
+            # When timeout_seconds == 0 (interactive sessions), don't impose
+            # per-model LLM call timeouts — let the call take as long as needed.
+            llm_timeout_budget = None if agent_config.timeout_seconds == 0 else 180
             response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
                 session,
                 models,
@@ -1103,6 +1109,7 @@ class AgentRunner:
                 agent_config.temperature,
                 trace,
                 on_stream_event=on_stream_event,
+                timeout_budget=llm_timeout_budget,
             )
 
             if response is None:
@@ -1783,6 +1790,7 @@ class AgentRunner:
         temperature: float,
         trace: Any = None,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        timeout_budget: int | None = 180,
     ) -> tuple[Any, str, int, dict[str, Any]]:
         """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
         start = time.monotonic()
@@ -1797,6 +1805,7 @@ class AgentRunner:
                     broken_models,
                     temperature,
                     on_stream_event=on_stream_event,
+                    timeout_budget=timeout_budget,
                 )
         else:
             response = await self._do_llm_call(
@@ -1807,6 +1816,7 @@ class AgentRunner:
                 broken_models,
                 temperature,
                 on_stream_event=on_stream_event,
+                timeout_budget=timeout_budget,
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1946,6 +1956,7 @@ class AgentRunner:
         broken_models: set[str],
         temperature: float,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        timeout_budget: int | None = 180,
     ) -> Any:
         """Dispatch to streaming or non-streaming LLM call."""
         if on_content or on_stream_event:
@@ -1957,6 +1968,7 @@ class AgentRunner:
                 broken_models=broken_models,
                 temperature=temperature,
                 on_stream_event=on_stream_event,
+                timeout_budget=timeout_budget,
             )
         return await self._call_llm(
             session.messages,
@@ -1964,6 +1976,7 @@ class AgentRunner:
             tool_schemas,
             broken_models=broken_models,
             temperature=temperature,
+            timeout_budget=timeout_budget,
         )
 
     # ─── Error Recovery Helper ──────────────────────────────────────
@@ -2470,6 +2483,7 @@ class AgentRunner:
         tools: list[dict[str, Any]],
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
+        timeout_budget: int | None = 180,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
         input_est = await self._prepare_llm_call(messages, models)
@@ -2477,8 +2491,11 @@ class AgentRunner:
 
         # Divide total timeout budget across fallback models so worst-case
         # wall-clock time stays bounded (instead of N * 120s).
-        total_timeout_budget = 180  # total time for all fallbacks
-        per_model_timeout = max(30, total_timeout_budget // len(models))
+        # When timeout_budget is None (interactive sessions), skip per-model timeouts.
+        if timeout_budget is not None:
+            per_model_timeout: int | None = max(30, timeout_budget // len(models))
+        else:
+            per_model_timeout = None
 
         logger.debug(
             "LLM call with models: %s (broken: %s)",
@@ -2490,9 +2507,13 @@ class AgentRunner:
                 continue
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                return await asyncio.wait_for(
-                    litellm.acompletion(**kwargs), timeout=per_model_timeout
-                )
+                if per_model_timeout is not None:
+                    result = await asyncio.wait_for(
+                        litellm.acompletion(**kwargs), timeout=per_model_timeout
+                    )
+                else:
+                    result = await litellm.acompletion(**kwargs)
+                return result
             except TimeoutError:
                 self._handle_model_error(
                     TimeoutError(f"LLM call to {model} hung for {per_model_timeout}s"),
@@ -2526,6 +2547,7 @@ class AgentRunner:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        timeout_budget: int | None = 180,
     ) -> Any:
         """Call LLM with streaming. Returns reconstructed ModelResponse.
 
@@ -2541,8 +2563,11 @@ class AgentRunner:
 
         # Divide total timeout budget across fallback models so worst-case
         # wall-clock time stays bounded (instead of N * 120s).
-        total_timeout_budget = 180  # total time for all fallbacks
-        per_model_timeout = max(30, total_timeout_budget // len(models))
+        # When timeout_budget is None (interactive sessions), skip per-model timeouts.
+        if timeout_budget is not None:
+            per_model_timeout: int | None = max(30, timeout_budget // len(models))
+        else:
+            per_model_timeout = None
 
         async def _emit(event: dict[str, Any]) -> None:
             if on_stream_event:
@@ -2557,9 +2582,12 @@ class AgentRunner:
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 stream_start = time.monotonic()
-                stream = await asyncio.wait_for(
-                    litellm.acompletion(**kwargs), timeout=per_model_timeout
-                )
+                if per_model_timeout is not None:
+                    stream = await asyncio.wait_for(
+                        litellm.acompletion(**kwargs), timeout=per_model_timeout
+                    )
+                else:
+                    stream = await litellm.acompletion(**kwargs)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
@@ -2724,8 +2752,47 @@ class AgentRunner:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._persist_run_sync, run)
 
+    @staticmethod
+    def _assess_outcome(run: AgentRun) -> None:
+        """Assess interactive run outcome using simple heuristics.
+
+        Only runs for interactive triggers (TELEGRAM, WEBCHAT) are assessed.
+        Cron, sub-agent, workflow, and other automated runs are skipped.
+        """
+        from robothor.engine.models import RunStatus, TriggerType
+
+        # Only assess interactive runs
+        if run.trigger_type not in (TriggerType.TELEGRAM, TriggerType.WEBCHAT):
+            return
+        # Skip sub-agent runs
+        if run.parent_run_id:
+            return
+
+        if run.status == RunStatus.TIMEOUT:
+            run.outcome_assessment = "abandoned"
+            run.outcome_notes = "Run timed out"
+        elif run.status == RunStatus.FAILED:
+            run.outcome_assessment = "incorrect"
+            run.outcome_notes = f"Run failed: {(run.error_message or 'unknown')[:200]}"
+        elif run.status == RunStatus.COMPLETED:
+            if run.budget_exhausted:
+                run.outcome_assessment = "partial"
+                run.outcome_notes = "Budget exhausted before completion"
+            elif run.error_message:
+                run.outcome_assessment = "partial"
+                run.outcome_notes = f"Completed with errors: {run.error_message[:200]}"
+            elif not run.output_text or len(run.output_text.strip()) < 10:
+                run.outcome_assessment = "partial"
+                run.outcome_notes = "Completed with minimal output"
+            else:
+                run.outcome_assessment = "successful"
+                run.outcome_notes = None
+
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
+        # Assess outcome for interactive runs before persisting
+        self._assess_outcome(run)
+
         try:
             update_run(
                 run.id,
@@ -2748,6 +2815,8 @@ class AgentRunner:
                 token_budget=run.token_budget or None,
                 cost_budget_usd=run.cost_budget_usd or None,
                 budget_exhausted=run.budget_exhausted or None,
+                outcome_assessment=run.outcome_assessment,
+                outcome_notes=run.outcome_notes,
             )
             if run.steps:
                 try:

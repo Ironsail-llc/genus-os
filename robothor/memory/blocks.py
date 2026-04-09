@@ -17,12 +17,22 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db import get_connection
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BLOCK_SEEDS = [
+    ("persona", "system", 3000),
+    ("user_profile", "system", 5000),
+    ("user_model", "persistent", 5000),
+    ("working_context", "ephemeral", 5000),
+    ("operational_findings", "persistent", 5000),
+    ("contacts_summary", "persistent", 5000),
+]
 
-def read_block(block_name: str) -> dict[str, Any]:
+
+def read_block(block_name: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     """Read a named memory block and increment its read count.
 
     Returns:
@@ -36,9 +46,9 @@ def read_block(block_name: str) -> dict[str, Any]:
             cur.execute(
                 "UPDATE agent_memory_blocks "
                 "SET read_count = read_count + 1, last_read_at = NOW() "
-                "WHERE block_name = %s "
+                "WHERE tenant_id = %s AND block_name = %s "
                 "RETURNING content, last_written_at",
-                (block_name,),
+                (tenant_id, block_name),
             )
             row = cur.fetchone()
             if not row:
@@ -50,7 +60,7 @@ def read_block(block_name: str) -> dict[str, Any]:
             }
 
 
-def write_block(block_name: str, content: str) -> dict[str, Any]:
+def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     """Write or update a named memory block.
 
     Uses UPSERT — creates the block if it doesn't exist, updates if it does.
@@ -64,18 +74,19 @@ def write_block(block_name: str, content: str) -> dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO agent_memory_blocks (block_name, content, last_written_at, write_count) "
-                "VALUES (%s, %s, NOW(), 1) "
-                "ON CONFLICT (block_name) DO UPDATE "
+                "INSERT INTO agent_memory_blocks "
+                "(tenant_id, block_name, content, last_written_at, write_count) "
+                "VALUES (%s, %s, %s, NOW(), 1) "
+                "ON CONFLICT (tenant_id, block_name) DO UPDATE "
                 "SET content = EXCLUDED.content, last_written_at = NOW(), "
                 "    write_count = agent_memory_blocks.write_count + 1 "
                 "RETURNING id",
-                (block_name, content),
+                (tenant_id, block_name, content),
             )
             return {"success": True, "block_name": block_name}
 
 
-def list_blocks() -> dict[str, Any]:
+def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     """List all memory blocks with their sizes and timestamps.
 
     Returns:
@@ -85,7 +96,8 @@ def list_blocks() -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT block_name, length(content) AS size, last_written_at "
-                "FROM agent_memory_blocks ORDER BY block_name",
+                "FROM agent_memory_blocks WHERE tenant_id = %s ORDER BY block_name",
+                (tenant_id,),
             )
             return {
                 "blocks": [
@@ -97,3 +109,24 @@ def list_blocks() -> dict[str, Any]:
                     for row in cur.fetchall()
                 ],
             }
+
+
+def seed_blocks_for_tenant(tenant_id: str) -> int:
+    """Create the default memory blocks for a new tenant.
+
+    Returns:
+        Number of blocks seeded.
+    """
+    count = 0
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for block_name, block_type, max_chars in DEFAULT_BLOCK_SEEDS:
+                cur.execute(
+                    "INSERT INTO agent_memory_blocks "
+                    "(tenant_id, block_name, block_type, max_chars) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, block_name) DO NOTHING",
+                    (tenant_id, block_name, block_type, max_chars),
+                )
+                count += cur.rowcount
+    return count
