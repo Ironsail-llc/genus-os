@@ -1975,6 +1975,52 @@ def create_tenant(
             return None
 
 
+def create_tenant_with_user(
+    tenant_id: str,
+    display_name: str,
+    telegram_user_id: str,
+    user_display_name: str,
+    parent_tenant_id: str | None = None,
+) -> str | None:
+    """Create a tenant and its first user in a single transaction.
+
+    Returns tenant ID on success, None on failure.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """INSERT INTO crm_tenants (id, display_name, parent_tenant_id, settings)
+                   VALUES (%s, %s, %s, '{}')""",
+                (tenant_id, display_name, parent_tenant_id),
+            )
+            cur.execute(
+                """INSERT INTO tenant_users
+                   (telegram_user_id, display_name, tenant_id, role, is_active)
+                   VALUES (%s, %s, %s, 'owner', TRUE)""",
+                (telegram_user_id, user_display_name, tenant_id),
+            )
+            conn.commit()
+            _safe_audit(
+                "create",
+                "tenant_with_user",
+                tenant_id,
+                details={"display_name": display_name, "telegram_user_id": telegram_user_id},
+            )
+            # Seed memory blocks for new tenant
+            try:
+                from robothor.memory.blocks import seed_blocks_for_tenant
+
+                seed_blocks_for_tenant(tenant_id)
+            except Exception:
+                logger.warning("Failed to seed memory blocks for tenant %s", tenant_id)
+            return tenant_id
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to create tenant with user: %s", e)
+            return None
+
+
 def get_tenant(tenant_id: str) -> dict[str, Any] | None:
     """Get a tenant by ID."""
     with get_connection() as conn:
