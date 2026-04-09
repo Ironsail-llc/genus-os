@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from fastapi import Request
+from fastapi import Request  # noqa: TC002 — FastAPI needs runtime import for DI
 
 
 def get_tenant_id(request: Request) -> str:

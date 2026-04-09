@@ -252,7 +252,8 @@ def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | Non
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        result: dict[str, Any] = json.loads(path.read_text())
+        return result
     except Exception as e:
         logger.warning("Failed to read skill meta %s: %s", path, e)
         return None

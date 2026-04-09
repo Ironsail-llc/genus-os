@@ -35,7 +35,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=int(args.get("timeout", 30)),
                 cwd=ctx.workspace or None,
             )
             return {
@@ -44,7 +44,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:
-            return {"error": "Command timed out (30s limit)"}
+            return {"error": f"Command timed out ({int(args.get('timeout', 30))}s limit)"}
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 

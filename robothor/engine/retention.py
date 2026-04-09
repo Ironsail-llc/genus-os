@@ -128,7 +128,7 @@ def _cleanup_table(
             )
             batch_deleted = cur.rowcount
             conn.commit()
-            total += batch_deleted
+            total += batch_deleted or 0
             if batch_deleted < batch_size:
                 break
     return total

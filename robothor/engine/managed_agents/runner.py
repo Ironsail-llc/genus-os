@@ -343,7 +343,12 @@ def _build_tools(
     try:
         from robothor.engine.config import load_agent_config
 
-        agent_config = load_agent_config(agent_id)
+        manifest_dir = (
+            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+            / "docs"
+            / "agents"
+        )
+        agent_config = load_agent_config(agent_id, manifest_dir)
     except Exception:
         logger.warning("Could not load agent config for %s, using empty tools", agent_id)
         tools: list[dict[str, Any]] = []
@@ -353,6 +358,11 @@ def _build_tools(
 
     from robothor.engine.managed_agents.tool_bridge import build_ma_tools_for_agent
 
+    if agent_config is None:
+        tools_list: list[dict[str, Any]] = []
+        if enable_builtin_sandbox:
+            tools_list.append({"type": "agent_toolset_20260401"})
+        return tools_list
     return build_ma_tools_for_agent(
         registry, agent_config, enable_builtin_sandbox=enable_builtin_sandbox
     )
@@ -364,7 +374,10 @@ def _load_system_prompt(agent_id: str) -> str:
         from robothor.engine.config import build_system_prompt, load_agent_config
 
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
-        config = load_agent_config(agent_id)
+        manifest_dir = workspace / "docs" / "agents"
+        config = load_agent_config(agent_id, manifest_dir)
+        if config is None:
+            return ""
         parts = build_system_prompt(config, workspace)
         return parts.full_text()
     except Exception:

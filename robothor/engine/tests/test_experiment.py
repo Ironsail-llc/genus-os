@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -682,12 +683,12 @@ class TestExperimentConstants:
 
 class TestExperimentGuardrails:
     def test_no_guardrails_allows_all(self):
-        config = {"guardrails": []}
+        config: dict[str, Any] = {"guardrails": []}
         changes = [{"file": "anywhere/file.py", "description": "whatever"}]
         assert _check_experiment_guardrails(config, changes) is None
 
     def test_missing_guardrails_key_allows_all(self):
-        config = {}
+        config: dict[str, Any] = {}
         changes = [{"file": "anywhere/file.py", "description": "whatever"}]
         assert _check_experiment_guardrails(config, changes) is None
 
@@ -820,7 +821,7 @@ class TestExperimentFileLocking:
         """experiment_create writes advisory locks for search-space files."""
         from robothor.engine.tools.handlers.experiment import _experiment_create
 
-        store = {}
+        store: dict[str, str] = {}
 
         def read_fn(name):
             if name in store:

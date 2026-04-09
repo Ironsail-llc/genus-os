@@ -542,7 +542,7 @@ def create_workspace(path: Path) -> None:
         # Snapshot template hashes so `robothor upgrade` can detect changes
         from robothor.cli.upgrade import _save_state, _snapshot_template_hashes
 
-        state_data: dict = {}
+        state_data: dict[str, Any] = {}
         state_file = path / ".robothor" / "migrations_applied.yaml"
         if state_file.exists():
             import yaml

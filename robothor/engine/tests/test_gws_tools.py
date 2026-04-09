@@ -844,9 +844,9 @@ class TestGwsGmailReply:
             import base64
 
             # Check the subprocess call — second call is the send
-            from robothor.engine.tools.handlers.gws import subprocess
+            from robothor.engine.tools.handlers import gws as _gws_mod
 
-            send_call = subprocess.run.call_args_list[1]
+            send_call = _gws_mod.subprocess.run.call_args_list[1]  # type: ignore[attr-defined]
             json_arg = send_call[0][0][-1]  # last arg is the JSON body
             raw = json.loads(json_arg)["raw"]
             mime_bytes = base64.urlsafe_b64decode(raw)
@@ -913,9 +913,9 @@ class TestGwsGmailReply:
             # Verify all 3 external addresses are collected
             import base64
 
-            from robothor.engine.tools.handlers.gws import subprocess
+            from robothor.engine.tools.handlers import gws as _gws_mod
 
-            send_call = subprocess.run.call_args_list[1]
+            send_call = _gws_mod.subprocess.run.call_args_list[1]  # type: ignore[attr-defined]
             json_arg = send_call[0][0][-1]
             raw = json.loads(json_arg)["raw"]
             mime_text = base64.urlsafe_b64decode(raw).decode("utf-8")

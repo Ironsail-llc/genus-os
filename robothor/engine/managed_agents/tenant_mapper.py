@@ -47,7 +47,7 @@ class TenantMapper:
         """
         cached = _lookup_resource("agent", tenant_id, agent_id)
         if cached:
-            return {"id": cached["ma_resource_id"], "version": cached.get("ma_version", 1)}
+            return {"id": str(cached["ma_resource_id"]), "version": cached.get("ma_version", 1)}
 
         config = MAAgentConfig(
             name=f"{tenant_id}/{agent_id}",
@@ -70,7 +70,7 @@ class TenantMapper:
             tenant_id,
             agent_id,
         )
-        return {"id": ma_agent["id"], "version": ma_agent.get("version", 1)}
+        return {"id": str(ma_agent["id"]), "version": ma_agent.get("version", 1)}
 
     async def get_or_create_environment(
         self,
@@ -80,7 +80,7 @@ class TenantMapper:
         """Return the MA environment ID, creating if needed."""
         cached = _lookup_resource("environment", tenant_id, env_name)
         if cached:
-            return cached["ma_resource_id"]
+            return str(cached["ma_resource_id"])
 
         config = MAEnvironmentConfig(name=f"{tenant_id}/{env_name}")
         ma_env = await self._client.create_environment(config)
@@ -90,7 +90,7 @@ class TenantMapper:
             ma_env["id"],
             tenant_id,
         )
-        return ma_env["id"]
+        return str(ma_env["id"])
 
     async def get_or_create_memory_store(
         self,
@@ -100,7 +100,7 @@ class TenantMapper:
         """Return the MA memory-store ID, creating if needed."""
         cached = _lookup_resource("memory_store", tenant_id, store_name)
         if cached:
-            return cached["ma_resource_id"]
+            return str(cached["ma_resource_id"])
 
         store = await self._client.create_memory_store(
             name=f"{tenant_id}/{store_name}",
@@ -113,7 +113,7 @@ class TenantMapper:
             tenant_id,
             store_name,
         )
-        return store["id"]
+        return str(store["id"])
 
     async def invalidate(self, resource_type: str, tenant_id: str, resource_name: str) -> None:
         """Delete a cached mapping so the next call re-creates the resource."""

@@ -21,7 +21,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
-def _get_conn():
+def _get_conn() -> Any:
     """Get a database connection. Use: with _get_conn() as conn:"""
     from robothor.engine.tools.dispatch import get_db
 

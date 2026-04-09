@@ -47,21 +47,22 @@ class SlackBot:
             )
             return
 
-        self._app = AsyncApp(token=bot_token)
+        app = AsyncApp(token=bot_token)
+        self._app = app
 
         # Register message handler
-        @self._app.event("message")
-        async def handle_message(event: dict, say: Any) -> None:
+        @app.event("message")  # type: ignore[untyped-decorator]
+        async def handle_message(event: dict[str, Any], say: Any) -> None:
             await self._on_message(event, say)
 
         # Register slash commands
-        @self._app.command("/status")
+        @app.command("/status")  # type: ignore[untyped-decorator]
         async def handle_status(ack: Any, respond: Any) -> None:
             await ack()
             await respond("Engine status: running")
 
-        @self._app.command("/clear")
-        async def handle_clear(ack: Any, respond: Any, command: dict) -> None:
+        @app.command("/clear")  # type: ignore[untyped-decorator]
+        async def handle_clear(ack: Any, respond: Any, command: dict[str, Any]) -> None:
             await ack()
             from robothor.engine.chat import get_shared_session
 
@@ -88,8 +89,9 @@ class SlackBot:
         register_platform_sender("slack", slack_send)
 
         # Start Socket Mode handler
-        self._handler = AsyncSocketModeHandler(self._app, app_token)
-        await self._handler.start_async()
+        handler = AsyncSocketModeHandler(app, app_token)
+        self._handler = handler
+        await handler.start_async()
         self._started = True
         logger.info("Slack bot started (Socket Mode)")
 
@@ -100,7 +102,7 @@ class SlackBot:
             self._started = False
             logger.info("Slack bot stopped")
 
-    async def _on_message(self, event: dict, say: Any) -> None:
+    async def _on_message(self, event: dict[str, Any], say: Any) -> None:
         """Handle incoming Slack messages."""
         # Ignore bot messages
         if event.get("bot_id") or event.get("subtype"):

@@ -23,7 +23,7 @@ class ToolContext:
     workspace: str = ""
 
 
-def get_db():
+def get_db() -> Any:
     """Standard DB connection for tool handlers.
 
     Usage::

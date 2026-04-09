@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from robothor.engine.managed_agents.runner import run_on_managed_agents
 
 
-def _mock_stream_events(events: list[dict]) -> AsyncMock:
+def _mock_stream_events(events: list[dict[str, Any]]) -> Any:
     """Create a mock stream that yields the given events."""
 
     async def _stream(session_id: str):

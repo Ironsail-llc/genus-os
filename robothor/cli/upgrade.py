@@ -51,7 +51,7 @@ def _discover_migrations() -> list[Path]:
         workspace / "infra" / "migrations",
         workspace / "crm" / "migrations",
     ]
-    files = []
+    files: list[Path] = []
     for d in migration_dirs:
         if d.is_dir():
             files.extend(d.glob("*.sql"))

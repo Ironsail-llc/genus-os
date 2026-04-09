@@ -27,8 +27,9 @@ def _parse_data(args: dict[str, Any], key: str = "report_data") -> dict[str, Any
     if not data:
         return None
     if isinstance(data, str):
-        return json.loads(data)
-    return data
+        result: dict[str, Any] = json.loads(data)
+        return result
+    return data  # type: ignore[no-any-return]
 
 
 @_handler("render_report")

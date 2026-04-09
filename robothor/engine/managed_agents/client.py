@@ -88,7 +88,8 @@ class ManagedAgentsClient:
 
     async def list_agents(self) -> list[dict[str, Any]]:
         resp = await self._get("/v1/agents")
-        return resp.get("data", [])
+        result: list[dict[str, Any]] = resp.get("data", [])
+        return result
 
     # ── Environment CRUD ──────────────────────────────────────────────
 
@@ -188,14 +189,16 @@ class ManagedAgentsClient:
             f"/v1/memory_stores/{store_id}/memories",
             params={"path_prefix": "/"},
         )
-        return resp.get("data", [])
+        result: list[dict[str, Any]] = resp.get("data", [])
+        return result
 
     async def list_memories(self, store_id: str) -> list[dict[str, Any]]:
         resp = await self._get(
             f"/v1/memory_stores/{store_id}/memories",
             params={"path_prefix": "/"},
         )
-        return resp.get("data", [])
+        result: list[dict[str, Any]] = resp.get("data", [])
+        return result
 
     # ── Internals ─────────────────────────────────────────────────────
 
@@ -213,7 +216,8 @@ class ManagedAgentsClient:
             raise MAUnavailableError(f"MA API rate limited: {resp.text[:500]}")
         if resp.status_code >= 400:
             raise MAClientError(f"MA API {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
 
     async def _get(self, path: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
         try:
@@ -229,7 +233,8 @@ class ManagedAgentsClient:
             raise MAUnavailableError(f"MA API rate limited: {resp.text[:500]}")
         if resp.status_code >= 400:
             raise MAClientError(f"MA API {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
 
     async def close(self) -> None:
         await self._client.aclose()

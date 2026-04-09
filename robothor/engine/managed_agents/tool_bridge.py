@@ -131,9 +131,9 @@ def build_ma_tools_from_names(
     for name in tool_names:
         if name in skip_names:
             continue
-        schema = all_schemas.get(name)
-        if schema:
-            tools.append(engine_schema_to_ma_custom(schema))
+        tool_schema = all_schemas.get(name)
+        if tool_schema:
+            tools.append(engine_schema_to_ma_custom(tool_schema))
         else:
             logger.warning("Tool %r not found in registry, skipping", name)
 

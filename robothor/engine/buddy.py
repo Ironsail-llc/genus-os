@@ -668,7 +668,7 @@ class BuddyEngine:
 
             # Check for existing open autoagent task for this agent within 7 days
             existing = list_tasks(
-                assigned_to="auto-agent",
+                assigned_to_agent="auto-agent",
                 status="TODO",
                 tags=[agent_id],
             )

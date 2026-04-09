@@ -17,6 +17,9 @@ alice@example.com
 bob@example.com
 agent@example.com
 
+# RFC 2822 Message-ID headers in test fixtures (not real emails)
+cabx123@mail.gmail.com
+
 # Path patterns that are references, not hardcoded usage
 Path.home()
 ROBOTHOR_WORKSPACE
