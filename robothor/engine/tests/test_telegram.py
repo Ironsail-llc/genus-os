@@ -9,6 +9,7 @@ import pytest
 from aiogram.exceptions import TelegramRetryAfter
 
 from robothor.engine.chat import _sessions, get_shared_session
+from robothor.engine.config import EngineConfig
 from robothor.engine.telegram import MAX_MESSAGE_LENGTH, TelegramBot
 
 
@@ -490,3 +491,113 @@ class TestStreamingToolVisibility:
 
         # Status message (id=42) should be deleted
         bot.bot.delete_message.assert_called_once_with(chat_id=12345, message_id=42)
+
+
+class TestUserResolution:
+    """Tests for _resolve_user — per-user tenant routing."""
+
+    def test_registered_user_returns_info(self, bot):
+        """Registered user resolves to their tenant and display name."""
+        message = MagicMock()
+        message.from_user.id = 99999
+        message.chat.id = 99999
+        message.chat.type = "private"
+
+        user_info = {"tenant_id": "acme", "display_name": "Alice", "role": "owner"}
+        with patch("robothor.engine.users.lookup_user", return_value=user_info):
+            result = bot._resolve_user("99999", message)
+
+        assert result == user_info
+        assert bot._chat_user_info["99999"] == user_info
+
+    def test_unregistered_primary_chat_fallback(self, bot):
+        """Unregistered user on primary chat gets operator_name fallback."""
+        message = MagicMock()
+        message.from_user.id = 12345
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "private"
+
+        # Set operator_name on config (need unfrozen copy)
+        bot.config = EngineConfig(
+            bot_token="test-token-123",
+            default_chat_id="12345",
+            operator_name="Philip",
+            tenant_id="test-tenant",
+        )
+
+        with patch("robothor.engine.users.lookup_user", return_value=None):
+            result = bot._resolve_user("12345", message)
+
+        assert result is not None
+        assert result["display_name"] == "Philip"
+        assert result["tenant_id"] == "test-tenant"
+        assert result["role"] == "owner"
+
+    def test_unregistered_group_chat_fallback(self, bot):
+        """Unregistered user in a group chat falls back to default tenant."""
+        message = MagicMock()
+        message.from_user.id = 77777
+        message.from_user.first_name = "Bob"
+        message.chat.id = 55555
+        message.chat.type = "group"
+
+        with patch("robothor.engine.users.lookup_user", return_value=None):
+            result = bot._resolve_user("55555", message)
+
+        assert result is not None
+        assert result["display_name"] == "Bob"
+        assert result["tenant_id"] == "test-tenant"
+
+    def test_unregistered_private_chat_returns_none(self, bot):
+        """Unregistered user in private chat returns None (-> onboarding)."""
+        message = MagicMock()
+        message.from_user.id = 77777
+        message.chat.id = 77777
+        message.chat.type = "private"
+
+        with patch("robothor.engine.users.lookup_user", return_value=None):
+            result = bot._resolve_user("77777", message)
+
+        assert result is None
+
+    def test_get_tenant_id_uses_resolved_info(self, bot):
+        """_get_tenant_id returns resolved tenant when available."""
+        bot._chat_user_info["99999"] = {
+            "tenant_id": "acme",
+            "display_name": "Alice",
+            "role": "owner",
+        }
+        assert bot._get_tenant_id("99999") == "acme"
+
+    def test_get_tenant_id_falls_back_to_config(self, bot):
+        """_get_tenant_id falls back to config.tenant_id when no resolution."""
+        assert bot._get_tenant_id("unknown") == "test-tenant"
+
+    @pytest.mark.asyncio
+    async def test_trigger_detail_includes_sender(self, bot):
+        """_run_interactive encodes sender name in trigger_detail."""
+        bot._chat_user_info["12345"] = {
+            "tenant_id": "test-tenant",
+            "display_name": "Alice",
+            "role": "owner",
+        }
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("12345", session_key, session, "test message")
+
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        # Verify trigger_detail includes sender
+        call_kwargs = bot.runner.execute.call_args
+        if call_kwargs:
+            detail = call_kwargs.kwargs.get("trigger_detail", "")
+            assert "|sender:Alice" in detail
+            assert call_kwargs.kwargs.get("tenant_id") == "test-tenant"

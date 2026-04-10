@@ -222,6 +222,9 @@ class TelegramBot:
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
 
+        # Per-chat resolved user identity (from tenant_users table)
+        self._chat_user_info: dict[str, dict[str, Any]] = {}
+
         self._setup_handlers()
 
         # Register send function for delivery module
@@ -281,7 +284,7 @@ class TelegramBot:
             get_task_registry().spawn(
                 clear_session_async(
                     self._session_key(chat_id),
-                    tenant_id=self.config.tenant_id,
+                    tenant_id=self._get_tenant_id(chat_id),
                 ),
                 name=f"tg-clear-session:{chat_id}",
             )
@@ -297,7 +300,7 @@ class TelegramBot:
             get_task_registry().spawn(
                 clear_session_async(
                     self._session_key(chat_id),
-                    tenant_id=self.config.tenant_id,
+                    tenant_id=self._get_tenant_id(chat_id),
                 ),
                 name=f"tg-reset-session:{chat_id}",
             )
@@ -560,7 +563,7 @@ class TelegramBot:
                 session.active_plan.status = "rejected"
                 # Persist cleared state
                 get_task_registry().spawn(
-                    clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                    clear_plan_state_async(session_key, tenant_id=self._get_tenant_id(chat_id)),
                     name=f"tg-reject-plan:{chat_id}",
                 )
                 session.active_plan = None
@@ -593,7 +596,7 @@ class TelegramBot:
                 update_model_override_async(
                     self._session_key(chat_id),
                     model_id,
-                    tenant_id=self.config.tenant_id,
+                    tenant_id=self._get_tenant_id(chat_id),
                 ),
                 name=f"tg-model-override:{chat_id}",
             )
@@ -675,6 +678,16 @@ class TelegramBot:
                 return
 
             chat_id = str(message.chat.id)
+
+            # ── Resolve user identity ──
+            user_info = self._resolve_user(chat_id, message)
+            if user_info is None:
+                from robothor.engine.onboarding import start_onboarding
+
+                reply = start_onboarding(str(message.from_user.id))
+                await message.answer(reply)
+                return
+
             caption = (message.caption or "").strip()
 
             # Determine what was sent
@@ -807,6 +820,32 @@ class TelegramBot:
                 chat_id,
                 user_text[:100],
             )
+
+            # ── Resolve user identity ──
+            from robothor.engine.onboarding import (
+                is_onboarding,
+                process_onboarding,
+                start_onboarding,
+            )
+
+            telegram_user_id = str(message.from_user.id)
+
+            # Handle in-progress onboarding first
+            if is_onboarding(telegram_user_id):
+                reply = process_onboarding(telegram_user_id, user_text)
+                if reply:
+                    from robothor.engine.users import clear_cache
+
+                    clear_cache()
+                    await message.answer(reply)
+                return
+
+            user_info = self._resolve_user(chat_id, message)
+            if user_info is None:
+                # Unregistered private chat user — start onboarding
+                reply = start_onboarding(telegram_user_id)
+                await message.answer(reply)
+                return
 
             session_key = self._session_key(chat_id)
             session = get_shared_session(session_key)
@@ -1009,14 +1048,23 @@ class TelegramBot:
                 async with _lock:
                     history = list(session.history)
 
+                # Build trigger_detail with sender identity for warmup
+                _user = self._chat_user_info.get(chat_id)
+                _sender = _user["display_name"] if _user else ""
+                _detail = f"chat:{chat_id}"
+                if _sender:
+                    _detail += f"|sender:{_sender}"
+                _tenant = self._get_tenant_id(chat_id)
+
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
                     message=user_text,
                     trigger_type=TriggerType.TELEGRAM,
-                    trigger_detail=f"chat:{chat_id}",
+                    trigger_detail=_detail,
                     on_tool=on_tool,
                     model_override=model,
                     conversation_history=history or None,
+                    tenant_id=_tenant,
                 )
 
                 async with _lock:
@@ -1046,7 +1094,7 @@ class TelegramBot:
                             run.output_text,
                             channel="telegram",
                             model_override=model,
-                            tenant_id=self.config.tenant_id,
+                            tenant_id=_tenant,
                         ),
                         name=f"tg-save-exchange:{chat_id}",
                     )
@@ -1185,7 +1233,7 @@ class TelegramBot:
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
-                        tenant_id=self.config.tenant_id,
+                        tenant_id=self._get_tenant_id(chat_id),
                     ),
                     name=f"tg-save-plan:{chat_id}",
                 )
@@ -1286,7 +1334,7 @@ class TelegramBot:
                         f"/deep {query}",
                         run.output_text,
                         channel="telegram",
-                        tenant_id=self.config.tenant_id,
+                        tenant_id=self._get_tenant_id(chat_id),
                     ),
                     name=f"tg-save-deep:{chat_id}",
                 )
@@ -1413,7 +1461,7 @@ class TelegramBot:
                         run.output_text,
                         channel="telegram",
                         model_override=model,
-                        tenant_id=self.config.tenant_id,
+                        tenant_id=self._get_tenant_id(chat_id),
                     ),
                     name=f"tg-save-plan-exec:{chat_id}",
                 )
@@ -1421,7 +1469,7 @@ class TelegramBot:
             # Clear plan + persist
             session.active_plan = None
             get_task_registry().spawn(
-                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                clear_plan_state_async(session_key, tenant_id=self._get_tenant_id(chat_id)),
                 name=f"tg-clear-plan-exec:{chat_id}",
             )
 
@@ -1558,7 +1606,7 @@ class TelegramBot:
                         run.output_text,
                         channel="telegram",
                         model_override=self._model_override.get(chat_id),
-                        tenant_id=self.config.tenant_id,
+                        tenant_id=self._get_tenant_id(chat_id),
                     ),
                     name=f"tg-save-deep-exec:{chat_id}",
                 )
@@ -1566,7 +1614,7 @@ class TelegramBot:
             # Clear plan + persist
             session.active_plan = None
             get_task_registry().spawn(
-                clear_plan_state_async(session_key, tenant_id=self.config.tenant_id),
+                clear_plan_state_async(session_key, tenant_id=self._get_tenant_id(chat_id)),
                 name=f"tg-clear-deep-exec:{chat_id}",
             )
 
@@ -1708,7 +1756,7 @@ class TelegramBot:
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
-                        tenant_id=self.config.tenant_id,
+                        tenant_id=self._get_tenant_id(chat_id),
                     ),
                     name=f"tg-save-plan-revision:{chat_id}",
                 )
@@ -1741,6 +1789,59 @@ class TelegramBot:
                 ]
             ]
         )
+
+    def _resolve_user(self, chat_id: str, message: Message) -> dict[str, Any] | None:
+        """Resolve the Telegram sender to a tenant user.
+
+        Returns a dict with tenant_id, display_name, role — or None if the
+        user is unregistered and should be routed to onboarding.
+
+        For the primary operator chat (default_chat_id), falls back to
+        operator_name from config if tenant_users has no entry.
+        """
+        from robothor.engine.users import lookup_user
+
+        if not message.from_user:
+            return {
+                "tenant_id": self.config.tenant_id,
+                "display_name": "",
+                "role": "user",
+            }
+
+        telegram_user_id = str(message.from_user.id)
+        user_info = lookup_user(telegram_user_id)
+
+        if user_info is not None:
+            self._chat_user_info[chat_id] = user_info
+            return user_info
+
+        # Unregistered user — primary operator gets a fallback
+        if chat_id == self.config.default_chat_id:
+            fallback = {
+                "tenant_id": self.config.tenant_id,
+                "display_name": self.config.operator_name or message.from_user.first_name or "",
+                "role": "owner",
+            }
+            self._chat_user_info[chat_id] = fallback
+            return fallback
+
+        # Unregistered user in a group chat — use default tenant
+        if message.chat.type != "private":
+            fallback = {
+                "tenant_id": self.config.tenant_id,
+                "display_name": message.from_user.first_name or "",
+                "role": "user",
+            }
+            self._chat_user_info[chat_id] = fallback
+            return fallback
+
+        # Unregistered user in private chat — route to onboarding
+        return None
+
+    def _get_tenant_id(self, chat_id: str) -> str:
+        """Get the resolved tenant_id for a chat, falling back to config."""
+        info = self._chat_user_info.get(chat_id)
+        return info["tenant_id"] if info else self.config.tenant_id
 
     def _session_key(self, chat_id: str) -> str:
         """Return a DB session key for a Telegram chat.

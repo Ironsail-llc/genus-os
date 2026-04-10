@@ -12,6 +12,7 @@ from robothor.engine.models import AgentConfig
 from robothor.engine.warmup import (
     _CONTEXT_HOOKS,
     MAX_WARMTH_CHARS,
+    build_interactive_preamble,
     build_warmth_preamble,
 )
 
@@ -269,3 +270,82 @@ class TestSchedulerWarmup:
         payload = scheduler._build_payload(sample_agent_config)
         assert "SESSION HISTORY" not in payload
         assert "Execute your scheduled tasks" in payload
+
+
+class TestBuildInteractivePreamble:
+    """Tests for build_interactive_preamble with sender identity."""
+
+    def test_sender_name_injects_identity_section(self) -> None:
+        """When sender_name is provided, preamble includes identity section."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(BLOCK_PATCH, return_value=None):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="Alice",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "CURRENT USER" in result
+        assert "Alice" in result
+        assert "Do not confuse" in result
+
+    def test_no_sender_name_omits_identity_section(self) -> None:
+        """When sender_name is empty, no identity section is injected."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(BLOCK_PATCH, return_value=None):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "CURRENT USER" not in result
+
+    def test_entity_context_excludes_sender_name(self) -> None:
+        """_build_entity_context skips the sender's name from entity search."""
+        from robothor.engine.warmup import _build_entity_context
+
+        # Mock the DB call — if "Alice" is excluded, it shouldn't appear
+        # in the entity search candidates at all
+        with patch("robothor.db.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = []
+
+            # Message mentions "Alice" — but she's excluded
+            result = _build_entity_context(
+                "Tell Alice about the project",
+                exclude_names={"Alice"},
+            )
+
+            # If Alice was excluded, fewer (or zero) queries should have been made
+            # for that name. With only "Alice" as candidate and it excluded,
+            # we should get empty result.
+            assert result == ""
+
+    def test_entity_context_without_exclusion(self) -> None:
+        """Without exclusion, names are searched normally."""
+        from robothor.engine.warmup import _build_entity_context
+
+        with patch("robothor.db.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.return_value = mock_cursor
+            mock_cursor.fetchall.return_value = [
+                {"fact_text": "Alice works at Acme", "category": "person", "importance_score": 0.8},
+            ]
+
+            result = _build_entity_context(
+                "Tell Alice about the project",
+                exclude_names=None,
+            )
+
+            assert "Alice works at Acme" in result
