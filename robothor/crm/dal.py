@@ -2088,7 +2088,12 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
 # ─── Shared Working State ────────────────────────────────────────────────
 
 
-def append_to_block(block_name: str, entry: str, max_entries: int = 20) -> bool:
+def append_to_block(
+    block_name: str,
+    entry: str,
+    max_entries: int = 20,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
     """Append a timestamped line to a memory block, trimming oldest entries."""
     timestamp = datetime.now(UTC).strftime("%H:%M")
     line = f"[{timestamp}] {entry}"
@@ -2096,8 +2101,8 @@ def append_to_block(block_name: str, entry: str, max_entries: int = 20) -> bool:
         cur = conn.cursor()
         try:
             cur.execute(
-                "SELECT content FROM agent_memory_blocks WHERE block_name = %s",
-                (block_name,),
+                "SELECT content FROM agent_memory_blocks WHERE tenant_id = %s AND block_name = %s",
+                (tenant_id, block_name),
             )
             row = cur.fetchone()
             if row and row[0]:
@@ -2112,12 +2117,13 @@ def append_to_block(block_name: str, entry: str, max_entries: int = 20) -> bool:
 
             new_content = "\n".join(lines)
             cur.execute(
-                """INSERT INTO agent_memory_blocks (block_name, content, last_written_at, write_count)
-                   VALUES (%s, %s, NOW(), 1)
-                   ON CONFLICT (block_name) DO UPDATE
+                """INSERT INTO agent_memory_blocks
+                   (tenant_id, block_name, content, last_written_at, write_count)
+                   VALUES (%s, %s, %s, NOW(), 1)
+                   ON CONFLICT (tenant_id, block_name) DO UPDATE
                    SET content = EXCLUDED.content, last_written_at = NOW(),
                        write_count = agent_memory_blocks.write_count + 1""",
-                (block_name, new_content),
+                (tenant_id, block_name, new_content),
             )
             conn.commit()
             return True
