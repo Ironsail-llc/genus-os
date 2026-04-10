@@ -214,6 +214,11 @@ class TelegramBot:
         self._idle_timeout: float = 900.0  # 15 minutes
         self._session_locks: dict[str, asyncio.Lock] = {}  # chat_id → per-chat lock
 
+        # Message coalescing — Telegram splits long messages into chunks.
+        # Buffer them and drain before acting so fragments become one run.
+        self._message_buffers: dict[str, list[str]] = {}  # chat_id → queued texts
+        self._drain_scheduled: dict[str, bool] = {}  # chat_id → drain task pending
+
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
 
@@ -305,6 +310,9 @@ class TelegramBot:
         @self.dp.message(Command("stop"))
         async def cmd_stop(message: Message) -> None:
             chat_id = str(message.chat.id)
+            # Clear any buffered (not-yet-started) messages
+            self._message_buffers.pop(chat_id, None)
+            self._drain_scheduled.pop(chat_id, None)
             task = self._active_tasks.get(chat_id)
             if task and not task.done():
                 task.cancel()
@@ -779,8 +787,8 @@ class TelegramBot:
                 await self._run_plan_mode(chat_id, session_key, session, user_text, message)
                 return
 
-            # Execute via _run_interactive (shared with handle_text)
-            await self._run_interactive(chat_id, session_key, session, user_text)
+            # Execute via coalescing buffer (shared with handle_text)
+            await self._enqueue_message(chat_id, session_key, session, user_text)
 
         # ── Interactive text messages ──
 
@@ -818,8 +826,57 @@ class TelegramBot:
                 await self._run_plan_mode(chat_id, session_key, session, user_text, message)
                 return
 
-            # Execute via _run_interactive (shared with handle_file)
-            await self._run_interactive(chat_id, session_key, session, user_text)
+            # Execute via coalescing buffer (shared with handle_file)
+            await self._enqueue_message(chat_id, session_key, session, user_text)
+
+    # ── Message coalescing ──────────────────────────────────────────
+    # Telegram splits long messages into ~4096-char chunks, each arriving
+    # as a separate update.  We buffer them and drain once per batch so
+    # the agent sees one combined message instead of N orphaned runs.
+
+    async def _enqueue_message(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+        user_text: str,
+    ) -> None:
+        """Buffer a message and schedule a drain if none is pending."""
+        self._message_buffers.setdefault(chat_id, []).append(user_text)
+
+        # If a run is already active, the message waits — the run's finally
+        # block will kick off a new drain when it finishes.
+        task = self._active_tasks.get(chat_id)
+        if task and not task.done():
+            return
+
+        # If a drain is already scheduled, it will pick this up too.
+        if self._drain_scheduled.get(chat_id):
+            return
+
+        self._drain_scheduled[chat_id] = True
+        asyncio.create_task(self._drain_and_run(chat_id, session_key, session))
+
+    async def _drain_and_run(
+        self,
+        chat_id: str,
+        session_key: str,
+        session: Any,
+    ) -> None:
+        """Yield briefly to let sibling chunks buffer, then run once."""
+        # aiogram dispatches all updates from one getUpdates batch as
+        # concurrent asyncio tasks.  sleep(0) lets them all enqueue.
+        # 0.3s safety margin covers cross-batch edge cases.
+        await asyncio.sleep(0.3)
+
+        buf = self._message_buffers.pop(chat_id, [])
+        self._drain_scheduled[chat_id] = False
+
+        if not buf:
+            return
+
+        combined_text = "\n".join(buf)
+        await self._run_interactive(chat_id, session_key, session, combined_text)
 
     async def _run_interactive(
         self,
@@ -1037,6 +1094,11 @@ class TelegramBot:
                 typing_active = False
                 typing_task.cancel()
                 self._active_tasks.pop(chat_id, None)
+
+                # Drain any messages that arrived while this run was active
+                if self._message_buffers.get(chat_id) and not self._drain_scheduled.get(chat_id):
+                    self._drain_scheduled[chat_id] = True
+                    asyncio.create_task(self._drain_and_run(chat_id, session_key, session))
 
         task = asyncio.create_task(run_agent())
         self._active_tasks[chat_id] = task
@@ -1877,7 +1939,9 @@ class TelegramBot:
 
     async def stop(self) -> None:
         """Stop the bot gracefully."""
-        # Cancel all active tasks
+        # Clear message buffers and cancel all active tasks
+        self._message_buffers.clear()
+        self._drain_scheduled.clear()
         for task in self._active_tasks.values():
             task.cancel()
         self._active_tasks.clear()
