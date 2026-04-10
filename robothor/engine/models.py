@@ -292,6 +292,8 @@ class AgentRun:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     agent_id: str = ""
+    user_id: str = ""
+    user_role: str = ""
 
     trigger_type: TriggerType = TriggerType.MANUAL
     trigger_detail: str | None = None
@@ -361,6 +363,8 @@ class SpawnContext:
     remaining_cost_budget_usd: float = 0.0
     parent_trace_id: str = ""
     parent_span_id: str = ""
+    user_id: str = ""
+    user_role: str = ""
 
 
 @dataclass

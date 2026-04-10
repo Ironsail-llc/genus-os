@@ -21,6 +21,9 @@ class ToolContext:
     agent_id: str = ""
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     workspace: str = ""
+    user_id: str = ""
+    user_role: str = ""
+    accessible_tenant_ids: tuple[str, ...] = ()
 
 
 def get_db() -> Any:
@@ -132,6 +135,7 @@ def _audit_tool_call(
     agent_id: str,
     tenant_id: str,
     *,
+    user_id: str = "",
     status: str = "ok",
     error: str | None = None,
 ) -> None:
@@ -140,6 +144,8 @@ def _audit_tool_call(
         from robothor.audit.logger import log_event
 
         details: dict[str, Any] = {"tenant_id": tenant_id}
+        if user_id:
+            details["user_id"] = user_id
         if error:
             details["error"] = error[:500]
         log_event(
@@ -161,12 +167,26 @@ async def _execute_tool(
     agent_id: str = "",
     tenant_id: str = "",
     workspace: str = "",
+    user_id: str = "",
+    user_role: str = "",
+    accessible_tenant_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
-    Checks adapter-provided tools first (dynamic MCP servers), then falls
-    through to hardcoded engine handlers.
+    Checks user permissions, then adapter-provided tools (dynamic MCP
+    servers), then falls through to hardcoded engine handlers.
     """
+    # ── Permission check (single enforcement gate) ──
+    if user_role:
+        from robothor.engine.permissions import check_tool_permission
+
+        denied = check_tool_permission(user_role, tenant_id, name)
+        if denied:
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
+            )
+            return {"error": denied}
+
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -177,14 +197,23 @@ async def _execute_tool(
             pool = get_mcp_client_pool()
             session = await pool.get_session(route)
             result: dict[str, Any] = await session.call_tool(name, args)
-            _audit_tool_call(name, agent_id, tenant_id)
+            _audit_tool_call(name, agent_id, tenant_id, user_id=user_id)
             return result
         except Exception as e:
             logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
-            _audit_tool_call(name, agent_id, tenant_id, status="error", error=str(e))
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="error", error=str(e)
+            )
             return {"error": f"Adapter tool '{name}' failed: {e}"}
 
-    ctx = ToolContext(agent_id=agent_id, tenant_id=tenant_id, workspace=workspace)
+    ctx = ToolContext(
+        agent_id=agent_id,
+        tenant_id=tenant_id,
+        workspace=workspace,
+        user_id=user_id,
+        user_role=user_role,
+        accessible_tenant_ids=accessible_tenant_ids,
+    )
     handlers = _get_handlers()
     handler = handlers.get(name)
     if handler is None:
@@ -192,7 +221,9 @@ async def _execute_tool(
 
     result = cast("dict[str, Any]", await handler(args, ctx))
     if isinstance(result, dict) and "error" in result:
-        _audit_tool_call(name, agent_id, tenant_id, status="error", error=result["error"])
+        _audit_tool_call(
+            name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]
+        )
     else:
-        _audit_tool_call(name, agent_id, tenant_id)
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id)
     return result

@@ -197,6 +197,8 @@ class AgentRunner:
         execution_mode: bool = False,
         deep_plan: bool = False,
         tenant_id: str | None = None,
+        user_id: str = "",
+        user_role: str = "",
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -226,10 +228,17 @@ class AgentRunner:
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
-        # Sub-agent: link to parent run
+        # User identity
+        session.run.user_id = user_id
+        session.run.user_role = user_role
+
+        # Sub-agent: link to parent run + inherit user identity
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id
             session.run.nesting_depth = spawn_context.nesting_depth + 1
+            if not user_id and spawn_context.user_id:
+                session.run.user_id = spawn_context.user_id
+                session.run.user_role = spawn_context.user_role
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.
@@ -1329,6 +1338,8 @@ class AgentRunner:
                             agent_id=agent_config.id,
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
+                            user_id=session.run.user_id,
+                            user_role=session.run.user_role,
                             timeout=_tool_timeout,
                         )
                 else:
@@ -1338,6 +1349,8 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         tenant_id=session.run.tenant_id,
                         workspace=str(self.config.workspace),
+                        user_id=session.run.user_id,
+                        user_role=session.run.user_role,
                         timeout=_tool_timeout,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)

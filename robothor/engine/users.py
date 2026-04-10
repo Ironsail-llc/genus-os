@@ -36,7 +36,7 @@ def lookup_user(telegram_user_id: str) -> dict[str, Any] | None:
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT tenant_id, display_name, role "
+                "SELECT tenant_id, display_name, role, id::TEXT as user_id "
                 "FROM tenant_users "
                 "WHERE telegram_user_id = %s AND is_active = TRUE",
                 (telegram_user_id,),
@@ -51,6 +51,7 @@ def lookup_user(telegram_user_id: str) -> dict[str, Any] | None:
             "tenant_id": row[0],
             "display_name": row[1],
             "role": row[2],
+            "user_id": row[3],
         }
         _cache[telegram_user_id] = result
         return result
