@@ -2129,7 +2129,7 @@ def append_to_block(
             return True
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to append to block %s: %s", block_name, e)
+            logger.error("Failed to append to block %s: %s", block_name.replace("\n", "\\n"), e)
             return False
 
 
