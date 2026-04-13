@@ -58,6 +58,22 @@ class TestEngineConfig:
         config = EngineConfig.from_env()
         assert config.default_chat_agent == "custom-chat"
 
+    def test_operator_name_default(self, monkeypatch):
+        """operator_name defaults to empty string."""
+        monkeypatch.delenv("ROBOTHOR_OPERATOR_NAME", raising=False)
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        config = EngineConfig.from_env()
+        assert config.operator_name == ""
+
+    def test_operator_name_from_env(self, monkeypatch):
+        """operator_name reads from ROBOTHOR_OPERATOR_NAME."""
+        monkeypatch.setenv("ROBOTHOR_OPERATOR_NAME", "Alice")
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        config = EngineConfig.from_env()
+        assert config.operator_name == "Alice"
+
 
 class TestManifestLoading:
     def test_load_manifest_valid(self, sample_manifest):
