@@ -681,7 +681,7 @@ class BuddyEngine:
             if isinstance(existing, list):
                 return len(existing)
         except Exception:
-            pass
+            logger.debug("Failed to get flag count for %s", agent_id, exc_info=True)
         return 0
 
     def _create_autoagent_task(self, agent_id: str, threshold: int) -> bool:

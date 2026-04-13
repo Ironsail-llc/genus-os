@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.engine.sanitize import sanitize_log
 from robothor.memory.ingest_state import content_hash, is_already_ingested, record_ingested
 from robothor.memory.ingestion import ingest_content
 
@@ -80,7 +81,9 @@ async def ingest_conversation_session(
 
         hash_val = _compute_session_hash(session_key, history)
         if is_already_ingested(_DEDUP_SOURCE, session_key, hash_val):
-            logger.debug("Session %s already ingested (hash match), skipping", session_key)
+            logger.debug(
+                "Session %s already ingested (hash match), skipping", sanitize_log(session_key)
+            )
             return None
 
         transcript = format_transcript(history)
@@ -108,12 +111,14 @@ async def ingest_conversation_session(
 
         logger.info(
             "Ingested conversation session %s: %d facts, %d entities",
-            session_key,
+            sanitize_log(session_key),
             result.get("facts_processed", 0),
             result.get("entities_stored", 0),
         )
         return result
 
     except Exception:
-        logger.warning("Conversation ingestion failed for %s", session_key, exc_info=True)
+        logger.warning(
+            "Conversation ingestion failed for %s", sanitize_log(session_key), exc_info=True
+        )
         return None

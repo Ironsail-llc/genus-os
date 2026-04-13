@@ -1000,7 +1000,7 @@ def create_task(
                     tenant_id=tenant_id,
                 )
             except Exception:
-                logger.debug("Failed to publish task.created event", exc_info=True)
+                logger.warning("Failed to publish task.created event", exc_info=True)
             return task_id
         except Exception as e:
             conn.rollback()
@@ -1323,7 +1323,7 @@ def resolve_task(
                         tenant_id=tenant_id,
                     )
                 except Exception:
-                    logger.debug("Failed to publish task.resolved event", exc_info=True)
+                    logger.warning("Failed to publish task.resolved event", exc_info=True)
             return ok
         except Exception as e:
             conn.rollback()

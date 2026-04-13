@@ -184,6 +184,8 @@ class ToolRegistry:
 
         Args:
             timeout: Per-tool timeout in seconds. 0 = unlimited.
+            accessible_tenant_ids: Tenant IDs this run may access
+                (resolved from user role + tenant hierarchy).
         """
         try:
             if timeout > 0:

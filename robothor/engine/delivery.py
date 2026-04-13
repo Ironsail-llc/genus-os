@@ -163,26 +163,29 @@ async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, A
         return None
 
 
-async def _maybe_append_buddy_reflection(text: str, run: AgentRun, config: AgentConfig) -> str:
+async def _maybe_append_buddy_reflection(
+    text: str, run: AgentRun, config: AgentConfig
+) -> tuple[str, bool]:
     """Optionally append a buddy one-liner to heartbeat output.
 
     Only fires for the main agent's heartbeat runs. Stays silent when
     there are no noteworthy events.
+
+    Returns (text, has_reflection) tuple.
     """
     if not _is_heartbeat_run(run):
-        return text
+        return text, False
     if config.id != "main":
-        return text
+        return text, False
 
     ctx = _get_buddy_context()
     if not ctx or not ctx.get("events"):
-        return text
+        return text, False
 
     reflection = await _generate_buddy_reflection(text, ctx)
     if reflection:
-        run.buddy_reflection = True  # type: ignore[attr-defined]
-        return f"{text}\n\n---\n{reflection}"
-    return text
+        return f"{text}\n\n---\n{reflection}", True
+    return text, False
 
 
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
@@ -236,11 +239,10 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     text = run.output_text.strip()
 
     # Buddy reflection — append subconscious one-liner to main heartbeat
-    text = await _maybe_append_buddy_reflection(text, run, config)
+    text, has_reflection = await _maybe_append_buddy_reflection(text, run, config)
 
     # Suppress trivial heartbeat output — short filler like "All quiet" or "Nothing new"
     # Skip suppression if buddy added a reflection (it decided something was worth saying)
-    has_reflection = getattr(run, "buddy_reflection", False)
     if _is_heartbeat_run(run) and _is_trivial_output(text) and not has_reflection:
         logger.debug("Suppressed trivial heartbeat output for %s: %s", config.id, text[:80])
         run.delivery_status = "suppressed_trivial"

@@ -174,9 +174,20 @@ async def _execute_tool(
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
-    Checks adapter-provided tools first (dynamic MCP servers), then falls
-    through to hardcoded engine handlers.
+    Checks user permissions, then adapter-provided tools (dynamic MCP
+    servers), then falls through to hardcoded engine handlers.
     """
+    # ── Permission check (single enforcement gate) ──
+    if user_role:
+        from robothor.engine.permissions import check_tool_permission
+
+        denied = check_tool_permission(user_role, tenant_id, name)
+        if denied:
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
+            )
+            return {"error": denied}
+
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -192,7 +203,7 @@ async def _execute_tool(
         except Exception as e:
             logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
             _audit_tool_call(
-                name, agent_id, tenant_id, status="error", error=str(e), user_id=user_id
+                name, agent_id, tenant_id, user_id=user_id, status="error", error=str(e)
             )
             return {"error": f"Adapter tool '{name}' failed: {e}"}
 
@@ -212,7 +223,7 @@ async def _execute_tool(
     result = cast("dict[str, Any]", await handler(args, ctx))
     if isinstance(result, dict) and "error" in result:
         _audit_tool_call(
-            name, agent_id, tenant_id, status="error", error=result["error"], user_id=user_id
+            name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]
         )
     else:
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id)

@@ -335,6 +335,9 @@ class AgentRun:
     parent_run_id: str | None = None
     nesting_depth: int = 0
 
+    # Hierarchical tenant access (resolved at run start)
+    accessible_tenant_ids: tuple[str, ...] = ()
+
     # CRM task linkage (auto-task)
     task_id: str | None = None
 

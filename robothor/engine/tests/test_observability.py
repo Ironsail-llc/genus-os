@@ -206,8 +206,9 @@ class TestBuddyReflection:
 
         config = _make_config(id="main")
         run = _make_run(trigger_detail=None)  # not a heartbeat
-        result = await _maybe_append_buddy_reflection("Hello world", run, config)
+        result, has_reflection = await _maybe_append_buddy_reflection("Hello world", run, config)
         assert result == "Hello world"  # unchanged
+        assert has_reflection is False
 
     @pytest.mark.asyncio
     async def test_reflection_skipped_for_non_main_agent(self):
@@ -216,8 +217,9 @@ class TestBuddyReflection:
 
         config = _make_config(id="email-classifier")
         run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result = await _maybe_append_buddy_reflection("Report here", run, config)
+        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
         assert result == "Report here"  # unchanged
+        assert has_reflection is False
 
     @pytest.mark.asyncio
     @patch("robothor.engine.delivery._get_buddy_context")
@@ -228,8 +230,9 @@ class TestBuddyReflection:
         mock_ctx.return_value = {"events": []}
         config = _make_config(id="main")
         run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result = await _maybe_append_buddy_reflection("Report here", run, config)
+        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
         assert result == "Report here"  # unchanged
+        assert has_reflection is False
 
     @pytest.mark.asyncio
     @patch("robothor.engine.delivery._generate_buddy_reflection")
@@ -243,11 +246,12 @@ class TestBuddyReflection:
 
         config = _make_config(id="main")
         run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result = await _maybe_append_buddy_reflection("Report here", run, config)
+        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
 
         assert "Report here" in result
         assert "---" in result
         assert "momentum is building" in result
+        assert has_reflection is True
 
     @pytest.mark.asyncio
     @patch("robothor.engine.delivery._generate_buddy_reflection")
@@ -261,8 +265,9 @@ class TestBuddyReflection:
 
         config = _make_config(id="main")
         run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result = await _maybe_append_buddy_reflection("Report here", run, config)
+        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
         assert result == "Report here"
+        assert has_reflection is False
 
     @pytest.mark.asyncio
     @patch("robothor.engine.delivery._generate_buddy_reflection")

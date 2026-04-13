@@ -232,10 +232,26 @@ class AgentRunner:
         session.run.user_id = user_id
         session.run.user_role = user_role
 
-        # Sub-agent: link to parent run
+        # Sub-agent: link to parent run + inherit user identity
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id
             session.run.nesting_depth = spawn_context.nesting_depth + 1
+            if not user_id and spawn_context.user_id:
+                session.run.user_id = spawn_context.user_id
+                session.run.user_role = spawn_context.user_role
+
+        # Resolve hierarchical tenant access.
+        # owner/admin roles see child tenants; others see only their own.
+        try:
+            from robothor.engine.permissions import resolve_accessible_tenants
+
+            _user_role = getattr(session.run, "user_role", None)
+            session.run.accessible_tenant_ids = resolve_accessible_tenants(
+                resolved_tenant, _user_role
+            )
+        except Exception:
+            # Degrade gracefully — restrict to own tenant only.
+            session.run.accessible_tenant_ids = (resolved_tenant,)
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.
@@ -1348,6 +1364,7 @@ class AgentRunner:
                             user_id=session.run.user_id,
                             user_role=session.run.user_role,
                             timeout=_tool_timeout,
+                            accessible_tenant_ids=session.run.accessible_tenant_ids,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1359,6 +1376,7 @@ class AgentRunner:
                         user_id=session.run.user_id,
                         user_role=session.run.user_role,
                         timeout=_tool_timeout,
+                        accessible_tenant_ids=session.run.accessible_tenant_ids,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
