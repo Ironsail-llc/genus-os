@@ -232,6 +232,23 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     )
                 )
 
+            # Ingest conversation to memory (fire-and-forget)
+            if len(session.history) >= 4 and _config:
+                from robothor.memory.conversation_ingest import (
+                    ingest_conversation_session,
+                )
+
+                asyncio.create_task(
+                    ingest_conversation_session(
+                        session_key=session_key,
+                        history=list(session.history),
+                        agent_id=agent_id,
+                        trigger_type="webchat",
+                        run_id=run.id,
+                        tenant_id=_config.tenant_id,
+                    )
+                )
+
             # Signal completion with metadata
             await queue.put(
                 {

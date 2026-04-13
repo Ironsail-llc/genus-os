@@ -156,6 +156,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Memory read-only tools
         "search_memory",
         "get_entity",
+        "get_knowledge_gaps",
         "memory_block_read",
         "memory_block_list",
         # CRM read

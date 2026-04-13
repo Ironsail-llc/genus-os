@@ -122,6 +122,7 @@ class TestManifestConfiguration:
             "autoagent_learnings",
             "autoresearch_learnings",
             "performance_baselines",
+            "self_model",
             "watchdog_log",
             "autodream_log",
         }

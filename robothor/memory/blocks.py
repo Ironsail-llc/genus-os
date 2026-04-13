@@ -37,6 +37,9 @@ DEFAULT_BLOCK_SEEDS = [
     ("autoresearch_learnings", "persistent", 5000),
     ("architect_evolution_log", "persistent", 5000),
     ("architect_dispatch_ledger", "persistent", 5000),
+    # Curiosity Engine + Self Model
+    ("curiosity_engine_findings", "persistent", 5000),
+    ("self_model", "persistent", 8000),
 ]
 
 

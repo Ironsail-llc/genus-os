@@ -113,6 +113,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                 "required": ["name"],
             },
         },
+        {
+            "name": "get_knowledge_gaps",
+            "description": "Analyze the knowledge graph for gaps: orphaned entities, low-confidence facts, type imbalances, thin clusters, and uncertainty signals.",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
         # Vision tools
         {
             "name": "look",
@@ -915,6 +920,11 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             return result or {"name": arguments.get("name", ""), "found": False}
         except Exception:
             return {"name": arguments.get("name", ""), "found": False}
+
+    if name == "get_knowledge_gaps":
+        from robothor.memory.gap_analysis import analyze_knowledge_gaps
+
+        return await analyze_knowledge_gaps()
 
     # ── Vision proxy tools ──
 

@@ -22,6 +22,9 @@ EXPECTED_BLOCK_NAMES = {
     "autoresearch_learnings",
     "architect_evolution_log",
     "architect_dispatch_ledger",
+    # Curiosity Engine + Self Model
+    "curiosity_engine_findings",
+    "self_model",
 }
 
 

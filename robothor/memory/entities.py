@@ -342,3 +342,162 @@ async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
         "entities_stored": len(extracted["entities"]),
         "relations_stored": relations_stored,
     }
+
+
+# ── Cross-Fact Relationship Inference ────────────────────────────────────────
+
+RELATION_INFERENCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "target": {"type": "string"},
+                    "relation": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["source", "target", "relation", "confidence"],
+            },
+        },
+    },
+    "required": ["relations"],
+}
+
+MAX_INFERRED_CONFIDENCE = 0.7
+
+
+async def find_underconnected_entities(
+    min_mentions: int = 2,
+    max_relations: int = 1,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Find entities mentioned multiple times but with few graph connections."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT e.id, e.name, e.entity_type, e.mention_count,
+                   COUNT(r.id) AS relation_count
+            FROM memory_entities e
+            LEFT JOIN memory_relations r
+                ON (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+            WHERE e.mention_count >= %s
+            GROUP BY e.id, e.name, e.entity_type, e.mention_count
+            HAVING COUNT(r.id) <= %s
+            ORDER BY e.mention_count DESC
+            LIMIT %s
+            """,
+            (min_mentions, max_relations, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+async def find_cooccurring_entity_pairs(
+    entity_ids: list[int],
+) -> list[dict[str, Any]]:
+    """Find pairs of entities that appear in the same facts."""
+    if not entity_ids:
+        return []
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            WITH target_entities AS (
+                SELECT id, name FROM memory_entities WHERE id = ANY(%s)
+            ),
+            entity_facts AS (
+                SELECT te.id AS entity_id, te.name AS entity_name, f.id AS fact_id, f.fact_text
+                FROM target_entities te
+                JOIN memory_facts f ON te.name = ANY(f.entities)
+                WHERE f.is_active = TRUE
+            )
+            SELECT
+                a.entity_id AS entity_a_id, a.entity_name AS entity_a_name,
+                b.entity_id AS entity_b_id, b.entity_name AS entity_b_name,
+                COUNT(DISTINCT a.fact_id) AS shared_fact_count,
+                ARRAY_AGG(DISTINCT a.fact_id) AS shared_fact_ids
+            FROM entity_facts a
+            JOIN entity_facts b ON a.fact_id = b.fact_id AND a.entity_id < b.entity_id
+            GROUP BY a.entity_id, a.entity_name, b.entity_id, b.entity_name
+            HAVING COUNT(DISTINCT a.fact_id) >= 1
+            ORDER BY COUNT(DISTINCT a.fact_id) DESC
+            """,
+            (entity_ids,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+async def infer_relations(
+    pairs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Use LLM to infer relationship types between co-occurring entity pairs.
+
+    Inferred relations are stored with confidence capped at MAX_INFERRED_CONFIDENCE.
+    """
+    if not pairs:
+        return []
+
+    stored = []
+    for pair in pairs:
+        try:
+            facts_text = "\n".join(f"- {t}" for t in pair.get("shared_facts_text", []))
+            prompt = (
+                f"Given these two entities and the facts they share, "
+                f"what is their relationship?\n\n"
+                f"Entity A: {pair['entity_a_name']}\nEntity B: {pair['entity_b_name']}\n\n"
+                f"Shared facts:\n{facts_text}\n\n"
+                f"Return the relationship(s) between them. "
+                f"Use simple verb phrases (works_at, manages, uses, collaborates_with, belongs_to, etc.)."
+            )
+
+            raw = await llm_client.generate(
+                prompt=prompt,
+                system="Infer entity relationships from shared facts.",
+                max_tokens=512,
+                format=RELATION_INFERENCE_SCHEMA,
+            )
+
+            parsed = json.loads(raw.strip())
+            relations = parsed.get("relations", [])
+            if not isinstance(relations, list):
+                continue
+
+            name_to_id = {
+                pair["entity_a_name"]: pair["entity_a_id"],
+                pair["entity_b_name"]: pair["entity_b_id"],
+            }
+
+            for rel in relations:
+                src_id = name_to_id.get(rel.get("source", ""))
+                tgt_id = name_to_id.get(rel.get("target", ""))
+                rel_type = rel.get("relation", "")
+                if not (src_id and tgt_id and rel_type):
+                    continue
+
+                confidence = min(float(rel.get("confidence", 0.6)), MAX_INFERRED_CONFIDENCE)
+                fact_ref = pair["shared_fact_ids"][0] if pair.get("shared_fact_ids") else None
+                rel_id = await add_relation(src_id, tgt_id, rel_type, fact_ref, confidence)
+                stored.append(
+                    {
+                        "relation_id": rel_id,
+                        "source": rel.get("source"),
+                        "target": rel.get("target"),
+                        "relation_type": rel_type,
+                        "confidence": confidence,
+                    }
+                )
+
+        except (json.JSONDecodeError, Exception):
+            logger.warning(
+                "Relationship inference failed for pair %s <-> %s",
+                pair.get("entity_a_name"),
+                pair.get("entity_b_name"),
+                exc_info=True,
+            )
+            continue
+
+    return stored

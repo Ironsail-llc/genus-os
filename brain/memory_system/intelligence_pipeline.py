@@ -956,6 +956,19 @@ async def main():
         report["phases"]["p6_cleanup"] = phase_6_cleanup()
         logger.info("  → %d items pruned", report["phases"]["p6_cleanup"].get("items_pruned", 0))
 
+        # Phase 7: Self-model synthesis
+        logger.info("Phase 7: Self-model synthesis...")
+        try:
+            from robothor.engine.self_model import build_self_model, write_self_model
+
+            model = await build_self_model()
+            await write_self_model(model)
+            report["phases"]["p7_self_model"] = {"status": "ok"}
+            logger.info("  → self-model written to memory block")
+        except Exception as e:
+            logger.warning("Phase 7 (self-model) failed: %s", e)
+            report["phases"]["p7_self_model"] = {"status": "error", "error": str(e)}
+
         report["stats_after"] = await get_memory_stats()
 
     except Exception as e:

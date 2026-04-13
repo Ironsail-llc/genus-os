@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 import yaml
@@ -206,7 +207,7 @@ class EventHooks:
                     consumer_name,
                     stream_keys,  # type: ignore[arg-type]
                     count=5,
-                    block=5000,
+                    block=int(os.environ.get("EVENT_BUS_BLOCK_MS", "2000")),
                 )
                 if not results:
                     continue

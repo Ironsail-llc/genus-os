@@ -1051,6 +1051,24 @@ class TelegramBot:
                         name=f"tg-save-exchange:{chat_id}",
                     )
 
+                # Ingest conversation to memory (fire-and-forget)
+                if len(session.history) >= 4:
+                    from robothor.memory.conversation_ingest import (
+                        ingest_conversation_session,
+                    )
+
+                    get_task_registry().spawn(
+                        ingest_conversation_session(
+                            session_key=session_key,
+                            history=list(session.history),
+                            agent_id=self.config.default_chat_agent,
+                            trigger_type="telegram",
+                            run_id=run.id,
+                            tenant_id=self.config.tenant_id,
+                        ),
+                        name=f"conv-ingest:{chat_id}",
+                    )
+
                 # Delete status message, deliver final output as new message
                 if stream_msg_id is not None:
                     with contextlib.suppress(Exception):

@@ -979,6 +979,28 @@ def create_task(
                     "priority": priority,
                 },
             )
+            # Publish event to Redis Streams for reactive agent coordination
+            try:
+                from robothor.events.bus import publish as publish_event
+
+                publish_event(
+                    stream="crm",
+                    event_type="task.created",
+                    payload={
+                        "task_id": task_id,
+                        "title": title,
+                        "assigned_to_agent": assigned_to_agent,
+                        "created_by_agent": created_by_agent,
+                        "priority": priority,
+                        "tags": tags or [],
+                        "requires_human": requires_human,
+                    },
+                    source="crm_dal",
+                    actor=created_by_agent or "system",
+                    tenant_id=tenant_id,
+                )
+            except Exception:
+                logger.debug("Failed to publish task.created event", exc_info=True)
             return task_id
         except Exception as e:
             conn.rollback()
@@ -1285,6 +1307,23 @@ def resolve_task(
                         "agent_id": agent_id,
                     },
                 )
+                try:
+                    from robothor.events.bus import publish as publish_event
+
+                    publish_event(
+                        stream="crm",
+                        event_type="task.resolved",
+                        payload={
+                            "task_id": task_id,
+                            "resolution": resolution,
+                            "resolved_by": agent_id,
+                        },
+                        source="crm_dal",
+                        actor=agent_id or "system",
+                        tenant_id=tenant_id,
+                    )
+                except Exception:
+                    logger.debug("Failed to publish task.resolved event", exc_info=True)
             return ok
         except Exception as e:
             conn.rollback()

@@ -437,6 +437,55 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
     }
 
 
+# ── Cross-Entity Relationship Inference ───────────────────────────────────────
+
+
+async def infer_entity_relationships(
+    min_mentions: int = 2,
+    max_relations: int = 1,
+    max_pairs: int = 20,
+) -> list[dict[str, Any]]:
+    """Orchestrate cross-fact entity relationship inference."""
+    from robothor.memory.entities import (
+        find_cooccurring_entity_pairs,
+        find_underconnected_entities,
+        infer_relations,
+    )
+
+    underconnected = await find_underconnected_entities(min_mentions, max_relations)
+    if not underconnected:
+        logger.info("No underconnected entities found for relationship inference")
+        return []
+
+    entity_ids = [e["id"] for e in underconnected]
+    pairs = await find_cooccurring_entity_pairs(entity_ids)
+    if not pairs:
+        logger.info("No co-occurring entity pairs found")
+        return []
+
+    # Enrich pairs with shared fact text for LLM context
+    for pair in pairs[:max_pairs]:
+        fact_ids = pair.get("shared_fact_ids", [])
+        if fact_ids:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s)",
+                    (fact_ids[:5],),
+                )
+                pair["shared_facts_text"] = [row[0] for row in cur.fetchall()]
+        else:
+            pair["shared_facts_text"] = []
+
+    logger.info(
+        "Inferring relations for %d entity pairs (from %d underconnected entities)",
+        min(len(pairs), max_pairs),
+        len(underconnected),
+    )
+
+    return await infer_relations(pairs[:max_pairs])
+
+
 # ── Cross-Domain Insight Discovery (P1) ──────────────────────────────────────
 
 
@@ -929,6 +978,20 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     step_timings["insights"] = time.monotonic() - t4
     logger.info("Step 6 (insights): %s (%.1fs)", insight_result, step_timings["insights"])
 
+    # Step 7: Cross-entity relationship inference
+    t5 = time.monotonic()
+    inferred_relations: list[dict[str, Any]] = []
+    try:
+        inferred_relations = await infer_entity_relationships()
+    except Exception as e:
+        logger.warning("Relationship inference failed: %s", e)
+    step_timings["relationship_inference"] = time.monotonic() - t5
+    logger.info(
+        "Step 7 (relationship inference): %d relations inferred (%.1fs)",
+        len(inferred_relations),
+        step_timings["relationship_inference"],
+    )
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -943,5 +1006,6 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "consolidation_groups": consolidation_groups,
         "unconsolidated_swept": swept,
         "insights": insight_result,
+        "relations_inferred": len(inferred_relations),
         "step_timings": step_timings,
     }

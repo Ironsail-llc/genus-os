@@ -93,6 +93,13 @@ async def _memory_block_list(args: dict[str, Any], ctx: ToolContext) -> dict[str
     return await asyncio.to_thread(list_blocks)
 
 
+@_handler("get_knowledge_gaps")
+async def _get_knowledge_gaps(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.memory.gap_analysis import analyze_knowledge_gaps
+
+    return await analyze_knowledge_gaps()
+
+
 @_handler("append_to_block")
 async def _append_to_block(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import append_to_block
