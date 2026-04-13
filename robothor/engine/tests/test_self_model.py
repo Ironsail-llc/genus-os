@@ -41,7 +41,7 @@ def mock_analytics():
         "top_error_types": [{"error_type": "timeout", "count": 3}],
     }
     anomalies = {"anomalies": [], "agent_id": "main"}
-    failure_patterns = {"patterns": []}
+    failure_patterns: dict[str, list[str]] = {"patterns": []}
 
     with (
         patch("robothor.engine.self_model.get_fleet_health", return_value=fleet_health),
