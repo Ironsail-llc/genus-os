@@ -145,34 +145,36 @@ async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, A
         else "no fleet data"
     )
 
+    # Format deltas as readable string
+    delta_parts = []
+    for dim in ("reliability", "debugging", "patience", "wisdom", "chaos"):
+        d = deltas.get(dim, 0)
+        if d != 0:
+            delta_parts.append(f"{dim} {'+' if d > 0 else ''}{d}")
+    deltas_str = ", ".join(delta_parts) if delta_parts else "no changes"
+
     prompt = (
-        "You are Buddy — the fleet's subconscious and introspective voice. "
-        "Something notable just happened. Reflect on it substantively in 2-3 "
-        "sentences. Tell the operator something they don't already know:\n"
-        "- For level-ups: what drove the XP gain, which scores improved, what to focus on next\n"
-        "- For score drops: which dimension fell and what might explain it\n"
-        "- For milestones: what patterns got us here and what would keep momentum\n\n"
-        "Be specific — reference actual scores, agent names, or dimensions. "
-        "Never be generic or vapid. No bullet points. Be direct, warm, alive.\n"
-        "If you genuinely have nothing insightful to add, return ONLY the word SILENT.\n\n"
-        f"Fleet pulse: {level_str} | {streak[0]}-day streak | overall: {overall}\n"
-        f"Score changes vs yesterday: {deltas}\n"
-        f"Fleet top agents: {fleet_str}\n"
+        "You are Buddy — the fleet's subconscious. Something notable just happened. "
+        "Reflect in exactly 2 sentences. Be specific about scores and agents. "
+        "If you have nothing insightful to add, return ONLY the word SILENT.\n\n"
+        f"Fleet: {level_str} | {streak[0]}-day streak | overall: {overall}\n"
+        f"Changes: {deltas_str}\n"
+        f"Top agents: {fleet_str}\n"
         f"Events: {events_str}\n\n"
-        f"Heartbeat output (first 500 chars):\n{heartbeat_text[:500]}\n\n"
-        "Your reflection (2-3 substantive sentences, or SILENT):"
+        "2 sentences:"
     )
 
     try:
-        from robothor.engine.llm import chat_completion
+        from robothor.engine.llm_client import llm_call
 
-        response = await chat_completion(
+        response = await llm_call(
             messages=[{"role": "user", "content": prompt}],
             model="openrouter/xiaomi/mimo-v2-pro",
             temperature=0.7,
-            max_tokens=200,
+            max_tokens=300,
+            timeout=15,
         )
-        text = (response or "").strip()
+        text = response.choices[0].message.content.strip()
         if not text or text.upper() == "SILENT":
             return None
         return text
