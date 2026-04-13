@@ -16,7 +16,7 @@ Evaluation order (first match wins):
     2. Tenant-specific ALLOW →  allowed
     3. ``__default__`` DENY  →  blocked
     4. ``__default__`` ALLOW →  allowed
-    5. No match              →  allowed (fail-open for unconfigured roles)
+    5. No match              →  denied (fail-closed for unconfigured roles)
 """
 
 from __future__ import annotations
@@ -62,14 +62,14 @@ def check_tool_permission(
                 WHERE role = %s AND tenant_id IN (%s, '__default__')
                 ORDER BY
                     CASE WHEN tenant_id = %s THEN 0 ELSE 1 END,
-                    access ASC
+                    access DESC
                 """,
                 (user_role, tenant_id, tenant_id),
             )
             rules = cur.fetchall()
 
         if not rules:
-            return None  # No rules configured — fail-open
+            return f"No permission rules for role '{user_role}' — access denied"
 
         # Evaluate rules in priority order (tenant-specific before __default__)
         for pattern, access, _rule_tenant in rules:
@@ -78,11 +78,11 @@ def check_tool_permission(
                     return f"Role '{user_role}' denied '{tool_name}' (pattern: {pattern})"
                 return None  # Explicitly allowed
 
-        return None  # No matching rule — fail-open
+        return f"No permission rule matched for role '{user_role}' on '{tool_name}' — access denied"
 
     except Exception:
-        logger.debug("Permission check failed, allowing by default", exc_info=True)
-        return None  # Fail-open on errors — don't block operations
+        logger.warning("Permission check failed — denying access", exc_info=True)
+        return "Permission check unavailable — access denied"
 
 
 def resolve_accessible_tenants(

@@ -15,14 +15,15 @@ class TestCheckToolPermission:
         result = check_tool_permission("", "test-tenant", "create_person")
         assert result is None
 
-    def test_no_rules_fails_open(self):
-        """No rules configured means fail-open (allowed)."""
+    def test_no_rules_fails_closed(self):
+        """No rules configured means fail-closed (denied)."""
         with patch("robothor.db.connection.get_connection") as mock_conn:
             mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
             mock_cursor.fetchall.return_value = []
 
             result = check_tool_permission("viewer", "test-tenant", "create_person")
-            assert result is None
+            assert result is not None
+            assert "denied" in result
 
     def test_deny_rule_blocks(self):
         """Matching deny rule blocks the tool."""
@@ -80,11 +81,39 @@ class TestCheckToolPermission:
             result = check_tool_permission("viewer", "t", "create_person")
             assert result is not None
 
-    def test_db_error_fails_open(self):
-        """DB errors fail-open (don't block operations)."""
+    def test_deny_shadows_allow_same_tenant(self):
+        """A deny rule at the same tenant level shadows a broader allow rule."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            # Same tenant, deny on specific tool sorts before allow on wildcard
+            # (ORDER BY access DESC: 'deny' > 'allow')
+            mock_cursor.fetchall.return_value = [
+                ("create_person", "deny", "test-tenant"),
+                ("*", "allow", "test-tenant"),
+            ]
+
+            result = check_tool_permission("user", "test-tenant", "create_person")
+            assert result is not None
+            assert "denied" in result
+
+    def test_no_matching_rule_fails_closed(self):
+        """Rules exist but none match the tool — fail-closed."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = [
+                ("unrelated_*", "allow", "__default__"),
+            ]
+
+            result = check_tool_permission("user", "test-tenant", "create_person")
+            assert result is not None
+            assert "denied" in result
+
+    def test_db_error_fails_closed(self):
+        """DB errors fail-closed (deny access)."""
         with patch("robothor.db.connection.get_connection", side_effect=Exception("DB down")):
             result = check_tool_permission("viewer", "test-tenant", "create_person")
-            assert result is None
+            assert result is not None
+            assert "denied" in result
 
 
 class TestResolveAccessibleTenants:
