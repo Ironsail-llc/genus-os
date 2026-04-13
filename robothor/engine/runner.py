@@ -197,6 +197,8 @@ class AgentRunner:
         execution_mode: bool = False,
         deep_plan: bool = False,
         tenant_id: str | None = None,
+        user_id: str = "",
+        user_role: str = "",
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -226,10 +228,27 @@ class AgentRunner:
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
+        # User identity threading
+        session.run.user_id = user_id
+        session.run.user_role = user_role
+
         # Sub-agent: link to parent run
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id
             session.run.nesting_depth = spawn_context.nesting_depth + 1
+
+        # Resolve hierarchical tenant access.
+        # owner/admin roles see child tenants; others see only their own.
+        try:
+            from robothor.engine.permissions import resolve_accessible_tenants
+
+            _user_role = getattr(session.run, "user_role", None)
+            session.run.accessible_tenant_ids = resolve_accessible_tenants(
+                resolved_tenant, _user_role
+            )
+        except Exception:
+            # Degrade gracefully — restrict to own tenant only.
+            session.run.accessible_tenant_ids = (resolved_tenant,)
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.
@@ -271,7 +290,16 @@ class AgentRunner:
             from robothor.engine.warmup import build_interactive_preamble
 
             _extra_blocks = agent_config.warmup_memory_blocks or []
-            _tenant = self.config.tenant_id
+            _tenant = resolved_tenant
+
+            # Extract sender name from trigger_detail (format: "chat:123|sender:Name")
+            # Falls back to operator_name from config for the primary chat.
+            _sender = ""
+            if trigger_detail and "|sender:" in trigger_detail:
+                _sender = trigger_detail.split("|sender:", 1)[1]
+            elif self.config.operator_name:
+                _sender = self.config.operator_name
+
             warmup_future = loop.run_in_executor(
                 None,
                 lambda: build_interactive_preamble(
@@ -280,6 +308,7 @@ class AgentRunner:
                     include_blocks=True,
                     extra_memory_blocks=_extra_blocks,
                     tenant_id=_tenant,
+                    sender_name=_sender,
                 ),
             )
 
@@ -1329,7 +1358,10 @@ class AgentRunner:
                             agent_id=agent_config.id,
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
+                            user_id=session.run.user_id,
+                            user_role=session.run.user_role,
                             timeout=_tool_timeout,
+                            accessible_tenant_ids=session.run.accessible_tenant_ids,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1338,7 +1370,10 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         tenant_id=session.run.tenant_id,
                         workspace=str(self.config.workspace),
+                        user_id=session.run.user_id,
+                        user_role=session.run.user_role,
                         timeout=_tool_timeout,
+                        accessible_tenant_ids=session.run.accessible_tenant_ids,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 

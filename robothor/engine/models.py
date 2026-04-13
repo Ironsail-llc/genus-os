@@ -291,6 +291,8 @@ class AgentRun:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
+    user_id: str = ""
+    user_role: str = ""
     agent_id: str = ""
 
     trigger_type: TriggerType = TriggerType.MANUAL
@@ -333,6 +335,9 @@ class AgentRun:
     parent_run_id: str | None = None
     nesting_depth: int = 0
 
+    # Hierarchical tenant access (resolved at run start)
+    accessible_tenant_ids: tuple[str, ...] = ()
+
     # CRM task linkage (auto-task)
     task_id: str | None = None
 
@@ -355,6 +360,8 @@ class SpawnContext:
     parent_agent_id: str
     correlation_id: str
     nesting_depth: int  # parent's depth (child = +1)
+    user_id: str = ""
+    user_role: str = ""
     max_nesting_depth: int = 2  # absolute cap: 3
     max_spawn_batch: int = 0  # 0 = use engine default
     remaining_token_budget: int = 0

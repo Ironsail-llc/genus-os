@@ -17,6 +17,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory.facts import store_fact
@@ -41,6 +42,8 @@ async def find_similar_facts(
     query: str,
     limit: int = 5,
     threshold: float = 0.5,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Find existing facts semantically similar to a query.
 
@@ -70,10 +73,11 @@ async def find_similar_facts(
             FROM memory_facts
             WHERE embedding IS NOT NULL
               AND is_active = TRUE
+              AND tenant_id = %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (embedding, embedding, limit),
+            (embedding, tenant_id or DEFAULT_TENANT, embedding, limit),
         )
         results = [dict(r) for r in cur.fetchall()]
 
@@ -136,7 +140,7 @@ async def classify_relationship(new_fact: str, existing_fact: str) -> dict[str, 
         return {"classification": "new", "reasoning": "Failed to classify, treating as new"}
 
 
-def _supersede_fact(old_id: int, new_id: int) -> None:
+def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     """Mark an old fact as superseded by a new one."""
     with get_connection() as conn:
         cur = conn.cursor()
@@ -145,8 +149,9 @@ def _supersede_fact(old_id: int, new_id: int) -> None:
             UPDATE memory_facts
             SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
             WHERE id = %s
+              AND tenant_id = %s
             """,
-            (new_id, old_id),
+            (new_id, old_id, tenant_id or DEFAULT_TENANT),
         )
 
 
@@ -155,6 +160,8 @@ async def resolve_and_store(
     source_content: str,
     source_type: str,
     similarity_threshold: float = 0.7,
+    *,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Full conflict resolution pipeline: find similar -> classify -> act.
 
@@ -171,10 +178,11 @@ async def resolve_and_store(
         fact["fact_text"],
         limit=3,
         threshold=similarity_threshold,
+        tenant_id=tenant_id,
     )
 
     if not similar:
-        fact_id = await store_fact(fact, source_content, source_type)
+        fact_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
         return {"action": "stored", "new_id": fact_id}
 
     best_match = similar[0]
@@ -191,8 +199,8 @@ async def resolve_and_store(
         }
 
     if classification["classification"] in ("contradiction", "update"):
-        new_id = await store_fact(fact, source_content, source_type)
-        _supersede_fact(best_match["id"], new_id)
+        new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+        _supersede_fact(best_match["id"], new_id, tenant_id=tenant_id)
         return {
             "action": "superseded",
             "new_id": new_id,
@@ -202,5 +210,5 @@ async def resolve_and_store(
         }
 
     # Classified as new — store directly
-    fact_id = await store_fact(fact, source_content, source_type)
+    fact_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
     return {"action": "stored", "new_id": fact_id}

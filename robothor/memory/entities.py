@@ -16,6 +16,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 
@@ -116,17 +117,25 @@ Text: {text}"""
         return {"entities": [], "relations": []}
 
 
-async def upsert_entity(name: str, entity_type: str, aliases: list[str] | None = None) -> int:
+async def upsert_entity(
+    name: str,
+    entity_type: str,
+    aliases: list[str] | None = None,
+    *,
+    tenant_id: str = "",
+) -> int:
     """Insert or update an entity, incrementing mention count on conflict.
 
     Args:
         name: Entity name.
         entity_type: One of person, project, organization, technology, location, event.
         aliases: Optional list of alternative names.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Entity ID.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     entity_type = entity_type.lower()
     if entity_type not in VALID_ENTITY_TYPES:
         entity_type = "technology"
@@ -135,14 +144,14 @@ async def upsert_entity(name: str, entity_type: str, aliases: list[str] | None =
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO memory_entities (name, entity_type, aliases)
-            VALUES (%s, %s, %s)
+            INSERT INTO memory_entities (name, entity_type, aliases, tenant_id)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (name, entity_type) DO UPDATE
             SET mention_count = memory_entities.mention_count + 1,
                 last_seen = NOW()
             RETURNING id
             """,
-            (name, entity_type, aliases or []),
+            (name, entity_type, aliases or [], _tenant),
         )
         entity_id: int = cur.fetchone()[0]
 
@@ -155,6 +164,8 @@ async def add_relation(
     relation_type: str,
     fact_id: int | None = None,
     confidence: float = 1.0,
+    *,
+    tenant_id: str = "",
 ) -> int:
     """Add a relationship between two entities.
 
@@ -164,40 +175,47 @@ async def add_relation(
         relation_type: Type of relationship (e.g., 'uses', 'works_at').
         fact_id: Optional ID of the fact this relation was derived from.
         confidence: Confidence score for the relation.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Relation ID.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO memory_relations (source_entity_id, target_entity_id, relation_type, fact_id, confidence)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO memory_relations (source_entity_id, target_entity_id, relation_type, fact_id, confidence, tenant_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_entity_id, target_entity_id, relation_type) DO UPDATE
             SET confidence = GREATEST(memory_relations.confidence, EXCLUDED.confidence)
             RETURNING id
             """,
-            (source_id, target_id, relation_type, fact_id, confidence),
+            (source_id, target_id, relation_type, fact_id, confidence, _tenant),
         )
         rel_id: int = cur.fetchone()[0]
 
     return rel_id
 
 
-async def get_entity(name: str) -> dict[str, Any] | None:
+async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None:
     """Look up an entity and all its relationships.
 
     Args:
         name: Entity name (case-insensitive).
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Dict with entity info and relations, or None if not found.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute("SELECT * FROM memory_entities WHERE lower(name) = lower(%s)", (name,))
+        cur.execute(
+            "SELECT * FROM memory_entities WHERE lower(name) = lower(%s) AND tenant_id = %s",
+            (name, _tenant),
+        )
         entity = cur.fetchone()
 
         if not entity:
@@ -211,9 +229,9 @@ async def get_entity(name: str) -> dict[str, Any] | None:
             SELECT r.*, e.name as target_name, e.entity_type as target_type
             FROM memory_relations r
             JOIN memory_entities e ON r.target_entity_id = e.id
-            WHERE r.source_entity_id = %s
+            WHERE r.source_entity_id = %s AND r.tenant_id = %s
             """,
-            (entity["id"],),
+            (entity["id"], _tenant),
         )
         outgoing = [dict(r) for r in cur.fetchall()]
 
@@ -223,9 +241,9 @@ async def get_entity(name: str) -> dict[str, Any] | None:
             SELECT r.*, e.name as source_name, e.entity_type as source_type
             FROM memory_relations r
             JOIN memory_entities e ON r.source_entity_id = e.id
-            WHERE r.target_entity_id = %s
+            WHERE r.target_entity_id = %s AND r.tenant_id = %s
             """,
-            (entity["id"],),
+            (entity["id"], _tenant),
         )
         incoming = [dict(r) for r in cur.fetchall()]
 
@@ -233,16 +251,18 @@ async def get_entity(name: str) -> dict[str, Any] | None:
     return entity
 
 
-async def get_all_about(entity_name: str) -> dict[str, Any]:
+async def get_all_about(entity_name: str, *, tenant_id: str = "") -> dict[str, Any]:
     """Get everything known about an entity: entity info, facts, and relations.
 
     Args:
         entity_name: Entity name to look up.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Dict with 'entity', 'facts', and 'relations'.
     """
-    entity = await get_entity(entity_name)
+    _tenant = tenant_id or DEFAULT_TENANT
+    entity = await get_entity(entity_name, tenant_id=tenant_id)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -252,10 +272,11 @@ async def get_all_about(entity_name: str) -> dict[str, Any]:
             FROM memory_facts
             WHERE %s = ANY(entities)
               AND is_active = TRUE
+              AND tenant_id = %s
             ORDER BY created_at DESC
             LIMIT 50
             """,
-            (entity_name,),
+            (entity_name, _tenant),
         )
         facts = [dict(r) for r in cur.fetchall()]
 
@@ -266,12 +287,18 @@ async def get_all_about(entity_name: str) -> dict[str, Any]:
     }
 
 
-async def extract_and_store_entities(content: str, fact_id: int | None = None) -> dict[str, Any]:
+async def extract_and_store_entities(
+    content: str,
+    fact_id: int | None = None,
+    *,
+    tenant_id: str = "",
+) -> dict[str, Any]:
     """Extract entities and relations from content and store them.
 
     Args:
         content: Text to extract entities from.
         fact_id: Optional fact ID to link relations to.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Dict with counts of entities and relations stored.
@@ -280,7 +307,7 @@ async def extract_and_store_entities(content: str, fact_id: int | None = None) -
 
     entity_ids = {}
     for e in extracted["entities"]:
-        eid = await upsert_entity(e["name"], e["type"])
+        eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
         entity_ids[e["name"]] = eid
 
     relations_stored = 0
@@ -288,7 +315,7 @@ async def extract_and_store_entities(content: str, fact_id: int | None = None) -
         src_id = entity_ids.get(r["source"])
         tgt_id = entity_ids.get(r["target"])
         if src_id and tgt_id:
-            await add_relation(src_id, tgt_id, r["relation"], fact_id=fact_id)
+            await add_relation(src_id, tgt_id, r["relation"], fact_id=fact_id, tenant_id=tenant_id)
             relations_stored += 1
 
     return {
@@ -297,7 +324,7 @@ async def extract_and_store_entities(content: str, fact_id: int | None = None) -
     }
 
 
-async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
+async def extract_entities_batch(fact_ids: list[int], *, tenant_id: str = "") -> dict[str, Any]:
     """Batch-extract entities from multiple facts in a single LLM call.
 
     Instead of one LLM call per fact, this concatenates all fact texts
@@ -305,16 +332,21 @@ async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
 
     Args:
         fact_ids: List of fact IDs to extract entities from.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         Dict with total entities and relations stored.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     if not fact_ids:
         return {"entities_stored": 0, "relations_stored": 0}
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, fact_text FROM memory_facts WHERE id = ANY(%s)", (fact_ids,))
+        cur.execute(
+            "SELECT id, fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s",
+            (fact_ids, _tenant),
+        )
         facts = {r["id"]: r["fact_text"] for r in cur.fetchall()}
 
     if not facts:
@@ -326,7 +358,7 @@ async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
 
     entity_ids = {}
     for e in extracted["entities"]:
-        eid = await upsert_entity(e["name"], e["type"])
+        eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
         entity_ids[e["name"]] = eid
 
     relations_stored = 0
@@ -335,7 +367,9 @@ async def extract_entities_batch(fact_ids: list[int]) -> dict[str, Any]:
         src_id = entity_ids.get(r["source"])
         tgt_id = entity_ids.get(r["target"])
         if src_id and tgt_id:
-            await add_relation(src_id, tgt_id, r["relation"], fact_id=ref_fact_id)
+            await add_relation(
+                src_id, tgt_id, r["relation"], fact_id=ref_fact_id, tenant_id=tenant_id
+            )
             relations_stored += 1
 
     return {

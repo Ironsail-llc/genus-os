@@ -21,6 +21,9 @@ class ToolContext:
     agent_id: str = ""
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     workspace: str = ""
+    user_id: str = ""
+    user_role: str = ""
+    accessible_tenant_ids: tuple[str, ...] = ()
 
 
 def get_db() -> Any:
@@ -141,6 +144,8 @@ def _audit_tool_call(
         from robothor.audit.logger import log_event
 
         details: dict[str, Any] = {"tenant_id": tenant_id}
+        if user_id:
+            details["user_id"] = user_id
         if error:
             details["error"] = error[:500]
         log_event(
@@ -164,6 +169,8 @@ async def _execute_tool(
     tenant_id: str = "",
     workspace: str = "",
     user_id: str = "",
+    user_role: str = "",
+    accessible_tenant_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -189,7 +196,14 @@ async def _execute_tool(
             )
             return {"error": f"Adapter tool '{name}' failed: {e}"}
 
-    ctx = ToolContext(agent_id=agent_id, tenant_id=tenant_id, workspace=workspace)
+    ctx = ToolContext(
+        agent_id=agent_id,
+        tenant_id=tenant_id,
+        workspace=workspace,
+        user_id=user_id,
+        user_role=user_role,
+        accessible_tenant_ids=accessible_tenant_ids,
+    )
     handlers = _get_handlers()
     handler = handlers.get(name)
     if handler is None:
