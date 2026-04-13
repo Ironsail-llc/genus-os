@@ -25,7 +25,9 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.facts import search_facts
 
-    results = await search_facts(args.get("query", ""), limit=args.get("limit", 10))
+    results = await search_facts(
+        args.get("query", ""), limit=args.get("limit", 10), tenant_id=ctx.tenant_id
+    )
     return {
         "results": [
             {
@@ -47,10 +49,12 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     content_type = args.get("content_type", "conversation")
     facts = await extract_facts(content)
     if facts:
-        stored_ids = [await store_fact(f, content, content_type) for f in facts]
+        stored_ids = [
+            await store_fact(f, content, content_type, tenant_id=ctx.tenant_id) for f in facts
+        ]
         return {"id": stored_ids[0], "facts_stored": len(stored_ids)}
     fact = {"fact_text": content, "category": "personal", "entities": [], "confidence": 0.5}
-    fact_id = await store_fact(fact, content, content_type)
+    fact_id = await store_fact(fact, content, content_type, tenant_id=ctx.tenant_id)
     return {"id": fact_id, "facts_stored": 1}
 
 
@@ -59,7 +63,7 @@ async def _get_entity(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.entities import get_entity
 
     try:
-        result = await get_entity(args.get("name", ""))
+        result = await get_entity(args.get("name", ""), tenant_id=ctx.tenant_id)
         return result or {"name": args.get("name", ""), "found": False}
     except Exception:
         return {"name": args.get("name", ""), "found": False}
@@ -69,28 +73,33 @@ async def _get_entity(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 async def _get_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.facts import get_memory_stats
 
-    return await asyncio.to_thread(get_memory_stats)
+    return await asyncio.to_thread(get_memory_stats, tenant_id=ctx.tenant_id)
 
 
 @_handler("memory_block_read")
 async def _memory_block_read(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import read_block
 
-    return await asyncio.to_thread(read_block, args.get("block_name", ""))
+    return await asyncio.to_thread(read_block, args.get("block_name", ""), tenant_id=ctx.tenant_id)
 
 
 @_handler("memory_block_write")
 async def _memory_block_write(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import write_block
 
-    return await asyncio.to_thread(write_block, args.get("block_name", ""), args.get("content", ""))
+    return await asyncio.to_thread(
+        write_block,
+        args.get("block_name", ""),
+        args.get("content", ""),
+        tenant_id=ctx.tenant_id,
+    )
 
 
 @_handler("memory_block_list")
 async def _memory_block_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import list_blocks
 
-    return await asyncio.to_thread(list_blocks)
+    return await asyncio.to_thread(list_blocks, tenant_id=ctx.tenant_id)
 
 
 @_handler("append_to_block")

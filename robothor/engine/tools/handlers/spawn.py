@@ -170,6 +170,7 @@ async def _handle_spawn_agent(
                 spawn_context=child_spawn_ctx,
                 user_id=ctx.user_id if ctx else "",
                 user_role=ctx.user_role if ctx else "",
+                tenant_id=ctx.tenant_id if ctx else "",
             )
     finally:
         await release(dedup_key)

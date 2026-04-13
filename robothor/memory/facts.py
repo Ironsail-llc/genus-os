@@ -22,6 +22,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 
@@ -259,6 +260,8 @@ async def store_fact(
     source_content: str,
     source_type: str,
     metadata: dict[str, Any] | None = None,
+    *,
+    tenant_id: str = "",
 ) -> int:
     """Store a fact with its embedding in the database.
 
@@ -267,6 +270,7 @@ async def store_fact(
         source_content: Original content the fact was extracted from.
         source_type: Type of source (conversation, email, etc.).
         metadata: Optional additional metadata.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         The database ID of the stored fact.
@@ -279,8 +283,8 @@ async def store_fact(
             """
             INSERT INTO memory_facts
             (fact_text, category, entities, confidence, source_content, source_type,
-             embedding, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+             embedding, metadata, tenant_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -292,6 +296,7 @@ async def store_fact(
                 source_type,
                 embedding,
                 json.dumps(metadata or {}),
+                tenant_id or DEFAULT_TENANT,
             ),
         )
         fact_id: int = cur.fetchone()[0]
@@ -304,6 +309,8 @@ async def store_facts_batch(
     source_content: str,
     source_type: str,
     metadata: dict[str, Any] | None = None,
+    *,
+    tenant_id: str = "",
 ) -> list[int]:
     """Store multiple facts with batch-embedded vectors.
 
@@ -315,6 +322,7 @@ async def store_facts_batch(
         source_content: Original content the facts were extracted from.
         source_type: Type of source (conversation, email, etc.).
         metadata: Optional additional metadata.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         List of database IDs for the stored facts.
@@ -334,8 +342,8 @@ async def store_facts_batch(
                 """
                 INSERT INTO memory_facts
                 (fact_text, category, entities, confidence, source_content, source_type,
-                 embedding, metadata)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                 embedding, metadata, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -347,6 +355,7 @@ async def store_facts_batch(
                     source_type,
                     embedding,
                     json.dumps(metadata or {}),
+                    tenant_id or DEFAULT_TENANT,
                 ),
             )
             ids.append(cur.fetchone()[0])
@@ -358,12 +367,15 @@ async def store_facts_batch(
 async def search_insights(
     query: str,
     limit: int = 5,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Search cross-domain insights by vector similarity.
 
     Args:
         query: Search query text.
         limit: Maximum number of results.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         List of matching insight dictionaries sorted by similarity.
@@ -379,10 +391,11 @@ async def search_insights(
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_insights
             WHERE is_active = TRUE AND embedding IS NOT NULL
+              AND tenant_id = %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (embedding, embedding, limit),
+            (embedding, tenant_id or DEFAULT_TENANT, embedding, limit),
         )
         results = [dict(r) for r in cur.fetchall()]
 
@@ -399,6 +412,7 @@ async def search_facts(
     use_reranker: bool = False,
     expand_entities: bool = False,
     include_insights: bool = False,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
 
@@ -423,6 +437,7 @@ async def search_facts(
 
     active_clause = "AND is_active = TRUE" if active_only else ""
     fetch_limit = max(30, limit * 3)
+    _tenant = tenant_id or DEFAULT_TENANT
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -434,11 +449,11 @@ async def search_facts(
                    metadata, created_at,
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
-            WHERE embedding IS NOT NULL {active_clause}
+            WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (embedding, embedding, fetch_limit),
+            (embedding, _tenant, embedding, fetch_limit),
         )
         vector_results = [dict(r) for r in cur.fetchall()]
 
@@ -449,12 +464,12 @@ async def search_facts(
                    metadata, created_at,
                    ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
             FROM memory_facts
-            WHERE tsv @@ plainto_tsquery('english', %s)
+            WHERE tsv @@ plainto_tsquery('english', %s) AND tenant_id = %s
               {active_clause}
             ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
             LIMIT %s
             """,
-            (query, query, query, fetch_limit),
+            (query, query, _tenant, query, fetch_limit),
         )
         bm25_results = [dict(r) for r in cur.fetchall()]
 
@@ -497,7 +512,7 @@ async def search_facts(
 
             expansion_ids = {r["id"] for r in candidates}
             for entity_name in list(mentioned_entities)[:3]:
-                entity = await get_entity(entity_name)
+                entity = await get_entity(entity_name, tenant_id=_tenant)
                 if entity and entity.get("relations"):
                     for rel in entity["relations"][:3]:
                         related_name = rel.get("target") or rel.get("source", "")
@@ -509,13 +524,14 @@ async def search_facts(
                                     SELECT id, fact_text, category, entities, confidence,
                                            source_type, metadata, created_at, importance_score
                                     FROM memory_facts
-                                    WHERE is_active = TRUE AND %s = ANY(entities)
+                                    WHERE is_active = TRUE AND tenant_id = %s
+                                      AND %s = ANY(entities)
                                       AND importance_score > 0.5
                                       AND id != ALL(%s)
                                     ORDER BY importance_score DESC, created_at DESC
                                     LIMIT 2
                                     """,
-                                    (related_name, list(expansion_ids)),
+                                    (_tenant, related_name, list(expansion_ids)),
                                 )
                                 for r in cur.fetchall():
                                     r = dict(r)
@@ -538,7 +554,7 @@ async def search_facts(
             )
             if include_insights:
                 try:
-                    insights = await search_insights(query, limit=3)
+                    insights = await search_insights(query, limit=3, tenant_id=tenant_id)
                     reranked.extend(insights)
                 except Exception:
                     pass
@@ -551,7 +567,7 @@ async def search_facts(
     # Append cross-domain insights if requested
     if include_insights:
         try:
-            insights = await search_insights(query, limit=3)
+            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
             result.extend(insights)
         except Exception:
             pass  # Insight search is best-effort
@@ -559,37 +575,56 @@ async def search_facts(
     return result
 
 
-def get_memory_stats() -> dict[str, Any]:
+def get_memory_stats(tenant_id: str = "") -> dict[str, Any]:
     """Get memory system statistics from the facts-based memory system.
+
+    Args:
+        tenant_id: Tenant scope for data isolation.
 
     Returns counts for total facts, active facts, superseded facts,
     scored facts, entities, and relations.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute("SELECT COUNT(*) as count FROM memory_facts")
+        cur.execute(
+            "SELECT COUNT(*) as count FROM memory_facts WHERE tenant_id = %s",
+            (_tenant,),
+        )
         total_facts = cur.fetchone()["count"]
 
-        cur.execute("SELECT COUNT(*) as count FROM memory_facts WHERE is_active = TRUE")
+        cur.execute(
+            "SELECT COUNT(*) as count FROM memory_facts WHERE is_active = TRUE AND tenant_id = %s",
+            (_tenant,),
+        )
         active_facts = cur.fetchone()["count"]
 
         cur.execute(
             "SELECT COUNT(*) as count FROM memory_facts "
-            "WHERE is_active = FALSE AND superseded_by IS NOT NULL"
+            "WHERE is_active = FALSE AND superseded_by IS NOT NULL AND tenant_id = %s",
+            (_tenant,),
         )
         superseded_count = cur.fetchone()["count"]
 
         cur.execute(
             "SELECT COUNT(*) as count FROM memory_facts "
-            "WHERE importance_score != 0.5 AND is_active = TRUE"
+            "WHERE importance_score != 0.5 AND is_active = TRUE AND tenant_id = %s",
+            (_tenant,),
         )
         scored_count = cur.fetchone()["count"]
 
-        cur.execute("SELECT COUNT(*) as count FROM memory_entities")
+        cur.execute(
+            "SELECT COUNT(*) as count FROM memory_entities WHERE tenant_id = %s",
+            (_tenant,),
+        )
         entity_count = cur.fetchone()["count"]
 
-        cur.execute("SELECT COUNT(*) as count FROM memory_relations")
+        cur.execute(
+            "SELECT COUNT(*) as count FROM memory_relations WHERE tenant_id = %s",
+            (_tenant,),
+        )
         relation_count = cur.fetchone()["count"]
 
     return {
@@ -605,6 +640,7 @@ def get_memory_stats() -> dict[str, Any]:
 def search_facts_compat(
     query: str,
     limit: int = 10,
+    tenant_id: str = "",
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
     """Sync compatibility wrapper for search_facts, matching the old tiers API.
@@ -615,13 +651,14 @@ def search_facts_compat(
     Args:
         query: Search query text.
         limit: Maximum number of results.
+        tenant_id: Tenant scope for data isolation.
 
     Returns:
         List of result dicts with 'content', 'content_type', 'tier' keys.
     """
     import asyncio
 
-    results = asyncio.run(search_facts(query, limit=limit))
+    results = asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
     compat_results = [
         {
             **r,

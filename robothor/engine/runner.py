@@ -277,7 +277,16 @@ class AgentRunner:
             from robothor.engine.warmup import build_interactive_preamble
 
             _extra_blocks = agent_config.warmup_memory_blocks or []
-            _tenant = self.config.tenant_id
+            _tenant = resolved_tenant
+
+            # Extract sender name from trigger_detail (format: "chat:123|sender:Name")
+            # Falls back to operator_name from config for the primary chat.
+            _sender = ""
+            if trigger_detail and "|sender:" in trigger_detail:
+                _sender = trigger_detail.split("|sender:", 1)[1]
+            elif self.config.operator_name:
+                _sender = self.config.operator_name
+
             warmup_future = loop.run_in_executor(
                 None,
                 lambda: build_interactive_preamble(
@@ -286,6 +295,7 @@ class AgentRunner:
                     include_blocks=True,
                     extra_memory_blocks=_extra_blocks,
                     tenant_id=_tenant,
+                    sender_name=_sender,
                 ),
             )
 

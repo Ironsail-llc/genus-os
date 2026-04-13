@@ -26,6 +26,15 @@ INSTANCE_PATHS = {
     "CHANGELOG.md",
 }
 
+# Generated/vendored files — skip entirely (package names false-positive as emails)
+GENERATED_FILES = {
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "package-lock.json",
+    "Pipfile.lock",
+    "poetry.lock",
+}
+
 # Patterns to detect (compiled regexes)
 LEAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Hardcoded home directory paths
@@ -128,6 +137,8 @@ def main() -> int:
 
     for path in staged_files:
         if _is_instance_path(path):
+            continue
+        if Path(path).name in GENERATED_FILES:
             continue
 
         # Read staged content (not working tree)

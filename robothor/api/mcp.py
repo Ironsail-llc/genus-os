@@ -872,6 +872,8 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
     """Handle an MCP tool call and return result."""
 
     # ── Memory tools ──
+    # TODO: MCP protocol doesn't carry tenant context yet. All memory calls
+    # use DEFAULT_TENANT fallback until MCP sessions support tenant_id.
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
