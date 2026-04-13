@@ -19,12 +19,12 @@ router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 
 @router.post("/search")
-async def memory_search(body: MemorySearchRequest):
+async def memory_search(body: MemorySearchRequest, tenant_id: str = Depends(get_tenant_id)):
     """Semantic search over memory facts."""
     try:
         from robothor.memory.facts import search_facts
 
-        results = await search_facts(body.query, limit=body.limit)
+        results = await search_facts(body.query, limit=body.limit, tenant_id=tenant_id)
         return {"results": results, "count": len(results)}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

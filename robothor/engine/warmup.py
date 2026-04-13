@@ -258,6 +258,7 @@ def build_interactive_preamble(
     include_blocks: bool = True,
     tenant_id: str = DEFAULT_TENANT,
     extra_memory_blocks: list[str] | None = None,
+    sender_name: str = "",
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -270,11 +271,22 @@ def build_interactive_preamble(
         include_blocks: If True, inject core memory blocks (persona, user_profile,
             working_context). Set to False for ongoing sessions where blocks are
             already in conversation history.
+        sender_name: Display name of the current user. When set, injects an
+            identity section and excludes the name from entity context search
+            to avoid confusing the user with other people sharing the same name.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
     """
     sections: list[str] = []
+
+    # Sender identity — tell the agent exactly who it's talking to
+    if sender_name:
+        sections.append(
+            f"--- CURRENT USER ---\n"
+            f"You are speaking with {sender_name}. Address them by this name.\n"
+            f"Do not confuse them with other people who may share the same name."
+        )
 
     # Core memory blocks — only for new sessions (no prior history)
     if include_blocks:
@@ -290,9 +302,15 @@ def build_interactive_preamble(
             logger.debug("Interactive warmup blocks failed: %s", e)
 
     # Entity-aware context — if user mentions a name, pull relevant facts
+    # Exclude the sender's name to avoid pulling facts about other people
+    # who share the same name — the sender's identity comes from their
+    # tenant's persona/user_profile blocks, not from entity search.
     if user_message and len(user_message) > 5:
         try:
-            context = _build_entity_context(user_message, tenant_id=tenant_id)
+            exclude = {sender_name} if sender_name else None
+            context = _build_entity_context(
+                user_message, tenant_id=tenant_id, exclude_names=exclude
+            )
             if context:
                 sections.append(context)
         except Exception as e:
@@ -318,11 +336,19 @@ def build_interactive_preamble(
 MAX_ENTITY_CONTEXT_CHARS = 1000
 
 
-def _build_entity_context(user_message: str, tenant_id: str = DEFAULT_TENANT) -> str:
+def _build_entity_context(
+    user_message: str,
+    tenant_id: str = DEFAULT_TENANT,
+    exclude_names: set[str] | None = None,
+) -> str:
     """Extract entities from user message and pull relevant facts.
 
     Looks for capitalized proper nouns in the message and searches
     memory facts for matching entity references.
+
+    Args:
+        exclude_names: Names to skip during entity search (e.g. the current
+            user's name, to avoid confusing them with other people).
 
     Budget: max 1000 chars for this section.
     """
@@ -356,6 +382,10 @@ def _build_entity_context(user_message: str, tenant_id: str = DEFAULT_TENANT) ->
             )
         ):
             candidates.add(cleaned)
+
+    # Remove excluded names (e.g. the current user's name)
+    if exclude_names:
+        candidates -= {n for n in exclude_names if n}
 
     if not candidates:
         return ""

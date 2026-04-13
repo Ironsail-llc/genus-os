@@ -30,6 +30,8 @@ async def rag_query(
     system_prompt: str | None = None,
     use_reranker: bool = True,
     rerank_top_k: int = 10,
+    *,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Full RAG pipeline: search memory → rerank → inject context → generate.
 
@@ -56,6 +58,7 @@ async def rag_query(
     results = search_facts_compat(
         question,
         limit=memory_limit,
+        tenant_id=tenant_id,
     )
     t_search = time.time() - t0
 
@@ -121,6 +124,8 @@ async def rag_chat(
     max_tokens: int = 4096,
     use_reranker: bool = True,
     rerank_top_k: int = 10,
+    *,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Multi-turn RAG chat — searches memory based on the latest user message.
 
@@ -150,7 +155,7 @@ async def rag_chat(
 
     t0 = time.time()
 
-    results = search_facts_compat(last_user_msg, limit=memory_limit)
+    results = search_facts_compat(last_user_msg, limit=memory_limit, tenant_id=tenant_id)
     t_search = time.time() - t0
 
     if use_reranker and len(results) > rerank_top_k:
