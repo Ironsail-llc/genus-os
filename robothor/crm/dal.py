@@ -388,7 +388,17 @@ def merge_companies(
                 logger.error("merge_companies: keeper or loser not found")
                 return None
 
-            fillable = ["domain_name", "employees", "address", "linkedin_url"]
+            fillable = [
+                "domain_name",
+                "employees",
+                "address_street1",
+                "address_street2",
+                "address_city",
+                "address_state",
+                "address_postcode",
+                "address_country",
+                "linkedin_url",
+            ]
             updates: list[str] = []
             update_vals: list[Any] = []
             for field in fillable:
@@ -500,12 +510,22 @@ def create_company(
     name: str,
     domain_name: str | None = None,
     employees: int | None = None,
+    address_street1: str | None = None,
+    address_street2: str | None = None,
+    address_city: str | None = None,
+    address_state: str | None = None,
+    address_postcode: str | None = None,
+    address_country: str | None = None,
     address: str | None = None,
     linkedin_url: str | None = None,
     ideal_customer_profile: bool = False,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
     """Create a company. Returns company UUID."""
+    # Flat address fallback: map to address_street1 if structured not provided
+    if address and not address_street1:
+        address_street1 = address
+
     company_id = str(uuid.uuid4())
     with get_connection() as conn:
         cur = conn.cursor()
@@ -513,15 +533,22 @@ def create_company(
             cur.execute(
                 """
                 INSERT INTO crm_companies (id, name, domain_name, employees,
-                    address, linkedin_url, ideal_customer_profile, tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    address_street1, address_street2, address_city, address_state,
+                    address_postcode, address_country,
+                    linkedin_url, ideal_customer_profile, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
                 (
                     company_id,
                     name,
                     domain_name,
                     employees,
-                    address,
+                    address_street1,
+                    address_street2,
+                    address_city,
+                    address_state,
+                    address_postcode,
+                    address_country,
                     linkedin_url,
                     ideal_customer_profile,
                     tenant_id,
@@ -553,7 +580,13 @@ def update_company(company_id: str, tenant_id: str = DEFAULT_TENANT, **fields: A
     col_map = {
         "domain_name": "domain_name",
         "employees": "employees",
-        "address": "address",
+        "address_street1": "address_street1",
+        "address_street2": "address_street2",
+        "address_city": "address_city",
+        "address_state": "address_state",
+        "address_postcode": "address_postcode",
+        "address_country": "address_country",
+        "address": "address_street1",  # flat fallback
         "linkedin_url": "linkedin_url",
         "ideal_customer_profile": "ideal_customer_profile",
         "name": "name",
@@ -2433,3 +2466,118 @@ def get_timeline(identifier: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, 
                 break
 
         return timeline
+
+
+# ─── Agent Reviews ───────────────────────────────────────────────────────
+
+
+def create_review(
+    agent_id: str,
+    reviewer: str,
+    reviewer_type: str,
+    rating: int,
+    categories: dict[str, int] | None = None,
+    feedback: str | None = None,
+    action_items: list[str] | None = None,
+    run_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> str | None:
+    """Create an agent review. Returns review UUID."""
+    review_id = str(uuid.uuid4())
+    rating = max(1, min(5, rating))  # clamp to 1-5
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """INSERT INTO agent_reviews
+                   (id, tenant_id, agent_id, run_id, reviewer, reviewer_type,
+                    rating, categories, feedback, action_items)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    review_id,
+                    tenant_id,
+                    agent_id,
+                    run_id,
+                    reviewer,
+                    reviewer_type,
+                    rating,
+                    json.dumps(categories) if categories else None,
+                    feedback,
+                    action_items,
+                ),
+            )
+            conn.commit()
+            return review_id
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to create review for %s: %s", agent_id, e)
+            return None
+
+
+def get_reviews(
+    agent_id: str,
+    days: int = 30,
+    reviewer_type: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    """Get recent reviews for an agent."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        sql = """
+            SELECT id, agent_id, run_id, reviewer, reviewer_type,
+                   rating, categories, feedback, action_items, created_at
+            FROM agent_reviews
+            WHERE agent_id = %s AND tenant_id = %s
+              AND created_at > NOW() - make_interval(days := %s)
+        """
+        params: list[Any] = [agent_id, tenant_id, days]
+        if reviewer_type:
+            sql += " AND reviewer_type = %s"
+            params.append(reviewer_type)
+        sql += " ORDER BY created_at DESC"
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_review_summary(
+    agent_id: str,
+    days: int = 30,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """Get aggregate review stats for an agent."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT COUNT(*) as count,
+                   ROUND(AVG(rating)::numeric, 2) as avg_rating
+            FROM agent_reviews
+            WHERE agent_id = %s AND tenant_id = %s
+              AND created_at > NOW() - make_interval(days := %s)
+            """,
+            (agent_id, tenant_id, days),
+        )
+        row = cur.fetchone()
+        count = row["count"] if row else 0
+        avg_rating = float(row["avg_rating"]) if row and row["avg_rating"] else None
+
+        # Get recent feedback
+        cur.execute(
+            """
+            SELECT feedback, rating, reviewer
+            FROM agent_reviews
+            WHERE agent_id = %s AND tenant_id = %s
+              AND created_at > NOW() - make_interval(days := %s)
+              AND feedback IS NOT NULL AND feedback != ''
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+            (agent_id, tenant_id, days),
+        )
+        recent_feedback = [dict(r) for r in cur.fetchall()]
+
+        return {
+            "count": count,
+            "avg_rating": avg_rating,
+            "recent_feedback": recent_feedback,
+        }

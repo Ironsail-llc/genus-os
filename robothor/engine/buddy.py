@@ -639,6 +639,25 @@ class BuddyEngine:
             pass
         return 50
 
+    def _compute_review_score(self, agent_id: str) -> int | None:
+        """Review score from formal feedback (0-100), or None if no reviews.
+
+        Reads from agent_reviews table (last 30 days). Scales 1-5 rating
+        to 0-100: rating 1 → 0, rating 3 → 50, rating 5 → 100.
+        """
+        try:
+            from robothor.crm.dal import get_review_summary
+
+            summary = get_review_summary(agent_id, days=30)
+            if not summary or summary["count"] == 0:
+                return None
+            avg = summary["avg_rating"]
+            if avg is None:
+                return None
+            return min(100, max(0, int((avg - 1) * 25)))
+        except Exception:
+            return None
+
     # ── Per-agent scoring ──────────────────────────────────────────────────
 
     # Minimum runs in the 7-day window before we trust per-agent scores.
@@ -702,15 +721,35 @@ class BuddyEngine:
                 )
             )
             agent_config = load_agent_config(agent_id, manifest_dir)
-            if agent_config and agent_config.goals:
-                goal_score = self._evaluate_goals(agent_id, agent_config.goals, target_date)
-                # Blend: 50% outcome quality + 50% goal attainment
-                outcome_raw = stats.effectiveness_score
+            has_goals = agent_config and agent_config.goals
+            goal_score = (
+                self._evaluate_goals(agent_id, agent_config.goals, target_date)
+                if has_goals
+                else None
+            )
+            review_score = self._compute_review_score(agent_id)
+            outcome_raw = stats.effectiveness_score
+
+            # Blend effectiveness from available signals
+            if goal_score is not None and review_score is not None:
+                # All three signals: 40% outcome + 30% goals + 30% reviews
+                stats.effectiveness_score = min(
+                    100,
+                    max(0, int(outcome_raw * 0.4 + goal_score * 100 * 0.3 + review_score * 0.3)),
+                )
+            elif goal_score is not None:
+                # Outcome + goals: 50/50
                 stats.effectiveness_score = min(
                     100, max(0, int(outcome_raw * 0.5 + goal_score * 100 * 0.5))
                 )
+            elif review_score is not None:
+                # Outcome + reviews: 60/40
+                stats.effectiveness_score = min(
+                    100, max(0, int(outcome_raw * 0.6 + review_score * 0.4))
+                )
+            # else: outcome only (already set)
         except Exception:
-            pass  # Goal evaluation is best-effort; never block scoring
+            pass  # Goal/review evaluation is best-effort; never block scoring
         daily_xp = (
             stats.tasks_completed * XP_TASK_COMPLETED + stats.errors_avoided * XP_ERROR_RECOVERY
         )
@@ -994,6 +1033,22 @@ class BuddyEngine:
             except Exception:
                 pass
 
+            # Get recent review feedback for context
+            review_context = ""
+            try:
+                from robothor.crm.dal import get_review_summary
+
+                review_summary = get_review_summary(agent_id, days=30)
+                if review_summary and review_summary["count"] > 0:
+                    review_context = (
+                        f"\n\n**Recent reviews:** {review_summary['count']} reviews, "
+                        f"avg rating: {review_summary['avg_rating']}/5\n"
+                    )
+                    for fb in review_summary.get("recent_feedback", [])[:3]:
+                        review_context += f"- {fb.get('feedback', '')}\n"
+            except Exception:
+                pass
+
             create_task(
                 title=f"Optimize {agent_id}: low score (below {threshold})",
                 body=(
@@ -1001,6 +1056,7 @@ class BuddyEngine:
                     f"**Current scores:** {scores_str}\n\n"
                     f"Define a benchmark suite (if none exists), run it, and iterate on "
                     f"the agent's instruction file and manifest to improve performance."
+                    f"{review_context}"
                 ),
                 assigned_to_agent="auto-agent",
                 tags=["autoagent", "low-score", agent_id],
@@ -1053,6 +1109,22 @@ class BuddyEngine:
             except Exception:
                 pass
 
+            # Get recent review feedback for context
+            review_context = ""
+            try:
+                from robothor.crm.dal import get_review_summary
+
+                review_summary = get_review_summary(agent_id, days=30)
+                if review_summary and review_summary["count"] > 0:
+                    review_context = (
+                        f"\n\n**Recent reviews:** {review_summary['count']} reviews, "
+                        f"avg rating: {review_summary['avg_rating']}/5\n"
+                    )
+                    for fb in review_summary.get("recent_feedback", [])[:3]:
+                        review_context += f"- {fb.get('feedback', '')}\n"
+            except Exception:
+                pass
+
             create_task(
                 title=f"Deep analysis {agent_id}: persistent low score (below {threshold})",
                 body=(
@@ -1062,6 +1134,7 @@ class BuddyEngine:
                     f"Run a controlled experiment to identify the root cause. "
                     f"Consider: prompt structure, model fit, tool selection, "
                     f"task complexity mismatch."
+                    f"{review_context}"
                 ),
                 assigned_to_agent="auto-researcher",
                 tags=["auto-researcher", "low-score", agent_id],
@@ -1287,6 +1360,15 @@ class BuddyEngine:
             logger.warning("Failed to refresh per-agent buddy stats: %s", e)
             result["fleet_error"] = str(e)
 
+        # ── Write automated system reviews for notable score changes ────────
+        try:
+            if fleet:
+                reviews_written = self._write_system_reviews(fleet)
+                if reviews_written:
+                    result["system_reviews"] = reviews_written
+        except Exception as e:
+            logger.debug("Failed to write system reviews: %s", e)
+
         # ── Flag underperformers for AutoAgent ─────────────────────────────
         try:
             flagged = self.flag_underperformers()
@@ -1299,6 +1381,46 @@ class BuddyEngine:
             logger.debug("Failed to flag underperformers: %s", e)
 
         return result
+
+    def _write_system_reviews(self, fleet: list[AgentBuddyStats]) -> int:
+        """Generate system reviews for agents with notable scores.
+
+        Writes a review when:
+        - overall_score < 40: rating 1 (critical)
+        - overall_score < 60: rating 2 (concern)
+        - overall_score >= 90: rating 5 (excellent)
+
+        Returns count of reviews written.
+        """
+        from robothor.crm.dal import create_review
+
+        count = 0
+        for stats in fleet:
+            if stats.overall_score < 40:
+                rating, label = 1, "critical"
+            elif stats.overall_score < 60:
+                rating, label = 2, "concern"
+            elif stats.overall_score >= 90:
+                rating, label = 5, "excellent"
+            else:
+                continue  # 60-89 is normal — no review needed
+
+            create_review(
+                agent_id=stats.agent_id,
+                reviewer="buddy",
+                reviewer_type="system",
+                rating=rating,
+                feedback=(
+                    f"[{label}] Overall: {stats.overall_score}, "
+                    f"Eff: {stats.effectiveness_score}, "
+                    f"Bench: {stats.benchmark_dim_score}, "
+                    f"R: {stats.reliability_score}, "
+                    f"D: {stats.debugging_score}, "
+                    f"P: {stats.patience_score}"
+                ),
+            )
+            count += 1
+        return count
 
     def _update_status_block(
         self, stats: DailyStats, daily_xp: int, streak: int, level: LevelInfo

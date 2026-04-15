@@ -885,3 +885,114 @@ class TestShouldVerify:
         sample_agent_config.verification_enabled = True
         session = AgentSession("test-agent", trigger_type=TriggerType.TELEGRAM)
         assert runner._should_verify(sample_agent_config, None, session) is True
+
+
+# ── Outcome Assessment ──────────────────────────────────────────────────
+
+
+class TestAssessOutcome:
+    """Tests for _assess_outcome — universal outcome assessment for all run types."""
+
+    def test_cron_run_gets_assessed(self):
+        """Cron-triggered runs should receive outcome_assessment."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-1",
+            agent_id="email-classifier",
+            trigger_type=TriggerType.CRON,
+            status=RunStatus.COMPLETED,
+            output_text="Classified 5 emails successfully.",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "successful"
+
+    def test_hook_run_gets_assessed(self):
+        """Hook-triggered runs should receive outcome_assessment."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-2",
+            agent_id="calendar-monitor",
+            trigger_type=TriggerType.HOOK,
+            status=RunStatus.TIMEOUT,
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "abandoned"
+
+    def test_workflow_run_gets_assessed(self):
+        """Workflow-triggered runs should receive outcome_assessment."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-3",
+            agent_id="email-responder",
+            trigger_type=TriggerType.WORKFLOW,
+            status=RunStatus.FAILED,
+            error_message="API timeout",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "incorrect"
+
+    def test_completed_with_errors_is_partial(self):
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-4",
+            agent_id="crm-hygiene",
+            trigger_type=TriggerType.CRON,
+            status=RunStatus.COMPLETED,
+            output_text="Done with some issues.",
+            error_message="Warning: 2 contacts skipped",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "partial"
+
+    def test_completed_minimal_output_is_partial(self):
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-5",
+            agent_id="buddy-watch",
+            trigger_type=TriggerType.CRON,
+            status=RunStatus.COMPLETED,
+            output_text="Done",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "partial"
+
+    def test_sub_agent_runs_skipped(self):
+        """Sub-agent runs should not be assessed."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-6",
+            agent_id="email-classifier",
+            trigger_type=TriggerType.SUB_AGENT,
+            status=RunStatus.COMPLETED,
+            output_text="Sub-task result.",
+            parent_run_id="parent-123",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment is None
+
+    def test_telegram_still_assessed(self):
+        """Telegram runs should still be assessed (backward compat)."""
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        run = AgentRun(
+            id="run-7",
+            agent_id="main",
+            trigger_type=TriggerType.TELEGRAM,
+            status=RunStatus.COMPLETED,
+            output_text="Here's your calendar for today with 3 meetings.",
+        )
+        AgentRunner._assess_outcome(run)
+        assert run.outcome_assessment == "successful"
