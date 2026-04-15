@@ -561,7 +561,7 @@ class BuddyEngine:
                     )
                     row = cur.fetchone()
                     if row and row[0] > 0:
-                        return row[1] / row[0]
+                        return float(row[1]) / float(row[0])
                 elif metric == "avg_duration_ms":
                     cur.execute(
                         """
@@ -592,7 +592,7 @@ class BuddyEngine:
                     s = dist.get("successful", 0)
                     u = sum(dist.get(k, 0) for k in ("partial", "incorrect"))
                     if s + u > 0:
-                        return s / (s + u)
+                        return float(s) / float(s + u)
                 elif metric == "error_rate":
                     cur.execute(
                         """
@@ -606,7 +606,7 @@ class BuddyEngine:
                     )
                     row = cur.fetchone()
                     if row and row[0] > 0:
-                        return row[1] / row[0]
+                        return float(row[1]) / float(row[0])
                 elif metric == "timeout_rate":
                     cur.execute(
                         """
@@ -620,7 +620,7 @@ class BuddyEngine:
                     )
                     row = cur.fetchone()
                     if row and row[0] > 0:
-                        return row[1] / row[0]
+                        return float(row[1]) / float(row[0])
         except Exception:
             pass
         return None
@@ -721,12 +721,8 @@ class BuddyEngine:
                 )
             )
             agent_config = load_agent_config(agent_id, manifest_dir)
-            has_goals = agent_config and agent_config.goals
-            goal_score = (
-                self._evaluate_goals(agent_id, agent_config.goals, target_date)
-                if has_goals
-                else None
-            )
+            goals = agent_config.goals if agent_config else None
+            goal_score = self._evaluate_goals(agent_id, goals, target_date) if goals else None
             review_score = self._compute_review_score(agent_id)
             outcome_raw = stats.effectiveness_score
 

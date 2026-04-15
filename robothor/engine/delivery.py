@@ -176,7 +176,7 @@ async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, A
             max_tokens=300,
             timeout=15,
         )
-        text = response.choices[0].message.content.strip()
+        text = str(response.choices[0].message.content or "").strip()
         if not text or text.upper() == "SILENT":
             return None
         return text
