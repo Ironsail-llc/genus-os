@@ -243,6 +243,10 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         timeout_seconds=schedule.get("timeout_seconds", 600),
         max_iterations=schedule.get("max_iterations", 20),
         stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 300)),
+        # ── Cross-run persistent journal ──
+        journal_file=schedule.get("journal_file", ""),
+        journal_checkpoint_interval=int(schedule.get("journal_checkpoint_interval", 5)),
+        resume_on_start=bool(schedule.get("resume_on_start", False)),
         temperature=float(model.get("temperature", 0.3)),
         session_target=schedule.get("session_target", "isolated"),
         catch_up=schedule.get("catch_up", "coalesce"),
@@ -265,6 +269,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         shared_working_state=manifest.get("shared_working_state", False),
         status_file=manifest.get("status_file", ""),
         sla=manifest.get("sla", {}),
+        goals=manifest.get("goals", []),
         streams_read=streams.get("read", []),
         streams_write=streams.get("write", []),
         warmup_memory_blocks=warmup.get("memory_blocks", []),

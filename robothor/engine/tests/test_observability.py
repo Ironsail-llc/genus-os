@@ -224,10 +224,10 @@ class TestBuddyReflection:
     @pytest.mark.asyncio
     @patch("robothor.engine.delivery._get_buddy_context")
     async def test_reflection_skipped_when_no_events(self, mock_ctx):
-        """Buddy stays silent when there are no noteworthy events."""
+        """Buddy stays silent when there are no noteworthy events (cooldowns block all)."""
         from robothor.engine.delivery import _maybe_append_buddy_reflection
 
-        mock_ctx.return_value = {"events": []}
+        mock_ctx.return_value = None  # _get_buddy_context returns None when no events pass cooldown
         config = _make_config(id="main")
         run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
         result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)

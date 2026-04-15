@@ -10,6 +10,7 @@ Modes:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -97,32 +98,40 @@ def _is_trivial_output(text: str) -> bool:
     """Detect 'nothing to report' output that shouldn't be delivered.
 
     Short messages (<300 chars) containing common filler phrases are suppressed.
+    Uses word-boundary matching to avoid false positives on substrings.
     Substantial reports always get through.
     """
     if len(text) > 300:
         return False
     lower = text.lower()
-    return any(p in lower for p in _TRIVIAL_PATTERNS)
+    return any(re.search(r"\b" + re.escape(p) + r"\b", lower) for p in _TRIVIAL_PATTERNS)
 
 
 # ── Buddy reflection (subconscious one-liner) ────────────────────────────
 
 
 def _get_buddy_context() -> dict[str, Any] | None:
-    """Get buddy heartbeat context (live scores, events, deltas)."""
+    """Get buddy events gated by cooldowns.
+
+    Returns context only when there are new, non-cooldown events.
+    Calling this consumes eligible events (marks their cooldowns).
+    """
     try:
         from robothor.engine.buddy import BuddyEngine
 
-        return BuddyEngine().get_buddy_heartbeat_context()
+        ctx = BuddyEngine().get_buddy_events()
+        if not ctx or not ctx.get("events"):
+            return None
+        return ctx
     except Exception:
         logger.debug("Failed to get buddy context for reflection")
         return None
 
 
 async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, Any]) -> str | None:
-    """Generate a buddy one-liner via a lightweight LLM call.
+    """Generate a buddy reflection via a lightweight LLM call.
 
-    Returns a short reflection string, or None if buddy decides to stay silent.
+    Returns a short reflection (2-3 sentences), or None if buddy decides to stay silent.
     """
     events_str = ", ".join(buddy_ctx.get("events", []))
     overall = buddy_ctx.get("overall_score", 50)
@@ -131,30 +140,43 @@ async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, A
     level_info = buddy_ctx.get("level_info")
     level_str = f"Level {level_info.level} {level_info.level_name}" if level_info else "Unknown"
 
+    fleet_top = buddy_ctx.get("fleet_top", [])
+    fleet_str = (
+        ", ".join(f"{a['agent_id']}={a['overall_score']}" for a in fleet_top[:3])
+        if fleet_top
+        else "no fleet data"
+    )
+
+    # Format deltas as readable string
+    delta_parts = []
+    for dim in ("reliability", "debugging", "patience", "effectiveness", "benchmark"):
+        d = deltas.get(dim, 0)
+        if d != 0:
+            delta_parts.append(f"{dim} {'+' if d > 0 else ''}{d}")
+    deltas_str = ", ".join(delta_parts) if delta_parts else "no changes"
+
     prompt = (
-        "You are Buddy, the fleet's subconscious. You just observed this heartbeat "
-        "report being sent to the operator. You may append ONE sentence (or stay "
-        "silent by returning ONLY the word SILENT).\n\n"
-        "Speak only when genuinely insightful: a celebration, a concern, a pattern "
-        "the operator should notice. Never repeat what the heartbeat already said. "
-        "Never use bullet points. Be warm, brief, alive.\n\n"
-        f"Fleet pulse: {level_str} | {streak[0]}-day streak | overall: {overall}\n"
-        f"Score changes: {deltas}\n"
-        f"Events: {events_str or 'none'}\n\n"
-        f"Heartbeat output (first 500 chars):\n{heartbeat_text[:500]}\n\n"
-        "Your reflection (one sentence, or SILENT):"
+        "You are Buddy — the fleet's subconscious. Something notable just happened. "
+        "Reflect in exactly 2 sentences. Be specific about scores and agents. "
+        "If you have nothing insightful to add, return ONLY the word SILENT.\n\n"
+        f"Fleet: {level_str} | {streak[0]}-day streak | overall: {overall}\n"
+        f"Changes: {deltas_str}\n"
+        f"Top agents: {fleet_str}\n"
+        f"Events: {events_str}\n\n"
+        "2 sentences:"
     )
 
     try:
-        from robothor.engine.llm import chat_completion
+        from robothor.engine.llm_client import llm_call
 
-        response = await chat_completion(
+        response = await llm_call(
             messages=[{"role": "user", "content": prompt}],
             model="openrouter/xiaomi/mimo-v2-pro",
             temperature=0.7,
-            max_tokens=100,
+            max_tokens=300,
+            timeout=15,
         )
-        text = (response or "").strip()
+        text = str(response.choices[0].message.content or "").strip()
         if not text or text.upper() == "SILENT":
             return None
         return text
@@ -179,7 +201,7 @@ async def _maybe_append_buddy_reflection(
         return text, False
 
     ctx = _get_buddy_context()
-    if not ctx or not ctx.get("events"):
+    if not ctx:
         return text, False
 
     reflection = await _generate_buddy_reflection(text, ctx)

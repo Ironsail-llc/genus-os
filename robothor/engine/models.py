@@ -107,6 +107,11 @@ class HeartbeatConfig:
     timeout_seconds: int = 600
     stall_timeout_seconds: int = 300  # kill if no activity for this long (0 = disabled)
 
+    # ── Cross-run persistent journal (multi-session research agents) ──
+    journal_file: str = ""  # workspace-relative path to cross-run journal JSON
+    journal_checkpoint_interval: int = 5  # write journal every N iterations (0 = end-of-run)
+    resume_on_start: bool = False  # inject journal as startup preamble if exists
+
     # Delivery (typically announce for heartbeat)
     delivery_mode: DeliveryMode = DeliveryMode.ANNOUNCE
     delivery_channel: str = ""
@@ -170,6 +175,9 @@ class AgentConfig:
     # SLA
     sla: dict[str, str] = field(default_factory=dict)
 
+    # Goals — measurable success criteria for self-improvement loop
+    goals: list[dict[str, Any]] = field(default_factory=list)
+
     # Streams
     streams_read: list[str] = field(default_factory=list)
     streams_write: list[str] = field(default_factory=list)
@@ -184,6 +192,11 @@ class AgentConfig:
     max_iterations: int = 20  # soft check-in interval (not a hard cap)
     safety_cap: int = 200  # absolute max iterations (infinite-loop protection only)
     stall_timeout_seconds: int = 300  # kill if no activity for this long (0 = disabled)
+
+    # ── Cross-run persistent journal (multi-session research agents) ──
+    journal_file: str = ""  # workspace-relative path to cross-run journal JSON
+    journal_checkpoint_interval: int = 5  # write journal every N iterations (0 = end-of-run)
+    resume_on_start: bool = False  # inject journal as startup preamble if exists
 
     # Downstream agents to trigger after successful cron run
     downstream_agents: list[str] = field(default_factory=list)

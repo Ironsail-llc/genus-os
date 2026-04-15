@@ -106,6 +106,12 @@ async def _create_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         name=args.get("name", ""),
         domain_name=args.get("domainName"),
         employees=args.get("employees"),
+        address_street1=args.get("addressStreet1"),
+        address_street2=args.get("addressStreet2"),
+        address_city=args.get("addressCity"),
+        address_state=args.get("addressState"),
+        address_postcode=args.get("addressPostcode"),
+        address_country=args.get("addressCountry"),
         address=args.get("address"),
         linkedin_url=args.get("linkedinUrl"),
         ideal_customer_profile=args.get("idealCustomerProfile", False),
@@ -136,7 +142,13 @@ async def _update_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         "name": "name",
         "domainName": "domain_name",
         "employees": "employees",
-        "address": "address",
+        "addressStreet1": "address_street1",
+        "addressStreet2": "address_street2",
+        "addressCity": "address_city",
+        "addressState": "address_state",
+        "addressPostcode": "address_postcode",
+        "addressCountry": "address_country",
+        "address": "address",  # flat fallback — DAL maps to address_street1
         "linkedinUrl": "linkedin_url",
         "idealCustomerProfile": "ideal_customer_profile",
     }
@@ -692,3 +704,54 @@ async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     if company_merge:
         return {"success": True, "keeper": company_merge}
     return {"error": "Merge failed — one or both IDs not found"}
+
+
+# ── Agent Reviews ──
+
+
+@_handler("review_agent")
+async def _review_agent(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Submit a review for an agent."""
+    from robothor.crm.dal import create_review
+
+    agent_id = args.get("agent_id", "").strip()
+    if not agent_id:
+        return {"error": "agent_id is required"}
+    rating = args.get("rating")
+    if not isinstance(rating, int) or not 1 <= rating <= 5:
+        return {"error": "rating must be an integer 1-5"}
+
+    review_id = await asyncio.to_thread(
+        create_review,
+        agent_id=agent_id,
+        reviewer=args.get("reviewer", ctx.agent_id),
+        reviewer_type=args.get("reviewer_type", "agent"),
+        rating=rating,
+        categories=args.get("categories"),
+        feedback=args.get("feedback"),
+        action_items=args.get("action_items"),
+        run_id=args.get("run_id"),
+        tenant_id=ctx.tenant_id,
+    )
+    return (
+        {"success": True, "review_id": review_id}
+        if review_id
+        else {"error": "Failed to create review"}
+    )
+
+
+@_handler("get_agent_reviews")
+async def _get_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Get reviews and summary for an agent."""
+    from robothor.crm.dal import get_review_summary, get_reviews
+
+    agent_id = args.get("agent_id", "").strip()
+    if not agent_id:
+        return {"error": "agent_id is required"}
+
+    days = args.get("days", 30)
+    reviews = await asyncio.to_thread(get_reviews, agent_id, days=days, tenant_id=ctx.tenant_id)
+    summary = await asyncio.to_thread(
+        get_review_summary, agent_id, days=days, tenant_id=ctx.tenant_id
+    )
+    return {"reviews": reviews, "summary": summary}

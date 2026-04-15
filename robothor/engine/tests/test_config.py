@@ -491,3 +491,43 @@ class TestDeliveryToFallbackChain:
         monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
         config = manifest_to_agent_config({"id": "test", "delivery": {"mode": "announce"}})
         assert config.delivery_to == ""
+
+
+# ── Goals parsing ──────────────────────────────────────────────────────
+
+
+class TestGoalsParsing:
+    """Tests for parsing goals: section from agent manifests."""
+
+    def test_goals_parsed_from_manifest(self):
+        manifest = {
+            "id": "email-classifier",
+            "goals": [
+                {
+                    "id": "high-completion",
+                    "metric": "completion_rate",
+                    "target": ">0.95",
+                    "weight": 1.0,
+                },
+                {
+                    "id": "fast-classification",
+                    "metric": "avg_duration_ms",
+                    "target": "<1800000",
+                    "weight": 0.5,
+                },
+            ],
+        }
+        config = manifest_to_agent_config(manifest)
+        assert len(config.goals) == 2
+        assert config.goals[0]["id"] == "high-completion"
+        assert config.goals[0]["metric"] == "completion_rate"
+        assert config.goals[0]["target"] == ">0.95"
+        assert config.goals[1]["weight"] == 0.5
+
+    def test_no_goals_defaults_to_empty(self):
+        config = manifest_to_agent_config({"id": "bare"})
+        assert config.goals == []
+
+    def test_goals_empty_list(self):
+        config = manifest_to_agent_config({"id": "bare", "goals": []})
+        assert config.goals == []

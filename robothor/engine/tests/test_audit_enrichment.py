@@ -148,7 +148,9 @@ class TestQueryLogUserId:
         query_log()
 
         sql = mock_cur.execute.call_args[0][0]
-        assert "user_id" not in sql.split("WHERE")[1].split("ORDER")[0] or "user_id = %s" not in sql
+        # user_id should appear in SELECT but NOT as a WHERE filter
+        where_clause = sql.split("WHERE")[1].split("ORDER")[0]
+        assert "user_id = %s" not in where_clause
 
     @patch("robothor.audit.logger._get_connection")
     @patch("robothor.audit.logger._release_connection")

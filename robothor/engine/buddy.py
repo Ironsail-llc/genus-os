@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -36,11 +37,11 @@ XP_DREAM_COMPLETED = 10
 XP_STREAK_BONUS = 5  # per streak day, multiplicative
 
 # Overall score weights (must sum to 1.0)
-WEIGHT_RELIABILITY = 0.30
-WEIGHT_DEBUGGING = 0.25
-WEIGHT_PATIENCE = 0.20
-WEIGHT_WISDOM = 0.15
-WEIGHT_CHAOS = 0.10  # applied as (100 - chaos_score)
+WEIGHT_RELIABILITY = 0.25
+WEIGHT_DEBUGGING = 0.20
+WEIGHT_PATIENCE = 0.15
+WEIGHT_EFFECTIVENESS = 0.25  # outcome quality (was WEIGHT_CHAOS)
+WEIGHT_BENCHMARK = 0.15  # benchmark aggregate score (was WEIGHT_WISDOM)
 
 
 def xp_for_level(level: int) -> int:
@@ -76,17 +77,17 @@ def level_name(level: int) -> str:
 def compute_overall_score(
     debugging: int,
     patience: int,
-    chaos: int,
-    wisdom: int,
+    effectiveness: int,
+    benchmark_score: int,
     reliability: int,
 ) -> int:
-    """Weighted composite score (0-100). Chaos is inverted (low chaos = good)."""
+    """Weighted composite score (0-100)."""
     raw = (
         reliability * WEIGHT_RELIABILITY
         + debugging * WEIGHT_DEBUGGING
         + patience * WEIGHT_PATIENCE
-        + wisdom * WEIGHT_WISDOM
-        + (100 - chaos) * WEIGHT_CHAOS
+        + effectiveness * WEIGHT_EFFECTIVENESS
+        + benchmark_score * WEIGHT_BENCHMARK
     )
     return min(100, max(0, int(raw)))
 
@@ -107,8 +108,10 @@ class DailyStats:
     # Computed RPG scores (0-100)
     debugging_score: int = 50
     patience_score: int = 50
-    chaos_score: int = 50
-    wisdom_score: int = 50
+    chaos_score: int = 50  # legacy, kept for DB compat
+    wisdom_score: int = 50  # legacy, kept for DB compat
+    effectiveness_score: int = 50  # outcome quality (replaces chaos in overall)
+    benchmark_dim_score: int = 50  # benchmark aggregate (replaces wisdom in overall)
     reliability_score: int = 50
 
     def total_daily_xp(self, streak_days: int = 0) -> int:
@@ -157,8 +160,10 @@ class AgentBuddyStats:
     errors_recovered: int = 0
     debugging_score: int = 50
     patience_score: int = 50
-    chaos_score: int = 50
-    wisdom_score: int = 50
+    chaos_score: int = 50  # legacy, kept for DB compat
+    wisdom_score: int = 50  # legacy, kept for DB compat
+    effectiveness_score: int = 50  # outcome quality (replaces chaos in overall)
+    benchmark_dim_score: int = 50  # benchmark aggregate (replaces wisdom in overall)
     reliability_score: int = 50
     overall_score: int = 50
     daily_xp: int = 0
@@ -281,12 +286,17 @@ class BuddyEngine:
         stats.patience_score = self._compute_patience(target_date, agent_id=agent_id)
         stats.chaos_score = self._compute_chaos(target_date, agent_id=agent_id)
         stats.wisdom_score = self._compute_wisdom(stats)
+        stats.effectiveness_score = self._compute_effectiveness(target_date, agent_id=agent_id)
         stats.reliability_score = self._compute_reliability(target_date, agent_id=agent_id)
 
         return stats
 
     def _compute_debugging(self, target_date: date, *, agent_id: str | None = None) -> int:
-        """Debugging: error recovery rate over last 7 days."""
+        """Debugging: error recovery rate over last 7 days.
+
+        No errors in the window = perfect score (100), not neutral (50).
+        Errors present = recovery rate as percentage.
+        """
         try:
             from robothor.db.connection import get_connection
 
@@ -306,14 +316,24 @@ class BuddyEngine:
                     [start, target_date, *ac_params],
                 )
                 row = cur.fetchone()
-                if row and row[0] > 0:
-                    return min(100, int(100 * row[1] / row[0]))
+                if row:
+                    total_errors = int(row[0])
+                    if total_errors == 0:
+                        return 100  # No errors = perfect
+                    recovered = int(row[1])
+                    return min(100, int(100 * recovered / total_errors))
         except Exception:
             pass
         return 50
 
     def _compute_patience(self, target_date: date, *, agent_id: str | None = None) -> int:
-        """Patience: ratio of avg duration to timeout (consistent, not rushed)."""
+        """Patience: consistency of run durations (low variance = high patience).
+
+        Uses coefficient of variation (CV = stddev/avg) scaled so:
+          CV=0.0 → 100 (perfectly consistent)
+          CV=1.0 → 50  (moderate variance — normal for mixed agent types)
+          CV>=2.0 → 0  (extremely chaotic)
+        """
         try:
             from robothor.db.connection import get_connection
 
@@ -335,9 +355,10 @@ class BuddyEngine:
                 if row and row[0] and row[1]:
                     avg_ms = float(row[0])
                     std_ms = float(row[1])
-                    # Low variance relative to mean = high patience
+                    # Scale: CV=0→100, CV=1→50, CV>=2→0
                     cv = std_ms / avg_ms if avg_ms > 0 else 1.0
-                    return min(100, max(0, int(100 * (1.0 - min(cv, 1.0)))))
+                    score = 100 * (1.0 - min(cv, 2.0) / 2.0)
+                    return min(100, max(0, int(score)))
         except Exception:
             pass
         return 50
@@ -375,9 +396,22 @@ class BuddyEngine:
         return 50
 
     def _compute_wisdom(self, stats: DailyStats) -> int:
-        """Wisdom: insights and dreams weighted score."""
+        """Wisdom: insights and dreams weighted score.
+
+        Scaled so growth is gradual:
+          1 insight + 1 dream = 15
+          5 insights + 5 dreams = 75
+          7+ insights + 5+ dreams = 100
+        """
         raw = stats.insights_generated * 10 + stats.dreams_completed * 5
-        return min(100, raw)
+        # Logarithmic scaling: first points are easy, later points are harder
+        if raw <= 0:
+            return 0
+        # log-scale: ln(raw+1) / ln(150) * 100 → 100 at raw=150
+        import math
+
+        score = min(100, int(100 * math.log(raw + 1) / math.log(150)))
+        return score
 
     def _compute_reliability(self, target_date: date, *, agent_id: str | None = None) -> int:
         """Reliability: completion rate over last 7 days."""
@@ -405,6 +439,224 @@ class BuddyEngine:
         except Exception:
             pass
         return 50
+
+    def _compute_effectiveness(self, target_date: date, *, agent_id: str | None = None) -> int:
+        """Effectiveness: outcome quality over last 7 days.
+
+        Reads outcome_assessment from agent_runs. Score = satisfaction_rate * 100.
+        Only counts runs with non-null outcome_assessment.
+        Abandoned runs are excluded (same as analytics.py).
+        """
+        try:
+            from robothor.db.connection import get_connection
+
+            start = target_date - timedelta(days=7)
+            ac, ac_params = _agent_clause(agent_id)
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT outcome_assessment, COUNT(*)
+                    FROM agent_runs
+                    WHERE DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                      AND outcome_assessment IS NOT NULL
+                    """
+                    + ac
+                    + """
+                    GROUP BY outcome_assessment
+                    """,
+                    [start, target_date, *ac_params],
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    return 50  # No assessed runs — neutral
+
+                outcome_dist = {r[0]: r[1] for r in rows}
+                successful = outcome_dist.get("successful", 0)
+                unsatisfied = sum(outcome_dist.get(k, 0) for k in ("partial", "incorrect"))
+                total_rated = successful + unsatisfied
+                if total_rated == 0:
+                    return 50  # Only abandoned runs — neutral
+                return min(100, max(0, int(100 * successful / total_rated)))
+        except Exception:
+            pass
+        return 50
+
+    def _evaluate_goals(
+        self, agent_id: str, goals: list[dict[str, Any]], target_date: date
+    ) -> float:
+        """Evaluate per-agent goals. Returns 0.0-1.0 (weighted fraction met).
+
+        Supported metrics: completion_rate, avg_duration_ms, satisfaction_rate,
+        error_rate, timeout_rate.
+        Target operators: <, >, <=, >=, =
+        """
+        import re
+
+        if not goals:
+            return 1.0  # No goals = vacuously met
+
+        total_weight = 0.0
+        met_weight = 0.0
+
+        for goal in goals:
+            metric = goal.get("metric", "")
+            target_str = goal.get("target", "")
+            weight = float(goal.get("weight", 1.0))
+
+            # Parse target: operator + value
+            match = re.match(r"([<>=!]+)\s*(.+)", target_str)
+            if not match:
+                continue
+            op, val_str = match.group(1), match.group(2)
+            try:
+                target_val = float(val_str)
+            except ValueError:
+                continue
+
+            # Get actual metric value
+            actual = self._get_goal_metric(agent_id, metric, target_date)
+            if actual is None:
+                continue  # No data — exclude from scoring (don't penalize)
+
+            # Only count goals we can actually measure
+            total_weight += weight
+
+            # Compare
+            met = False
+            if op == ">":
+                met = actual > target_val
+            elif op == ">=":
+                met = actual >= target_val
+            elif op == "<":
+                met = actual < target_val
+            elif op == "<=":
+                met = actual <= target_val
+            elif op == "=":
+                met = abs(actual - target_val) < 0.001
+
+            if met:
+                met_weight += weight
+
+        return met_weight / total_weight if total_weight > 0 else 1.0
+
+    def _get_goal_metric(self, agent_id: str, metric: str, target_date: date) -> float | None:
+        """Fetch a metric value for goal evaluation."""
+        try:
+            from robothor.db.connection import get_connection
+
+            start = target_date - timedelta(days=7)
+            with get_connection() as conn:
+                cur = conn.cursor()
+                if metric == "completion_rate":
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) as total,
+                               COUNT(*) FILTER (WHERE status = 'completed') as completed
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                        """,
+                        (agent_id, start, target_date),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] > 0:
+                        return float(row[1]) / float(row[0])
+                elif metric == "avg_duration_ms":
+                    cur.execute(
+                        """
+                        SELECT AVG(duration_ms)
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                          AND status = 'completed' AND duration_ms > 0
+                        """,
+                        (agent_id, start, target_date),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] is not None:
+                        return float(row[0])
+                elif metric == "satisfaction_rate":
+                    cur.execute(
+                        """
+                        SELECT outcome_assessment, COUNT(*)
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                          AND outcome_assessment IS NOT NULL
+                        GROUP BY outcome_assessment
+                        """,
+                        (agent_id, start, target_date),
+                    )
+                    dist = {r[0]: r[1] for r in cur.fetchall()}
+                    s = dist.get("successful", 0)
+                    u = sum(dist.get(k, 0) for k in ("partial", "incorrect"))
+                    if s + u > 0:
+                        return float(s) / float(s + u)
+                elif metric == "error_rate":
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) as total,
+                               COUNT(*) FILTER (WHERE status IN ('failed', 'timeout')) as errors
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                        """,
+                        (agent_id, start, target_date),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] > 0:
+                        return float(row[1]) / float(row[0])
+                elif metric == "timeout_rate":
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) as total,
+                               COUNT(*) FILTER (WHERE status = 'timeout') as timeouts
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND DATE(started_at AT TIME ZONE 'America/New_York') BETWEEN %s AND %s
+                        """,
+                        (agent_id, start, target_date),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] > 0:
+                        return float(row[1]) / float(row[0])
+        except Exception:
+            pass
+        return None
+
+    def _compute_benchmark_score(self, agent_id: str) -> int:
+        """Benchmark dimension: latest benchmark aggregate score (0-100).
+
+        Reads from the memory block written by benchmark_run tool.
+        Returns 50 (neutral) if no benchmark data exists.
+        """
+        try:
+            score, _ = self._get_latest_benchmark(agent_id)
+            if score is not None:
+                return min(100, max(0, int(score * 100)))
+        except Exception:
+            pass
+        return 50
+
+    def _compute_review_score(self, agent_id: str) -> int | None:
+        """Review score from formal feedback (0-100), or None if no reviews.
+
+        Reads from agent_reviews table (last 30 days). Scales 1-5 rating
+        to 0-100: rating 1 → 0, rating 3 → 50, rating 5 → 100.
+        """
+        try:
+            from robothor.crm.dal import get_review_summary
+
+            summary = get_review_summary(agent_id, days=30)
+            if not summary or summary["count"] == 0:
+                return None
+            avg = summary["avg_rating"]
+            if avg is None:
+                return None
+            return min(100, max(0, int((avg - 1) * 25)))
+        except Exception:
+            return None
 
     # ── Per-agent scoring ──────────────────────────────────────────────────
 
@@ -453,6 +705,47 @@ class BuddyEngine:
         # AutoDreams are system-wide, not per-agent, so wisdom has no signal here.
         # Use neutral default (50) instead of the 0 that _compute_wisdom produces.
         stats.wisdom_score = 50
+        # Compute new dimensions for per-agent scoring
+        benchmark_dim = self._compute_benchmark_score(agent_id)
+        stats.benchmark_dim_score = benchmark_dim
+        # Blend goal attainment into effectiveness if agent has goals defined
+        try:
+            from pathlib import Path
+
+            from robothor.engine.config import load_agent_config
+
+            manifest_dir = Path(
+                __import__("os").environ.get(
+                    "ROBOTHOR_MANIFEST_DIR",
+                    str(Path.home() / "robothor" / "docs" / "agents"),
+                )
+            )
+            agent_config = load_agent_config(agent_id, manifest_dir)
+            goals = agent_config.goals if agent_config else None
+            goal_score = self._evaluate_goals(agent_id, goals, target_date) if goals else None
+            review_score = self._compute_review_score(agent_id)
+            outcome_raw = stats.effectiveness_score
+
+            # Blend effectiveness from available signals
+            if goal_score is not None and review_score is not None:
+                # All three signals: 40% outcome + 30% goals + 30% reviews
+                stats.effectiveness_score = min(
+                    100,
+                    max(0, int(outcome_raw * 0.4 + goal_score * 100 * 0.3 + review_score * 0.3)),
+                )
+            elif goal_score is not None:
+                # Outcome + goals: 50/50
+                stats.effectiveness_score = min(
+                    100, max(0, int(outcome_raw * 0.5 + goal_score * 100 * 0.5))
+                )
+            elif review_score is not None:
+                # Outcome + reviews: 60/40
+                stats.effectiveness_score = min(
+                    100, max(0, int(outcome_raw * 0.6 + review_score * 0.4))
+                )
+            # else: outcome only (already set)
+        except Exception:
+            pass  # Goal/review evaluation is best-effort; never block scoring
         daily_xp = (
             stats.tasks_completed * XP_TASK_COMPLETED + stats.errors_avoided * XP_ERROR_RECOVERY
         )
@@ -473,12 +766,14 @@ class BuddyEngine:
             patience_score=stats.patience_score,
             chaos_score=stats.chaos_score,
             wisdom_score=stats.wisdom_score,
+            effectiveness_score=stats.effectiveness_score,
+            benchmark_dim_score=benchmark_dim,
             reliability_score=stats.reliability_score,
             overall_score=compute_overall_score(
                 stats.debugging_score,
                 stats.patience_score,
-                stats.chaos_score,
-                stats.wisdom_score,
+                stats.effectiveness_score,
+                benchmark_dim,
                 stats.reliability_score,
             ),
             daily_xp=daily_xp,
@@ -576,10 +871,13 @@ class BuddyEngine:
                     INSERT INTO agent_buddy_stats (
                         agent_id, stat_date, tasks_completed, errors_recovered,
                         debugging_score, patience_score, chaos_score,
-                        wisdom_score, reliability_score, overall_score,
+                        wisdom_score, effectiveness_score, benchmark_dim_score,
+                        reliability_score, overall_score,
                         daily_xp, total_xp, level,
                         last_benchmark_score, last_benchmark_at, computed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+                    )
                     ON CONFLICT (agent_id, stat_date) DO UPDATE SET
                         tasks_completed = EXCLUDED.tasks_completed,
                         errors_recovered = EXCLUDED.errors_recovered,
@@ -587,6 +885,8 @@ class BuddyEngine:
                         patience_score = EXCLUDED.patience_score,
                         chaos_score = EXCLUDED.chaos_score,
                         wisdom_score = EXCLUDED.wisdom_score,
+                        effectiveness_score = EXCLUDED.effectiveness_score,
+                        benchmark_dim_score = EXCLUDED.benchmark_dim_score,
                         reliability_score = EXCLUDED.reliability_score,
                         overall_score = EXCLUDED.overall_score,
                         daily_xp = EXCLUDED.daily_xp,
@@ -605,6 +905,8 @@ class BuddyEngine:
                         stats.patience_score,
                         stats.chaos_score,
                         stats.wisdom_score,
+                        stats.effectiveness_score,
+                        stats.benchmark_dim_score,
                         stats.reliability_score,
                         stats.overall_score,
                         stats.daily_xp,
@@ -711,7 +1013,7 @@ class BuddyEngine:
                     cur.execute(
                         """
                         SELECT overall_score, debugging_score, patience_score,
-                               chaos_score, wisdom_score, reliability_score
+                               effectiveness_score, benchmark_dim_score, reliability_score
                         FROM agent_buddy_stats
                         WHERE agent_id = %s
                         ORDER BY stat_date DESC LIMIT 1
@@ -722,8 +1024,24 @@ class BuddyEngine:
                     if row:
                         scores_str = (
                             f"Overall: {row[0]}, Debugging: {row[1]}, Patience: {row[2]}, "
-                            f"Chaos: {row[3]}, Wisdom: {row[4]}, Reliability: {row[5]}"
+                            f"Effectiveness: {row[3]}, Benchmark: {row[4]}, Reliability: {row[5]}"
                         )
+            except Exception:
+                pass
+
+            # Get recent review feedback for context
+            review_context = ""
+            try:
+                from robothor.crm.dal import get_review_summary
+
+                review_summary = get_review_summary(agent_id, days=30)
+                if review_summary and review_summary["count"] > 0:
+                    review_context = (
+                        f"\n\n**Recent reviews:** {review_summary['count']} reviews, "
+                        f"avg rating: {review_summary['avg_rating']}/5\n"
+                    )
+                    for fb in review_summary.get("recent_feedback", [])[:3]:
+                        review_context += f"- {fb.get('feedback', '')}\n"
             except Exception:
                 pass
 
@@ -734,6 +1052,7 @@ class BuddyEngine:
                     f"**Current scores:** {scores_str}\n\n"
                     f"Define a benchmark suite (if none exists), run it, and iterate on "
                     f"the agent's instruction file and manifest to improve performance."
+                    f"{review_context}"
                 ),
                 assigned_to_agent="auto-agent",
                 tags=["autoagent", "low-score", agent_id],
@@ -770,7 +1089,7 @@ class BuddyEngine:
                     cur.execute(
                         """
                         SELECT overall_score, debugging_score, patience_score,
-                               chaos_score, wisdom_score, reliability_score
+                               effectiveness_score, benchmark_dim_score, reliability_score
                         FROM agent_buddy_stats
                         WHERE agent_id = %s
                         ORDER BY stat_date DESC LIMIT 1
@@ -781,8 +1100,24 @@ class BuddyEngine:
                     if row:
                         scores_str = (
                             f"Overall: {row[0]}, Debugging: {row[1]}, Patience: {row[2]}, "
-                            f"Chaos: {row[3]}, Wisdom: {row[4]}, Reliability: {row[5]}"
+                            f"Effectiveness: {row[3]}, Benchmark: {row[4]}, Reliability: {row[5]}"
                         )
+            except Exception:
+                pass
+
+            # Get recent review feedback for context
+            review_context = ""
+            try:
+                from robothor.crm.dal import get_review_summary
+
+                review_summary = get_review_summary(agent_id, days=30)
+                if review_summary and review_summary["count"] > 0:
+                    review_context = (
+                        f"\n\n**Recent reviews:** {review_summary['count']} reviews, "
+                        f"avg rating: {review_summary['avg_rating']}/5\n"
+                    )
+                    for fb in review_summary.get("recent_feedback", [])[:3]:
+                        review_context += f"- {fb.get('feedback', '')}\n"
             except Exception:
                 pass
 
@@ -795,6 +1130,7 @@ class BuddyEngine:
                     f"Run a controlled experiment to identify the root cause. "
                     f"Consider: prompt structure, model fit, tool selection, "
                     f"task complexity mismatch."
+                    f"{review_context}"
                 ),
                 assigned_to_agent="auto-researcher",
                 tags=["auto-researcher", "low-score", agent_id],
@@ -933,9 +1269,10 @@ class BuddyEngine:
                         stat_date, tasks_completed, emails_processed,
                         insights_generated, errors_avoided, dreams_completed,
                         debugging_score, patience_score, chaos_score,
-                        wisdom_score, reliability_score,
+                        wisdom_score, effectiveness_score, benchmark_dim_score,
+                        reliability_score,
                         total_xp, level, current_streak_days, longest_streak_days
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (stat_date) DO UPDATE SET
                         tasks_completed = EXCLUDED.tasks_completed,
                         emails_processed = EXCLUDED.emails_processed,
@@ -946,6 +1283,8 @@ class BuddyEngine:
                         patience_score = EXCLUDED.patience_score,
                         chaos_score = EXCLUDED.chaos_score,
                         wisdom_score = EXCLUDED.wisdom_score,
+                        effectiveness_score = EXCLUDED.effectiveness_score,
+                        benchmark_dim_score = EXCLUDED.benchmark_dim_score,
                         reliability_score = EXCLUDED.reliability_score,
                         total_xp = EXCLUDED.total_xp,
                         level = EXCLUDED.level,
@@ -963,6 +1302,8 @@ class BuddyEngine:
                         stats.patience_score,
                         stats.chaos_score,
                         stats.wisdom_score,
+                        stats.effectiveness_score,
+                        stats.benchmark_dim_score,
                         stats.reliability_score,
                         daily_xp,
                         level_before.level,
@@ -1015,6 +1356,15 @@ class BuddyEngine:
             logger.warning("Failed to refresh per-agent buddy stats: %s", e)
             result["fleet_error"] = str(e)
 
+        # ── Write automated system reviews for notable score changes ────────
+        try:
+            if fleet:
+                reviews_written = self._write_system_reviews(fleet)
+                if reviews_written:
+                    result["system_reviews"] = reviews_written
+        except Exception as e:
+            logger.debug("Failed to write system reviews: %s", e)
+
         # ── Flag underperformers for AutoAgent ─────────────────────────────
         try:
             flagged = self.flag_underperformers()
@@ -1028,6 +1378,54 @@ class BuddyEngine:
 
         return result
 
+    def _write_system_reviews(self, fleet: list[AgentBuddyStats]) -> int:
+        """Generate system reviews for agents with notable scores.
+
+        Writes a review when:
+        - overall_score < 40: rating 1 (critical)
+        - overall_score < 60: rating 2 (concern)
+        - overall_score >= 90: rating 5 (excellent)
+
+        Returns count of reviews written.
+        """
+        from robothor.crm.dal import create_review, get_reviews
+
+        count = 0
+        for stats in fleet:
+            if stats.overall_score < 40:
+                rating, label = 1, "critical"
+            elif stats.overall_score < 60:
+                rating, label = 2, "concern"
+            elif stats.overall_score >= 90:
+                rating, label = 5, "excellent"
+            else:
+                continue  # 60-89 is normal — no review needed
+
+            # Dedup: skip if a system review already exists for this agent today
+            try:
+                existing = get_reviews(stats.agent_id, days=1, reviewer_type="system")
+                if existing:
+                    continue
+            except Exception:
+                pass  # If check fails, write the review anyway
+
+            create_review(
+                agent_id=stats.agent_id,
+                reviewer="buddy",
+                reviewer_type="system",
+                rating=rating,
+                feedback=(
+                    f"[{label}] Overall: {stats.overall_score}, "
+                    f"Eff: {stats.effectiveness_score}, "
+                    f"Bench: {stats.benchmark_dim_score}, "
+                    f"R: {stats.reliability_score}, "
+                    f"D: {stats.debugging_score}, "
+                    f"P: {stats.patience_score}"
+                ),
+            )
+            count += 1
+        return count
+
     def _update_status_block(
         self, stats: DailyStats, daily_xp: int, streak: int, level: LevelInfo
     ) -> None:
@@ -1038,7 +1436,7 @@ class BuddyEngine:
             lines = [
                 f"Level {level.level} {level.level_name} ({level.total_xp + daily_xp:,} XP) | {streak}-day streak",
                 f"Debugging: {stats.debugging_score} | Patience: {stats.patience_score} | "
-                f"Chaos: {stats.chaos_score} | Wisdom: {stats.wisdom_score} | "
+                f"Effectiveness: {stats.effectiveness_score} | Benchmark: {stats.benchmark_dim_score} | "
                 f"Reliability: {stats.reliability_score}",
                 f"Today: {stats.tasks_completed} tasks, {stats.emails_processed} emails, "
                 f"{stats.insights_generated} insights, {stats.dreams_completed} dreams (+{daily_xp} XP)",
@@ -1051,11 +1449,59 @@ class BuddyEngine:
 
     _STREAK_MILESTONES = frozenset({7, 14, 30, 60, 100})
 
-    def get_buddy_heartbeat_context(self, target_date: date | None = None) -> dict[str, Any]:
-        """Prepare mood-relevant data for the buddy heartbeat reflection.
+    # Cooldown durations (hours) — events won't re-fire within this window.
+    _EVENT_COOLDOWNS: dict[str, int] = {
+        "level_up": 24,
+        "streak_milestone": 24,
+        "score_threshold_up": 12,
+        "score_threshold_down": 12,
+        "score_swing": 4,
+    }
 
-        Returns a dict with level info, streak, today's scores, deltas vs
-        yesterday, fleet top/bottom, and a list of notable events.
+    _COOLDOWN_BLOCK = "buddy_event_cooldowns"
+
+    def _load_event_cooldowns(self) -> dict[str, str]:
+        """Load event cooldown timestamps from memory block."""
+        try:
+            from robothor.memory.blocks import read_block
+
+            result = read_block(self._COOLDOWN_BLOCK)
+            content = result.get("content", "")
+            if content and isinstance(content, str):
+                return dict(json.loads(content))
+        except Exception:
+            pass
+        return {}
+
+    def _save_event_cooldowns(self, state: dict[str, str]) -> None:
+        """Persist event cooldown timestamps to memory block."""
+        try:
+            from robothor.memory.blocks import write_block
+
+            write_block(self._COOLDOWN_BLOCK, json.dumps(state))
+        except Exception as e:
+            logger.debug("Failed to save buddy event cooldowns: %s", e)
+
+    def _is_on_cooldown(self, state: dict[str, str], event_key: str) -> bool:
+        """Check if an event is still within its cooldown window."""
+        last_fired_str = state.get(f"cooldown_{event_key}")
+        if not last_fired_str:
+            return False
+        try:
+            last_fired = datetime.fromisoformat(last_fired_str)
+            cooldown_hours = self._EVENT_COOLDOWNS.get(event_key, 4)
+            return datetime.now(UTC) - last_fired < timedelta(hours=cooldown_hours)
+        except Exception:
+            return False
+
+    def _mark_event_fired(self, state: dict[str, str], event_key: str) -> None:
+        """Record that an event just fired."""
+        state[f"cooldown_{event_key}"] = datetime.now(UTC).isoformat()
+
+    def _get_status_and_deltas(self, target_date: date | None = None) -> dict[str, Any]:
+        """Compute current status: level, streak, scores, deltas, fleet rankings.
+
+        Shared helper for both get_buddy_status() and get_buddy_events().
         """
         if target_date is None:
             target_date = datetime.now(UTC).date()
@@ -1075,8 +1521,8 @@ class BuddyEngine:
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT debugging_score, patience_score, chaos_score,
-                           wisdom_score, reliability_score
+                    SELECT debugging_score, patience_score, effectiveness_score,
+                           benchmark_dim_score, reliability_score
                     FROM buddy_stats WHERE stat_date = %s
                     """,
                     (yesterday,),
@@ -1086,8 +1532,8 @@ class BuddyEngine:
                     score_deltas = {
                         "debugging": scores_today.debugging_score - row[0],
                         "patience": scores_today.patience_score - row[1],
-                        "chaos": scores_today.chaos_score - row[2],
-                        "wisdom": scores_today.wisdom_score - row[3],
+                        "effectiveness": scores_today.effectiveness_score - row[2],
+                        "benchmark": scores_today.benchmark_dim_score - row[3],
                         "reliability": scores_today.reliability_score - row[4],
                     }
 
@@ -1112,56 +1558,128 @@ class BuddyEngine:
         except Exception:
             pass
 
-        # ── Detect notable events ──
-        events: list[str] = []
-
-        # Streak milestones
-        current_streak = streak[0]
-        if current_streak in self._STREAK_MILESTONES:
-            events.append(f"{current_streak}-day streak milestone!")
-
-        # Level-up
-        if yesterday_level is not None and level_info.level > yesterday_level:
-            events.append(
-                f"Level up! {yesterday_level} → {level_info.level} ({level_info.level_name})"
-            )
-
-        # Score threshold crossings
         overall = compute_overall_score(
             scores_today.debugging_score,
             scores_today.patience_score,
-            scores_today.chaos_score,
-            scores_today.wisdom_score,
+            scores_today.effectiveness_score,
+            scores_today.benchmark_dim_score,
             scores_today.reliability_score,
         )
-        if score_deltas:
-            yesterday_overall = compute_overall_score(
-                scores_today.debugging_score - score_deltas.get("debugging", 0),
-                scores_today.patience_score - score_deltas.get("patience", 0),
-                scores_today.chaos_score - score_deltas.get("chaos", 0),
-                scores_today.wisdom_score - score_deltas.get("wisdom", 0),
-                scores_today.reliability_score - score_deltas.get("reliability", 0),
-            )
-            if overall >= 85 and yesterday_overall < 85:
-                events.append("Fleet overall crossed above 85 — thriving!")
-            elif overall < 50 and yesterday_overall >= 50:
-                events.append("Fleet overall dropped below 50 — needs attention")
-
-            # Large score swings (> 10 pts in any dimension)
-            for dim, delta in score_deltas.items():
-                if abs(delta) > 10:
-                    direction = "up" if delta > 0 else "down"
-                    events.append(f"{dim.capitalize()} {direction} {abs(delta)} pts")
 
         return {
             "level_info": level_info,
             "streak": streak,
             "scores_today": scores_today,
             "score_deltas": score_deltas,
+            "yesterday_level": yesterday_level,
             "fleet_top": fleet_top,
-            "events": events,
             "overall_score": overall,
         }
+
+    def get_buddy_status(self, target_date: date | None = None) -> dict[str, Any]:
+        """Current fleet status — level, streak, scores, deltas, fleet rankings.
+
+        Safe to call on every heartbeat. No events, no side effects.
+        Used by warmup context injection.
+        """
+        ctx = self._get_status_and_deltas(target_date)
+        # Strip internal-only fields
+        ctx.pop("yesterday_level", None)
+        return ctx
+
+    def get_buddy_events(self, target_date: date | None = None) -> dict[str, Any]:
+        """Detect notable events, gated by cooldowns.
+
+        Each event fires at most once within its cooldown window.
+        Calling this method consumes eligible events (marks their cooldowns).
+        Used by delivery reflection path.
+
+        Returns the full context dict with an 'events' list. If no events
+        pass the cooldown filter, the list is empty.
+        """
+        ctx = self._get_status_and_deltas(target_date)
+        cooldown_state = self._load_event_cooldowns()
+        events: list[str] = []
+        fired_any = False
+
+        level_info = ctx["level_info"]
+        streak = ctx["streak"]
+        scores_today = ctx["scores_today"]
+        score_deltas = ctx["score_deltas"]
+        yesterday_level = ctx.pop("yesterday_level", None)
+        overall = ctx["overall_score"]
+
+        # Streak milestones
+        current_streak = streak[0]
+        if current_streak in self._STREAK_MILESTONES and not self._is_on_cooldown(
+            cooldown_state, "streak_milestone"
+        ):
+            events.append(f"{current_streak}-day streak milestone!")
+            self._mark_event_fired(cooldown_state, "streak_milestone")
+            fired_any = True
+
+        # Level-up
+        if (
+            yesterday_level is not None
+            and level_info.level > yesterday_level
+            and not self._is_on_cooldown(cooldown_state, "level_up")
+        ):
+            events.append(
+                f"Level up! {yesterday_level} → {level_info.level} ({level_info.level_name})"
+            )
+            self._mark_event_fired(cooldown_state, "level_up")
+            fired_any = True
+
+        # Score threshold crossings
+        if score_deltas:
+            yesterday_overall = compute_overall_score(
+                scores_today.debugging_score - score_deltas.get("debugging", 0),
+                scores_today.patience_score - score_deltas.get("patience", 0),
+                scores_today.effectiveness_score - score_deltas.get("effectiveness", 0),
+                scores_today.benchmark_dim_score - score_deltas.get("benchmark", 0),
+                scores_today.reliability_score - score_deltas.get("reliability", 0),
+            )
+            if (
+                overall >= 85
+                and yesterday_overall < 85
+                and not self._is_on_cooldown(cooldown_state, "score_threshold_up")
+            ):
+                events.append("Fleet overall crossed above 85 — thriving!")
+                self._mark_event_fired(cooldown_state, "score_threshold_up")
+                fired_any = True
+            elif (
+                overall < 50
+                and yesterday_overall >= 50
+                and not self._is_on_cooldown(cooldown_state, "score_threshold_down")
+            ):
+                events.append("Fleet overall dropped below 50 — needs attention")
+                self._mark_event_fired(cooldown_state, "score_threshold_down")
+                fired_any = True
+
+            # Large score swings (> 10 pts in any dimension)
+            for dim, delta in score_deltas.items():
+                if abs(delta) > 10:
+                    swing_key = f"score_swing_{dim}"
+                    if not self._is_on_cooldown(cooldown_state, swing_key):
+                        direction = "up" if delta > 0 else "down"
+                        events.append(f"{dim.capitalize()} {direction} {abs(delta)} pts")
+                        self._mark_event_fired(cooldown_state, swing_key)
+                        fired_any = True
+
+        # Persist cooldown state if any events fired
+        if fired_any:
+            self._save_event_cooldowns(cooldown_state)
+
+        ctx["events"] = events
+        return ctx
+
+    def get_buddy_heartbeat_context(self, target_date: date | None = None) -> dict[str, Any]:
+        """Legacy wrapper — returns status with cooldown-gated events.
+
+        Callers should prefer get_buddy_status() (warmup) or
+        get_buddy_events() (delivery) directly.
+        """
+        return self.get_buddy_events(target_date)
 
     def increment_task_count(self, agent_id: str | None = None) -> None:
         """Lightweight counter increment — called by AGENT_END lifecycle hook.

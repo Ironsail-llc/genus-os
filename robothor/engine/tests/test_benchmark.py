@@ -686,3 +686,161 @@ class TestExperimentBenchmarkMode:
         assert result.get("baseline_set") is True
         # Verify _benchmark_run was called with correct args
         mock_run.assert_called_once()
+
+
+# ─── LLM Judge Scoring ────────────────────────────────────────────
+
+
+class TestValidateTaskQualityCategory:
+    """Quality category is valid for tasks with judge field."""
+
+    def test_quality_category_valid(self):
+        task = {
+            "id": "output-quality",
+            "prompt": "Reply to this email",
+            "category": "quality",
+            "expected": {
+                "judge": {
+                    "rubric": ["Is the reply clear?", "Is it concise?"],
+                }
+            },
+        }
+        assert _validate_task(task) is None
+
+    def test_quality_category_without_judge_still_valid(self):
+        """Quality category works with standard must_contain too."""
+        task = {
+            "id": "output-quality",
+            "prompt": "Reply to this email",
+            "category": "quality",
+            "expected": {"must_contain": ["reply"]},
+        }
+        assert _validate_task(task) is None
+
+    def test_judge_rubric_required(self):
+        """Judge field without rubric is invalid."""
+        task = {
+            "id": "bad-judge",
+            "prompt": "Reply",
+            "category": "quality",
+            "expected": {"judge": {}},
+        }
+        err = _validate_task(task)
+        assert err is not None
+        assert "rubric" in err.lower()
+
+    def test_judge_rubric_must_be_list(self):
+        """Judge rubric must be a list."""
+        task = {
+            "id": "bad-rubric",
+            "prompt": "Reply",
+            "category": "quality",
+            "expected": {"judge": {"rubric": "not a list"}},
+        }
+        err = _validate_task(task)
+        assert err is not None
+        assert "rubric" in err.lower()
+
+
+class TestJudgeOutput:
+    """Tests for _judge_output — LLM-based quality scoring."""
+
+    @pytest.mark.asyncio
+    async def test_judge_scores_rubric_items(self):
+        """Judge returns fraction of rubric items met."""
+        from robothor.engine.tools.handlers.benchmark import _judge_output
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "scores": [1, 0, 1],  # 2 out of 3 met
+            }
+        )
+
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+            score = await _judge_output(
+                "Agent output here",
+                ["Is it clear?", "Is it concise?", "Is it actionable?"],
+                "openrouter/xiaomi/mimo-v2-pro",
+            )
+        assert abs(score - 2.0 / 3.0) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_judge_all_pass(self):
+        from robothor.engine.tools.handlers.benchmark import _judge_output
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({"scores": [1, 1, 1]})
+
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+            score = await _judge_output("output", ["a", "b", "c"], "model")
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_judge_llm_failure_returns_neutral(self):
+        """LLM failure returns 0.5 (non-fatal)."""
+        from robothor.engine.tools.handlers.benchmark import _judge_output
+
+        with patch(
+            "litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("API down")
+        ):
+            score = await _judge_output("output", ["a", "b"], "model")
+        assert score == 0.5
+
+
+class TestScoreTaskWithJudge:
+    """Tests for _score_task_async with judge field in expected."""
+
+    @pytest.mark.asyncio
+    async def test_judge_check_passes_above_threshold(self):
+        from robothor.engine.tools.handlers.benchmark import _score_task_async
+
+        expected = {
+            "must_contain": ["reply"],
+            "judge": {"rubric": ["Clear?", "Concise?"], "threshold": 0.7},
+        }
+        # Mock _judge_output to return 0.8 (above threshold)
+        with patch(
+            "robothor.engine.tools.handlers.benchmark._judge_output",
+            new_callable=AsyncMock,
+            return_value=0.8,
+        ):
+            score = await _score_task_async(
+                "This is a reply to your email",
+                expected,
+                {"total_cost_usd": 0.01, "steps": 2},
+            )
+        # 2 checks: must_contain "reply" (pass) + judge >= 0.7 (pass) = 2/2 = 1.0
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_judge_check_fails_below_threshold(self):
+        from robothor.engine.tools.handlers.benchmark import _score_task_async
+
+        expected = {
+            "must_contain": ["reply"],
+            "judge": {"rubric": ["Clear?", "Concise?"], "threshold": 0.7},
+        }
+        with patch(
+            "robothor.engine.tools.handlers.benchmark._judge_output",
+            new_callable=AsyncMock,
+            return_value=0.4,
+        ):
+            score = await _score_task_async(
+                "This is a reply",
+                expected,
+                {"total_cost_usd": 0.01, "steps": 2},
+            )
+        # must_contain passes, judge fails = 1/2 = 0.5
+        assert score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_no_judge_falls_back_to_sync(self):
+        """Tasks without judge field work identically to _score_task."""
+        from robothor.engine.tools.handlers.benchmark import _score_task_async
+
+        expected = {"must_contain": ["hello"], "must_not_contain": ["goodbye"]}
+        score = await _score_task_async("hello world", expected, {})
+        assert score == 1.0

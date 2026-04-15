@@ -142,7 +142,8 @@ def create_health_app(
                     SELECT agent_id, debugging_score, patience_score, chaos_score,
                            wisdom_score, reliability_score, overall_score,
                            level, total_xp, daily_xp, tasks_completed,
-                           last_benchmark_score, last_benchmark_at
+                           last_benchmark_score, last_benchmark_at,
+                           effectiveness_score, benchmark_dim_score
                     FROM agent_buddy_stats
                     WHERE stat_date = CURRENT_DATE
                     ORDER BY overall_score DESC
@@ -168,6 +169,8 @@ def create_health_app(
                             "chaos": r[3],
                             "wisdom": r[4],
                             "reliability": r[5],
+                            "effectiveness": r[13] if r[13] is not None else 50,
+                            "benchmark": r[14] if r[14] is not None else 50,
                         },
                         "benchmarkScore": float(r[11]) if r[11] is not None else None,
                         "benchmarkAt": r[12].isoformat() if r[12] else None,
@@ -224,6 +227,32 @@ def create_health_app(
         except Exception as e:
             logger.warning("Failed to load buddy agent history: %s", e)
             return {"agentId": agent_id, "days": [], "error": "Failed to load agent history"}
+
+    @app.get("/api/reviews/{agent_id}")
+    async def api_get_reviews(agent_id: str, days: int = 30) -> dict[str, Any]:
+        """Get reviews for an agent."""
+        days = max(1, min(days, 365))
+        try:
+            from robothor.crm.dal import get_reviews
+
+            reviews = get_reviews(agent_id, days=days)
+            return {"agentId": agent_id, "reviews": reviews}
+        except Exception as e:
+            logger.warning("Failed to load reviews for %s: %s", agent_id, e)
+            return {"agentId": agent_id, "reviews": [], "error": str(e)}
+
+    @app.get("/api/reviews/{agent_id}/summary")
+    async def api_review_summary(agent_id: str, days: int = 30) -> dict[str, Any]:
+        """Get aggregate review summary for an agent."""
+        days = max(1, min(days, 365))
+        try:
+            from robothor.crm.dal import get_review_summary
+
+            summary = get_review_summary(agent_id, days=days)
+            return {"agentId": agent_id, **summary}
+        except Exception as e:
+            logger.warning("Failed to load review summary for %s: %s", agent_id, e)
+            return {"agentId": agent_id, "count": 0, "error": str(e)}
 
     @app.get("/api/kairos/dreams")
     async def kairos_dreams(limit: int = 10) -> dict[str, Any]:

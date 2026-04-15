@@ -66,7 +66,7 @@ from robothor.engine.tracking import create_run, create_step, create_steps_batch
 # Max seconds to wait for the next streaming chunk before aborting and
 # falling back to the next model.  Prevents stalled streams from hanging
 # the entire run (the stream *creation* timeout is separate — 120 s).
-STREAM_CHUNK_TIMEOUT = 60
+STREAM_CHUNK_TIMEOUT = 90
 
 
 class _StallWatchdog:
@@ -78,6 +78,10 @@ class _StallWatchdog:
 
     If stall_timeout <= 0, the watchdog is disabled (no-op).
     Hard timeout_seconds is kept as an absolute safety net.
+
+    Uses a cooperative abort flag in addition to task.cancel() because
+    asyncio task cancellation doesn't reliably propagate through all
+    async HTTP libraries (litellm/httpx).
     """
 
     def __init__(self, stall_timeout: int, hard_timeout: int) -> None:
@@ -86,6 +90,8 @@ class _StallWatchdog:
         self._last_activity = time.monotonic()
         self._task: asyncio.Task[None] | None = None
         self._cancelled = False
+        self._abort_event = asyncio.Event()
+        self._abort_reason: str = ""
 
     def touch(self) -> None:
         """Record activity — resets the stall timer."""
@@ -115,7 +121,11 @@ class _StallWatchdog:
                         self._hard_timeout,
                         elapsed,
                     )
+                    self._abort_reason = (
+                        f"Stall watchdog hard timeout ({self._hard_timeout}s) after {elapsed:.0f}s"
+                    )
                     self._cancelled = True
+                    self._abort_event.set()
                     monitored_task.cancel()
                     return
 
@@ -126,7 +136,11 @@ class _StallWatchdog:
                         idle,
                         self._stall_timeout,
                     )
+                    self._abort_reason = (
+                        f"No activity for {idle:.0f}s (stall limit {self._stall_timeout}s)"
+                    )
                     self._cancelled = True
+                    self._abort_event.set()
                     monitored_task.cancel()
                     return
         except asyncio.CancelledError:
@@ -136,6 +150,16 @@ class _StallWatchdog:
         """Stop the watchdog."""
         if self._task and not self._task.done():
             self._task.cancel()
+
+    @property
+    def should_abort(self) -> bool:
+        """Cooperative abort check — run loop checks this each iteration."""
+        return self._abort_event.is_set()
+
+    @property
+    def abort_reason(self) -> str:
+        """Why the watchdog triggered."""
+        return self._abort_reason
 
     @property
     def was_stall_timeout(self) -> bool:
@@ -327,6 +351,38 @@ class AgentRunner:
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
+
+        # ── Cross-run journal resume ──────────────────────────────────────────
+        # If the agent has resume_on_start=true and a journal_file configured,
+        # load the journal and inject it as a preamble to the message so the
+        # agent wakes up knowing exactly where it left off.
+        if (
+            trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW)
+            and agent_config.resume_on_start
+            and agent_config.journal_file
+        ):
+            try:
+                from robothor.engine.journal import JournalManager
+
+                journal_state = JournalManager.load(
+                    agent_id, agent_config.journal_file, self.config.workspace
+                )
+                if journal_state:
+                    journal_preamble = JournalManager.format_resume_preamble(journal_state)
+                    message = f"{journal_preamble}\n\n{message}"
+                    logger.info(
+                        "Journal resume injected for %s: experiment=%s iteration=%d next_action=%s",
+                        _sanitize(agent_id),
+                        _sanitize(journal_state.experiment_id),
+                        journal_state.iteration,
+                        journal_state.next_action,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Journal resume failed for %s (non-fatal): %s",
+                    _sanitize(agent_id),
+                    _sanitize(e),
+                )
 
         t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
         logger.info(
@@ -903,7 +959,10 @@ class AgentRunner:
             except Exception as e:
                 logger.warning("AGENT_START hook error: %s", _sanitize(e))
 
-        # Build readonly tool set for runtime enforcement in plan mode
+        # Build tool sets for runtime enforcement
+        _allowed_tool_set: frozenset[str] = frozenset(
+            s["function"]["name"] for s in tool_schemas if "function" in s
+        )
         _readonly_tool_set: frozenset[str] = frozenset()
         if readonly_mode:
             from robothor.engine.tools.constants import READONLY_TOOLS
@@ -927,6 +986,15 @@ class AgentRunner:
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
 
         while True:
+            # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
+            if self._active_watchdog and self._active_watchdog.should_abort:
+                logger.warning(
+                    "Run loop aborting: watchdog flagged abort — %s",
+                    self._active_watchdog.abort_reason,
+                )
+                session.record_error(self._active_watchdog.abort_reason)
+                return
+
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
             if _iteration >= _safety_cap:
                 await self._force_wrapup(
@@ -1137,9 +1205,10 @@ class AgentRunner:
                 tool_schemas = []  # force text-only final response
 
             # ── LLM call ──
-            # When timeout_seconds == 0 (interactive sessions), don't impose
-            # per-model LLM call timeouts — let the call take as long as needed.
-            llm_timeout_budget = None if agent_config.timeout_seconds == 0 else 180
+            # No per-model timeout budgets — let each model take as long as
+            # it needs.  The stall watchdog (touches on every stream chunk and
+            # tool completion) is the correct guard against stuck runs.
+            # The litellm HTTP timeout (600 s) handles truly dead connections.
             response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
                 session,
                 models,
@@ -1149,7 +1218,6 @@ class AgentRunner:
                 agent_config.temperature,
                 trace,
                 on_stream_event=on_stream_event,
-                timeout_budget=llm_timeout_budget,
             )
 
             if response is None:
@@ -1228,6 +1296,23 @@ class AgentRunner:
                         tool_name=tool_name,
                         tool_input=tool_args,
                         tool_output={"error": guard_msg, "guard": "plan_mode"},
+                        tool_call_id=tc.id,
+                        error_message=guard_msg,
+                    )
+                    iteration_errors.append((tool_name, guard_msg, None))
+                    if scratchpad:
+                        scratchpad.record_tool_call(tool_name, error=guard_msg)
+                    continue
+
+                # ── [TOOLS_ALLOWED GUARD] Runtime enforcement ──
+                # Belt-and-suspenders: even though schemas are filtered,
+                # block any tool call not in the agent's allowed set.
+                if _allowed_tool_set and tool_name not in _allowed_tool_set:
+                    guard_msg = f"Tool '{tool_name}' is not available to this agent."
+                    session.record_tool_call(
+                        tool_name=tool_name,
+                        tool_input=tool_args,
+                        tool_output={"error": guard_msg, "guard": "tools_allowed"},
                         tool_call_id=tc.id,
                         error_message=guard_msg,
                     )
@@ -1836,7 +1921,6 @@ class AgentRunner:
         temperature: float,
         trace: Any = None,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        timeout_budget: int | None = 180,
     ) -> tuple[Any, str, int, dict[str, Any]]:
         """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
         start = time.monotonic()
@@ -1851,7 +1935,6 @@ class AgentRunner:
                     broken_models,
                     temperature,
                     on_stream_event=on_stream_event,
-                    timeout_budget=timeout_budget,
                 )
         else:
             response = await self._do_llm_call(
@@ -1862,7 +1945,6 @@ class AgentRunner:
                 broken_models,
                 temperature,
                 on_stream_event=on_stream_event,
-                timeout_budget=timeout_budget,
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -2002,7 +2084,6 @@ class AgentRunner:
         broken_models: set[str],
         temperature: float,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        timeout_budget: int | None = 180,
     ) -> Any:
         """Dispatch to streaming or non-streaming LLM call."""
         if on_content or on_stream_event:
@@ -2014,7 +2095,6 @@ class AgentRunner:
                 broken_models=broken_models,
                 temperature=temperature,
                 on_stream_event=on_stream_event,
-                timeout_budget=timeout_budget,
             )
         return await self._call_llm(
             session.messages,
@@ -2022,7 +2102,6 @@ class AgentRunner:
             tool_schemas,
             broken_models=broken_models,
             temperature=temperature,
-            timeout_budget=timeout_budget,
         )
 
     # ─── Error Recovery Helper ──────────────────────────────────────
@@ -2470,7 +2549,7 @@ class AgentRunner:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": get_output_tokens(model, input_est),
-            "timeout": 180 if model.startswith("ollama_chat/") else 120,
+            "timeout": 600 if model.startswith("ollama_chat/") else 300,
         }
         if stream:
             kwargs["stream"] = True
@@ -2529,19 +2608,10 @@ class AgentRunner:
         tools: list[dict[str, Any]],
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
-        timeout_budget: int | None = 180,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
-
-        # Divide total timeout budget across fallback models so worst-case
-        # wall-clock time stays bounded (instead of N * 120s).
-        # When timeout_budget is None (interactive sessions), skip per-model timeouts.
-        if timeout_budget is not None:
-            per_model_timeout: int | None = max(30, timeout_budget // len(models))
-        else:
-            per_model_timeout = None
 
         logger.debug(
             "LLM call with models: %s (broken: %s)",
@@ -2553,23 +2623,8 @@ class AgentRunner:
                 continue
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                if per_model_timeout is not None:
-                    result = await asyncio.wait_for(
-                        litellm.acompletion(**kwargs), timeout=per_model_timeout
-                    )
-                else:
-                    result = await litellm.acompletion(**kwargs)
+                result = await litellm.acompletion(**kwargs)
                 return result
-            except TimeoutError:
-                self._handle_model_error(
-                    TimeoutError(f"LLM call to {model} hung for {per_model_timeout}s"),
-                    model,
-                    broken_models,
-                )
-                last_error = TimeoutError(f"Model {model} timed out after {per_model_timeout}s")
-                # Model rotation is activity — don't let watchdog kill us mid-fallback
-                if self._active_watchdog:
-                    self._active_watchdog.touch()
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
@@ -2593,7 +2648,6 @@ class AgentRunner:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        timeout_budget: int | None = 180,
     ) -> Any:
         """Call LLM with streaming. Returns reconstructed ModelResponse.
 
@@ -2606,14 +2660,6 @@ class AgentRunner:
         """
         input_est = await self._prepare_llm_call(messages, models)
         last_error: Exception | None = None
-
-        # Divide total timeout budget across fallback models so worst-case
-        # wall-clock time stays bounded (instead of N * 120s).
-        # When timeout_budget is None (interactive sessions), skip per-model timeouts.
-        if timeout_budget is not None:
-            per_model_timeout: int | None = max(30, timeout_budget // len(models))
-        else:
-            per_model_timeout = None
 
         async def _emit(event: dict[str, Any]) -> None:
             if on_stream_event:
@@ -2628,12 +2674,7 @@ class AgentRunner:
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 stream_start = time.monotonic()
-                if per_model_timeout is not None:
-                    stream = await asyncio.wait_for(
-                        litellm.acompletion(**kwargs), timeout=per_model_timeout
-                    )
-                else:
-                    stream = await litellm.acompletion(**kwargs)
+                stream = await litellm.acompletion(**kwargs)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
@@ -2800,16 +2841,13 @@ class AgentRunner:
 
     @staticmethod
     def _assess_outcome(run: AgentRun) -> None:
-        """Assess interactive run outcome using simple heuristics.
+        """Assess run outcome using simple heuristics.
 
-        Only runs for interactive triggers (TELEGRAM, WEBCHAT) are assessed.
-        Cron, sub-agent, workflow, and other automated runs are skipped.
+        All trigger types are assessed (cron, hook, workflow, interactive).
+        Sub-agent runs are skipped (parent handles assessment).
         """
-        from robothor.engine.models import RunStatus, TriggerType
+        from robothor.engine.models import RunStatus
 
-        # Only assess interactive runs
-        if run.trigger_type not in (TriggerType.TELEGRAM, TriggerType.WEBCHAT):
-            return
         # Skip sub-agent runs
         if run.parent_run_id:
             return

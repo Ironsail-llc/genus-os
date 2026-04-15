@@ -96,7 +96,7 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     if not task.get("prompt"):
         return f"task '{task['id']}' missing 'prompt'"
     category = task.get("category", "correctness")
-    if category not in ("correctness", "safety", "efficiency", "tone"):
+    if category not in ("correctness", "safety", "efficiency", "tone", "quality"):
         return f"task '{task['id']}' has invalid category '{category}'"
     expected = task.get("expected", {})
     if not expected:
@@ -107,6 +107,12 @@ def _validate_task(task: dict[str, Any]) -> str | None:
                 re.compile(pattern)
             except re.error as exc:
                 return f"task '{task['id']}' has invalid regex in {field}: {exc}"
+    # Validate judge field if present
+    judge = expected.get("judge")
+    if judge is not None:
+        rubric = judge.get("rubric")
+        if not rubric or not isinstance(rubric, list):
+            return f"task '{task['id']}' judge requires 'rubric' as a list of criteria"
     return None
 
 
@@ -137,6 +143,91 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     max_iters = expected.get("max_iterations")
     if max_iters is not None:
         checks.append(run_meta.get("steps", 0) <= max_iters)
+
+    if not checks:
+        return 0.0
+
+    return sum(checks) / len(checks)
+
+
+async def _judge_output(output: str, rubric: list[str], model: str) -> float:
+    """Score output against a rubric using an LLM judge. Returns 0.0-1.0.
+
+    Each rubric item is scored 0 or 1 by the judge. The returned score is the
+    fraction of items that passed. On LLM failure, returns 0.5 (non-fatal).
+    """
+    import litellm
+
+    prompt = (
+        "You are a benchmark judge. Score the following agent output against each rubric item.\n"
+        "For each item, return 1 if the output satisfies it, 0 if not.\n\n"
+        f"## Output to evaluate\n{output[:3000]}\n\n"
+        "## Rubric items\n"
+        + "\n".join(f"{i + 1}. {item}" for i, item in enumerate(rubric))
+        + '\n\nRespond with ONLY a JSON object: {"scores": [1, 0, 1, ...]}'
+    )
+
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+            timeout=30,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            return 0.5
+        data = json.loads(content)
+        scores = data.get("scores", [])
+        if not scores:
+            return 0.5
+        return sum(1 for s in scores if s) / len(rubric)
+    except Exception as e:
+        logger.debug("Judge LLM call failed: %s", str(e).replace("\n", "\\n"))
+        return 0.5
+
+
+async def _score_task_async(
+    output: str, expected: dict[str, Any], run_meta: dict[str, Any]
+) -> float:
+    """Async version of _score_task that supports LLM judge checks.
+
+    If expected contains a 'judge' field, runs _judge_output and adds
+    the result as one check (passes if score >= threshold). All other
+    checks remain deterministic and synchronous.
+    """
+    checks: list[bool] = []
+
+    # Standard regex checks (same as _score_task)
+    for p in expected.get("must_contain", []):
+        try:
+            checks.append(bool(re.search(p, output, re.IGNORECASE)))
+        except re.error:
+            checks.append(False)
+    for p in expected.get("must_not_contain", []):
+        try:
+            checks.append(not bool(re.search(p, output, re.IGNORECASE)))
+        except re.error:
+            checks.append(False)
+
+    max_cost = expected.get("max_cost_usd")
+    if max_cost is not None:
+        checks.append(run_meta.get("total_cost_usd", 0) <= max_cost)
+
+    max_iters = expected.get("max_iterations")
+    if max_iters is not None:
+        checks.append(run_meta.get("steps", 0) <= max_iters)
+
+    # LLM judge check
+    judge = expected.get("judge")
+    if judge:
+        rubric = judge.get("rubric", [])
+        threshold = float(judge.get("threshold", 0.7))
+        model = judge.get("model", "openrouter/xiaomi/mimo-v2-pro")
+        judge_score = await _judge_output(output, rubric, model)
+        checks.append(judge_score >= threshold)
 
     if not checks:
         return 0.0
@@ -316,7 +407,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 "status": run.status.value,
             }
 
-            score = _score_task(output, task.get("expected", {}), run_meta)
+            score = await _score_task_async(output, task.get("expected", {}), run_meta)
             total_cost += run.total_cost_usd
 
             results.append(

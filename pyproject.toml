@@ -33,6 +33,7 @@ dependencies = [
     "requests~=2.31",
     "pyyaml~=6.0",
     "litellm~=1.50",
+    "aiohttp>=3.13.4",
     "aiogram~=3.10",
     "apscheduler~=3.10",
     "html2text~=2024.2",

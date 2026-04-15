@@ -599,32 +599,32 @@ def _git_status_context(config: AgentConfig) -> str | None:
 def _buddy_status_context(config: AgentConfig) -> str | None:
     """Inject live buddy fleet pulse into main agent warmup.
 
-    Computes scores, deltas, and events fresh at each heartbeat invocation
-    instead of reading a stale daily memory block.
+    Shows current level, scores, deltas, and fleet rankings.
+    Does NOT include events — those flow exclusively through the
+    delivery reflection path with cooldown gating.
     """
     if config.id != "main":
         return None
     try:
         from robothor.engine.buddy import BuddyEngine
 
-        ctx = BuddyEngine().get_buddy_heartbeat_context()
+        ctx = BuddyEngine().get_buddy_status()
         li = ctx["level_info"]
         streak_current, streak_longest = ctx["streak"]
         scores = ctx["scores_today"]
         deltas = ctx.get("score_deltas", {})
-        events = ctx.get("events", [])
 
         lines = [
             f"[FLEET PULSE] Level {li.level} {li.level_name} ({li.total_xp:,} XP) | "
             f"{streak_current}-day streak"
             + (f" (record: {streak_longest})" if streak_longest > streak_current else ""),
             f"Scores: D:{scores.debugging_score} P:{scores.patience_score} "
-            f"C:{scores.chaos_score} W:{scores.wisdom_score} R:{scores.reliability_score}",
+            f"Eff:{scores.effectiveness_score} Bench:{scores.benchmark_dim_score} R:{scores.reliability_score}",
         ]
 
         if deltas:
             delta_parts = []
-            for dim in ("reliability", "debugging", "patience", "wisdom", "chaos"):
+            for dim in ("reliability", "debugging", "patience", "effectiveness", "benchmark"):
                 d = deltas.get(dim, 0)
                 if d != 0:
                     delta_parts.append(f"{dim[0].upper()}{'+' if d > 0 else ''}{d}")
@@ -635,9 +635,6 @@ def _buddy_status_context(config: AgentConfig) -> str | None:
         if fleet_top:
             top_strs = [f"{a['agent_id']} ({a['overall_score']})" for a in fleet_top[:3]]
             lines.append(f"Fleet top: {', '.join(top_strs)}")
-
-        if events:
-            lines.append(f"Events: {'; '.join(events)}")
 
         return "\n".join(lines)
     except Exception:
