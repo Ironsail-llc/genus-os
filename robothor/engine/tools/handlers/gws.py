@@ -22,6 +22,19 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 HANDLERS: dict[str, Any] = {}
 
 
+def _resolve_owner_email() -> str:
+    """Operator email from ``.robothor/owner.yaml``, env-var fallback."""
+    try:
+        from robothor.owner_config import load_owner_config
+
+        cfg = load_owner_config()
+        if cfg is not None and cfg.email:
+            return cfg.email.lower()
+    except Exception:
+        logger.debug("owner_config unavailable; using env fallback", exc_info=True)
+    return os.environ.get("ROBOTHOR_OWNER_EMAIL", "").strip().lower()
+
+
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     """Run a gws CLI command, return parsed JSON or error dict."""
     import json as _json
@@ -343,8 +356,8 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("location"):
             event_body["location"] = args["location"]
         attendees = [{"email": e} for e in args.get("attendees", [])]
-        owner_email = os.environ.get("ROBOTHOR_OWNER_EMAIL", "")
-        if owner_email and not any(a["email"] == owner_email for a in attendees):
+        owner_email = _resolve_owner_email()
+        if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
             attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
 

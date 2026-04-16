@@ -70,6 +70,26 @@ Three mechanisms prevent instance data from leaking into platform code:
 
 3. **`DEFAULT_TENANT`** (`robothor/constants.py`) — All code uses `DEFAULT_TENANT` (from `ROBOTHOR_DEFAULT_TENANT` env var, default `"default"`) instead of hardcoding a tenant name.
 
+## Operator Identity
+
+The operator (the human who owns this Genus OS instance) is a first-class concept, but their personal data never enters the platform repo.
+
+- **Path is platform** (hardcoded in `robothor.constants.owner_config_path()`): `<ROBOTHOR_WORKSPACE>/.robothor/owner.yaml`. Every instance looks in the same place.
+- **Content is instance** (gitignored via `.robothor/`): the operator's name, emails, nicknames. Template at `templates/owner.yaml.example`.
+- **Loaded by** `robothor.owner_config.load_owner_config()` on daemon startup and by resolvers that need to disambiguate the operator from other CRM contacts sharing a first name.
+- **Linked to CRM** via `tenant_users.person_id` (migration `039_operator_identity.sql`), populated idempotently by `bootstrap_owner_person_links()` on daemon startup. One owner per tenant, DB-enforced by a partial unique index.
+
+**Rules of thumb:**
+
+| I want to... | Do this | Not this |
+|--------------|---------|----------|
+| Know who the operator is | `get_owner_person(tenant_id)` | `search_people("Philip")` |
+| Send to the operator's email | `OwnerConfig.email` / `all_emails()` | Hardcode an email |
+| Check "is the speaker the operator?" | `OwnerConfig.matches_name(name)` | First-name string equality |
+| Refuse a write unless approved by the operator | `resolve_task()`'s `requires_human` path | Custom string checks |
+
+Legacy env vars `ROBOTHOR_OWNER_EMAIL` / `ROBOTHOR_OWNER_NAME` remain as a fallback for one release cycle; the loader emits a `DeprecationWarning` when it falls back.
+
 ## The Agent Builder Flow
 
 Agents are built using a CLI + Claude Code workflow:

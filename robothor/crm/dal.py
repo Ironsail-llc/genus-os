@@ -60,23 +60,52 @@ def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwarg
 # ─── People ──────────────────────────────────────────────────────────────
 
 
-def search_people(name: str, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
-    """Search people by name (ILIKE on first_name/last_name)."""
+def search_people(
+    name: str,
+    tenant_id: str = DEFAULT_TENANT,
+    prefer_owner: bool = False,
+) -> list[dict[str, Any]]:
+    """Search people by name (ILIKE on first_name/last_name).
+
+    When ``prefer_owner=True``, the operator's row (if any) is sorted first
+    so bare first-name matches resolve to the operator before other contacts
+    sharing the name. See :func:`get_owner_person`.
+    """
+    owner_id = get_owner_person(tenant_id)["id"] if prefer_owner else None
+    if prefer_owner and owner_id is None:
+        # No owner configured — fall through to normal ordering.
+        prefer_owner = False
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         pattern = f"%{name}%"
-        cur.execute(
-            """
-            SELECT p.*, c.name AS company_name
-            FROM crm_people p
-            LEFT JOIN crm_companies c ON c.id = p.company_id
-            WHERE p.deleted_at IS NULL AND p.tenant_id = %s
-              AND (p.first_name ILIKE %s OR p.last_name ILIKE %s)
-            ORDER BY p.updated_at DESC
-            LIMIT 50
-        """,
-            (tenant_id, pattern, pattern),
-        )
+        if prefer_owner:
+            cur.execute(
+                """
+                SELECT p.*, c.name AS company_name
+                FROM crm_people p
+                LEFT JOIN crm_companies c ON c.id = p.company_id
+                WHERE p.deleted_at IS NULL AND p.tenant_id = %s
+                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s)
+                ORDER BY (CASE WHEN p.id = %s THEN 0 ELSE 1 END),
+                         p.updated_at DESC
+                LIMIT 50
+            """,
+                (tenant_id, pattern, pattern, owner_id),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT p.*, c.name AS company_name
+                FROM crm_people p
+                LEFT JOIN crm_companies c ON c.id = p.company_id
+                WHERE p.deleted_at IS NULL AND p.tenant_id = %s
+                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s)
+                ORDER BY p.updated_at DESC
+                LIMIT 50
+            """,
+                (tenant_id, pattern, pattern),
+            )
         return [person_to_dict(r) for r in cur.fetchall()]
 
 
@@ -1304,13 +1333,32 @@ def resolve_task(
                     "id": task_id,
                 }
 
-            # Guard: requires_human tasks can only be resolved by the owner
-            _owner = os.environ.get("ROBOTHOR_OWNER_NAME", "owner").lower()
-            if row and row.get("requires_human") and agent_id not in (_owner, "helm-user", "main"):
-                return {
-                    "error": "Task requires human resolution — only the instance owner can resolve it",
-                    "id": task_id,
-                }
+            # Guard: requires_human tasks can only be resolved by the owner.
+            # Accepts owner's first_name (legacy), "helm-user", "main", or the
+            # operator's canonical first/full name from owner.yaml.
+            if row and row.get("requires_human"):
+                allowed: set[str] = {"helm-user", "main"}
+                from robothor.owner_config import load_owner_config
+
+                owner_cfg = load_owner_config()
+                if owner_cfg is not None:
+                    allowed.update(
+                        x
+                        for x in (
+                            owner_cfg.first_name.lower(),
+                            owner_cfg.full_name.lower(),
+                            *owner_cfg.nicknames,
+                        )
+                        if x
+                    )
+                else:
+                    allowed.add(os.environ.get("ROBOTHOR_OWNER_NAME", "owner").lower())
+
+                if (agent_id or "").lower() not in allowed:
+                    return {
+                        "error": "Task requires human resolution — only the instance owner can resolve it",
+                        "id": task_id,
+                    }
 
             cur.execute(
                 """UPDATE crm_tasks
@@ -2296,6 +2344,163 @@ def check_health() -> dict[str, Any]:
         return {"status": "ok", "people": people_count, "conversations": conv_count}
 
 
+# ─── Owner Identity ──────────────────────────────────────────────────────
+
+
+def get_owner_person(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
+    """Return the ``crm_people`` row for this tenant's operator.
+
+    Resolution order:
+      1. ``tenant_users.role='owner'`` with a non-null ``person_id`` — joined
+         to ``crm_people``.
+      2. ``owner.yaml`` email → ``crm_people`` lookup (one-shot fallback for
+         instances that haven't completed ``bootstrap_owner_person_links``).
+
+    Returns an empty dict (not None) when no operator is configured, so
+    ``get_owner_person(...)["id"]`` returns ``None`` rather than raising.
+    Callers that need presence should check ``if row.get("id")``.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT p.*
+            FROM tenant_users u
+            JOIN crm_people p ON p.id = u.person_id
+            WHERE u.tenant_id = %s
+              AND u.role = 'owner'
+              AND u.person_id IS NOT NULL
+              AND p.deleted_at IS NULL
+              AND p.tenant_id = %s
+            LIMIT 1
+            """,
+            (tenant_id, tenant_id),
+        )
+        row = cur.fetchone()
+        if row:
+            return person_to_dict(row)
+
+        # Fallback — owner.yaml configured but bootstrap hasn't run yet.
+        from robothor.owner_config import load_owner_config
+
+        config = load_owner_config()
+        if config is None or config.tenant_id != tenant_id:
+            return {"id": None}
+
+        cur.execute(
+            """
+            SELECT p.*
+            FROM crm_people p
+            WHERE p.deleted_at IS NULL
+              AND p.tenant_id = %s
+              AND LOWER(p.email) = %s
+            ORDER BY p.updated_at DESC
+            LIMIT 1
+            """,
+            (tenant_id, config.email),
+        )
+        row = cur.fetchone()
+        return person_to_dict(row) if row else {"id": None}
+
+
+def bootstrap_owner_person_links() -> dict[str, Any]:
+    """Ensure ``tenant_users.role='owner'`` is linked to a CRM person.
+
+    Idempotent — safe to call on every daemon start:
+      - No ``owner.yaml`` / env vars → no-op.
+      - Operator row missing → create it from the config.
+      - Owner row already linked → no-op.
+      - Owner row unlinked → link it (respects the partial unique index).
+
+    Returns a dict describing what happened, for logging and tests.
+    """
+    from robothor.owner_config import load_owner_config
+
+    result: dict[str, Any] = {"linked": False, "created_person": False}
+    config = load_owner_config()
+    if config is None:
+        result["reason"] = "no owner config"
+        return result
+
+    result["tenant_id"] = config.tenant_id
+    result["email"] = config.email
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, person_id
+            FROM tenant_users
+            WHERE tenant_id = %s AND role = 'owner'
+            ORDER BY id
+            LIMIT 1
+            """,
+            (config.tenant_id,),
+        )
+        owner_row = cur.fetchone()
+        if not owner_row:
+            result["reason"] = "no tenant_users row with role='owner'"
+            logger.info("bootstrap_owner_person_links: %s", result["reason"])
+            return result
+
+        if owner_row["person_id"]:
+            result["reason"] = "already linked"
+            result["person_id"] = owner_row["person_id"]
+            return result
+
+        # Find the operator's crm_people row by email.
+        cur.execute(
+            """
+            SELECT id FROM crm_people
+            WHERE deleted_at IS NULL
+              AND tenant_id = %s
+              AND LOWER(email) = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (config.tenant_id, config.email),
+        )
+        person_row = cur.fetchone()
+
+        if person_row:
+            person_id = person_row["id"]
+        else:
+            person_id = create_person(
+                config.first_name,
+                config.last_name,
+                email=config.email,
+                phone=config.phone,
+                tenant_id=config.tenant_id,
+            )
+            result["created_person"] = True
+            if not person_id:
+                result["reason"] = "create_person was blocked"
+                logger.warning("bootstrap_owner_person_links: %s", result["reason"])
+                return result
+
+        cur.execute(
+            """
+            UPDATE tenant_users
+            SET person_id = %s
+            WHERE tenant_id = %s
+              AND role = 'owner'
+              AND person_id IS NULL
+            """,
+            (person_id, config.tenant_id),
+        )
+        conn.commit()
+
+        result["linked"] = True
+        result["person_id"] = person_id
+        logger.info(
+            "bootstrap_owner_person_links: linked tenant=%s → person_id=%s%s",
+            config.tenant_id,
+            person_id,
+            " (created)" if result["created_person"] else "",
+        )
+        return result
+
+
 # ─── Contact Resolution ──────────────────────────────────────────────────
 
 
@@ -2308,6 +2513,13 @@ def resolve_contact(
     """Resolve a channel identifier to a person_id. Creates person if needed.
 
     Upserts into ``contact_identifiers`` and returns the resolved row.
+
+    Owner priority: when the channel identifier has no existing mapping and
+    the caller-provided ``name`` matches the operator's first/last/nickname
+    (via :class:`robothor.owner_config.OwnerConfig.matches_name`), the owner's
+    CRM row is preferred over other contacts sharing the name. A channel
+    identifier already mapped to a non-owner person is **not** overridden —
+    an explicit mapping always wins over a name-only heuristic.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2324,6 +2536,21 @@ def resolve_contact(
 
         if existing:
             person_id = existing.get("person_id")
+
+        # Owner priority: only when no existing identifier mapping disambiguates,
+        # and only on a name-driven lookup.
+        if not person_id and name:
+            from robothor.owner_config import load_owner_config
+
+            owner_cfg = load_owner_config()
+            if (
+                owner_cfg is not None
+                and owner_cfg.tenant_id == tenant_id
+                and owner_cfg.matches_name(name)
+            ):
+                owner_row = get_owner_person(tenant_id)
+                if owner_row.get("id"):
+                    person_id = owner_row["id"]
 
         # If no person_id, search or create
         if not person_id:

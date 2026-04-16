@@ -158,6 +158,8 @@ def find_best_match(
     candidates: list[dict[str, Any]],
     threshold: float = 0.75,
     name_key: str = "name",
+    owner_candidate_id: str | None = None,
+    owner_nicknames: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Find the best matching candidate above threshold.
 
@@ -166,16 +168,31 @@ def find_best_match(
         candidates: List of dicts, each must have a key specified by name_key.
         threshold: Minimum similarity score (0.0-1.0).
         name_key: Key in candidate dicts that holds the name string.
+        owner_candidate_id: Optional ``id`` of the operator's candidate row.
+            When set, ties at the top score prefer the owner *only* when the
+            input name (normalized, or its canonical nickname form) is in
+            ``owner_nicknames``. Higher non-owner scores still win — the
+            scorer stays pure; this is tiebreak-only.
+        owner_nicknames: Set of lowercased names/nicknames that identify the
+            operator (typically ``{first, last, *OwnerConfig.nicknames}``).
 
     Returns:
         Best matching candidate dict (with 'match_score' added), or None.
-        On ties, prefers candidate with higher 'mention_count' (if present).
+        On ties, prefers the owner candidate if the input name identifies
+        the operator, otherwise falls back to higher ``mention_count``.
     """
     if not name or not candidates:
         return None
 
-    best_match = None
+    best_match: dict[str, Any] | None = None
     best_score = 0.0
+
+    owner_names = {n.lower() for n in (owner_nicknames or set()) if n}
+    normalized_input = normalize_name(name)
+    canonical_input = _canonical(normalized_input)
+    input_identifies_owner = bool(
+        owner_names and (normalized_input in owner_names or canonical_input in owner_names)
+    )
 
     for candidate in candidates:
         candidate_name = candidate.get(name_key, "")
@@ -190,7 +207,18 @@ def find_best_match(
             best_score = score
             best_match = candidate
         elif score == best_score and best_match is not None:
-            # Prefer higher mention count on ties
+            # Tiebreak: when the input clearly identifies the operator,
+            # the owner candidate always wins (and is never replaced by a
+            # non-owner, regardless of mention_count).
+            if input_identifies_owner and owner_candidate_id is not None:
+                current_is_owner = best_match.get("id") == owner_candidate_id
+                cand_is_owner = candidate.get("id") == owner_candidate_id
+                if current_is_owner and not cand_is_owner:
+                    continue
+                if cand_is_owner and not current_is_owner:
+                    best_match = candidate
+                    continue
+            # Legacy tiebreak: higher mention count wins.
             if candidate.get("mention_count", 0) > best_match.get("mention_count", 0):
                 best_match = candidate
 
