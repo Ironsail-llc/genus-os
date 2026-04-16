@@ -133,6 +133,95 @@ def get_agent_stats(
             else None
         )
 
+        # ── Goal-system metrics ──
+        # p95 latency + cost
+        cur.execute(
+            """
+            SELECT
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms,
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY total_cost_usd) as p95_cost_usd
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND status = 'completed'
+              AND created_at > NOW() - make_interval(days := %s)
+              AND parent_run_id IS NULL
+            """,
+            (agent_id, tenant_id, days),
+        )
+        percentiles = cur.fetchone() or {}
+        stats["p95_duration_ms"] = (
+            float(percentiles["p95_duration_ms"])
+            if percentiles.get("p95_duration_ms") is not None
+            else None
+        )
+        stats["p95_cost_usd"] = (
+            float(percentiles["p95_cost_usd"])
+            if percentiles.get("p95_cost_usd") is not None
+            else None
+        )
+
+        # Delivery success rate (among runs with an announce-style delivery)
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE delivery_mode = 'announce') as announce_runs,
+                COUNT(*) FILTER (WHERE delivery_mode = 'announce' AND delivery_status = 'delivered') as delivered
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND created_at > NOW() - make_interval(days := %s)
+              AND parent_run_id IS NULL
+            """,
+            (agent_id, tenant_id, days),
+        )
+        drow = cur.fetchone() or {}
+        announce_runs = drow.get("announce_runs") or 0
+        delivered = drow.get("delivered") or 0
+        stats["delivery_success_rate"] = (
+            round(delivered / announce_runs, 4) if announce_runs > 0 else None
+        )
+
+        # Median + min_output_chars proxy (median char length of output_text)
+        cur.execute(
+            """
+            SELECT
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY char_length(output_text))
+                    as median_chars,
+                AVG(char_length(output_text)) as avg_chars
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND status = 'completed'
+              AND output_text IS NOT NULL
+              AND created_at > NOW() - make_interval(days := %s)
+              AND parent_run_id IS NULL
+            """,
+            (agent_id, tenant_id, days),
+        )
+        crow = cur.fetchone() or {}
+        # Goal uses min_output_chars as "median char length must be above N"
+        stats["min_output_chars"] = (
+            float(crow["median_chars"]) if crow.get("median_chars") is not None else None
+        )
+
+        # Operator rating avg (from agent_reviews)
+        cur.execute(
+            """
+            SELECT AVG(rating)::float as avg_rating, COUNT(*) as n
+            FROM agent_reviews
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND reviewer_type = 'operator'
+              AND created_at > NOW() - make_interval(days := %s)
+            """,
+            (agent_id, tenant_id, days),
+        )
+        rrow = cur.fetchone() or {}
+        stats["operator_rating_avg"] = (
+            float(rrow["avg_rating"]) if rrow.get("avg_rating") is not None else None
+        )
+
     return stats
 
 

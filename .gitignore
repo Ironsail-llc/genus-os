@@ -22,6 +22,9 @@ docs/agents/*.md
 docs/agents/retired/
 !docs/agents/schema.yaml
 !docs/agents/INSTRUCTION_CONTRACT.md
+!docs/agents/GOAL_TAXONOMY.md
+!docs/agents/corrective-actions.yaml
+!docs/agents/PLAYBOOK.md
 docs/CRON_MAP.md
 docs/experiments/
 docs/workflows/retired/

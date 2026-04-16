@@ -571,6 +571,10 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
     warmup_context_files = hb.warmup_context_files or agent_config.warmup_context_files
     warmup_peer_agents = hb.warmup_peer_agents or agent_config.warmup_peer_agents
 
+    # Cost cap: heartbeat override wins; fall back to parent agent's cap.
+    max_cost_usd = hb.cost_budget_usd or agent_config.max_cost_usd
+    hard_budget = True if hb.cost_budget_usd > 0 else agent_config.hard_budget
+
     return AgentConfig(
         id=agent_config.id,
         name=agent_config.name,
@@ -602,6 +606,8 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         warmup_peer_agents=warmup_peer_agents,
         stall_timeout_seconds=hb.stall_timeout_seconds,
         error_feedback=agent_config.error_feedback,
+        max_cost_usd=max_cost_usd,
+        hard_budget=hard_budget,
         # Sub-agent config inherited from parent
         can_spawn_agents=agent_config.can_spawn_agents,
         max_nesting_depth=agent_config.max_nesting_depth,

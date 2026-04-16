@@ -226,6 +226,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
             bootstrap_files=raw_heartbeat.get("bootstrap_files", []),
+            cost_budget_usd=float(raw_heartbeat.get("cost_budget_usd", 0.0)),
             # token_budget is auto-derived at runtime from model registry × max_iterations
         )
 

@@ -42,6 +42,7 @@ from robothor.engine.config import (
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
+    DeliveryMode,
     RunStep,
     SpawnContext,
     StepType,
@@ -2868,6 +2869,15 @@ class AgentRunner:
             elif not run.output_text or len(run.output_text.strip()) < 10:
                 run.outcome_assessment = "partial"
                 run.outcome_notes = "Completed with minimal output"
+            elif run.delivery_mode == DeliveryMode.ANNOUNCE and len(run.output_text.strip()) < 200:
+                # Announce-mode agents broadcast to the operator — if the final
+                # message is this short, it's almost certainly a meta-confirmation
+                # ("Briefing delivered") rather than the actual briefing content.
+                run.outcome_assessment = "partial"
+                run.outcome_notes = (
+                    f"Thin announce output ({len(run.output_text.strip())} chars) "
+                    "— likely meta-confirmation instead of full content"
+                )
             else:
                 run.outcome_assessment = "successful"
                 run.outcome_notes = None

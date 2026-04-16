@@ -127,6 +127,7 @@ class HeartbeatConfig:
 
     # Budget overrides
     token_budget: int = 0
+    cost_budget_usd: float = 0.0  # hard cost ceiling per run (0 = inherit from v2)
 
 
 @dataclass
