@@ -389,10 +389,49 @@ def contact_reconciliation() -> dict[str, Any]:
     }
 
     try:
+        from robothor.crm.dal import get_owner_person
         from robothor.memory.contact_matching import find_best_match
+        from robothor.owner_config import load_owner_config
 
         conn = get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Resolve the operator's memory_entities row + nickname set once.
+        # Without this, find_best_match can't prefer the owner on name-only
+        # ties (e.g. "Alice" matching both "Alice Owner" and "Alice Example"
+        # with equal score), so the tiebreak added in PR #97 was unreachable
+        # from production. See robothor/memory/contact_matching.find_best_match.
+        owner_candidate_id = None
+        owner_nicknames: set[str] = set()
+        try:
+            owner_cfg = load_owner_config()
+            owner_person = get_owner_person(tenant_id=owner_cfg.tenant_id)
+            if owner_person:
+                # Look up the memory_entities row that mirrors the owner,
+                # keyed by name (periodic_analysis runs against memory_entities).
+                cur.execute(
+                    """
+                    SELECT id FROM memory_entities
+                    WHERE entity_type = 'person'
+                      AND LOWER(name) = LOWER(%s)
+                    LIMIT 1
+                    """,
+                    (f"{owner_person['first_name']} {owner_person['last_name']}".strip(),),
+                )
+                owner_row = cur.fetchone()
+                if owner_row:
+                    owner_candidate_id = owner_row["id"]
+            owner_nicknames = {
+                n.lower()
+                for n in (
+                    *owner_cfg.nicknames,
+                    owner_cfg.first_name,
+                    owner_cfg.last_name,
+                )
+                if n
+            }
+        except Exception as e:
+            logger.debug("owner context unavailable for find_best_match tiebreak: %s", e)
 
         # --- Reconciliation: link memory_entity_id ---
 
@@ -424,6 +463,8 @@ def contact_reconciliation() -> dict[str, Any]:
                     display_name,
                     person_entities,
                     threshold=0.75,
+                    owner_candidate_id=owner_candidate_id,
+                    owner_nicknames=owner_nicknames,
                 )
 
                 if match:

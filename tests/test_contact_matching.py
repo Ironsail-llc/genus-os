@@ -56,7 +56,7 @@ class TestNameSimilarity:
             ("Bob", "Robert"),
             ("Bill", "William"),
             ("Jim", "James"),
-            ("Sam", "Samantha"),
+            ("Cat", "Catherine"),
             ("Dan", "Daniel"),
         ]
         for nick, full in pairs:

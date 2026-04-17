@@ -177,9 +177,25 @@ async def main() -> None:
     logger.info("Starting Genus OS Agent Engine...")
 
     # Clean up stale runs from previous crash/restart
-    cleaned = await asyncio.get_event_loop().run_in_executor(None, _cleanup_stale_runs)
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
+
+    # Link the operator's CRM row to tenant_users.person_id (idempotent).
+    # Driven by ~/.robothor/owner.yaml; no-op if not configured.
+    try:
+        from robothor.crm.dal import bootstrap_owner_person_links
+
+        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
+        if link_result.get("linked"):
+            logger.info(
+                "Operator identity: linked tenant=%s → person_id=%s%s",
+                link_result.get("tenant_id"),
+                link_result.get("person_id"),
+                " (created new person)" if link_result.get("created_person") else "",
+            )
+    except Exception:
+        logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
     # Load config
     config = EngineConfig.from_env()
