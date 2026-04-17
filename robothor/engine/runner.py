@@ -42,6 +42,7 @@ from robothor.engine.config import (
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
+    DeliveryMode,
     RunStep,
     SpawnContext,
     StepType,
@@ -67,6 +68,11 @@ from robothor.engine.tracking import create_run, create_step, create_steps_batch
 # falling back to the next model.  Prevents stalled streams from hanging
 # the entire run (the stream *creation* timeout is separate — 120 s).
 STREAM_CHUNK_TIMEOUT = 90
+
+# Announce-mode runs that end with fewer characters than this are flagged
+# as "partial" — almost always a meta-confirmation ("briefing delivered")
+# rather than the real content the agent was supposed to broadcast.
+ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
 
 class _StallWatchdog:
@@ -2868,6 +2874,15 @@ class AgentRunner:
             elif not run.output_text or len(run.output_text.strip()) < 10:
                 run.outcome_assessment = "partial"
                 run.outcome_notes = "Completed with minimal output"
+            elif (
+                run.delivery_mode == DeliveryMode.ANNOUNCE
+                and len(run.output_text.strip()) < ANNOUNCE_MIN_OUTPUT_CHARS
+            ):
+                run.outcome_assessment = "partial"
+                run.outcome_notes = (
+                    f"Thin announce output ({len(run.output_text.strip())} chars) "
+                    "— likely meta-confirmation instead of full content"
+                )
             else:
                 run.outcome_assessment = "successful"
                 run.outcome_notes = None

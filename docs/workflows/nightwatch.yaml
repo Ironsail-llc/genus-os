@@ -12,12 +12,12 @@ description: >
   in isolated git worktrees, producing draft PRs for review.
 version: "2026-03-05"
 
-# DISABLED 2026-03-17 — Nightwatch paused to reduce Sonnet 4.6 spend
-# triggers:
-#   - type: cron
-#     cron: "0 2 * * *"
-#     timezone: America/New_York
-triggers: []
+# Re-enabled 2026-04-16 after auth fix (nightwatch_lib.py stripped ANTHROPIC_API_KEY,
+# causing rc=1 on every invocation). See brain/scripts/nightwatch_lib.py:140.
+triggers:
+  - type: cron
+    cron: "0 2 * * *"
+    timezone: America/New_York
 
 timeout_seconds: 1800
 

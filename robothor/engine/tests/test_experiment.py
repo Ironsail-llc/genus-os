@@ -979,3 +979,143 @@ class TestExperimentFileLocking:
         assert result["status"] == "completed"
         # Lock should be cleared (empty string)
         assert store.get("experiment_lock:brain/agents/X.md") == ""
+
+
+# ─── search_space parser + staleness tests ──────────────────────────
+
+
+class TestSearchSpaceParser:
+    """_parse_search_space only emits clean file paths; malformed inputs are discarded."""
+
+    def test_simple_comma_list(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        assert _parse_search_space("a/b.md, c/d.yaml") == ["a/b.md", "c/d.yaml"]
+
+    def test_strips_parenthetical_descriptions(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        # "brain/X.md (instruction file — simplify)" → "brain/X.md"
+        result = _parse_search_space(
+            "brain/EMAIL_CLASSIFIER.md (instruction file), docs/agents/email-classifier.yaml (manifest: tools)"
+        )
+        assert result == ["brain/EMAIL_CLASSIFIER.md", "docs/agents/email-classifier.yaml"]
+
+    def test_rejects_multiline_prose(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        # Agent writes a multi-line instruction as search_space; parser must not treat it as paths
+        result = _parse_search_space(
+            "You may modify:\n- brain/EMAIL_CLASSIFIER.md (instruction file — simplify branching\n- reduce complexity)"
+        )
+        assert result == ["brain/EMAIL_CLASSIFIER.md"]
+
+    def test_rejects_standalone_words(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        # "model" and "timeouts)" should not become lock keys
+        result = _parse_search_space("brain/X.md, model, timeouts)")
+        assert result == ["brain/X.md"]
+
+    def test_empty_and_whitespace(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        assert _parse_search_space("") == []
+        assert _parse_search_space("   ,  , ") == []
+
+    def test_dedups(self):
+        from robothor.engine.tools.handlers.experiment import _parse_search_space
+
+        assert _parse_search_space("a/b.md, a/b.md, c.yaml") == ["a/b.md", "c.yaml"]
+
+
+class TestLockStaleness:
+    """Locks held longer than LOCK_STALENESS_HOURS are reclaimable."""
+
+    @pytest.mark.asyncio
+    async def test_stale_lock_is_reclaimed(self):
+        from robothor.engine.tools.handlers.experiment import _experiment_create
+
+        store = {"experiment_lock:brain/agents/X.md": "abandoned-exp"}
+        written_at: dict[str, str] = {
+            # 48 hours stale
+            "experiment_lock:brain/agents/X.md": "2026-04-14T12:00:00-04:00"
+        }
+
+        def read_fn(name):
+            if name in store:
+                return {
+                    "content": store[name],
+                    "last_written_at": written_at.get(name, "2026-04-16T12:00:00-04:00"),
+                }
+            return {"error": "not found"}
+
+        def write_fn(name, content):
+            store[name] = content
+            written_at[name] = "2026-04-16T12:00:00-04:00"
+            return {"success": True}
+
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=read_fn),
+            patch("robothor.memory.blocks.write_block", side_effect=write_fn),
+            patch(
+                "robothor.engine.tools.handlers.experiment._now_iso",
+                return_value="2026-04-16T12:00:00-04:00",
+            ),
+        ):
+            result = await _experiment_create(
+                {
+                    "experiment_id": "new-owner",
+                    "metric_command": "echo 1",
+                    "direction": "maximize",
+                    "search_space": "brain/agents/X.md",
+                },
+                CTX,
+            )
+
+        assert result["success"] is True
+        # New experiment should have reclaimed the stale lock
+        assert store["experiment_lock:brain/agents/X.md"] == "new-owner"
+
+    @pytest.mark.asyncio
+    async def test_fresh_lock_still_blocks(self):
+        from robothor.engine.tools.handlers.experiment import _experiment_create
+
+        store = {"experiment_lock:brain/agents/X.md": "active-exp"}
+        written_at = {
+            # Only 1h old
+            "experiment_lock:brain/agents/X.md": "2026-04-16T11:00:00-04:00"
+        }
+
+        def read_fn(name):
+            if name in store:
+                return {
+                    "content": store[name],
+                    "last_written_at": written_at.get(name),
+                }
+            return {"error": "not found"}
+
+        def write_fn(name, content):
+            store[name] = content
+            return {"success": True}
+
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=read_fn),
+            patch("robothor.memory.blocks.write_block", side_effect=write_fn),
+            patch(
+                "robothor.engine.tools.handlers.experiment._now_iso",
+                return_value="2026-04-16T12:00:00-04:00",
+            ),
+        ):
+            result = await _experiment_create(
+                {
+                    "experiment_id": "new-contender",
+                    "metric_command": "echo 1",
+                    "direction": "maximize",
+                    "search_space": "brain/agents/X.md",
+                },
+                CTX,
+            )
+
+        assert "error" in result
+        assert "active-exp" in result["error"]

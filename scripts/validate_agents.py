@@ -51,9 +51,29 @@ def _import_checks():
 
 
 def load_manifests(agent_id: str | None = None) -> dict:
-    """Load YAML manifests from docs/agents/."""
+    """Load YAML manifests from docs/agents/.
+
+    Only tracked manifests are validated — instance-local (gitignored)
+    manifests are skipped so the platform validator never fails on agents
+    that live only in a single operator's fleet.
+    """
+    import subprocess
+
+    try:
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "docs/agents/*.yaml"],
+            cwd=REPO_ROOT,
+            text=True,
+        )
+        tracked_paths = {REPO_ROOT / p for p in tracked.splitlines() if p.strip()}
+    except (subprocess.SubprocessError, FileNotFoundError):
+        # Fall back to globbing everything if git isn't available (tarball install).
+        tracked_paths = set(MANIFEST_DIR.glob("*.yaml"))
+
     manifests = {}
     for f in sorted(MANIFEST_DIR.glob("*.yaml")):
+        if f not in tracked_paths:
+            continue
         with f.open() as fh:
             data = yaml.safe_load(fh)
         if (
@@ -104,14 +124,15 @@ def main():
     else:
         print("Schema: schema.yaml not found, using minimal required fields")
 
-    # Load all manifests (instance data — may not exist in clean checkout)
+    # Load all TRACKED manifests. Agent manifests are instance config and
+    # mostly gitignored, so a clean platform checkout yields zero. That's
+    # fine — the platform ships no enforced fleet.
     all_manifests = load_manifests()
     if not all_manifests:
-        if args.ci:
-            print("OK: No manifests found (agent manifests are instance config, not platform code)")
-            sys.exit(0)
-        print("ERROR: No manifests found in docs/agents/*.yaml", file=sys.stderr)
-        sys.exit(2)
+        print(
+            "OK: No tracked manifests found — agent manifests are instance config, not platform code."
+        )
+        sys.exit(0)
 
     # Load registered tools from Engine
     registered_tools = get_registered_tools()

@@ -32,9 +32,109 @@ logger = logging.getLogger(__name__)
 HANDLERS: dict[str, Any] = {}
 
 # Subprocess timeout for metric commands (seconds)
-_METRIC_CMD_TIMEOUT = 60
+_METRIC_CMD_TIMEOUT = 180
 # Maximum allowed iterations as a hard cap
 _HARD_MAX_ITERATIONS = 200
+# Advisory locks older than this are treated as abandoned and reclaimable.
+LOCK_STALENESS_HOURS = 24
+
+# Valid file-path token: alphanumerics + dot/underscore/slash/hyphen. No spaces,
+# parens, or newlines — rejects prose that leaks into search_space strings.
+_FILE_PATH_RE = _re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def _now_iso() -> str:
+    """Current time as ISO string — seam for tests."""
+    return datetime.now(UTC).isoformat()
+
+
+def _parse_search_space(search_space: str) -> list[str]:
+    """Extract clean file-path tokens from a search_space string.
+
+    Real-world search_space strings often include prose, parentheticals, and
+    multiple lines (e.g. "brain/X.md (instruction file — simplify)"). This
+    parser splits on commas AND whitespace-bounded tokens, strips parenthetical
+    tails, and keeps only tokens that look like filesystem paths.
+    """
+    if not search_space:
+        return []
+
+    candidates: list[str] = []
+    # Split on commas first, then fall back to whitespace/newline tokens.
+    for chunk in search_space.replace("\n", ",").split(","):
+        token = chunk.strip()
+        if not token:
+            continue
+        # Strip leading list markers ("- path").
+        token = token.lstrip("- \t")
+        # Stop at the first parenthetical or whitespace — "path (desc)" → "path".
+        token = token.split("(", 1)[0].strip()
+        token = token.split()[0] if token.split() else ""
+        # Require at least one "/" or "." — rules out bare words like "model",
+        # "reduce", "timeouts" that got caught in the old comma-split. Reject
+        # absolute paths and any token that contains `..` so a malicious
+        # manifest cannot pollute unrelated `experiment_lock:*` keys or
+        # clobber block storage outside the workspace.
+        if (
+            token
+            and _FILE_PATH_RE.match(token)
+            and ("/" in token or "." in token)
+            and not token.startswith("/")
+            and ".." not in token.split("/")
+        ):
+            candidates.append(token)
+
+    # Dedup preserving order.
+    seen: set[str] = set()
+    result: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            result.append(c)
+    return result
+
+
+def _suggest_measure_action(errors: list[str], metric_command: str) -> str:
+    """Map measurement error patterns to concrete next steps."""
+    joined = " ".join(errors).lower()
+    if "timeoutexpired" in joined or "timeout" in joined:
+        return (
+            f"Metric command timed out ({_METRIC_CMD_TIMEOUT}s). Simplify the command, "
+            "pre-warm caches, or raise _METRIC_CMD_TIMEOUT in experiment.py."
+        )
+    if "could not parse numeric metric" in joined:
+        return (
+            "Command ran but output is not numeric. Ensure the command's final line "
+            "is a plain number (no units, labels, or JSON)."
+        )
+    if "no such file" in joined or "not found" in joined or "command not found" in joined:
+        return f"Command references a missing file or binary. Verify: {metric_command!r}."
+    if "permission denied" in joined:
+        return "Permission denied — check execute bits on scripts the command invokes."
+    return "Inspect errors[] above. Re-run manually to see full stderr."
+
+
+def _lock_is_stale(last_written_at: str | None) -> bool:
+    """True if a lock's last_written_at is older than LOCK_STALENESS_HOURS.
+
+    "Now" is read from ``_now_iso()`` so tests can anchor time via that seam.
+    """
+    if not last_written_at:
+        return False
+    try:
+        written = datetime.fromisoformat(last_written_at)
+        now = datetime.fromisoformat(_now_iso())
+    except (ValueError, TypeError):
+        return False
+    if written.tzinfo is None:
+        # Naive timestamp is a bug signal (all writers emit tz-aware ISO)
+        # — coerce to UTC so a one-off bad write doesn't wedge the lock.
+        logger.warning("Lock timestamp %r was naive — assuming UTC", last_written_at)
+        written = written.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    age_hours = (now - written).total_seconds() / 3600.0
+    return age_hours >= LOCK_STALENESS_HOURS
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -181,12 +281,13 @@ def _check_experiment_guardrails(
 def _acquire_file_locks(experiment_id: str, search_space: str) -> str | None:
     """Check and acquire advisory locks for experiment search-space files.
 
-    Returns an error message if any file is locked by another experiment,
-    or None if locks were acquired successfully.
+    Returns an error message if any file is locked by another *active*
+    experiment, or None if locks were acquired successfully. Locks older than
+    LOCK_STALENESS_HOURS are considered abandoned and reclaimed.
     """
     from robothor.memory.blocks import read_block, write_block
 
-    files = [f.strip() for f in search_space.split(",") if f.strip()]
+    files = _parse_search_space(search_space)
     if not files:
         return None
 
@@ -197,6 +298,14 @@ def _acquire_file_locks(experiment_id: str, search_space: str) -> str | None:
         if not existing.get("error"):
             content = (existing.get("content") or "").strip()
             if content and content != experiment_id:
+                if _lock_is_stale(existing.get("last_written_at")):
+                    logger.warning(
+                        "Reclaiming stale lock on %s (was held by %s, age > %dh)",
+                        file_path,
+                        content,
+                        LOCK_STALENESS_HOURS,
+                    )
+                    continue
                 return (
                     f"File '{file_path}' is locked by experiment '{content}'. "
                     f"Wait for it to complete or release locks manually."
@@ -214,7 +323,7 @@ def _release_file_locks(experiment_id: str, search_space: str) -> None:
     """Release advisory locks held by this experiment."""
     from robothor.memory.blocks import read_block, write_block
 
-    files = [f.strip() for f in search_space.split(",") if f.strip()]
+    files = _parse_search_space(search_space)
     for file_path in files:
         lock_key = f"experiment_lock:{file_path}"
         existing = read_block(lock_key)
@@ -437,7 +546,11 @@ async def _experiment_measure(args: dict[str, Any], ctx: ToolContext) -> dict[st
             errors.append(f"Sample {i + 1}: {e}")
 
     if not samples:
-        return {"error": f"All {num_samples} measurements failed", "errors": errors}
+        return {
+            "error": f"All {num_samples} measurements failed",
+            "errors": errors,
+            "suggested_action": _suggest_measure_action(errors, metric_command),
+        }
 
     avg_value = statistics.mean(samples)
     result: dict[str, Any] = {

@@ -1,0 +1,53 @@
+id: monthly-goal-review
+name: Monthly Goal Review
+description: >
+  Meta-review: are our agent goal targets right? Are we measuring the right
+  things? Are weights calibrated? Delivered to the operator's Telegram on the 1st
+  of each month. Guards against goal gaming (hitting targets but operator
+  dissatisfied).
+version: "2026-04-16"
+
+triggers:
+  - type: cron
+    cron: "0 10 1 * *"
+    timezone: America/New_York
+
+timeout_seconds: 900
+
+steps:
+  - id: review
+    type: agent
+    agent_id: devops-manager
+    message: |
+      Monthly goal review. Examine the past 30 days of agent performance and
+      evaluate whether the goal system itself is working:
+
+      1. Run `python -m robothor.engine.goals nightly-review` (or read the
+         last 30 days of agent_reviews with reviewer='auto-review').
+      2. For each agent, check:
+         - Is the goal achievement score trending up, flat, or down?
+         - Are the targets realistic given observed variance?
+         - Any goals that ALWAYS pass (target too loose) or ALWAYS fail
+           (target impossible)?
+         - Does the operator rating (if any) agree with the metric rating?
+      3. Identify 3-5 goal adjustments to propose:
+         - Targets that should tighten (agent consistently exceeds)
+         - Targets that should loosen (agent consistently under, but no harm)
+         - Weights to rebalance
+         - New metrics to add
+         - Metrics to retire (no template to fix, no actionable signal)
+      4. Deliver a Telegram message to the operator with the top adjustments,
+         framed as questions. The operator approves or rejects. Approved changes
+         become Nightwatch PRs.
+
+      Rules:
+      - Do NOT change manifests yourself. This is a recommendation step.
+      - Do NOT propose goal changes that mask genuine breaches.
+      - Cite numbers: "main's timeout_rate has been 0.17 for 4 weeks running,
+        target <0.05 unchanged" — not "timeouts seem high".
+    on_failure: abort
+
+delivery:
+  mode: announce
+  channel: telegram
+  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"

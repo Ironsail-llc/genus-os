@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
 from psycopg2.extras import RealDictCursor
 
@@ -28,18 +29,35 @@ def get_agent_stats(
     agent_id: str,
     days: int = 7,
     tenant_id: str = DEFAULT_TENANT,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     """Get detailed stats for a single agent over a time window.
 
     Returns: success_rate, avg_tokens, avg_cost, avg_duration_ms,
     error_rate, total_runs, top_error_types, daily_breakdown.
+
+    ``as_of`` anchors the window's right edge (default: now). Rolling-history
+    callers pass distinct ``as_of`` to get snapshots at past timestamps.
     """
+    # Window predicate shared by every SELECT. When ``as_of`` is None we keep
+    # the NOW()-relative shape; otherwise the window is bounded above by
+    # ``as_of``. ``window_sql`` is a literal string, never user input.
+    if as_of is None:
+        window_sql = "created_at > NOW() - make_interval(days := %s)"
+        window_params: tuple[Any, ...] = (days,)
+    else:
+        window_sql = (
+            "created_at > %s::timestamptz - make_interval(days := %s) "
+            "AND created_at <= %s::timestamptz"
+        )
+        window_params = (as_of, days, as_of)
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Aggregate stats
         cur.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -55,10 +73,10 @@ def get_agent_stats(
             FROM agent_runs
             WHERE agent_id = %s
               AND tenant_id = %s
-              AND created_at > NOW() - make_interval(days := %s)
+              AND {window_sql}
               AND parent_run_id IS NULL
-            """,
-            (agent_id, tenant_id, days),
+            """,  # noqa: S608 — window_sql is a literal, not user input
+            (agent_id, tenant_id, *window_params),
         )
         stats = dict(cur.fetchone() or {})
 
@@ -76,7 +94,7 @@ def get_agent_stats(
 
         # Top error types (from error_message patterns)
         cur.execute(
-            """
+            f"""
             SELECT
                 COALESCE(
                     CASE
@@ -94,32 +112,32 @@ def get_agent_stats(
             WHERE agent_id = %s
               AND tenant_id = %s
               AND status IN ('failed', 'timeout')
-              AND created_at > NOW() - make_interval(days := %s)
+              AND {window_sql}
               AND parent_run_id IS NULL
             GROUP BY error_type
             ORDER BY count DESC
             LIMIT 5
-            """,
-            (agent_id, tenant_id, days),
+            """,  # noqa: S608
+            (agent_id, tenant_id, *window_params),
         )
         stats["top_error_types"] = [dict(r) for r in cur.fetchall()]
 
         # Outcome assessment distribution (interactive runs only)
         cur.execute(
-            """
+            f"""
             SELECT
                 outcome_assessment,
                 COUNT(*) as count
             FROM agent_runs
             WHERE agent_id = %s
               AND tenant_id = %s
-              AND created_at > NOW() - make_interval(days := %s)
+              AND {window_sql}
               AND parent_run_id IS NULL
               AND outcome_assessment IS NOT NULL
             GROUP BY outcome_assessment
             ORDER BY count DESC
-            """,
-            (agent_id, tenant_id, days),
+            """,  # noqa: S608
+            (agent_id, tenant_id, *window_params),
         )
         outcome_rows = cur.fetchall()
         outcome_dist = {r["outcome_assessment"]: r["count"] for r in outcome_rows}
@@ -132,6 +150,101 @@ def get_agent_stats(
             if (successful + unsatisfied) > 0
             else None
         )
+
+        # ── Goal-system metrics ──
+        # p95 latency + cost
+        cur.execute(
+            f"""
+            SELECT
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms,
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY total_cost_usd) as p95_cost_usd
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND status = 'completed'
+              AND {window_sql}
+              AND parent_run_id IS NULL
+            """,  # noqa: S608
+            (agent_id, tenant_id, *window_params),
+        )
+        percentiles = cur.fetchone() or {}
+        stats["p95_duration_ms"] = (
+            float(percentiles["p95_duration_ms"])
+            if percentiles.get("p95_duration_ms") is not None
+            else None
+        )
+        stats["p95_cost_usd"] = (
+            float(percentiles["p95_cost_usd"])
+            if percentiles.get("p95_cost_usd") is not None
+            else None
+        )
+
+        # Delivery success rate (among runs with an announce-style delivery)
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) FILTER (WHERE delivery_mode = 'announce') as announce_runs,
+                COUNT(*) FILTER (WHERE delivery_mode = 'announce' AND delivery_status = 'delivered') as delivered
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND {window_sql}
+              AND parent_run_id IS NULL
+            """,  # noqa: S608
+            (agent_id, tenant_id, *window_params),
+        )
+        drow = cur.fetchone() or {}
+        announce_runs = drow.get("announce_runs") or 0
+        delivered = drow.get("delivered") or 0
+        stats["delivery_success_rate"] = (
+            round(delivered / announce_runs, 4) if announce_runs > 0 else None
+        )
+
+        # Median + min_output_chars proxy (median char length of output_text)
+        cur.execute(
+            f"""
+            SELECT
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY char_length(output_text))
+                    as median_chars,
+                AVG(char_length(output_text)) as avg_chars
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND tenant_id = %s
+              AND status = 'completed'
+              AND output_text IS NOT NULL
+              AND {window_sql}
+              AND parent_run_id IS NULL
+            """,  # noqa: S608
+            (agent_id, tenant_id, *window_params),
+        )
+        crow = cur.fetchone() or {}
+        # Goal uses min_output_chars as "median char length must be above N"
+        stats["min_output_chars"] = (
+            float(crow["median_chars"]) if crow.get("median_chars") is not None else None
+        )
+
+        # Operator rating avg (from agent_reviews). Wrapped: if the fresh-install
+        # skipped migration 031 the table is absent — return None rather than
+        # crashing get_agent_stats entirely.
+        try:
+            cur.execute(
+                f"""
+                SELECT AVG(rating)::float as avg_rating
+                FROM agent_reviews
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND reviewer_type = 'operator'
+                  AND {window_sql}
+                """,  # noqa: S608
+                (agent_id, tenant_id, *window_params),
+            )
+            rrow = cur.fetchone() or {}
+            stats["operator_rating_avg"] = (
+                float(rrow["avg_rating"]) if rrow.get("avg_rating") is not None else None
+            )
+        except Exception as e:
+            logger.warning("agent_reviews query failed (migration 031 applied?): %s", e)
+            stats["operator_rating_avg"] = None
 
     return stats
 

@@ -2476,13 +2476,17 @@ def create_review(
     reviewer: str,
     reviewer_type: str,
     rating: int,
-    categories: dict[str, int] | None = None,
+    categories: dict[str, Any] | None = None,
     feedback: str | None = None,
     action_items: list[str] | None = None,
     run_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
-    """Create an agent review. Returns review UUID."""
+    """Create an agent review. Returns review UUID.
+
+    ``categories`` is JSON-serialized as-is — any JSON-compatible nested shape
+    is accepted, not only ``dict[str, int]``.
+    """
     review_id = str(uuid.uuid4())
     rating = max(1, min(5, rating))  # clamp to 1-5
     with get_connection() as conn:

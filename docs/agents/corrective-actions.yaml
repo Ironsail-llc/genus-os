@@ -1,0 +1,206 @@
+# Corrective-Action Templates
+#
+# When a goal breaches persistently, the improvement-analyst looks up the
+# matching template here and uses it to write a focused brief for the
+# Nightwatch overnight-pr pipeline.
+#
+# Key format: "<category>.<metric_name>" (e.g. "quality.min_output_chars").
+# If no specific key matches, fall back to "<category>.default".
+#
+# See: docs/agents/GOAL_TAXONOMY.md
+
+version: "2026-04-16"
+
+# ─── Quality breaches ────────────────────────────────────────────────
+
+quality.min_output_chars:
+  description: "Output is too short — likely meta-confirmation or truncated content"
+  investigation_steps:
+    - "Pull the 5 most recent runs and compare output_text lengths"
+    - "Check if output is a meta-confirmation (e.g. 'briefing delivered') vs real content"
+    - "Review instruction file for ambiguity about what the final message should contain"
+  remediations_in_order:
+    - "Revise instruction file to explicitly require the full briefing as the final assistant message"
+    - "Forbid meta-confirmation strings like 'delivered', 'complete', 'done' as final output"
+    - "Add required sections to the goal so partial outputs are detected"
+    - "If prompt-level fixes don't stick, consider upgrading to a stronger model for this agent"
+
+quality.required_sections_present:
+  description: "Outputs missing expected structure"
+  investigation_steps:
+    - "Diff recent outputs against the required sections list"
+    - "Check if model truncation is cutting sections"
+  remediations_in_order:
+    - "Strengthen instruction prompt to enforce section order and presence"
+    - "Raise max_iterations if the agent is running out of turns"
+    - "Switch to a model with larger context if input is too big"
+
+quality.operator_rating_avg:
+  description: "The operator rated the agent's output poorly"
+  investigation_steps:
+    - "Pull the last 10 agent_reviews rows with feedback text"
+    - "Identify the most common complaint pattern"
+  remediations_in_order:
+    - "Translate feedback into instruction-file rules"
+    - "Adjust tone/formatting conventions per the feedback"
+    - "Consider whether the goal's target is right — if the operator is consistently dissatisfied, the bar may be too low"
+
+quality.satisfaction_rate:
+  description: "Automated outcome assessment flags too many 'partial' or 'incorrect' runs"
+  investigation_steps:
+    - "Pull 10 most recent runs with outcome_assessment != 'successful'"
+    - "Look for patterns in outcome_notes"
+  remediations_in_order:
+    - "Address the most common failure pattern in instruction or config"
+    - "Tighten agent's tool allowlist if it's using wrong tools"
+
+quality.task_completion_rate:
+  description: "Agent creates tasks but doesn't complete them"
+  investigation_steps:
+    - "Query tasks where assignedToAgent={agent} AND status='TODO' older than SLA"
+    - "Sample 5 stale tasks to understand why they're stuck"
+  remediations_in_order:
+    - "Check for blocking dependencies (external API, missing tools)"
+    - "Raise task priority surfacing in warmup"
+    - "Adjust SLA if targets are unrealistic"
+
+quality.default:
+  description: "Quality below target — generic path"
+  remediations_in_order:
+    - "Inspect recent traces; compare successful vs unsuccessful runs"
+    - "Revise instruction file"
+    - "Adjust warmup context"
+
+# ─── Efficiency breaches ─────────────────────────────────────────────
+
+efficiency.timeout_rate:
+  description: "Too many runs hitting timeout"
+  investigation_steps:
+    - "Classify timeouts by in-flight tool call (run_steps table)"
+    - "Check if most are stuck in init (Reaped by watchdog) or in a specific tool"
+    - "Look for trigger_type pattern (sub_agent vs cron vs telegram)"
+  remediations_in_order:
+    - "Lower stall_timeout_seconds to fail fast on wedged tool calls"
+    - "If hitting max_iterations without converging, reduce it or simplify the task scope"
+    - "Trim instruction file + warmup to reduce token latency"
+    - "If sub-agents wedging in init, tighten sub_agent_timeout_seconds"
+
+efficiency.avg_duration_ms:
+  description: "Runs taking longer than target"
+  investigation_steps:
+    - "Percentile breakdown — is it long tail or all runs?"
+    - "Which tool calls dominate the duration?"
+  remediations_in_order:
+    - "Reduce max_iterations"
+    - "Trim prompt size"
+    - "Downgrade model (Opus→Sonnet, Sonnet→MiMo) if quality goals are still met"
+
+efficiency.p95_duration_ms:
+  description: "Slow tail latency"
+  investigation_steps:
+    - "Pull slowest 10 runs and look for common tool patterns"
+  remediations_in_order:
+    - "Apply stall_timeout to kill wedged outliers"
+    - "Add tool-specific timeouts"
+
+efficiency.p95_cost_usd:
+  description: "Cost tail runaway"
+  investigation_steps:
+    - "Pull highest-cost runs; check input/output token ratios"
+  remediations_in_order:
+    - "Enable hard_budget with cost_budget_usd ceiling"
+    - "Trim warmup context"
+    - "Downgrade model tier"
+
+efficiency.default:
+  description: "Efficiency target missed — generic path"
+  remediations_in_order:
+    - "Classify where time/cost is going"
+    - "Apply ceilings (timeout, iterations, cost)"
+    - "Consider model tier"
+
+# ─── Reach breaches ──────────────────────────────────────────────────
+
+reach.delivery_success_rate:
+  description: "Output not reaching the operator"
+  investigation_steps:
+    - "Check run.delivery_status distribution (delivered / failed / skipped)"
+    - "Verify bot token + Telegram channel config"
+    - "Confirm output_text is non-empty when delivery_status='delivered'"
+  remediations_in_order:
+    - "Verify channel health (bot token valid, endpoint reachable)"
+    - "Check output capture — may be empty due to agent's final-message bug"
+    - "Audit delivery.to / chat_id for drift"
+    - "Configure fallback channel if primary is flaky"
+
+reach.inbox_read_rate:
+  description: "Notifications piling up unread"
+  investigation_steps:
+    - "Query notifications table for unread count by agent"
+  remediations_in_order:
+    - "Adjust notification cadence"
+    - "Add summary digests instead of per-event notifications"
+
+reach.default:
+  description: "Delivery problem — generic path"
+  remediations_in_order:
+    - "Verify delivery channel config"
+    - "Check for output_text empty despite 'delivered' status"
+
+# ─── Correctness breaches ────────────────────────────────────────────
+
+correctness.error_rate:
+  description: "Too many runs failing"
+  investigation_steps:
+    - "Group error_message patterns over the window"
+    - "Identify the most frequent error family"
+  remediations_in_order:
+    - "Fix the most frequent error at its source (tool, schema, auth)"
+    - "Add retry logic if errors are transient"
+    - "Add input validation if errors are malformed-input-driven"
+    - "Guardrail review for over-strict blocks"
+
+correctness.tool_success_rate:
+  description: "Specific tools failing frequently"
+  investigation_steps:
+    - "Group tool errors by tool_name"
+    - "Check if failures are correlated with specific argument patterns"
+  remediations_in_order:
+    - "Fix tool implementation for the top-failing tool"
+    - "Update tool schema / validation"
+    - "Update agent prompt if tools are being called with wrong args"
+
+correctness.experiment_measure_success_rate:
+  description: "experiment_measure failing for auto-researcher"
+  investigation_steps:
+    - "Check recent experiment_measure errors"
+    - "Verify metric_command is still valid"
+    - "Check for stale advisory locks (>24h)"
+  remediations_in_order:
+    - "Raise _METRIC_CMD_TIMEOUT if commands legitimately slow"
+    - "Fix underlying metric command"
+    - "Release stale locks (now auto-released after 24h)"
+
+correctness.experiment_deadlock_rate:
+  description: "Experiments blocked by file locks"
+  investigation_steps:
+    - "Query memory blocks matching experiment_lock:* with non-empty content"
+  remediations_in_order:
+    - "Verify lock staleness detection is working (24h auto-release)"
+    - "Check for malformed lock keys from search_space parser"
+
+correctness.pr_revert_rate:
+  description: "Too many Nightwatch PRs reverted after merge"
+  investigation_steps:
+    - "Pull last 5 reverted PRs; look at revert commit messages"
+  remediations_in_order:
+    - "Tighten Nightwatch task selection — avoid speculative changes"
+    - "Require higher test coverage on PRs before merge"
+    - "Add canary period between merge and prod deploy"
+
+correctness.default:
+  description: "Correctness issue — generic path"
+  remediations_in_order:
+    - "Classify errors by type"
+    - "Fix the most frequent pattern at source"
+    - "Add validation at boundaries"

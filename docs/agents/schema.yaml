@@ -25,7 +25,7 @@ required:
     description: Date of last manifest change
   department:
     type: string
-    enum: [email, calendar, operations, security, communications, crm, briefings, core, custom]
+    enum: [email, calendar, operations, security, communications, crm, briefings, core, system, custom]
 
 recommended:
   model:
