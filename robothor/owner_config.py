@@ -1,12 +1,12 @@
 """Operator identity loader.
 
-Reads ``<ROBOTHOR_WORKSPACE>/.robothor/owner.yaml`` (hardcoded path, gitignored
-content) to answer "who is the operator of this Genus OS instance?". Callers
-use this to:
+Reads ``~/.robothor/owner.yaml`` (hardcoded path, gitignored content) to
+answer "who is the operator of this Genus OS instance?". Callers use this
+to:
 
 - Bootstrap the ``tenant_users.person_id`` link on daemon start.
-- Resolve "Philip" (or any bare first-name) to the operator's CRM row with
-  priority over other contacts sharing the name.
+- Resolve any bare first-name to the operator's CRM row with priority over
+  other contacts sharing the name.
 - Auto-attend the operator on outgoing calendar invites.
 
 Fallback order:

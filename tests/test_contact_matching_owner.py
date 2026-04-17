@@ -9,7 +9,7 @@ class TestOwnerTiebreak:
     def test_owner_wins_tiebreak_when_input_identifies_operator(self):
         # Two "Philip"s tie at 0.8 (single name matches part of full name).
         candidates = [
-            {"id": "other-philip", "name": "Philip Krupenya"},
+            {"id": "other-philip", "name": "Philip Example"},
             {"id": "owner-philip", "name": "Philip Owner"},
         ]
         result = find_best_match(
@@ -22,23 +22,24 @@ class TestOwnerTiebreak:
         assert result["id"] == "owner-philip"
 
     def test_higher_score_beats_owner_tiebreak(self):
-        # Owner matches at 0.8, Amurao matches at 0.95 — higher score wins.
+        # Exact-full-name match (1.0) beats owner partial match — owner priority
+        # is tiebreak-only, never a score override.
         candidates = [
             {"id": "owner-philip", "name": "Philip Owner"},
-            {"id": "amurao", "name": "Philip Amurao"},
+            {"id": "other", "name": "Philip Example"},
         ]
         result = find_best_match(
-            "Philip Amurao",
+            "Philip Example",
             candidates,
             owner_candidate_id="owner-philip",
             owner_nicknames={"philip", "phil"},
         )
-        assert result["id"] == "amurao"
+        assert result["id"] == "other"
 
     def test_no_owner_context_behaves_as_before(self):
         candidates = [
             {"id": "a", "name": "Philip Owner", "mention_count": 1},
-            {"id": "b", "name": "Philip Krupenya", "mention_count": 5},
+            {"id": "b", "name": "Philip Example", "mention_count": 5},
         ]
         result = find_best_match("Philip", candidates)
         # Higher mention_count wins at tie.
@@ -47,7 +48,7 @@ class TestOwnerTiebreak:
     def test_owner_wins_over_higher_mention_count_on_tie(self):
         candidates = [
             {"id": "owner-philip", "name": "Philip Owner", "mention_count": 1},
-            {"id": "krup", "name": "Philip Krupenya", "mention_count": 99},
+            {"id": "other", "name": "Philip Example", "mention_count": 99},
         ]
         result = find_best_match(
             "Philip",
@@ -60,22 +61,22 @@ class TestOwnerTiebreak:
     def test_input_not_an_owner_name_leaves_mention_tiebreak(self):
         candidates = [
             {"id": "owner-philip", "name": "Philip Owner", "mention_count": 1},
-            {"id": "krup", "name": "Philip Krupenya", "mention_count": 5},
+            {"id": "other", "name": "Philip Example", "mention_count": 5},
         ]
-        # Input "Krupenya" clearly points at the non-owner; owner priority
+        # Input "Example" clearly points at the non-owner; owner priority
         # must not fire just because the owner is in the candidate list.
         result = find_best_match(
-            "Krupenya",
+            "Example",
             candidates,
             owner_candidate_id="owner-philip",
             owner_nicknames={"philip"},
         )
-        assert result["id"] == "krup"
+        assert result["id"] == "other"
 
     def test_nickname_triggers_owner_priority(self):
         candidates = [
             {"id": "owner-philip", "name": "Philip Owner"},
-            {"id": "other", "name": "Philip Krupenya"},
+            {"id": "other", "name": "Philip Example"},
         ]
         result = find_best_match(
             "Phil",  # nickname, canonicalizes to "philip"
@@ -84,3 +85,20 @@ class TestOwnerTiebreak:
             owner_nicknames={"philip"},
         )
         assert result["id"] == "owner-philip"
+
+    def test_integer_ids_from_db_tiebreak_correctly(self):
+        """Regression for int/str mismatch: memory_entities.id is SERIAL (int),
+        so periodic_analysis passes an int into owner_candidate_id. The older
+        `str()` cast turned this into "42" while candidates kept int ids, and
+        the equality check silently failed."""
+        candidates = [
+            {"id": 42, "name": "Jordan Owner", "mention_count": 1},
+            {"id": 99, "name": "Jordan Example", "mention_count": 99},
+        ]
+        result = find_best_match(
+            "Jordan",
+            candidates,
+            owner_candidate_id=42,
+            owner_nicknames={"jordan"},
+        )
+        assert result["id"] == 42

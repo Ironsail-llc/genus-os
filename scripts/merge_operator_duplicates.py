@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transactional cleanup for operator duplicate rows and garbage CRM contacts.
 
-Run *after* reviewing ``scripts/audit_philip_contacts.py``. Nothing is
+Run *after* reviewing ``scripts/audit_operator_contacts.py``. Nothing is
 inferred — every action takes explicit IDs. The operator decides each row.
 
 Usage:
@@ -30,7 +30,9 @@ Per delete target:
     Hard-deletes the row. Use only for unambiguous garbage (e.g., rows
     auto-created from Drive share notifications).
 
-Everything runs inside one transaction per invocation; any error rolls back.
+The merge phase commits before the delete phase runs (outside ``--dry-run``)
+so a delete-phase failure does not silently discard completed merges.
+``--dry-run`` still rolls back the entire invocation as one transaction.
 """
 
 from __future__ import annotations
@@ -93,10 +95,11 @@ def _count_refs(cur, person_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for table, col in MERGE_FK_TABLES:
         cur.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE {col} = %s",
+            f"SELECT COUNT(*) AS n FROM {table} WHERE {col} = %s",
             (person_id,),
         )
-        counts[table] = cur.fetchone()[0]
+        # Cursor is RealDictCursor — numeric indexing raises KeyError: 0.
+        counts[table] = cur.fetchone()["n"]
     return counts
 
 
@@ -188,6 +191,13 @@ def main() -> int:
             soft = _soft_delete(cur, loser)
             print(f"  merged {loser[:8]}: {counts} soft_deleted={soft}")
             _log_audit(cur, "merge", args.canonical, loser, counts)
+
+        # Commit merges before entering the delete phase so a delete-phase
+        # failure cannot silently roll back work the operator already saw
+        # succeed. --dry-run defers this commit to the bottom.
+        if merge_ids and not args.dry_run:
+            conn.commit()
+            print(f"\nCommitted {len(merge_ids)} merge(s).")
 
         # Delete phase
         for target in delete_ids:

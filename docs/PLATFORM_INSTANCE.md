@@ -83,7 +83,7 @@ The operator (the human who owns this Genus OS instance) is a first-class concep
 
 | I want to... | Do this | Not this |
 |--------------|---------|----------|
-| Know who the operator is | `get_owner_person(tenant_id)` | `search_people("Philip")` |
+| Know who the operator is | `get_owner_person(tenant_id)` | `search_people("<first-name>")` |
 | Send to the operator's email | `OwnerConfig.email` / `all_emails()` | Hardcode an email |
 | Check "is the speaker the operator?" | `OwnerConfig.matches_name(name)` | First-name string equality |
 | Refuse a write unless approved by the operator | `resolve_task()`'s `requires_human` path | Custom string checks |

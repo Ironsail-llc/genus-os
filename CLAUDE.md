@@ -48,7 +48,7 @@ Your `brain/CLAUDE.md` is where personal identity, preferences, and instance-spe
 9. **Update docs with the change** — see `docs/DOC_MAINTENANCE.md` for the checklist.
 10. **Async boundaries** — engine internals (`robothor/engine/`) are fully async. `asyncio.run()` only in entry points (daemon.py, cli.py) and standalone scripts.
 11. **Instance data is user-land** — `brain/`, `docs/agents/*.yaml`, and `docs/CRON_MAP.md` are .gitignored. They belong to the instance, not the platform. Agent configs survive platform upgrades.
-12. **Operator identity comes from `~/.robothor/owner.yaml`** — load it via `robothor.owner_config.load_owner_config()`, resolve the operator's CRM row via `robothor.crm.dal.get_owner_person(tenant_id)`. **Never search for the operator by first name** (`search_people("Philip")`) — use `prefer_owner=True` if you must, or call `get_owner_person()` directly. The `.robothor/` dir is gitignored; the path is platform-hardcoded. New instances copy `templates/owner.yaml.example`.
+12. **Operator identity comes from `~/.robothor/owner.yaml`** — load it via `robothor.owner_config.load_owner_config()`, resolve the operator's CRM row via `robothor.crm.dal.get_owner_person(tenant_id)`. **Never search for the operator by first name** (e.g. `search_people("<operator-first-name>")`) — use `prefer_owner=True` if you must, or call `get_owner_person()` directly. The `.robothor/` dir is gitignored; the path is platform-hardcoded. New instances copy `templates/owner.yaml.example`.
 
 ## Operator Best Practices
 

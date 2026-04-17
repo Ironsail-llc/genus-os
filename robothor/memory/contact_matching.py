@@ -158,7 +158,7 @@ def find_best_match(
     candidates: list[dict[str, Any]],
     threshold: float = 0.75,
     name_key: str = "name",
-    owner_candidate_id: str | None = None,
+    owner_candidate_id: Any = None,
     owner_nicknames: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Find the best matching candidate above threshold.
@@ -169,6 +169,8 @@ def find_best_match(
         threshold: Minimum similarity score (0.0-1.0).
         name_key: Key in candidate dicts that holds the name string.
         owner_candidate_id: Optional ``id`` of the operator's candidate row.
+            Typed as ``Any`` so it can match whatever type the candidate ``id``
+            column is (int in production from psycopg2, str in unit tests).
             When set, ties at the top score prefer the owner *only* when the
             input name (normalized, or its canonical nickname form) is in
             ``owner_nicknames``. Higher non-owner scores still win — the

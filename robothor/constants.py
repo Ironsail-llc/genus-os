@@ -16,7 +16,9 @@ def _workspace_root() -> Path:
 def owner_config_path() -> Path:
     """Canonical, platform-hardcoded location of the operator identity file.
 
-    The *path* is tracked in the platform; the *content* at that path is
-    per-instance and gitignored (``.robothor/`` is in ``.gitignore``).
+    Resolves to ``~/.robothor/owner.yaml`` — a conventional user-level
+    dotfile, independent of ``ROBOTHOR_WORKSPACE`` (which holds project
+    data, not identity). The *path* is tracked in the platform; the
+    *content* at that path is per-instance and gitignored.
     """
-    return _workspace_root() / ".robothor" / "owner.yaml"
+    return Path.home() / ".robothor" / "owner.yaml"

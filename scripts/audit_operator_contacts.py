@@ -6,9 +6,9 @@ before running ``scripts/merge_operator_duplicates.py``. The suggested
 actions are advisory — the operator decides each row's fate explicitly.
 
 Usage:
-    python scripts/audit_philip_contacts.py              # uses owner's first name
-    python scripts/audit_philip_contacts.py --name philip
-    python scripts/audit_philip_contacts.py --tenant default
+    python scripts/audit_operator_contacts.py              # uses owner's first name
+    python scripts/audit_operator_contacts.py --name alice
+    python scripts/audit_operator_contacts.py --tenant default
 
 Columns:
     id, name, emails, identifiers, tasks, notes, conversations,

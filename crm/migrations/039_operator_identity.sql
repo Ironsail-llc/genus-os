@@ -8,7 +8,7 @@
 -- ROBOTHOR_OWNER_EMAIL / ROBOTHOR_OWNER_NAME. Name-based contact resolution
 -- (search_people ILIKE) could not distinguish the operator from other CRM
 -- contacts sharing a first name — risking confidential info reaching the
--- wrong "Philip" / "Alice" / etc.
+-- wrong contact when multiple rows share a common first name.
 --
 -- After this migration, tenant_users.person_id is the canonical pointer,
 -- DB-enforced unique per (tenant_id, role='owner'). Bootstrap is handled

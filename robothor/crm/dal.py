@@ -483,7 +483,7 @@ def list_people(
     """List people, optionally filtered by search term.
 
     When ``search`` is a name that matches the operator, the operator's row
-    is sorted first so agent-facing tools like ``list_people("Philip")``
+    is sorted first so agent-facing tools like ``list_people("<first-name>")``
     resolve to the operator before other contacts sharing the name.
     """
     if search:
@@ -2477,21 +2477,20 @@ def bootstrap_owner_person_links() -> dict[str, Any]:
                 phone=config.phone,
                 tenant_id=config.tenant_id,
             )
-            result["created_person"] = True
             if not person_id:
                 result["reason"] = "create_person was blocked"
                 logger.warning("bootstrap_owner_person_links: %s", result["reason"])
                 return result
+            result["created_person"] = True
 
+        # Scope the UPDATE by id so we only link the single owner row we
+        # selected above. A tenant may carry multiple unlinked owner rows
+        # (the state scripts/merge_operator_duplicates.py exists to repair);
+        # an unscoped UPDATE would assign them the same person_id and trip
+        # the uq_tenant_users_owner_person partial unique index from 039.
         cur.execute(
-            """
-            UPDATE tenant_users
-            SET person_id = %s
-            WHERE tenant_id = %s
-              AND role = 'owner'
-              AND person_id IS NULL
-            """,
-            (person_id, config.tenant_id),
+            "UPDATE tenant_users SET person_id = %s WHERE id = %s",
+            (person_id, owner_row["id"]),
         )
         conn.commit()
 

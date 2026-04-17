@@ -262,6 +262,63 @@ class TestBootstrap:
         assert result["linked"] is False
         assert "no tenant_users row" in result["reason"]
 
+    def test_update_scoped_to_selected_owner_row_id(self, monkeypatch):
+        """Regression: the UPDATE must target the single owner row selected
+        by SELECT ... LIMIT 1. If multiple unlinked owner rows exist (the
+        state scripts/merge_operator_duplicates.py repairs), an unscoped
+        UPDATE would assign them the same person_id and trip the partial
+        unique index uq_tenant_users_owner_person from migration 039."""
+        cfg = OwnerConfig(
+            tenant_id=DEFAULT_TENANT, first_name="Alice", last_name="E", email="a@example.com"
+        )
+        monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
+
+        cur = FakeCursor(
+            [
+                ({"id": "tu-42", "person_id": None}, []),  # tenant_users SELECT → id 42
+                ({"id": "existing-person"}, []),  # crm_people lookup
+                {"fetchone": None, "fetchall": [], "rowcount": 1},  # UPDATE
+            ]
+        )
+        with _patched_conn(cur):
+            from robothor.crm.dal import bootstrap_owner_person_links
+
+            result = bootstrap_owner_person_links()
+
+        assert result["linked"] is True
+        # UPDATE should scope by id=tu-42, not by (tenant_id, role, person_id IS NULL)
+        update_sql, update_params = cur.executed[-1]
+        assert "UPDATE tenant_users" in update_sql
+        assert "WHERE id = %s" in update_sql
+        assert "person_id IS NULL" not in update_sql  # the old unscoped predicate
+        assert update_params == ("existing-person", "tu-42")
+
+    def test_created_person_flag_not_set_when_create_blocked(self, monkeypatch):
+        """Regression: created_person=True was previously set before the
+        success check, producing a result with both created_person=True AND
+        reason='create_person was blocked'. Fix keeps the flag false on
+        failure so audit/log consumers aren't misled."""
+        cfg = OwnerConfig(
+            tenant_id=DEFAULT_TENANT, first_name="Alice", last_name="E", email="a@example.com"
+        )
+        monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
+        monkeypatch.setattr("robothor.crm.dal.create_person", lambda *a, **k: None)
+
+        cur = FakeCursor(
+            [
+                ({"id": "tu-1", "person_id": None}, []),  # tenant_users SELECT
+                (None, []),  # crm_people lookup miss → create_person is called
+            ]
+        )
+        with _patched_conn(cur):
+            from robothor.crm.dal import bootstrap_owner_person_links
+
+            result = bootstrap_owner_person_links()
+
+        assert result["linked"] is False
+        assert result["created_person"] is False
+        assert result["reason"] == "create_person was blocked"
+
 
 # ─── search_people(prefer_owner=True) ────────────────────────────────────────
 
@@ -405,7 +462,7 @@ class TestResolveContactOwnerPriority:
                         "channel": "telegram",
                         "identifier": "tg-999",
                         "person_id": "non-owner-id",
-                        "display_name": "Philip Amurao",
+                        "display_name": "Philip Example",
                     },
                     [],
                 ),
