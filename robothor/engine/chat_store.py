@@ -486,27 +486,55 @@ def search_chat_turns(
     return out
 
 
-def cleanup_stale_chat_turns(days: int = 90) -> int:
+def cleanup_stale_chat_turns(days: int = 90, tenant_id: str | None = None) -> int:
     """Delete chat turns older than N days that are (a) not pinned and
     (b) not referenced by any memory_facts.source_content (distilled facts
     always survive). Returns number of turns deleted.
+
+    ``tenant_id`` bounds the sweep to one tenant — nightly maintenance MUST
+    pass it explicitly so multi-tenant instances don't delete every tenant's
+    data on every run. When ``None`` (manual one-off GC), sweeps globally.
+
+    The NOT EXISTS filter is bounded by tenant + a min-length guard so the
+    O(N·M) LIKE scan only fires on substantive messages and stays inside
+    the current tenant's fact pool.
     """
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM chat_messages
-            WHERE created_at < NOW() - INTERVAL '%s days'
-              AND pinned = FALSE
-              AND NOT EXISTS (
-                  SELECT 1 FROM memory_facts f
-                  WHERE f.source_content IS NOT NULL
-                    AND f.source_content LIKE '%%' || (message->>'content') || '%%'
-                    AND length(message->>'content') > 20
-              )
-            """,
-            (days,),
-        )
+        if tenant_id is None:
+            cur.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE created_at < NOW() - make_interval(days := %s)
+                  AND pinned = FALSE
+                  AND length(message->>'content') > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memory_facts f
+                      WHERE f.source_content IS NOT NULL
+                        AND length(message->>'content') > 20
+                        AND f.source_content LIKE '%%' || (message->>'content') || '%%'
+                  )
+                """,
+                (days,),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE tenant_id = %s
+                  AND created_at < NOW() - make_interval(days := %s)
+                  AND pinned = FALSE
+                  AND length(message->>'content') > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memory_facts f
+                      WHERE f.tenant_id = %s
+                        AND f.source_content IS NOT NULL
+                        AND length(message->>'content') > 20
+                        AND f.source_content LIKE '%%' || (message->>'content') || '%%'
+                  )
+                """,
+                (tenant_id, days, tenant_id),
+            )
         count = int(cur.rowcount)
         conn.commit()
         return count

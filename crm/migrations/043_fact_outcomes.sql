@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS fact_access_log (
     id BIGSERIAL PRIMARY KEY,
     run_id TEXT NOT NULL,
     agent_id TEXT,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary'
+    tenant_id TEXT NOT NULL DEFAULT 'default'
         REFERENCES crm_tenants(id),
     fact_id INTEGER NOT NULL,
     accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -49,16 +49,17 @@ class TestDecayFactorsOutcomeFailures:
         assert wounded < healthy
 
     def test_score_stays_non_negative(self):
-        args = {
-            "last_accessed": datetime.now(UTC) - timedelta(days=30),
-            "access_count": 0,
-            "reinforcement_count": 0,
-            "importance_score": 0.1,
-        }
-        score = compute_decay_score(**args, outcome_failures=20)
+        score = compute_decay_score(
+            last_accessed=datetime.now(UTC) - timedelta(days=30),
+            access_count=0,
+            reinforcement_count=0,
+            importance_score=0.1,
+            outcome_failures=20,
+        )
         assert score >= 0.0
 
 
+@pytest.mark.integration
 class TestLogAndBump:
     """End-to-end round-trip against real DB, with cleanup."""
 
@@ -76,8 +77,8 @@ class TestLogAndBump:
                 INSERT INTO memory_facts
                     (fact_text, category, confidence, tenant_id, is_active, source_type)
                 VALUES
-                    ('__test_outcome_a__', 'personal', 0.8, 'robothor-primary', TRUE, 'test'),
-                    ('__test_outcome_b__', 'personal', 0.8, 'robothor-primary', TRUE, 'test')
+                    ('__test_outcome_a__', 'personal', 0.8, 'test', TRUE, 'test'),
+                    ('__test_outcome_b__', 'personal', 0.8, 'test', TRUE, 'test')
                 RETURNING id
                 """
             )

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -207,7 +207,7 @@ async def build_episodes_from_facts(
     Returns stats dict: {candidates, clusters, episodes_stored, skipped}.
     """
     tid = tenant_id or DEFAULT_TENANT
-    cutoff = datetime.now().astimezone() - timedelta(hours=hours_back)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours_back)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)

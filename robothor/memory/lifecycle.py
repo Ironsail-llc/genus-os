@@ -26,6 +26,7 @@ from typing import Any
 import httpx
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 
@@ -995,13 +996,33 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["relationship_inference"],
     )
 
+    # Resolve the set of active tenants so per-tenant maintenance steps run
+    # for every tenant (not just the instance's default). A fresh deployment
+    # has one tenant; multi-tenant instances have many. Without this, steps
+    # that default to DEFAULT_TENANT silently skip the primary tenant's data
+    # on any instance where ROBOTHOR_DEFAULT_TENANT != the seeded tenant id.
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT id FROM crm_tenants WHERE is_active = TRUE")
+            tenant_ids = [r["id"] for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("Could not enumerate tenants — falling back to DEFAULT_TENANT: %s", e)
+        tenant_ids = [DEFAULT_TENANT]
+    if not tenant_ids:
+        tenant_ids = [DEFAULT_TENANT]
+
     # Step 8: Episodic memory — cluster recent facts into time-bucketed episodes.
     t6 = time.monotonic()
     episode_stats: dict[str, Any] = {"candidates": 0, "clusters": 0, "episodes_stored": 0}
     try:
         from robothor.memory.episodes import build_episodes_from_facts
 
-        episode_stats = await build_episodes_from_facts(hours_back=72)
+        for tid in tenant_ids:
+            stats = await build_episodes_from_facts(hours_back=72, tenant_id=tid)
+            for k, v in stats.items():
+                if isinstance(v, int):
+                    episode_stats[k] = episode_stats.get(k, 0) + v
     except Exception as e:
         logger.warning("Episode building failed: %s", e)
     step_timings["episodes"] = time.monotonic() - t6
@@ -1019,8 +1040,15 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             extract_preferences_from_facts,
         )
 
-        preference_stats["extract"] = await extract_preferences_from_facts(hours_back=72)
-        preference_stats["drift"] = await detect_drift()
+        for tid in tenant_ids:
+            ext = await extract_preferences_from_facts(hours_back=72, tenant_id=tid)
+            drift = await detect_drift(tenant_id=tid)
+            for k, v in ext.items():
+                if isinstance(v, int):
+                    preference_stats["extract"][k] = preference_stats["extract"].get(k, 0) + v
+            for k, v in drift.items():
+                if isinstance(v, int):
+                    preference_stats["drift"][k] = preference_stats["drift"].get(k, 0) + v
     except Exception as e:
         logger.warning("Preference tracking failed: %s", e)
     step_timings["preferences"] = time.monotonic() - t7
@@ -1036,7 +1064,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     try:
         from robothor.engine.chat_store import cleanup_stale_chat_turns
 
-        chat_pruned = await asyncio.to_thread(cleanup_stale_chat_turns, 90)
+        for tid in tenant_ids:
+            chat_pruned += await asyncio.to_thread(cleanup_stale_chat_turns, 90, tid)
     except Exception as e:
         logger.warning("Chat turn TTL failed: %s", e)
     step_timings["chat_ttl"] = time.monotonic() - t8
@@ -1055,9 +1084,10 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             prune_expired_breadcrumbs,
         )
 
-        breadcrumb_stats["pruned"] = await asyncio.to_thread(prune_expired_breadcrumbs)
-        promo = await promote_hot_breadcrumbs()
-        breadcrumb_stats["promoted"] = promo.get("promoted", 0)
+        for tid in tenant_ids:
+            breadcrumb_stats["pruned"] += await asyncio.to_thread(prune_expired_breadcrumbs, tid)
+            promo = await promote_hot_breadcrumbs(tenant_id=tid)
+            breadcrumb_stats["promoted"] += promo.get("promoted", 0)
     except Exception as e:
         logger.warning("Breadcrumb maintenance failed: %s", e)
     step_timings["breadcrumbs"] = time.monotonic() - t9
@@ -1073,7 +1103,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     try:
         from robothor.memory.outcomes import cleanup_old_access_logs
 
-        access_log_pruned = await asyncio.to_thread(cleanup_old_access_logs, 30)
+        for tid in tenant_ids:
+            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, 30, tid)
     except Exception as e:
         logger.warning("Access log cleanup failed: %s", e)
     step_timings["access_log_cleanup"] = time.monotonic() - t10

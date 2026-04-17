@@ -9,7 +9,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS memory_procedures (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary'
+    tenant_id TEXT NOT NULL DEFAULT 'default'
         REFERENCES crm_tenants(id),
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',

@@ -35,6 +35,7 @@ class TestConfidenceFromCounts:
         assert c > 0.9
 
 
+@pytest.mark.integration
 class TestRecordFindRoundtrip:
     """End-to-end CRUD test against the real DB (requires migration 041)."""
 
@@ -47,7 +48,9 @@ class TestRecordFindRoundtrip:
             base = abs(hash(text)) % 1000 / 1000.0
             return [base] * 1024
 
-        monkeypatch.setattr(procedures.llm_client, "get_embedding_async", _fake_embed)
+        monkeypatch.setattr(
+            "robothor.memory.procedures.llm_client.get_embedding_async", _fake_embed
+        )
 
         pid = await procedures.record_procedure(
             name="__test_proc_roundtrip__",

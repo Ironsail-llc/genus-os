@@ -9,7 +9,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS agent_breadcrumbs (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary'
+    tenant_id TEXT NOT NULL DEFAULT 'default'
         REFERENCES crm_tenants(id),
     agent_id TEXT NOT NULL,
     run_id TEXT,

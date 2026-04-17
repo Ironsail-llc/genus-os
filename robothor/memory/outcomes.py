@@ -45,13 +45,13 @@ def log_fact_access(
         return
     tid = tenant_id or DEFAULT_TENANT
     try:
+        from psycopg2.extras import execute_values
+
         with get_connection() as conn:
             cur = conn.cursor()
-            cur.executemany(
-                """
-                INSERT INTO fact_access_log (run_id, agent_id, tenant_id, fact_id)
-                VALUES (%s, %s, %s, %s)
-                """,
+            execute_values(
+                cur,
+                "INSERT INTO fact_access_log (run_id, agent_id, tenant_id, fact_id) VALUES %s",
                 [(run_id, agent_id, tid, fid) for fid in fact_ids],
             )
     except Exception as e:
@@ -85,12 +85,13 @@ def bump_failure_for_run(
             SET outcome_failures = outcome_failures + 1,
                 last_failure_at = NOW(),
                 updated_at = NOW()
-            WHERE id IN (
+            WHERE tenant_id = %s
+              AND id IN (
                 SELECT DISTINCT fact_id FROM fact_access_log
                 WHERE run_id = %s AND tenant_id = %s
             )
             """,
-            (run_id, tid),
+            (tid, run_id, tid),
         )
         touched = cur.rowcount
 
@@ -115,15 +116,24 @@ def bump_failure_for_run(
     return {"facts_touched": touched, "facts_confidence_dropped": dropped}
 
 
-def cleanup_old_access_logs(days: int = 30) -> int:
-    """Trim the access log — not needed for attribution beyond the decay window."""
+def cleanup_old_access_logs(days: int = 30, tenant_id: str | None = None) -> int:
+    """Trim the access log — not needed for attribution beyond the decay window.
+
+    ``tenant_id`` bounds the sweep. Nightly maintenance passes it to stay
+    inside one tenant's audit data. ``None`` sweeps globally.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM fact_access_log
-            WHERE accessed_at < NOW() - INTERVAL '%s days'
-            """,
-            (days,),
-        )
+        if tenant_id is None:
+            cur.execute(
+                "DELETE FROM fact_access_log WHERE accessed_at < NOW() - make_interval(days := %s)",
+                (days,),
+            )
+        else:
+            cur.execute(
+                "DELETE FROM fact_access_log "
+                "WHERE tenant_id = %s "
+                "AND accessed_at < NOW() - make_interval(days := %s)",
+                (tenant_id, days),
+            )
         return int(cur.rowcount)

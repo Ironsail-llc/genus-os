@@ -47,6 +47,7 @@ class TestFormatForWarmup:
         assert len(out.splitlines()) <= 10
 
 
+@pytest.mark.integration
 class TestRoundtripDAL:
     """End-to-end insert → load → prune against real DB."""
 

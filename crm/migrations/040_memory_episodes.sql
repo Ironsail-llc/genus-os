@@ -12,7 +12,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS memory_episodes (
     id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'robothor-primary'
+    tenant_id TEXT NOT NULL DEFAULT 'default'
         REFERENCES crm_tenants(id),
     start_time TIMESTAMPTZ NOT NULL,
     end_time TIMESTAMPTZ NOT NULL,

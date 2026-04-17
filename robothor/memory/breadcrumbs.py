@@ -122,11 +122,22 @@ def format_breadcrumbs_for_warmup(breadcrumbs: list[dict[str, Any]]) -> str:
     return "\n".join(lines[:10])
 
 
-def prune_expired_breadcrumbs() -> int:
-    """Delete breadcrumbs past their expires_at. Returns number deleted."""
+def prune_expired_breadcrumbs(tenant_id: str | None = None) -> int:
+    """Delete breadcrumbs past their expires_at. Returns number deleted.
+
+    ``tenant_id`` bounds the sweep. Nightly maintenance must pass it so a
+    multi-tenant instance doesn't prune every tenant on every run. When
+    ``None`` (manual global GC), sweeps across all tenants.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM agent_breadcrumbs WHERE expires_at <= NOW()")
+        if tenant_id is None:
+            cur.execute("DELETE FROM agent_breadcrumbs WHERE expires_at <= NOW()")
+        else:
+            cur.execute(
+                "DELETE FROM agent_breadcrumbs WHERE tenant_id = %s AND expires_at <= NOW()",
+                (tenant_id,),
+            )
         return int(cur.rowcount)
 
 

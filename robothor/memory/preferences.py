@@ -226,15 +226,19 @@ async def detect_drift(tenant_id: str | None = None) -> dict[str, Any]:
         last_confirmed_str = p.get("last_confirmed") or ""
         try:
             last_confirmed = datetime.fromisoformat(last_confirmed_str)
-        except ValueError:
+        except (ValueError, TypeError):
             last_confirmed = cutoff
+        # Postgres returns tz-aware timestamps; a naive ISO string from the
+        # prefs store would raise on comparison. Coerce to UTC.
+        if last_confirmed.tzinfo is None:
+            last_confirmed = last_confirmed.replace(tzinfo=UTC)
 
         recent_contradictions = [
             r
             for r in results
             if r.get("created_at") is not None
             and r["created_at"] > last_confirmed
-            and r.get("created_at") > cutoff
+            and r["created_at"] > cutoff
             and r.get("similarity", 0) > _STALE_CONTRADICTION_THRESHOLD
             and r.get("id") not in (p.get("evidence_fact_ids") or [])
         ]

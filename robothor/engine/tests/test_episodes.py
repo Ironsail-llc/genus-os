@@ -102,7 +102,7 @@ class TestSearchEpisodesFallback:
         async def _boom(*args, **kwargs):
             raise RuntimeError("ollama down")
 
-        monkeypatch.setattr(episodes.llm_client, "get_embedding_async", _boom)
+        monkeypatch.setattr("robothor.memory.episodes.llm_client.get_embedding_async", _boom)
 
         result = await episodes.search_episodes("any query", limit=3, tenant_id="test")
         assert result == []
