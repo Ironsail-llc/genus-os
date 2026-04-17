@@ -582,6 +582,8 @@ def _main() -> None:
 
         for m in manifests:
             agent_id = m.get("id")
+            if not agent_id:
+                continue
             if args.agent and agent_id != args.agent:
                 continue
             goals = parse_goals_from_manifest(m)
