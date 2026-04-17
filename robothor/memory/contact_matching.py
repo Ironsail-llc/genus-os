@@ -109,7 +109,7 @@ def name_similarity(name_a: str, name_b: str) -> float:
         if parts_a[0] == parts_b[0] and parts_a[-1] == parts_b[-1]:
             return 0.95
 
-        # Reversed order match (e.g., "D'Agostino Rizzi" vs "Rizzi D'Agostino")
+        # Reversed order match (e.g., "Smith Jones" vs "Jones Smith")
         if parts_a[0] == parts_b[-1] and parts_a[-1] == parts_b[0]:
             return 0.9
 

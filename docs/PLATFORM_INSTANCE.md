@@ -74,7 +74,7 @@ Three mechanisms prevent instance data from leaking into platform code:
 
 The operator (the human who owns this Genus OS instance) is a first-class concept, but their personal data never enters the platform repo.
 
-- **Path is platform** (hardcoded in `robothor.constants.owner_config_path()`): `<ROBOTHOR_WORKSPACE>/.robothor/owner.yaml`. Every instance looks in the same place.
+- **Path is platform** (hardcoded in `robothor.constants.owner_config_path()`): `~/.robothor/owner.yaml` — a user-level dotfile, intentionally independent of `ROBOTHOR_WORKSPACE` (which holds project data, not identity). Every instance looks in the same place.
 - **Content is instance** (gitignored via `.robothor/`): the operator's name, emails, nicknames. Template at `templates/owner.yaml.example`.
 - **Loaded by** `robothor.owner_config.load_owner_config()` on daemon startup and by resolvers that need to disambiguate the operator from other CRM contacts sharing a first name.
 - **Linked to CRM** via `tenant_users.person_id` (migration `039_operator_identity.sql`), populated idempotently by `bootstrap_owner_person_links()` on daemon startup. One owner per tenant, DB-enforced by a partial unique index.

@@ -14,7 +14,7 @@ Usage:
 
     # Apply (prompts once for confirmation unless --yes):
     python scripts/merge_operator_duplicates.py \\
-        --tenant robothor-primary \\
+        --tenant default \\
         --canonical <UUID> \\
         --merge <UUID>,<UUID> \\
         --delete <UUID> \\

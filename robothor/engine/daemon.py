@@ -177,7 +177,7 @@ async def main() -> None:
     logger.info("Starting Genus OS Agent Engine...")
 
     # Clean up stale runs from previous crash/restart
-    cleaned = await asyncio.get_event_loop().run_in_executor(None, _cleanup_stale_runs)
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
@@ -186,9 +186,7 @@ async def main() -> None:
     try:
         from robothor.crm.dal import bootstrap_owner_person_links
 
-        link_result = await asyncio.get_event_loop().run_in_executor(
-            None, bootstrap_owner_person_links
-        )
+        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
         if link_result.get("linked"):
             logger.info(
                 "Operator identity: linked tenant=%s → person_id=%s%s",

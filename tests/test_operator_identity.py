@@ -390,10 +390,10 @@ class TestListPeopleOwnerPriority:
 
         from robothor.crm.dal import list_people
 
-        list_people(search="Philip", tenant_id=DEFAULT_TENANT)
+        list_people(search="Alice", tenant_id=DEFAULT_TENANT)
 
         assert captured["prefer_owner"] is True
-        assert captured["name"] == "Philip"
+        assert captured["name"] == "Alice"
 
 
 # ─── resolve_contact owner-priority ─────────────────────────────────────────
@@ -403,9 +403,9 @@ class TestResolveContactOwnerPriority:
     def test_name_only_lookup_prefers_owner_on_collision(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
+            email="alice@example.com",
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
@@ -419,9 +419,9 @@ class TestResolveContactOwnerPriority:
                 (
                     {
                         "id": "owner-id",
-                        "first_name": "Philip",
+                        "first_name": "Alice",
                         "last_name": "Owner",
-                        "email": "philip@example.com",
+                        "email": "alice@example.com",
                         "tenant_id": DEFAULT_TENANT,
                     },
                     [],
@@ -435,7 +435,7 @@ class TestResolveContactOwnerPriority:
             result = resolve_contact(
                 channel="mention",
                 identifier="msg-1",
-                name="Philip",
+                name="Alice",
                 tenant_id=DEFAULT_TENANT,
             )
 
@@ -448,13 +448,13 @@ class TestResolveContactOwnerPriority:
     def test_existing_channel_identifier_overrides_name_match(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
+            email="alice@example.com",
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
-        # Existing contact_identifiers row already maps to a non-owner Philip.
+        # Existing contact_identifiers row already maps to a non-owner Alice.
         cur = FakeCursor(
             [
                 (
@@ -462,7 +462,7 @@ class TestResolveContactOwnerPriority:
                         "channel": "telegram",
                         "identifier": "tg-999",
                         "person_id": "non-owner-id",
-                        "display_name": "Philip Example",
+                        "display_name": "Alice Example",
                     },
                     [],
                 ),
@@ -483,7 +483,7 @@ class TestResolveContactOwnerPriority:
             result = resolve_contact(
                 channel="telegram",
                 identifier="tg-999",
-                name="Philip",
+                name="Alice",
                 tenant_id=DEFAULT_TENANT,
             )
 
@@ -494,15 +494,15 @@ class TestResolveContactOwnerPriority:
     def test_non_owner_name_uses_search(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
+            email="alice@example.com",
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
-        # Flow for non-owner name "Samantha":
+        # Flow for non-owner name "Charlie":
         #  1. contact_identifiers SELECT — miss
-        #  2. search_people SELECT — returns Samantha row
+        #  2. search_people SELECT — returns Charlie row
         #  3. upsert
         cur = FakeCursor(
             [
@@ -511,15 +511,15 @@ class TestResolveContactOwnerPriority:
                     None,
                     [
                         {
-                            "id": "sam-id",
-                            "first_name": "Samantha",
-                            "last_name": "D",
-                            "email": "s@example.com",
+                            "id": "charlie-id",
+                            "first_name": "Charlie",
+                            "last_name": "Nonowner",
+                            "email": "charlie@example.com",
                             "tenant_id": DEFAULT_TENANT,
                         }
                     ],
                 ),
-                ({"channel": "mention", "identifier": "msg-2", "person_id": "sam-id"}, []),
+                ({"channel": "mention", "identifier": "msg-2", "person_id": "charlie-id"}, []),
             ]
         )
         with _patched_conn(cur):
@@ -528,11 +528,11 @@ class TestResolveContactOwnerPriority:
             result = resolve_contact(
                 channel="mention",
                 identifier="msg-2",
-                name="Samantha",
+                name="Charlie",
                 tenant_id=DEFAULT_TENANT,
             )
 
-        assert result["person_id"] == "sam-id"
+        assert result["person_id"] == "charlie-id"
 
 
 # ─── resolve_task human-approval gate ───────────────────────────────────────
@@ -542,10 +542,10 @@ class TestResolveTaskOwnerGate:
     def test_rejects_non_owner_agent_on_requires_human(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
-            nicknames=frozenset({"phil"}),
+            email="alice@example.com",
+            nicknames=frozenset({"ali"}),
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
@@ -565,9 +565,9 @@ class TestResolveTaskOwnerGate:
     def test_accepts_owner_first_name(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
+            email="alice@example.com",
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
@@ -583,7 +583,7 @@ class TestResolveTaskOwnerGate:
             # create a minimal tenants row SELECT? — resolve_task calls
             # _record_transition which issues additional queries; patch that out.
             with patch("robothor.crm.dal._record_transition"):
-                result = resolve_task(task_id="t-1", resolution="done", agent_id="philip")
+                result = resolve_task(task_id="t-1", resolution="done", agent_id="alice")
 
         # resolve_task returns True on success, dict{error:...} on failure.
         assert result is True
@@ -591,10 +591,10 @@ class TestResolveTaskOwnerGate:
     def test_accepts_owner_nickname(self, monkeypatch):
         cfg = OwnerConfig(
             tenant_id=DEFAULT_TENANT,
-            first_name="Philip",
+            first_name="Alice",
             last_name="Owner",
-            email="philip@example.com",
-            nicknames=frozenset({"phil", "pip"}),
+            email="alice@example.com",
+            nicknames=frozenset({"ali", "lisa"}),
         )
         monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: cfg)
 
@@ -607,6 +607,6 @@ class TestResolveTaskOwnerGate:
         with _patched_conn(cur), patch("robothor.crm.dal._record_transition"):
             from robothor.crm.dal import resolve_task
 
-            result = resolve_task(task_id="t-1", resolution="done", agent_id="pip")
+            result = resolve_task(task_id="t-1", resolution="done", agent_id="lisa")
 
         assert result is True

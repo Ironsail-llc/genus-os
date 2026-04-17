@@ -763,7 +763,7 @@ class TestEnrollFromImage:
 class TestEnrolledEndpoint:
     @pytest.mark.asyncio
     async def test_enrolled_list(self, service):
-        service.recognizer.enrolled = {"Alice": np.ones(512), "Samantha": np.ones(512)}
+        service.recognizer.enrolled = {"Alice": np.ones(512), "Bob": np.ones(512)}
         resp = await service._route_request("GET", "/enrolled", "")
         body = json.loads(resp.decode().split("\r\n\r\n")[1])
         assert body["count"] == 2

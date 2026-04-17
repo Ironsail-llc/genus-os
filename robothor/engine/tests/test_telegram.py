@@ -522,7 +522,7 @@ class TestUserResolution:
         bot.config = EngineConfig(
             bot_token="test-token-123",
             default_chat_id="12345",
-            operator_name="Philip",
+            operator_name="Alice",
             tenant_id="test-tenant",
         )
 
@@ -530,7 +530,7 @@ class TestUserResolution:
             result = bot._resolve_user("12345", message)
 
         assert result is not None
-        assert result["display_name"] == "Philip"
+        assert result["display_name"] == "Alice"
         assert result["tenant_id"] == "test-tenant"
         assert result["role"] == "owner"
 

@@ -1351,6 +1351,7 @@ def resolve_task(
                         x
                         for x in (
                             owner_cfg.first_name.lower(),
+                            owner_cfg.last_name.lower(),
                             owner_cfg.full_name.lower(),
                             *owner_cfg.nicknames,
                         )
