@@ -684,3 +684,7 @@ register_context_hook(_travel_status)
 register_context_hook(_weather_context)
 register_agent_context_hook(_git_status_context)
 register_agent_context_hook(_buddy_status_context)
+
+from robothor.engine.thread_pool import _thread_pool_context  # noqa: E402
+
+register_agent_context_hook(_thread_pool_context)
