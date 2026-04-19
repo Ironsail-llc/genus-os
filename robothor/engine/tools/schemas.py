@@ -764,6 +764,16 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Add a Google Meet video conference link (default true)",
                         "default": True,
                     },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Bypass the duplicate-meeting check. By default, a pre-insert search of ±14 days for an event with the same title and overlapping attendees will short-circuit creation; set force=true only when you have verified the existing event is not the one you want to create.",
+                        "default": False,
+                    },
+                    "attendee_confirmed": {
+                        "type": "boolean",
+                        "description": "Certify that the attendees have already confirmed this time out-of-band (e.g. the operator approved in chat, or an attendee replied 'yes' on an email thread). Bypasses the recurring_meeting_proposal_required guardrail for high-stakes invites. Never set this to true speculatively — only when you can point to the confirmation.",
+                        "default": False,
+                    },
                 },
                 "required": ["summary", "start", "end"],
             },

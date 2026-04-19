@@ -35,6 +35,112 @@ def _resolve_owner_email() -> str:
     return os.environ.get("ROBOTHOR_OWNER_EMAIL", "").strip().lower()
 
 
+def _normalize_summary(s: str) -> str:
+    """Lowercase, collapse whitespace, strip punctuation for loose title matching."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s)).strip().lower()
+
+
+def _summaries_match(a: str, b: str) -> bool:
+    """True when two meeting titles likely name the same series.
+
+    Either normalized string contains the other (catches "Weekly Sync" vs
+    "Weekly Sync Leadership"), OR normalized strings are equal.
+    """
+    na, nb = _normalize_summary(a), _normalize_summary(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    return na in nb or nb in na
+
+
+def _attendee_set(event_like: Any) -> set[str]:
+    """Extract attendee emails (lowercased) from a create-payload list or a gws event dict."""
+    out: set[str] = set()
+    if isinstance(event_like, list):
+        for entry in event_like:
+            if isinstance(entry, str):
+                out.add(entry.strip().lower())
+            elif isinstance(entry, dict) and entry.get("email"):
+                out.add(str(entry["email"]).strip().lower())
+    elif isinstance(event_like, dict):
+        for entry in event_like.get("attendees", []) or []:
+            if isinstance(entry, dict) and entry.get("email"):
+                out.add(str(entry["email"]).strip().lower())
+    return out
+
+
+def _attendees_overlap(proposed: set[str], existing: set[str], owner_email: str) -> bool:
+    """Overlap rule for dedup.
+
+    Ignore the operator's own email on both sides (it's auto-added, not a signal).
+    Match if the smaller side has at least half its attendees in the other side,
+    OR absolute overlap is at least 2.
+    """
+    a = {e for e in proposed if e and e != owner_email}
+    b = {e for e in existing if e and e != owner_email}
+    if not a or not b:
+        return False
+    inter = a & b
+    if len(inter) >= 2:
+        return True
+    smaller = min(len(a), len(b))
+    return smaller > 0 and (len(inter) / smaller) >= 0.5
+
+
+def _find_duplicate_event(
+    summary: str,
+    start: str,
+    attendees: list[str],
+    calendar_id: str,
+    owner_email: str,
+    window_days: int = 14,
+) -> dict[str, Any] | None:
+    """Return an existing event dict if one in the ±window overlaps this proposal, else None.
+
+    Only dedups against events with same-or-substring summary AND attendee overlap
+    (per _attendees_overlap). Silent on any list failure — dedup is best-effort.
+    """
+    import json as _json
+    from datetime import datetime, timedelta
+
+    try:
+        base = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    except ValueError:
+        logger.debug("gws_calendar_create dedup: unparseable start=%s — skipping check", start)
+        return None
+
+    time_min = (base - timedelta(days=window_days)).isoformat()
+    time_max = (base + timedelta(days=window_days)).isoformat()
+
+    cal_params = {
+        "calendarId": calendar_id,
+        "timeMin": time_min,
+        "timeMax": time_max,
+        "singleEvents": True,
+        "orderBy": "startTime",
+        "maxResults": 250,
+    }
+    listed = _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+    if not isinstance(listed, dict) or "error" in listed:
+        logger.debug("gws_calendar_create dedup: list failed — skipping (result=%s)", listed)
+        return None
+
+    proposed_attendees = _attendee_set(attendees)
+    for event in listed.get("items", []) or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("status") == "cancelled":
+            continue
+        if not _summaries_match(summary, event.get("summary", "") or ""):
+            continue
+        existing_attendees = _attendee_set(event)
+        if not _attendees_overlap(proposed_attendees, existing_attendees, owner_email):
+            continue
+        return event
+    return None
+
+
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     """Run a gws CLI command, return parsed JSON or error dict."""
     import json as _json
@@ -346,6 +452,41 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not summary or not start or not end:
             return {"error": "summary, start, and end are required"}
 
+        calendar_id = args.get("calendar_id", "primary")
+        owner_email = _resolve_owner_email()
+
+        if not args.get("force"):
+            dup = _find_duplicate_event(
+                summary=summary,
+                start=start,
+                attendees=args.get("attendees", []) or [],
+                calendar_id=calendar_id,
+                owner_email=owner_email,
+            )
+            if dup is not None:
+                existing_start = (dup.get("start") or {}).get("dateTime") or (
+                    dup.get("start") or {}
+                ).get("date", "")
+                logger.warning(
+                    "gws_calendar_create deduped against existing event %s "
+                    "(summary=%r start=%s) — use force=true to override",
+                    dup.get("id"),
+                    dup.get("summary"),
+                    existing_start,
+                )
+                return {
+                    "status": "deduped",
+                    "existing_event_id": dup.get("id"),
+                    "summary": dup.get("summary"),
+                    "start": existing_start,
+                    "htmlLink": dup.get("htmlLink"),
+                    "reason": (
+                        "An event with a matching title and overlapping attendees "
+                        "already exists within ±14 days. Not creating a duplicate. "
+                        "Pass force=true to bypass this check."
+                    ),
+                }
+
         event_body: dict[str, Any] = {
             "summary": summary,
             "start": {"dateTime": start},
@@ -356,7 +497,6 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("location"):
             event_body["location"] = args["location"]
         attendees = [{"email": e} for e in args.get("attendees", [])]
-        owner_email = _resolve_owner_email()
         if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
             attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
@@ -371,7 +511,6 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 }
             }
 
-        calendar_id = args.get("calendar_id", "primary")
         cal_params = {"calendarId": calendar_id}
         if with_meet:
             cal_params["conferenceDataVersion"] = 1

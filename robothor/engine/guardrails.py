@@ -54,7 +54,80 @@ POLICY_DESCRIPTIONS: dict[str, str] = {
     "write_path_restrict": "File writes are restricted to specific paths.",
     "desktop_safety": "Desktop automation has additional safety checks (no terminal emulators, no dangerous key combos).",
     "human_approval": "Certain tools require explicit human approval before execution.",
+    "requires_human_task_closure": (
+        "If this run reads a task with requires_human=true and does not close or update it, "
+        "the engine auto-marks that task IN_PROGRESS at run-end so the next heartbeat will not re-pick it. "
+        "To fully close, call update_task(status=DONE) or resolve_task explicitly."
+    ),
+    "recurring_meeting_proposal_required": (
+        "Creating a calendar invite with ≥3 external attendees, >7 days in the future, or recurring cadence "
+        "is blocked unless a prior step in this run proposed the time via email, or attendee_confirmed=true."
+    ),
 }
+
+
+def _owner_email_cached() -> str:
+    """Lookup operator email for domain-classification — cheap + cache-less."""
+    try:
+        from robothor.engine.tools.handlers.gws import _resolve_owner_email
+
+        return _resolve_owner_email()
+    except Exception:
+        import os as _os
+
+        return _os.environ.get("ROBOTHOR_OWNER_EMAIL", "").strip().lower()
+
+
+def _days_from_now(start: str) -> float | None:
+    """Parse an RFC3339 start string and return days between now (UTC) and then.
+
+    Returns None if unparseable so callers can skip the check rather than crash.
+    """
+    from datetime import datetime, timezone
+
+    if not start:
+        return None
+    try:
+        dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = datetime.now(tz=timezone.utc)
+    return (dt - now).total_seconds() / 86400.0
+
+
+def _lookup_scheduling_policies(emails: list[str]) -> dict[str, str]:
+    """Map each email to its crm_people.scheduling_policy (if non-default).
+
+    Queries ``crm_people.email`` directly (case-insensitive). Emails not in CRM
+    are omitted. Any DB / schema failure (e.g. column absent before migration)
+    returns an empty dict silently — the guardrail falls back to its email
+    heuristic signals only.
+    """
+    normalized = [e.strip().lower() for e in emails if e and "@" in e]
+    if not normalized:
+        return {}
+    try:
+        from robothor.crm.dal import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT lower(email), scheduling_policy "
+                "FROM crm_people "
+                "WHERE deleted_at IS NULL AND lower(email) = ANY(%s)",
+                (normalized,),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+
+    out: dict[str, str] = {}
+    for row in rows or []:
+        email = row[0]
+        policy = (row[1] or "stable").strip()
+        if policy and policy != "stable":
+            out[email] = policy
+    return out
 
 
 def guardrail_summary(policies: list[str]) -> str:
@@ -124,10 +197,18 @@ class GuardrailEngine:
         tool_name: str,
         tool_args: dict[str, Any],
         agent_id: str = "",
+        prior_steps: list[Any] | None = None,
     ) -> GuardrailResult:
-        """Run all enabled pre-execution guardrails on a tool call."""
+        """Run all enabled pre-execution guardrails on a tool call.
+
+        prior_steps is an optional list of this run's completed RunStep objects
+        (in order). Guardrails that need to inspect context from earlier in the
+        run (e.g. "did we already propose the time via email?") read it.
+        """
         for policy in self.enabled_policies:
-            result = self._run_pre_policy(policy, tool_name, tool_args, agent_id)
+            result = self._run_pre_policy(
+                policy, tool_name, tool_args, agent_id, prior_steps or []
+            )
             if not result.allowed:
                 return result
         return GuardrailResult()
@@ -150,6 +231,7 @@ class GuardrailEngine:
         tool_name: str,
         tool_args: dict[str, Any],
         agent_id: str,
+        prior_steps: list[Any],
     ) -> GuardrailResult:
         """Dispatch to the correct pre-execution policy."""
         if policy == "no_destructive_writes":
@@ -168,6 +250,8 @@ class GuardrailEngine:
             return self._check_desktop_safety(tool_name, tool_args)
         if policy == "human_approval":
             return self._check_human_approval(tool_name, tool_args, agent_id)
+        if policy == "recurring_meeting_proposal_required":
+            return self._check_recurring_meeting_proposal(tool_name, tool_args, prior_steps)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -396,6 +480,111 @@ class GuardrailEngine:
                 )
         return GuardrailResult()
 
+    def _check_recurring_meeting_proposal(
+        self,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        prior_steps: list[Any],
+    ) -> GuardrailResult:
+        """Block high-stakes calendar invites that were not pre-proposed via email.
+
+        High-stakes = any attendee with scheduling_policy='ask_first',
+        OR ≥3 external-domain attendees, OR starts >7d out, OR has recurrence.
+        Attendees with scheduling_policy='no_auto' block unconditionally.
+        Accepted evidence of proposal: a prior gws_gmail_send/gws_gmail_reply
+        step in this run whose body contains time-proposing language.
+        Alternatively, the caller can pass ``attendee_confirmed=true`` to
+        certify the proposal happened out-of-band, or ``force=true`` to
+        override entirely.
+        """
+        if tool_name != "gws_calendar_create":
+            return GuardrailResult()
+
+        if tool_args.get("force") or tool_args.get("attendee_confirmed"):
+            return GuardrailResult()
+
+        # Classify attendees by domain + CRM scheduling policy.
+        attendees = tool_args.get("attendees", []) or []
+        owner_email = _owner_email_cached()
+        owner_domain = owner_email.split("@", 1)[1] if "@" in owner_email else ""
+        external_attendee_count = 0
+        for a in attendees:
+            if not isinstance(a, str) or "@" not in a:
+                continue
+            dom = a.split("@", 1)[1].lower()
+            if dom and dom != owner_domain:
+                external_attendee_count += 1
+
+        policies = _lookup_scheduling_policies(
+            [a for a in attendees if isinstance(a, str)]
+        )
+        if "no_auto" in policies.values():
+            blocked_person = next(
+                email for email, p in policies.items() if p == "no_auto"
+            )
+            return GuardrailResult(
+                allowed=False,
+                action="blocked",
+                reason=(
+                    f"Blocked — {blocked_person} has scheduling_policy='no_auto'. "
+                    "Agents may not create calendar invites for this person; "
+                    "only the operator can. If the operator has approved this "
+                    "invite out-of-band, pass force=true."
+                ),
+                guardrail_name="recurring_meeting_proposal_required",
+            )
+        attendee_needs_proposal = "ask_first" in policies.values()
+
+        start = tool_args.get("start", "")
+        days_out = _days_from_now(start)
+        has_recurrence = bool(tool_args.get("recurrence"))
+
+        high_stakes = (
+            attendee_needs_proposal
+            or external_attendee_count >= 3
+            or (days_out is not None and days_out > 7)
+            or has_recurrence
+        )
+        if not high_stakes:
+            return GuardrailResult()
+
+        # Look for a proposal step in this run.
+        proposal_tools = {"gws_gmail_send", "gws_gmail_reply"}
+        proposal_keywords = (
+            "propose",
+            "suggest",
+            "availability",
+            "available",
+            "work for you",
+            "would this work",
+            "would that work",
+            "does this work",
+            "does that work",
+            "please confirm",
+            "let me know a time",
+            "prefer",
+        )
+        for step in prior_steps:
+            if getattr(step, "tool_name", None) not in proposal_tools:
+                continue
+            args = getattr(step, "tool_input", None) or {}
+            body = str(args.get("body", "")).lower()
+            if any(kw in body for kw in proposal_keywords):
+                return GuardrailResult()
+
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=(
+                "Blocked high-stakes calendar invite — no time-proposal email was "
+                "sent in this run. Send a 'does X work for you?' email first, then "
+                "create the event after attendees confirm; or pass "
+                "attendee_confirmed=true or force=true to certify an out-of-band "
+                "confirmation."
+            ),
+            guardrail_name="recurring_meeting_proposal_required",
+        )
+
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
         """Warn if tool output contains sensitive data patterns."""
         output_str = str(tool_output)[:10000]  # cap scan length
@@ -408,3 +597,128 @@ class GuardrailEngine:
                     guardrail_name="no_sensitive_data",
                 )
         return GuardrailResult()
+
+
+# ─── Post-run guardrails ─────────────────────────────────────────────
+#
+# Post-run checks don't belong on GuardrailEngine (which is per-tool-call) —
+# they operate on a finished run and can enqueue side-effects like task updates.
+
+
+def _collect_driven_task_ids(run: Any) -> set[str]:
+    """Task IDs this run read as requires_human=true, plus any run.task_id.
+
+    Looks at each `get_task` step's output for `requires_human` / `requiresHuman`
+    (both spellings are produced by different DAL code paths).
+    """
+    driven: set[str] = set()
+    task_id = getattr(run, "task_id", None)
+    if task_id:
+        driven.add(str(task_id))
+    for step in getattr(run, "steps", []) or []:
+        if getattr(step, "tool_name", None) != "get_task":
+            continue
+        out = getattr(step, "tool_output", None)
+        if not isinstance(out, dict):
+            continue
+        flag = out.get("requires_human")
+        if flag is None:
+            flag = out.get("requiresHuman")
+        if not flag:
+            continue
+        tid = out.get("id")
+        if tid:
+            driven.add(str(tid))
+    return driven
+
+
+def _collect_closed_task_ids(run: Any) -> set[str]:
+    """Task IDs the run already closed or moved out of TODO via update_task/resolve_task."""
+    closed: set[str] = set()
+    for step in getattr(run, "steps", []) or []:
+        name = getattr(step, "tool_name", None)
+        if name not in ("update_task", "resolve_task"):
+            continue
+        args = getattr(step, "tool_input", None) or {}
+        tid = args.get("id") or args.get("task_id")
+        if not tid:
+            continue
+        if name == "resolve_task":
+            closed.add(str(tid))
+            continue
+        # update_task: only counts as closure if it set a non-TODO status
+        status = str(args.get("status", "")).upper()
+        if status in {"DONE", "REVIEW", "IN_PROGRESS", "CANCELLED", "BLOCKED"}:
+            closed.add(str(tid))
+    return closed
+
+
+def check_post_run(run: Any, agent_config: Any, tenant_id: str = "") -> list[str]:
+    """Post-run enforcement — currently: requires_human_task_closure.
+
+    If the agent has the ``requires_human_task_closure`` guardrail enabled and
+    the run read any requires_human task without closing it, flip those tasks
+    to IN_PROGRESS with a note tying them to this run, so the next heartbeat
+    does not re-pick them.
+
+    Returns the list of task IDs that were auto-advanced (for logging/tests).
+    Silent no-op if the guardrail is not enabled for this agent.
+    """
+    policies = getattr(agent_config, "guardrails", []) or []
+    if "requires_human_task_closure" not in policies:
+        return []
+
+    driven = _collect_driven_task_ids(run)
+    if not driven:
+        return []
+    closed = _collect_closed_task_ids(run)
+    unclosed = driven - closed
+    if not unclosed:
+        return []
+
+    run_id = getattr(run, "id", "")
+    agent_id = getattr(run, "agent_id", "")
+    marker = (
+        f"\n[{agent_id} auto-advanced by run {run_id}: "
+        f"run read this requires_human task but did not close it explicitly]"
+    )
+
+    advanced: list[str] = []
+    try:
+        from robothor.crm.dal import DEFAULT_TENANT, get_task, update_task
+    except Exception as e:
+        logger.warning("check_post_run: crm.dal import failed: %s", e)
+        return []
+
+    tid_tenant = tenant_id or DEFAULT_TENANT
+    for tid in unclosed:
+        try:
+            existing = get_task(tid, tenant_id=tid_tenant)
+            if not existing:
+                continue
+            # Never regress a task that's already past TODO.
+            current_status = str(existing.get("status", "")).upper()
+            if current_status != "TODO":
+                continue
+            body = (existing.get("body") or "") + marker
+            ok = update_task(
+                tid,
+                changed_by=agent_id,
+                tenant_id=tid_tenant,
+                status="IN_PROGRESS",
+                body=body,
+            )
+            if ok:
+                advanced.append(tid)
+                logger.warning(
+                    "requires_human_task_closure: auto-advanced task %s to IN_PROGRESS "
+                    "(driven_by_run=%s agent=%s)",
+                    tid,
+                    run_id,
+                    agent_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "requires_human_task_closure: failed to advance task %s: %s", tid, e
+            )
+    return advanced

@@ -458,6 +458,170 @@ class TestGwsCalendarCreate:
             params = json.loads(cmd[params_idx + 1])
             assert "conferenceDataVersion" not in params
 
+    def test_create_dedupes_against_existing_matching_event(self):
+        # First subprocess.run (events list) returns one matching event;
+        # second would be insert but dedup should short-circuit before it runs.
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "existing123",
+                            "summary": "Valhalla Weekly",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-04-21T14:00:00-04:00"},
+                            "attendees": [
+                                {"email": "alice@vendor.example"},
+                                {"email": "bob@vendor.example"},
+                                {"email": "carol@partner.example"},
+                            ],
+                            "htmlLink": "https://cal/existing123",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with (
+            patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run", return_value=list_result
+            ) as mock_run,
+            patch.dict("os.environ", {"ROBOTHOR_OWNER_EMAIL": "robothor@example.com"}),
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Valhalla Weekly Leadership",
+                    "start": "2026-04-20T09:00:00-04:00",
+                    "end": "2026-04-20T09:30:00-04:00",
+                    "attendees": [
+                        "alice@vendor.example",
+                        "bob@vendor.example",
+                        "carol@partner.example",
+                    ],
+                },
+            )
+
+            assert result["status"] == "deduped"
+            assert result["existing_event_id"] == "existing123"
+            assert result["summary"] == "Valhalla Weekly"
+            # Only one subprocess call — list — and no insert.
+            assert mock_run.call_count == 1
+            cmd = mock_run.call_args[0][0]
+            assert "list" in cmd
+            assert "insert" not in cmd
+
+    def test_create_no_dedup_when_attendees_do_not_overlap(self):
+        # Matching title but no overlapping non-operator attendees — should create.
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "otherteam",
+                            "summary": "Weekly Sync",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-05-04T10:00:00-04:00"},
+                            "attendees": [
+                                {"email": "unrelated1@example.com"},
+                                {"email": "unrelated2@example.com"},
+                            ],
+                        }
+                    ]
+                }
+            ),
+        )
+        insert_result = MagicMock(returncode=0, stdout='{"id":"new1","summary":"Weekly Sync"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[list_result, insert_result],
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Weekly Sync",
+                    "start": "2026-05-01T10:00:00-04:00",
+                    "end": "2026-05-01T10:30:00-04:00",
+                    "attendees": ["colleague@othercompany.com"],
+                },
+            )
+
+            assert result.get("id") == "new1"
+            assert mock_run.call_count == 2
+
+    def test_create_force_bypasses_dedup(self):
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "dupe",
+                            "summary": "Valhalla Weekly",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-04-21T14:00:00-04:00"},
+                            "attendees": [
+                                {"email": "alice@vendor.example"},
+                                {"email": "bob@vendor.example"},
+                            ],
+                        }
+                    ]
+                }
+            ),
+        )
+        insert_result = MagicMock(returncode=0, stdout='{"id":"forced","summary":"Valhalla Weekly"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[insert_result, list_result],
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Valhalla Weekly",
+                    "start": "2026-04-28T14:00:00-04:00",
+                    "end": "2026-04-28T14:30:00-04:00",
+                    "attendees": ["alice@vendor.example", "bob@vendor.example"],
+                    "force": True,
+                },
+            )
+
+            assert result.get("id") == "forced"
+            # With force, the list is skipped entirely — only insert runs.
+            assert mock_run.call_count == 1
+            cmd = mock_run.call_args[0][0]
+            assert "insert" in cmd
+
+    def test_create_skips_dedup_when_list_fails(self):
+        # If the pre-check list errors, fall through to create (best-effort dedup).
+        list_fail = MagicMock(returncode=1, stdout="", stderr="auth fail")
+        insert_ok = MagicMock(returncode=0, stdout='{"id":"e9","summary":"Meeting"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[list_fail, insert_ok],
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Meeting",
+                    "start": "2026-06-01T10:00:00-04:00",
+                    "end": "2026-06-01T10:30:00-04:00",
+                },
+            )
+            assert result.get("id") == "e9"
+
     def test_create_requires_fields(self):
         from robothor.engine.tools import _handle_gws_tool
 

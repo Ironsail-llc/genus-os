@@ -883,3 +883,50 @@ class TestModels:
         assert config.max_nesting_depth == 2
         assert config.sub_agent_max_iterations == 10
         assert config.sub_agent_timeout_seconds == 120
+
+
+# ─── Tool denial inheritance ─────────────────────────────────────────
+
+
+class TestEmailResponderToolDenial:
+    """Regression for 2026-04-19 Daniel scheduling incident.
+
+    email-responder must never see gws_gmail_send (it has to use
+    gws_gmail_reply for threading + duplicate guarding). tools_denied on
+    the manifest must hide gws_gmail_send from the registry.
+    """
+
+    def test_gws_gmail_send_denied_in_tool_names(self):
+        """tools_denied must override tools_allowed for any sub-agent-style config.
+
+        Regression for the 2026-04-19 incident: the email-responder sub-agent
+        successfully called gws_gmail_send despite the manifest listing only
+        gws_gmail_reply in tools_allowed. With gws_gmail_send in tools_denied,
+        the registry must never surface it regardless of allowlist.
+        """
+        from robothor.engine.models import AgentConfig
+        from robothor.engine.tools import ToolRegistry
+
+        cfg = AgentConfig(
+            id="email-responder-like",
+            name="Test",
+            tools_allowed=[
+                "gws_gmail_search",
+                "gws_gmail_get",
+                "gws_gmail_reply",
+                # Note: gws_gmail_send intentionally NOT in allowlist, but also
+                # in denylist below as belt-and-suspenders in case tools_allowed
+                # is widened in future.
+                "gws_gmail_send",
+                "gws_calendar_list",
+            ],
+            tools_denied=["gws_gmail_send"],
+        )
+
+        registry = ToolRegistry()
+        tool_names = registry.get_tool_names(cfg)
+        assert (
+            "gws_gmail_send" not in tool_names
+        ), f"gws_gmail_send leaked past tools_denied: {tool_names}"
+        # Reply tool should still be present.
+        assert "gws_gmail_reply" in tool_names
