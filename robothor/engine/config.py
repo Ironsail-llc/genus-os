@@ -309,6 +309,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         eager_tool_compression=v2.get("eager_tool_compression", False),
         tool_offload_threshold=v2.get("tool_offload_threshold", 0),
         tool_timeout_seconds=int(v2.get("tool_timeout_seconds", 120)),
+        # Task batching — early-exit for high-volume task agents (e.g. email-analyst)
+        task_batch_limit=int(v2.get("task_batch_limit", 0)),
         # Continuous execution mode
         continuous=v2.get("continuous", False),
         progress_report_interval=int(v2.get("progress_report_interval", 50)),
@@ -776,4 +778,17 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "
         f"(UTC offset: {now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
     )
-    return SystemPromptParts(static_body=body, dynamic_tail=time_context)
+
+    # Inject task_batch_limit constraint when set — prevents timeout by capping
+    # how many tasks are processed per run (e.g. email-analyst 16% timeout rate).
+    dynamic_tail = time_context
+    if config.task_batch_limit > 0:
+        dynamic_tail = (
+            f"{time_context}\n"
+            f"TASK BATCH LIMIT: Process at most {config.task_batch_limit} tasks per run. "
+            f"Call list_my_tasks with limit={config.task_batch_limit} and process only the "
+            f"returned tasks. If more tasks exist, they will be picked up in the next run. "
+            f"This cap prevents timeouts — do not exceed it."
+        )
+
+    return SystemPromptParts(static_body=body, dynamic_tail=dynamic_tail)

@@ -246,6 +246,9 @@ class AgentConfig:
     # ── Tool execution ──
     tool_timeout_seconds: int = 120  # per-tool call timeout (0 = unlimited)
 
+    # ── Task batching — early-exit for high-volume task agents ──
+    task_batch_limit: int = 0  # max tasks per run (0 = no limit); injected into system prompt
+
     # ── Continuous execution mode ──
     continuous: bool = False  # raises caps for sustained multi-hour runs
     progress_report_interval: int = 50  # iterations between Telegram progress updates

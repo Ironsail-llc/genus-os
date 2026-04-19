@@ -531,3 +531,60 @@ class TestGoalsParsing:
     def test_goals_empty_list(self):
         config = manifest_to_agent_config({"id": "bare", "goals": []})
         assert config.goals == []
+
+
+# ── Task batch limit ─────────────────────────────────────────────────────
+
+
+class TestTaskBatchLimit:
+    """Tests for v2.task_batch_limit — per-run task cap for high-volume agents."""
+
+    def test_task_batch_limit_parsed_from_manifest(self):
+        """v2.task_batch_limit is parsed and stored on the config."""
+        manifest = {
+            "id": "email-analyst",
+            "v2": {"task_batch_limit": 5},
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.task_batch_limit == 5
+
+    def test_task_batch_limit_defaults_to_zero(self):
+        """task_batch_limit defaults to 0 (no limit) when not specified."""
+        config = manifest_to_agent_config({"id": "bare"})
+        assert config.task_batch_limit == 0
+
+    def test_task_batch_limit_zero_explicit(self):
+        """Explicitly setting v2.task_batch_limit: 0 disables the cap."""
+        manifest = {"id": "bare", "v2": {"task_batch_limit": 0}}
+        config = manifest_to_agent_config(manifest)
+        assert config.task_batch_limit == 0
+
+    def test_task_batch_limit_injected_into_system_prompt(self, tmp_path):
+        """When task_batch_limit > 0, the constraint appears in the dynamic tail."""
+        config = AgentConfig(id="email-analyst", name="Email Analyst", task_batch_limit=5)
+        parts = build_system_prompt(config, tmp_path)
+        assert "TASK BATCH LIMIT" in parts.dynamic_tail
+        assert "5" in parts.dynamic_tail
+        assert "list_my_tasks" in parts.dynamic_tail
+
+    def test_task_batch_limit_not_injected_when_zero(self, tmp_path):
+        """When task_batch_limit == 0, no batch constraint is added to the prompt."""
+        config = AgentConfig(id="bare-agent", name="Bare", task_batch_limit=0)
+        parts = build_system_prompt(config, tmp_path)
+        assert "TASK BATCH LIMIT" not in parts.dynamic_tail
+
+    def test_task_batch_limit_not_in_static_body(self, tmp_path):
+        """Batch limit constraint is in dynamic_tail only (not cached static body)."""
+        config = AgentConfig(id="email-analyst", name="Email Analyst", task_batch_limit=3)
+        parts = build_system_prompt(config, tmp_path)
+        # Verify it's in dynamic, not static (static is cached by file mtime)
+        assert "TASK BATCH LIMIT" not in parts.static_body
+        assert "TASK BATCH LIMIT" in parts.dynamic_tail
+
+    def test_task_batch_limit_full_text_includes_constraint(self, tmp_path):
+        """full_text() contains the batch limit from dynamic_tail."""
+        config = AgentConfig(id="email-analyst", name="Email Analyst", task_batch_limit=4)
+        parts = build_system_prompt(config, tmp_path)
+        full = parts.full_text()
+        assert "TASK BATCH LIMIT" in full
+        assert "4" in full
