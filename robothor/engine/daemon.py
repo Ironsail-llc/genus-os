@@ -228,6 +228,40 @@ async def main() -> None:
     )
 
     hook_registry = init_hook_registry()
+
+    # Register channel-bus surface handler so POST_DELIVERY dual-writes fleet
+    # outputs into main's session for supervisor visibility. Must be registered
+    # before load_global_hooks so the YAML entry can bind to it by name.
+    from robothor.engine.channel_bus import on_post_delivery as _channel_bus_surface
+
+    hook_registry.register_python_handler("channel_bus.surface", _channel_bus_surface)
+
+    # Channel-bus main busy-state hooks: AGENT_START/AGENT_END on the main
+    # agent flip a flag in the WakeDebouncer so wakes deferred during a
+    # concurrent interactive turn can re-fire cleanly when main goes idle.
+    async def _channel_bus_on_main_start(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                deb.mark_main_started()
+        return HookResult()
+
+    async def _channel_bus_on_main_end(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                await deb.mark_main_finished()
+        return HookResult()
+
+    hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
+    hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
+
     global_hooks = load_global_hooks(config.workspace / "docs" / "hooks")
     if global_hooks:
         hook_registry.register_many(global_hooks)
@@ -263,6 +297,33 @@ async def main() -> None:
     bot = TelegramBot(config, runner)
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
+
+    # Channel-bus debouncer: submits fleet surfaces, fires CHANNEL_EVENT wake
+    # on main after the debounce window. Uses main's YAML config for timing.
+    try:
+        from robothor.engine.channel_bus import WakeDebouncer, set_debouncer
+        from robothor.engine.config import load_agent_config as _load_main_cfg
+
+        _main_cfg = _load_main_cfg("main", config.manifest_dir)
+        cb_cfg = _main_cfg.channel_bus if _main_cfg else None
+        if cb_cfg is not None:
+            _debouncer = WakeDebouncer(
+                trigger_fn=scheduler.trigger_channel_event,
+                debounce_seconds=cb_cfg.wake_debounce_seconds,
+                cooldown_seconds=cb_cfg.main_wake_cooldown_seconds,
+                rate_limit_per_hour=cb_cfg.per_agent_rate_limit_per_hour,
+                enabled=cb_cfg.wake_on_surface,
+            )
+            set_debouncer(_debouncer)
+            logger.info(
+                "Channel-bus wake: enabled=%s debounce=%ds cooldown=%ds limit=%d/hr",
+                cb_cfg.wake_on_surface,
+                cb_cfg.wake_debounce_seconds,
+                cb_cfg.main_wake_cooldown_seconds,
+                cb_cfg.per_agent_rate_limit_per_hour,
+            )
+    except Exception as e:
+        logger.warning("Channel-bus debouncer init failed (non-fatal): %s", e)
 
     # Federation — start NATS if connections exist (no-op otherwise)
     nats_mgr = await _start_federation(config)

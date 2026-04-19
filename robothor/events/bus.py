@@ -61,7 +61,7 @@ EVENT_BUS_ENABLED = os.environ.get("EVENT_BUS_ENABLED", "true").lower() in (
 STREAM_PREFIX = "robothor:events:"
 
 # Base stream names (always valid)
-_BASE_STREAMS = {"email", "calendar", "crm", "vision", "health", "agent", "system"}
+_BASE_STREAMS = {"email", "calendar", "crm", "vision", "health", "agent", "system", "channel"}
 
 # Dynamic: extend with ROBOTHOR_EXTRA_STREAMS env var (comma-separated)
 _extra = os.environ.get("ROBOTHOR_EXTRA_STREAMS", "")

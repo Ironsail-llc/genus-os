@@ -483,6 +483,84 @@ class CronScheduler:
             f"heartbeat:{agent_config.heartbeat.cron_expr}",
         )
 
+    async def trigger_channel_event(
+        self,
+        tenant_id: str,
+        chat_id: str,
+        agents: list[str],
+        run_ids: list[str],
+    ) -> None:
+        """Wake main for a channel surface review (Phase 3 of the channel bus).
+
+        Called by ``WakeDebouncer._fire_after_delay`` after the 15s debounce
+        window closes on a burst of fleet deliveries. Uses a distinct dedup
+        key so it can't collide with main's heartbeat or a user-interactive
+        turn that happens to be in flight.
+        """
+        from robothor.engine.config import load_agent_config
+
+        agent_config = load_agent_config("main", self.config.manifest_dir)
+        if agent_config is None:
+            logger.warning("trigger_channel_event: main config not found")
+            return
+        if agent_config.channel_bus is None or not agent_config.channel_bus.wake_on_surface:
+            logger.debug("trigger_channel_event: wake_on_surface disabled, skipping")
+            return
+
+        dedup_key = "main:channel_wake"
+        if not await try_acquire(dedup_key):
+            logger.info("channel_wake skipped: %s already running", dedup_key)
+            return
+
+        try:
+            preamble = _build_channel_wake_preamble(agents, run_ids)
+
+            # Load main's canonical session so the wake run sees every fleet
+            # surface that was dual-written (plus its own prior turns).
+            conversation_history = None
+            try:
+                from robothor.engine.chat import get_main_session_key
+                from robothor.engine.chat_store import load_session
+
+                session_key = get_main_session_key()
+                hist_limit = (
+                    agent_config.channel_bus.wake_preamble_history_lines * 4
+                    if agent_config.channel_bus
+                    else 40
+                )
+                session_data = await asyncio.to_thread(
+                    load_session, session_key, limit=hist_limit, tenant_id=tenant_id
+                )
+                if session_data and session_data.get("history"):
+                    conversation_history = session_data["history"]
+            except Exception as e:
+                logger.debug("channel_wake: failed to load main session: %s", e)
+
+            trigger_detail = f"channel_event:{chat_id}:batch={len(run_ids)}"
+            try:
+                run = await self.runner.execute(
+                    agent_id="main",
+                    message=preamble,
+                    trigger_type=TriggerType.CHANNEL_EVENT,
+                    trigger_detail=trigger_detail,
+                    agent_config=agent_config,
+                    conversation_history=conversation_history,
+                    tenant_id=tenant_id,
+                )
+                logger.info(
+                    "channel_wake complete: status=%s agents=%s",
+                    run.status.value if run else "?",
+                    ",".join(agents),
+                )
+                if run is not None:
+                    from robothor.engine.delivery import deliver
+
+                    await deliver(agent_config, run)
+            except Exception as e:
+                logger.warning("channel_wake execute failed: %s", e)
+        finally:
+            await release(dedup_key)
+
     async def _run_workflow(self, workflow_id: str) -> None:
         """Execute a workflow as a scheduled cron job."""
         if not self.workflow_engine:
@@ -554,6 +632,38 @@ class CronScheduler:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("Cron scheduler stopped")
+
+
+def _build_channel_wake_preamble(agents: list[str], run_ids: list[str]) -> str:
+    """Compose the wake prompt handed to main during a CHANNEL_EVENT run.
+
+    Brief and directive: main should audit what just landed in the channel
+    (visible as recent assistant turns in its own session history) and
+    decide whether to respond, consolidate, or stay silent. Short preamble
+    keeps the run cheap — main already sees the full content upstream.
+    """
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    if agents:
+        agents_line = ", ".join(f"@{a}" for a in agents)
+    else:
+        agents_line = "(none listed — check session history)"
+    batch_note = (
+        f"{len(run_ids)} run{'s' if len(run_ids) != 1 else ''} in this batch"
+        if run_ids
+        else "debounce-only wake (no new run ids)"
+    )
+    return (
+        f"Channel surface review — {now}\n\n"
+        f"Since your last turn, {agents_line} posted to the channel ({batch_note}).\n"
+        f"Their messages are already in your session history above, labeled with "
+        f"[@agent-id] prefixes. Review them and decide:\n"
+        f"- respond in the channel if operator visibility is needed,\n"
+        f"- condense/consolidate if the fleet is repeating itself,\n"
+        f"- stay silent if the messages speak for themselves.\n\n"
+        f"Do not duplicate content the fleet already delivered. If nothing "
+        f"warrants a reply, output a single line such as 'noted' or stay "
+        f"silent — trivial outputs are suppressed by delivery."
+    )
 
 
 def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:

@@ -1,3 +1,28 @@
 # Global lifecycle hooks — apply to all agents.
 # Agent-specific hooks go in agent manifests under v2.lifecycle_hooks.
-hooks: []
+hooks:
+  # Channel bus: when any fleet agent's delivery reaches Telegram, dual-write
+  # the output into main's canonical session so main has visibility on its
+  # next run. Non-blocking — never delays or affects the delivery itself.
+  # See robothor/engine/channel_bus.py and docs/CHANNEL_BUS.md.
+  - event: post_delivery
+    handler_type: python
+    handler: channel_bus.surface
+    blocking: false
+    priority: 50
+  # Channel-bus wake busy-state: flip a flag when main starts/finishes so
+  # wakes queued during a concurrent run can re-fire cleanly afterward.
+  - event: agent_start
+    handler_type: python
+    handler: channel_bus.main_started
+    blocking: false
+    priority: 50
+    filter:
+      agent_id: main
+  - event: agent_end
+    handler_type: python
+    handler: channel_bus.main_finished
+    blocking: false
+    priority: 50
+    filter:
+      agent_id: main

@@ -332,16 +332,79 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
         header = f"*{config.name}*\n\n"
         full_text = header + text
 
-        await sender(chat_id, full_text)
+        sent = await sender(chat_id, full_text)
 
         run.delivery_status = "delivered"
         run.delivered_at = datetime.now(UTC)
         run.delivery_channel = "telegram"
+
+        platform_message_ids: list[str] = []
+        if sent:
+            for msg in sent:
+                mid = getattr(msg, "message_id", None)
+                if mid is not None:
+                    platform_message_ids.append(str(mid))
+
+        await _dispatch_post_delivery(
+            config=config,
+            run=run,
+            text=full_text,
+            channel="telegram",
+            chat_id=chat_id,
+            platform_message_ids=platform_message_ids,
+        )
         return True
     except Exception as e:
         logger.error("Telegram delivery failed for %s: %s", config.id, e)
         run.delivery_status = f"failed: {e}"
         return False
+
+
+async def _dispatch_post_delivery(
+    config: AgentConfig,
+    run: AgentRun,
+    text: str,
+    channel: str,
+    chat_id: str,
+    platform_message_ids: list[str],
+) -> None:
+    """Fire the POST_DELIVERY lifecycle hook with channel-bus metadata.
+
+    Best-effort: any failure here must not break delivery. The channel bus
+    handler (robothor.engine.channel_bus.on_post_delivery) is the primary
+    consumer.
+    """
+    try:
+        from robothor.engine.hook_registry import (
+            HookContext,
+            HookEvent,
+            get_hook_registry,
+        )
+
+        hr = get_hook_registry()
+        if hr is None:
+            return
+        tenant_id = (
+            getattr(run, "tenant_id", None) or getattr(config, "tenant_id", None) or "default"
+        )
+        ctx = HookContext(
+            event=HookEvent.POST_DELIVERY,
+            agent_id=config.id,
+            run_id=run.id or "",
+            output_text=text,
+            metadata={
+                "channel": channel,
+                "chat_id": chat_id,
+                "platform_message_ids": platform_message_ids,
+                "author_display_name": config.name,
+                "surface_to_channel": getattr(config, "surface_to_channel", True),
+                "tenant_id": tenant_id,
+                "trigger_detail": getattr(run, "trigger_detail", "") or "",
+            },
+        )
+        await hr.dispatch(HookEvent.POST_DELIVERY, ctx)
+    except Exception as e:
+        logger.debug("POST_DELIVERY dispatch failed (non-fatal): %s", e)
 
 
 async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> bool:

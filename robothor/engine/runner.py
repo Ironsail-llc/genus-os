@@ -303,6 +303,11 @@ class AgentRunner:
             # have memory blocks and entity context in conversation history.
             if not conversation_history:
                 warmup_kind = "interactive"
+        elif trigger_type == TriggerType.CHANNEL_EVENT:
+            # Wake-on-surface: main reviews the channel after fleet agents
+            # posted. Load the interactive preamble so main has memory blocks
+            # + session continuity just like a normal chat turn.
+            warmup_kind = "interactive"
 
         # Launch system prompt build + warmup concurrently
         sys_prompt_future = loop.run_in_executor(
@@ -518,7 +523,9 @@ class AgentRunner:
                 models = [m for m in models if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
 
                 if not models:
-                    return self._finish_run(session.fail("No models configured"))
+                    return self._finish_run(
+                        session.fail("No models configured"), agent_config=agent_config
+                    )
 
                 # ── [ROUTER] Classify difficulty → adjust config ──
                 route = self._apply_routing(agent_config, message, len(tool_names))
@@ -645,17 +652,19 @@ class AgentRunner:
                         )
                 except Exception as e:
                     logger.warning("autoDream post_stall failed: %s", _sanitize(e))
-                return self._finish_run(session.timeout(), trace=trace)
+                return self._finish_run(session.timeout(), trace=trace, agent_config=agent_config)
             # Hard timeout (only fires when stall watchdog is disabled)
             ht = agent_config.timeout_seconds
             logger.warning("Agent %s hard-timed out after %ds", _sanitize(agent_id), ht)
             session.record_error(f"Hard timeout after {ht}s")
-            return self._finish_run(session.timeout(), trace=trace)
+            return self._finish_run(session.timeout(), trace=trace, agent_config=agent_config)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("Agent %s failed: %s", _sanitize(agent_id), _sanitize(e), exc_info=True)
             session.record_error(str(e), tb)
-            return self._finish_run(session.fail(str(e), tb), trace=trace)
+            return self._finish_run(
+                session.fail(str(e), tb), trace=trace, agent_config=agent_config
+            )
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
@@ -690,7 +699,9 @@ class AgentRunner:
                     }
                 )
 
-        return self._finish_run(session.complete(output_text), trace=trace)
+        return self._finish_run(
+            session.complete(output_text), trace=trace, agent_config=agent_config
+        )
 
     # ─── Deep Mode (RLM bypass) ───────────────────────────────────────
 
@@ -1363,7 +1374,10 @@ class AgentRunner:
                 # ── [GUARDRAILS] Pre-execution check ──
                 if guardrail_engine:
                     gr = guardrail_engine.check_pre_execution(
-                        tool_name, tool_args, agent_id=agent_config.id
+                        tool_name,
+                        tool_args,
+                        agent_id=agent_config.id,
+                        prior_steps=session.run.steps,
                     )
                     if not gr.allowed:
                         # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
@@ -2788,12 +2802,32 @@ class AgentRunner:
         logger.error("All models failed (streaming). Last error: %s", last_error)
         return None
 
-    def _finish_run(self, run: AgentRun, trace: Any = None) -> AgentRun:
+    def _finish_run(self, run: AgentRun, trace: Any = None, agent_config: Any = None) -> AgentRun:
         """Finalize run and spawn background DB persistence.
 
         Returns the AgentRun immediately — DB writes happen asynchronously
         so callers (especially interactive Telegram sessions) are not blocked.
+
+        agent_config is optional — when passed, post-run guardrails
+        (e.g. requires_human_task_closure) will run against the finished run.
         """
+        # ── [GUARDRAIL] Post-run checks (require finished run + config) ──
+        if agent_config is not None:
+            try:
+                from robothor.engine.guardrails import check_post_run
+
+                check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
+            except Exception as e:
+                logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── [RECENT ACTIONS] Cross-session surface for tracked agents ──
+        try:
+            from robothor.engine.recent_actions import record_run
+
+            record_run(run, agent_config=agent_config)
+        except Exception as e:
+            logger.warning("recent_actions write error: %s", _sanitize(e))
+
         # ── [HOOKS] AGENT_END lifecycle hook (fire-and-forget) ──
         try:
             from robothor.engine.hook_registry import HookContext, HookEvent, get_hook_registry

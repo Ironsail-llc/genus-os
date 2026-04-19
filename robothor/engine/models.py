@@ -31,6 +31,7 @@ class TriggerType(StrEnum):
     FEDERATION = "federation"
     WEBHOOK = "webhook"
     IDE = "ide"
+    CHANNEL_EVENT = "channel_event"  # Main wakes after fleet surfaces to the channel
 
 
 class RunStatus(StrEnum):
@@ -131,6 +132,22 @@ class HeartbeatConfig:
 
 
 @dataclass
+class ChannelBusConfig:
+    """Main-agent-only — governs wake-on-surface behaviour.
+
+    Non-main agents never consume this; the channel bus filters them out
+    by authorship before a wake would ever reach them.
+    """
+
+    wake_on_surface: bool = False  # Off by default; flip on after observing Phase 1+2 clean
+    wake_debounce_seconds: int = 15
+    wake_cost_budget_usd: float = 0.15
+    per_agent_rate_limit_per_hour: int = 20
+    main_wake_cooldown_seconds: int = 300  # at most one wake per 5 min
+    wake_preamble_history_lines: int = 8
+
+
+@dataclass
 class AgentConfig:
     """Configuration for a single agent, loaded from YAML manifest."""
 
@@ -154,6 +171,10 @@ class AgentConfig:
     delivery_mode: DeliveryMode = DeliveryMode.NONE
     delivery_channel: str = ""
     delivery_to: str = ""
+    # Channel bus: when an outbound delivery succeeds, dual-write it into main's
+    # canonical session so main has visibility. Default on for fleet agents; main
+    # is skipped at runtime by authorship filter.
+    surface_to_channel: bool = True
 
     # Tools
     tools_allowed: list[str] = field(default_factory=list)
@@ -207,6 +228,9 @@ class AgentConfig:
 
     # Heartbeat — periodic health-check runs with overrides
     heartbeat: HeartbeatConfig | None = None
+
+    # Channel bus — wake-on-surface (main only)
+    channel_bus: ChannelBusConfig | None = None
 
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning

@@ -219,6 +219,12 @@ class TelegramBot:
         self._message_buffers: dict[str, list[str]] = {}  # chat_id → queued texts
         self._drain_scheduled: dict[str, bool] = {}  # chat_id → drain task pending
 
+        # Channel-bus reply context: when the user taps "Reply" on a surfaced
+        # message, we capture the resolved quote here so the drain can prefix
+        # the prompt and persist the linkage in the user turn's JSONB.
+        self._reply_context_buffers: dict[str, dict[str, Any]] = {}
+        self._user_message_id_buffers: dict[str, str] = {}
+
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
 
@@ -850,6 +856,35 @@ class TelegramBot:
             session_key = self._session_key(chat_id)
             session = get_shared_session(session_key)
 
+            # ── Channel-bus reply resolution ──
+            # If this message is a Telegram "Reply to" quote, look up the
+            # original in channel_message_map. When it was a fleet surface
+            # (e.g. a DevOps report), prepend a compact quote so main sees
+            # the thread context inline — and remember the linkage so the
+            # user turn's JSONB records the reference.
+            reply_ctx: dict[str, Any] | None = None
+            if message.reply_to_message and message.reply_to_message.message_id:
+                from robothor.engine.channel_bus import (
+                    format_reply_prefix,
+                    resolve_reply_context_async,
+                )
+
+                tenant_id = self._get_tenant_id(chat_id)
+                reply_ctx = await resolve_reply_context_async(
+                    chat_id=chat_id,
+                    platform_message_id=str(message.reply_to_message.message_id),
+                    tenant_id=tenant_id,
+                )
+                if reply_ctx:
+                    prefix = format_reply_prefix(reply_ctx)
+                    user_text = f"{prefix}\n\n{user_text}"
+                    self._reply_context_buffers[chat_id] = reply_ctx
+
+            # Remember this Telegram message id so the drain can record an
+            # inbound map row after persistence.
+            if message.message_id:
+                self._user_message_id_buffers[chat_id] = str(message.message_id)
+
             # ── Check for pending plan — ANY text = feedback for revision ──
             # Approval/rejection only via inline keyboard buttons.
             if session.active_plan and session.active_plan.status == "pending":
@@ -915,7 +950,16 @@ class TelegramBot:
             return
 
         combined_text = "\n".join(buf)
-        await self._run_interactive(chat_id, session_key, session, combined_text)
+        reply_ctx = self._reply_context_buffers.pop(chat_id, None)
+        user_message_id = self._user_message_id_buffers.pop(chat_id, None)
+        await self._run_interactive(
+            chat_id,
+            session_key,
+            session,
+            combined_text,
+            reply_ctx=reply_ctx,
+            user_message_id=user_message_id,
+        )
 
     async def _run_interactive(
         self,
@@ -923,11 +967,16 @@ class TelegramBot:
         session_key: str,
         session: Any,
         user_text: str,
+        *,
+        reply_ctx: dict[str, Any] | None = None,
+        user_message_id: str | None = None,
     ) -> None:
         """Execute an interactive agent run with streaming, typing indicator, and history management.
 
         Shared by handle_text and handle_file — the single execution path for
-        interactive Telegram messages.
+        interactive Telegram messages. ``reply_ctx`` carries the resolved
+        channel-bus reply (when the user tapped "Reply to" on a surfaced
+        message) so we can annotate the persisted user turn.
         """
         # ── Idle timeout: compress stale sessions ──
         now = time.monotonic()
@@ -1086,18 +1135,122 @@ class TelegramBot:
                     if len(session.history) > self._max_history:
                         session.history[:] = session.history[-self._max_history :]
 
-                # Persist to DB (fire-and-forget)
+                # Build user JSONB extras. When the user replied to a
+                # surfaced fleet message, include the linkage in the user
+                # turn's JSONB so history and audits can see the thread.
+                user_extras: dict[str, Any] | None = None
+                if user_message_id or reply_ctx:
+                    user_extras = {}
+                    if user_message_id:
+                        user_extras["telegram_message_id"] = user_message_id
+                    if reply_ctx:
+                        user_extras["replies_to"] = {
+                            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
+                            "author_agent_id": reply_ctx.get("author_agent_id", ""),
+                            "author_display_name": reply_ctx.get("author_display_name", ""),
+                            "chat_message_id": reply_ctx.get("chat_message_id"),
+                        }
+
+                # Delete status message, deliver final output as new message.
+                # Capture the Telegram Message objects returned by send_message
+                # so the channel bus can map platform_message_ids to the
+                # assistant chat_message row we'll persist below.
+                if stream_msg_id is not None:
+                    with contextlib.suppress(Exception):
+                        await self.bot.delete_message(
+                            chat_id=int(chat_id), message_id=stream_msg_id
+                        )
+
+                sent_messages: list[Any] = []
                 if run.output_text:
-                    get_task_registry().spawn(
-                        save_exchange_async(
+                    sent_messages = await self.send_message(chat_id, run.output_text)
+                elif run.error_message:
+                    sent_messages = await self.send_message(chat_id, f"Error: {run.error_message}")
+                else:
+                    sent_messages = await self.send_message(chat_id, "Done. No output produced.")
+
+                assistant_platform_ids = [
+                    str(m.message_id)
+                    for m in (sent_messages or [])
+                    if getattr(m, "message_id", None) is not None
+                ]
+
+                # Sequenced persistence: save the exchange, then write map rows
+                # linked to the real chat_message ids (so downstream audits and
+                # reply-to lookups resolve against real rows). One background
+                # task keeps the response path snappy but the writes ordered.
+                if run.output_text:
+
+                    async def _persist_and_map(
+                        session_key: str = session_key,
+                        user_text: str = user_text,
+                        output_text: str = run.output_text,
+                        model: Any = model,
+                        tenant_id: str = _tenant,
+                        user_extras: dict[str, Any] | None = user_extras,
+                        user_message_id: str | None = user_message_id,
+                        chat_id: str = chat_id,
+                        assistant_platform_ids: list[str] = assistant_platform_ids,
+                        author_run_id: str | None = run.id,
+                    ) -> None:
+                        from robothor.engine.channel_bus import (
+                            record_inbound,
+                            record_outbound,
+                        )
+
+                        inserted = await save_exchange_async(
                             session_key,
                             user_text,
-                            run.output_text,
+                            output_text,
                             channel="telegram",
                             model_override=model,
-                            tenant_id=_tenant,
-                        ),
-                        name=f"tg-save-exchange:{chat_id}",
+                            tenant_id=tenant_id,
+                            user_extras=user_extras,
+                        )
+                        if not inserted or len(inserted) < 2:
+                            return
+                        user_chat_message_id, assistant_chat_message_id = inserted
+
+                        loop = asyncio.get_running_loop()
+
+                        if user_message_id:
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda: record_inbound(
+                                        tenant_id=tenant_id,
+                                        channel="telegram",
+                                        chat_id=chat_id,
+                                        platform_message_id=user_message_id,
+                                        session_key=session_key,
+                                        chat_message_id=user_chat_message_id,
+                                        author_agent_id="user",
+                                    ),
+                                )
+                            except Exception as e:
+                                logger.debug("tg-map-inbound failed for %s: %s", chat_id, e)
+
+                        if assistant_platform_ids:
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda: record_outbound(
+                                        tenant_id=tenant_id,
+                                        channel="telegram",
+                                        chat_id=chat_id,
+                                        platform_message_ids=assistant_platform_ids,
+                                        session_key=session_key,
+                                        chat_message_id=assistant_chat_message_id,
+                                        author_agent_id="main",
+                                        author_run_id=author_run_id,
+                                    ),
+                                )
+                            except Exception as e:
+                                logger.debug("tg-map-outbound failed for %s: %s", chat_id, e)
+
+                    get_task_registry().spawn(
+                        _persist_and_map(),
+                        name=f"tg-persist-and-map:{chat_id}",
                     )
 
                 # Ingest conversation to memory (fire-and-forget)
@@ -1117,20 +1270,6 @@ class TelegramBot:
                         ),
                         name=f"conv-ingest:{chat_id}",
                     )
-
-                # Delete status message, deliver final output as new message
-                if stream_msg_id is not None:
-                    with contextlib.suppress(Exception):
-                        await self.bot.delete_message(
-                            chat_id=int(chat_id), message_id=stream_msg_id
-                        )
-
-                if run.output_text:
-                    await self.send_message(chat_id, run.output_text)
-                elif run.error_message:
-                    await self.send_message(chat_id, f"Error: {run.error_message}")
-                else:
-                    await self.send_message(chat_id, "Done. No output produced.")
 
             except asyncio.CancelledError:
                 # /stop was called during execution
@@ -1971,16 +2110,25 @@ class TelegramBot:
         logger.error("Telegram flood control: all %d retries exhausted", max_retries)
         raise last_exc  # type: ignore[misc]
 
-    async def send_message(self, chat_id: str, text: str) -> None:
-        """Send a message to a Telegram chat, splitting if needed."""
-        if not text:
-            return
+    async def send_message(self, chat_id: str, text: str, **_ignored: Any) -> list[Any]:
+        """Send a message to a Telegram chat, splitting if needed.
 
+        Returns the list of Message objects returned by the Telegram API —
+        one per chunk — so callers (channel bus) can record platform
+        message_ids for reply-to resolution. The list may contain None
+        entries for chunks that failed send after both HTML and plain-text
+        retries; callers should filter those out.
+        """
+        if not text:
+            return []
+
+        sent: list[Any] = []
         chunks = self._split_message(text)
         for chunk in chunks:
             html_chunk = _md_to_html(chunk)
+            result: Any = None
             try:
-                await self._retry_on_flood(
+                result = await self._retry_on_flood(
                     lambda c=html_chunk: self.bot.send_message(
                         chat_id=int(chat_id),
                         text=c,
@@ -1989,7 +2137,7 @@ class TelegramBot:
                 )
             except Exception:
                 try:
-                    await self._retry_on_flood(
+                    result = await self._retry_on_flood(
                         lambda c=chunk: self.bot.send_message(
                             chat_id=int(chat_id),
                             text=c,
@@ -1998,6 +2146,9 @@ class TelegramBot:
                     )
                 except Exception as e:
                     logger.error("Failed to send Telegram message: %s", e)
+            if result is not None:
+                sent.append(result)
+        return sent
 
     def _split_message(self, text: str) -> list[str]:
         """Split text into chunks that fit Telegram's limit."""

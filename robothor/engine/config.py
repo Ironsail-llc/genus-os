@@ -16,7 +16,13 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, HeartbeatConfig
+from robothor.engine.models import (
+    AgentConfig,
+    AgentHook,
+    ChannelBusConfig,
+    DeliveryMode,
+    HeartbeatConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +236,22 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             # token_budget is auto-derived at runtime from model registry × max_iterations
         )
 
+    # Channel-bus config — main only. Parsed here so the scheduler can read
+    # the debounce window and the runtime can honour the per-agent rate limit.
+    raw_channel_bus = manifest.get("channel_bus", {})
+    channel_bus_config: ChannelBusConfig | None = None
+    if raw_channel_bus:
+        channel_bus_config = ChannelBusConfig(
+            wake_on_surface=bool(raw_channel_bus.get("wake_on_surface", False)),
+            wake_debounce_seconds=int(raw_channel_bus.get("wake_debounce_seconds", 15)),
+            wake_cost_budget_usd=float(raw_channel_bus.get("wake_cost_budget_usd", 0.15)),
+            per_agent_rate_limit_per_hour=int(
+                raw_channel_bus.get("per_agent_rate_limit_per_hour", 20)
+            ),
+            main_wake_cooldown_seconds=int(raw_channel_bus.get("main_wake_cooldown_seconds", 300)),
+            wake_preamble_history_lines=int(raw_channel_bus.get("wake_preamble_history_lines", 8)),
+        )
+
     # v2 enhancement fields
     v2 = manifest.get("v2", {})
 
@@ -257,6 +279,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         delivery_to=delivery.get("to", "")
         or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
         or os.environ.get("TELEGRAM_CHAT_ID", ""),
+        surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
         instruction_file=manifest.get("instruction_file", ""),
@@ -279,6 +302,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         downstream_agents=manifest.get("downstream_agents", []),
         hooks=parsed_hooks,
         heartbeat=heartbeat,
+        channel_bus=channel_bus_config,
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         # v2 enhancements — sub-agent spawning

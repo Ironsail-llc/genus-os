@@ -27,6 +27,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
+    """Strip channel-bus metadata and re-label fleet surfaces before the
+    message reaches the LLM. Keeps only role + content on the wire.
+
+    When a non-main fleet agent's output was dual-written into main's
+    session, the JSONB carries ``author_agent_id`` and ``origin=channel_bus``.
+    To help main tell its own prior turns apart from a peer agent's report,
+    we prefix the rendered content with ``[@agent-id] ``. User turns that
+    replied to a surfaced message already carry the quote inline, so they
+    are passed through verbatim.
+    """
+    role = msg.get("role", "")
+    content = msg.get("content", "")
+    author = msg.get("author_agent_id")
+    if role == "assistant" and author and author != "main":
+        display = msg.get("author_display_name") or author
+        content = f"[@{display}] {content}"
+    return {"role": role, "content": content}
+
+
 # Role for engine-injected context (plan, scratchpad, budget warnings, etc.)
 # LiteLLM translates "developer" → "system" for non-OpenAI providers.
 ENGINE_CONTEXT_ROLE = "developer"
@@ -89,6 +109,14 @@ class AgentSession:
         If conversation_history is provided, prior messages are inserted
         between the system prompt and the current user message to give
         the LLM conversational context.
+
+        Channel-bus rendering: history entries with ``author_agent_id`` set
+        (fleet surfaces dual-written by the channel bus) are re-rendered
+        with an ``[@agent-id] …`` prefix so the LLM can distinguish between
+        its own prior turns and reports surfaced by other agents. JSONB
+        metadata keys (origin, surfaced_from_run_id, telegram_message_id,
+        replies_to) are dropped before the envelope reaches the LLM —
+        only role + content go on the wire.
         """
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
@@ -98,9 +126,13 @@ class AgentSession:
         self.run.delivery_mode = delivery_mode
         self._start_time = time.monotonic()
 
+        rendered_history: list[dict[str, Any]] = [
+            _render_history_for_llm(msg) for msg in conversation_history or []
+        ]
+
         self.messages = [
             {"role": "system", "content": system_prompt},
-            *(conversation_history or []),
+            *rendered_history,
             {"role": "user", "content": user_message},
         ]
 
