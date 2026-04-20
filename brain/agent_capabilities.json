@@ -66,6 +66,13 @@
       "streams_read": ["crm"],
       "streams_write": ["crm"]
     },
+    "chat-responder": {
+      "description": "Responds to classified Google Chat messages via CRM task inbox",
+      "tools": ["list_agent_tasks", "get_task", "create_task", "resolve_task", "update_task", "send_notification", "get_inbox", "ack_notification", "list_conversations", "get_conversation", "list_messages"],
+      "bridge_endpoints": ["GET /health", "GET /api/tasks/agent/*", "GET /api/tasks/*", "POST /api/tasks", "PATCH /api/tasks/*", "POST /api/tasks/*/resolve", "POST /api/notifications/send", "GET /api/notifications/inbox/*", "POST /api/notifications/*/ack", "GET /api/conversations", "GET /api/conversations/*", "GET /api/conversations/*/messages"],
+      "streams_read": ["chat"],
+      "streams_write": []
+    },
     "morning-briefing": {
       "description": "Daily morning briefing to Telegram",
       "tools": ["list_conversations"],

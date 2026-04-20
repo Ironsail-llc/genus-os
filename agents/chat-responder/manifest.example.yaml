@@ -1,0 +1,99 @@
+# Chat Responder — Agent Manifest
+#
+# Responds to classified Google Chat messages assigned via CRM tasks.
+# Receives tasks from chat-monitor, sends replies via gws_chat_send.
+#
+# USAGE: Copy to docs/agents/chat-responder.yaml and adjust as needed.
+#
+# tools_allowed is deliberately narrow — this agent only needs:
+#   - File I/O (read task files, write status)
+#   - Web (answer questions from Chat)
+#   - Memory (context about users/topics)
+#   - Task management (process assigned tasks)
+#   - Notifications (inter-agent coordination)
+#   - Google Chat (send replies, list spaces, read threads)
+#   - CRM conversations (look up context)
+#   - Agent monitoring (check system status)
+#
+# Excluded intentionally:
+#   - exec (no shell commands needed)
+#   - Vision tools (look, who_is_here, enroll_face, etc.)
+#   - CRM contact management (create_person, update_person, merge_*, etc.)
+#   - CRM company management (create_company, update_company, etc.)
+#   - CRM notes (create_note, update_note, etc.)
+#   - Task review workflow (approve_task, reject_task)
+#   - Git tools (git_status, git_diff, git_commit, etc.)
+#   - Desktop/browser tools
+#   - DevOps tools (jira_*, github_*, apollo_*, etc.)
+#   - Federation tools
+
+id: chat-responder
+name: Chat Responder
+description: Responds to classified Google Chat messages via CRM task inbox
+version: "2026-04-20"
+department: communications
+
+reports_to: chat-monitor
+receives_tasks_from:
+  - chat-monitor
+
+schedule:
+  cron: ""
+  timezone: America/New_York
+  timeout_seconds: 300
+  max_iterations: 15
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  # File I/O
+  - read_file
+  - write_file
+  - list_directory
+  # Web
+  - web_fetch
+  - web_search
+  # Memory
+  - search_memory
+  - memory_block_read
+  - memory_block_list
+  # Task management
+  - list_agent_tasks
+  - get_task
+  - create_task
+  - resolve_task
+  - update_task
+  # Notifications
+  - send_notification
+  - get_inbox
+  - ack_notification
+  # Google Chat
+  - gws_chat_send
+  - gws_chat_list_spaces
+  - gws_chat_list_messages
+  # CRM conversations (read-only)
+  - list_conversations
+  - get_conversation
+  - list_messages
+  # Agent monitoring (read-only)
+  - list_agent_runs
+  - get_agent_stats
+
+instruction_file: brain/instructions/CHAT_RESPONDER.md
+bootstrap_files: []
+
+task_protocol: true
+notification_inbox: true
+status_file: brain/memory/chat-responder-status.md
+
+v2:
+  error_feedback: true
+  planning_enabled: false
+  scratchpad_enabled: false
+  can_spawn_agents: false
+
+changelog:
+  - date: "2026-04-20"
+    change: "Initial manifest — narrow tools_allowed to reduce bootstrap context ~80%"
