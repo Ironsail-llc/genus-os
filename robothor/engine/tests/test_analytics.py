@@ -84,6 +84,91 @@ class TestGetAgentStats:
         assert len(result["top_error_types"]) == 2
 
     @patch("robothor.engine.analytics.get_connection")
+    def test_tool_success_rate_computed(self, mock_get_conn):
+        """tool_success_rate = tool_ok / tool_calls. Adds queries 8+."""
+        cursor = _mock_cursor(
+            [
+                # 1. aggregate
+                [
+                    {
+                        "total_runs": 5,
+                        "completed": 5,
+                        "failed": 0,
+                        "timeouts": 0,
+                        "budget_exhausted": 0,
+                        "avg_duration_ms": Decimal(1000),
+                        "avg_tokens": None,
+                        "avg_cost_usd": None,
+                        "total_cost_usd": None,
+                        "total_input_tokens": None,
+                        "total_output_tokens": None,
+                    }
+                ],
+                # 2. top error types
+                [],
+                # 3. outcome distribution
+                [],
+                # 4. percentiles
+                [{"p95_duration_ms": Decimal(2000), "p95_cost_usd": None}],
+                # 5. delivery success rate
+                [{"announce_runs": 0, "delivered": 0}],
+                # 6. median/min output chars
+                [{"median_chars": Decimal(500), "avg_chars": Decimal(600)}],
+                # 7. operator rating
+                [{"avg_rating": None}],
+                # 8. tool_success_rate — 19 ok out of 20 tool calls
+                [{"tool_calls": 20, "tool_ok": 19}],
+                # 9. recovery_rate — 2 error runs, 1 recovered
+                [{"error_total": 2, "recovered_total": 1}],
+            ]
+        )
+        mock_get_conn.return_value = _make_conn(cursor)
+
+        from robothor.engine.analytics import get_agent_stats
+
+        result = get_agent_stats("x", days=7)
+        assert result["tool_success_rate"] == 0.95  # 19/20
+        assert result["recovery_rate"] == 0.5  # 1/2
+
+    @patch("robothor.engine.analytics.get_connection")
+    def test_tool_success_rate_null_when_no_tool_calls(self, mock_get_conn):
+        """Return None (not 0) when there were no tool calls — no penalty."""
+        cursor = _mock_cursor(
+            [
+                [
+                    {
+                        "total_runs": 0,
+                        "completed": 0,
+                        "failed": 0,
+                        "timeouts": 0,
+                        "budget_exhausted": 0,
+                        "avg_duration_ms": None,
+                        "avg_tokens": None,
+                        "avg_cost_usd": None,
+                        "total_cost_usd": None,
+                        "total_input_tokens": None,
+                        "total_output_tokens": None,
+                    }
+                ],
+                [],
+                [],
+                [{"p95_duration_ms": None, "p95_cost_usd": None}],
+                [{"announce_runs": 0, "delivered": 0}],
+                [{"median_chars": None, "avg_chars": None}],
+                [{"avg_rating": None}],
+                [{"tool_calls": 0, "tool_ok": 0}],
+                [{"error_total": 0, "recovered_total": 0}],
+            ]
+        )
+        mock_get_conn.return_value = _make_conn(cursor)
+
+        from robothor.engine.analytics import get_agent_stats
+
+        result = get_agent_stats("idle-agent", days=7)
+        assert result["tool_success_rate"] is None
+        assert result["recovery_rate"] is None  # null means "nothing to evaluate"
+
+    @patch("robothor.engine.analytics.get_connection")
     def test_no_runs_returns_none_rates(self, mock_get_conn):
         cursor = _mock_cursor(
             [

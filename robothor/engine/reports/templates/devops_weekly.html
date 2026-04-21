@@ -157,6 +157,39 @@
 </td></tr>
 {% endif %}
 
+<!-- Personnel Review — DevOps manager's strategic read per contributor -->
+{% if personnel_analysis %}
+<tr><td style="padding:0 32px 24px;">
+  <h2 style="margin:0 0 4px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Personnel Review</h2>
+  <p style="margin:0 0 16px;font-size:12px;color:#6b778c;font-style:italic;">Strategic read per contributor — what's working, what to coach on.</p>
+
+  {% for p in personnel_analysis %}
+  <div style="margin-bottom:16px;padding:14px 18px;background:#fafbfc;border:1px solid #dfe1e6;border-radius:6px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+      <p style="margin:0;font-size:14px;font-weight:700;color:#172b4d;">
+        {{ p.name }}{% if p.role %} <span style="font-size:12px;font-weight:400;color:#6b778c;">&middot; {{ p.role }}</span>{% endif %}
+      </p>
+      {% if p.trend %}
+      <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:{% if 'up' in p.trend or 'improv' in p.trend %}#e3fcef;color:#006644{% elif 'down' in p.trend or 'declin' in p.trend %}#ffebe6;color:#bf2600{% else %}#deebff;color:#0747a6{% endif %};text-transform:uppercase;font-weight:600;letter-spacing:0.3px;">{{ p.trend }}</span>
+      {% endif %}
+    </div>
+    {% if p.snapshot %}
+    <p style="margin:0 0 10px;font-size:12px;color:#6b778c;">{{ p.snapshot }}</p>
+    {% endif %}
+    {% if p.strengths %}
+    <p style="margin:0 0 6px;font-size:13px;color:#172b4d;"><span style="color:#00875a;font-weight:700;">&#10004; Strengths:</span> {{ p.strengths }}</p>
+    {% endif %}
+    {% if p.concerns %}
+    <p style="margin:0 0 6px;font-size:13px;color:#172b4d;"><span style="color:#de350b;font-weight:700;">&#9888; Concerns:</span> {{ p.concerns }}</p>
+    {% endif %}
+    {% if p.coaching %}
+    <p style="margin:0;font-size:13px;color:#172b4d;"><span style="color:#0052cc;font-weight:700;">&#x2192; Coaching:</span> {{ p.coaching }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</td></tr>
+{% endif %}
+
 <!-- Bottlenecks -->
 {% if bottlenecks %}
 <tr><td style="padding:0 32px 24px;">

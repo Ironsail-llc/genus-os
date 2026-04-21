@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 # considered "persistently breached" and enters the improvement backlog.
 PERSISTENT_BREACH_DAYS = 3
 
+# Agents that drive the self-improvement loop itself. They still get scored
+# and reviewed so you can see them breaching, but no self-improve CRM task
+# is ever opened against them — that would let auto-agent silently edit its
+# own supervisors' manifests or guardrails.
+EXCLUDED_FROM_SELF_IMPROVE: frozenset[str] = frozenset(
+    {"buddy", "buddy-grader", "buddy-auditor", "auto-agent", "auto-researcher"}
+)
+
 
 # ─── Dataclasses ──────────────────────────────────────────────────────
 
@@ -52,6 +60,11 @@ class GoalBreach:
     actual: float | None
     consecutive_days_breached: int
     weight: float
+    # Rolling window the breach was evaluated against. Must survive the trip
+    # Buddy → task body marker → grader so verification uses the same slice.
+    # Defaults to 7 because older call sites predate this field; production
+    # `detect_goal_breach` always populates it from the goal's declared window.
+    window_days: int = 7
 
     @property
     def priority_score(self) -> float:
@@ -244,6 +257,7 @@ def detect_goal_breach(
                     actual=actual_latest,
                     consecutive_days_breached=consecutive,
                     weight=goal.weight,
+                    window_days=goal.window_days,
                 )
             )
     breaches.sort(key=lambda b: b.priority_score, reverse=True)

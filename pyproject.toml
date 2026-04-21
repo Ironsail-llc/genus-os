@@ -102,11 +102,26 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "RET", "PERF",
 ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 
 [tool.ruff.lint.per-file-ignores]
+"conftest.py" = ["SIM105"]
 "crm/bridge/*.py" = ["E402", "N815", "SIM105"]
 "crm/bridge/models.py" = ["N815"]
-"crm/bridge/routers/*.py" = ["N803"]
+"crm/bridge/routers/*.py" = ["N803", "B008"]  # B008: FastAPI Query/Depends defaults are idiomatic
 "crm/bridge/tests/*.py" = ["E402"]
 "crm/tests/*.py" = ["E402"]
+# Engine modules with legitimate append-in-loop patterns (conditional builds,
+# structured record construction) — PERF401 style suggestion not worth the rewrite
+"robothor/engine/buddy_critic.py" = ["PERF401"]
+"robothor/engine/session.py" = ["PERF401"]
+"robothor/engine/telegram.py" = ["PERF401"]
+# Test files: B017 blind-exception checks for DB constraint violations, N801/N802
+# test-name conventions mirror the camelCase flag being tested, A002 `id` shadows
+# builtin intentionally (matches the production field name), ERA001 commented
+# alternatives in tests are deliberately kept as documentation
+"tests/test_migration_*.py" = ["B017"]
+"robothor/engine/tests/test_channel_bus.py" = ["N801"]
+"robothor/engine/tests/test_guardrails_task_closure.py" = ["N802"]
+"robothor/engine/tests/test_thread_planner.py" = ["A002"]
+"robothor/engine/tests/test_goals.py" = ["ERA001"]
 
 # mypy config lives in mypy.ini (pyproject.toml overrides don't work with editable installs)
 

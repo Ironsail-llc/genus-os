@@ -31,6 +31,7 @@ class TriggerType(StrEnum):
     FEDERATION = "federation"
     WEBHOOK = "webhook"
     IDE = "ide"
+    CHANNEL_EVENT = "channel_event"  # Main wakes after fleet surfaces to the channel
 
 
 class RunStatus(StrEnum):
@@ -94,18 +95,29 @@ class HeartbeatConfig:
     """Override configuration for periodic heartbeat runs.
 
     When attached to an AgentConfig, the scheduler creates a separate cron job
-    that runs with these overrides (instruction file, delivery, warmup, etc.)
-    while inheriting model + tools from the parent agent.
+    that runs with these overrides (instruction file, delivery, warmup, etc.).
+    Model can be overridden per-beat; if not set, inherits from parent agent.
     """
 
     cron_expr: str = ""
     timezone: str = "America/New_York"
+    # Optional model override for heartbeat runs. When empty, inherits from
+    # the parent agent. Set to e.g. "openrouter/xiaomi/mimo-v2-pro" to pin
+    # the beat to a specific (cheaper) model independent of the parent.
+    model_primary: str = ""
+    model_fallbacks: list[str] = field(default_factory=list)
     instruction_file: str = ""
     session_target: str = "isolated"
     max_iterations: int = 15  # soft check-in interval (not a hard cap)
     safety_cap: int = 50  # absolute max iterations for heartbeat runs
-    timeout_seconds: int = 600
-    stall_timeout_seconds: int = 300  # kill if no activity for this long (0 = disabled)
+    # Wall-clock kills are off by default. Runs complete when the agent
+    # finishes its work. Set a positive value only if you explicitly want
+    # a circuit-breaker for this agent (not recommended).
+    timeout_seconds: int = 0
+    # Progress-based hang detector, off by default. When enabled, fires
+    # only if no completed LLM response / tool call / stream content
+    # arrives for this many seconds — i.e. a truly wedged provider.
+    stall_timeout_seconds: int = 0
 
     # ── Cross-run persistent journal (multi-session research agents) ──
     journal_file: str = ""  # workspace-relative path to cross-run journal JSON
@@ -128,6 +140,86 @@ class HeartbeatConfig:
     # Budget overrides
     token_budget: int = 0
     cost_budget_usd: float = 0.0  # hard cost ceiling per run (0 = inherit from v2)
+
+    # Persistent session history limit (messages to replay at the top of
+    # each heartbeat run). Smaller = cheaper first LLM call; larger =
+    # more continuity across beats. Default 20 matches the prior
+    # hardcoded value in scheduler.py.
+    persistent_history_limit: int = 20
+
+    # Scout-specific tool restriction. When non-empty, overrides the parent
+    # agent's `tools_allowed` for heartbeat runs only. The scout beat should
+    # scan and file (create_task/update_task) — it must NOT spawn_agent or
+    # execute work inside the beat. Leave empty to inherit parent's list.
+    tools_allowed: list[str] = field(default_factory=list)
+
+    # Override author identity for tasks created/updated during this beat.
+    # When set, DAL writes `created_by_agent`/`updated_by_agent` to this
+    # value instead of the run's agent_id. Lets the CRM timeline attribute
+    # beat-filed tasks to "scout" while the underlying run_id stays "main".
+    task_authorship_agent: str = ""
+
+
+@dataclass
+class WorkerConfig:
+    """Override configuration for periodic drain/worker runs.
+
+    Symmetric to HeartbeatConfig but for the drain cycle: main running every
+    few hours with full tools to execute the tasks the scout filed. Shares
+    the same agent identity ('main') but runs in a distinct session
+    ('cron:main:worker') so it doesn't poison the scout's context.
+    """
+
+    cron_expr: str = ""
+    timezone: str = "America/New_York"
+    instruction_file: str = ""
+    session_target: str = "persistent"
+    max_iterations: int = 30
+    safety_cap: int = 80
+    timeout_seconds: int = 0
+    stall_timeout_seconds: int = 0
+
+    # Delivery (typically announce for drain so operator sees completions)
+    delivery_mode: DeliveryMode = DeliveryMode.ANNOUNCE
+    delivery_channel: str = ""
+    delivery_to: str = ""
+
+    # Warmup context for drain runs
+    warmup_context_files: list[str] = field(default_factory=list)
+    warmup_peer_agents: list[str] = field(default_factory=list)
+    warmup_memory_blocks: list[str] = field(default_factory=list)
+
+    # Bootstrap files loaded into system prompt
+    bootstrap_files: list[str] = field(default_factory=list)
+
+    # Budget overrides
+    token_budget: int = 0
+    cost_budget_usd: float = 0.0
+
+    # Persistent session history limit
+    persistent_history_limit: int = 20
+
+    # Tool restriction for drain runs. When empty, inherits parent's full
+    # `tools_allowed` — drain should have full execution capability.
+    tools_allowed: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ChannelBusConfig:
+    """Main-agent-only — governs wake-on-surface behaviour.
+
+    Non-main agents never consume this; the channel bus filters them out
+    by authorship before a wake would ever reach them.
+    """
+
+    wake_on_surface: bool = False  # Off by default; flip on after observing Phase 1+2 clean
+    wake_debounce_seconds: int = 15
+    # Wake runs are not cost-gated. Rate limit + cooldown control
+    # frequency; cost is observed but not enforced.
+    wake_cost_budget_usd: float = 0.0
+    per_agent_rate_limit_per_hour: int = 20
+    main_wake_cooldown_seconds: int = 300  # at most one wake per 5 min
+    wake_preamble_history_lines: int = 8
 
 
 @dataclass
@@ -154,6 +246,10 @@ class AgentConfig:
     delivery_mode: DeliveryMode = DeliveryMode.NONE
     delivery_channel: str = ""
     delivery_to: str = ""
+    # Channel bus: when an outbound delivery succeeds, dual-write it into main's
+    # canonical session so main has visibility. Default on for fleet agents; main
+    # is skipped at runtime by authorship filter.
+    surface_to_channel: bool = True
 
     # Tools
     tools_allowed: list[str] = field(default_factory=list)
@@ -192,12 +288,20 @@ class AgentConfig:
     temperature: float = 0.3
     max_iterations: int = 20  # soft check-in interval (not a hard cap)
     safety_cap: int = 200  # absolute max iterations (infinite-loop protection only)
-    stall_timeout_seconds: int = 300  # kill if no activity for this long (0 = disabled)
+    # Progress-based hang detector, off by default. See HeartbeatConfig
+    # for the semantics; stall_timeout fires only when no actual progress
+    # (completed LLM response / tool / stream bytes) has occurred for
+    # this many seconds. Not a "your run took too long" kill.
+    stall_timeout_seconds: int = 0
 
     # ── Cross-run persistent journal (multi-session research agents) ──
     journal_file: str = ""  # workspace-relative path to cross-run journal JSON
     journal_checkpoint_interval: int = 5  # write journal every N iterations (0 = end-of-run)
     resume_on_start: bool = False  # inject journal as startup preamble if exists
+
+    # How many prior messages to replay at the top of a session-resumed
+    # cron/heartbeat run. Only honoured when session_target=persistent.
+    persistent_history_limit: int = 20
 
     # Downstream agents to trigger after successful cron run
     downstream_agents: list[str] = field(default_factory=list)
@@ -205,15 +309,31 @@ class AgentConfig:
     # Event hooks — triggers from Redis Streams (parsed from manifest hooks field)
     hooks: list[AgentHook] = field(default_factory=list)
 
-    # Heartbeat — periodic health-check runs with overrides
+    # Heartbeat — periodic health-check runs with overrides (the "scout beat")
     heartbeat: HeartbeatConfig | None = None
+
+    # Task authorship override: when non-empty, tool handlers write this
+    # identity to CRM `created_by_agent` / `updated_by_agent` instead of the
+    # run's agent_id. Used so scout beats (running as agent_id='main') file
+    # tasks attributed to 'scout' for CRM timeline clarity.
+    task_author_override: str = ""
+
+    # Worker — periodic queue-drain runs (the "drain cycle"). Symmetric to
+    # heartbeat: same agent identity, different trigger, own session.
+    worker: WorkerConfig | None = None
+
+    # Channel bus — wake-on-surface (main only)
+    channel_bus: ChannelBusConfig | None = None
 
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning
     can_spawn_agents: bool = False
     max_nesting_depth: int = 2  # absolute cap: 3
     sub_agent_max_iterations: int = 10
-    sub_agent_timeout_seconds: int = 120
+    # Wall-clock cap for spawned child agents — 0 means no cap, child
+    # runs until it finishes. Callers of spawn_agent may still pass an
+    # explicit timeout_seconds argument for a narrowed task.
+    sub_agent_timeout_seconds: int = 0
     max_concurrent_spawns: int = 0  # 0 = use engine default
     max_spawn_batch: int = 0  # 0 = use engine default
 
@@ -355,11 +475,19 @@ class AgentRun:
     # CRM task linkage (auto-task)
     task_id: str | None = None
 
+    # Contact 360 linkage — set when trigger_detail carries a chat_id we can
+    # resolve via contact_identifiers, or inherited from a parent SpawnContext.
+    person_id: str | None = None
+
     # Outcome assessment (interactive runs only)
     outcome_assessment: str | None = None  # "successful" | "partial" | "incorrect" | "abandoned"
     outcome_notes: str | None = None
 
     steps: list[RunStep] = field(default_factory=list)
+    # Index of the first not-yet-persisted step. Bumped as the session
+    # flushes steps mid-run so _persist_run_sync doesn't re-insert
+    # already-committed rows (which would hit PK collisions).
+    persisted_step_count: int = 0
 
 
 @dataclass
@@ -380,8 +508,14 @@ class SpawnContext:
     max_spawn_batch: int = 0  # 0 = use engine default
     remaining_token_budget: int = 0
     remaining_cost_budget_usd: float = 0.0
+    # Contact 360 linkage — propagates from parent run to all spawned children.
+    person_id: str | None = None
     parent_trace_id: str = ""
     parent_span_id: str = ""
+    # Stage 5 — CRM task this child is advancing. Set when a caller spawns
+    # with parent_task_id. At run end, unfinished todo_write items are
+    # lifted back to this task so the planner picks up next beat.
+    parent_task_id: str | None = None
 
 
 @dataclass

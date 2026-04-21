@@ -15,3 +15,4 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | New interactive mode | `brain/TOOLS.md`, `brain/AGENTS.md`, `CLAUDE.md` (reading guide), `SERVICES.md` (endpoints) |
 | Vault credential changes | `brain/TOOLS.md` (Vault section), `INFRASTRUCTURE.md` (Secrets Management) |
 | Deployment/fix with gotchas | Auto-memory `MEMORY.md` (session-to-session learning) |
+| Task-lifecycle change (planner / promoter / todo escalation / autonomy defaults) | `docs/SYSTEM_ARCHITECTURE.md` (Task Lifecycle section), `docs/AGENT_BUILDER.md` (Section 2a), `brain/HEARTBEAT.md`, `brain/AGENTS.md`, `brain/SOUL.md`, `brain/memory/autonomy_defaults.md` if budgets shift |

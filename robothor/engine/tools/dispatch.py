@@ -24,6 +24,10 @@ class ToolContext:
     user_id: str = ""
     user_role: str = ""
     accessible_tenant_ids: tuple[str, ...] = ()
+    # Task authorship override: when set, CRM task handlers attribute
+    # filed/updated tasks to this identity instead of agent_id. Used by
+    # the scout beat (runs as agent_id='main' but files as 'scout').
+    task_author_override: str = ""
 
 
 def get_db() -> Any:
@@ -171,6 +175,7 @@ async def _execute_tool(
     user_id: str = "",
     user_role: str = "",
     accessible_tenant_ids: tuple[str, ...] = (),
+    task_author_override: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -214,6 +219,7 @@ async def _execute_tool(
         user_id=user_id,
         user_role=user_role,
         accessible_tenant_ids=accessible_tenant_ids,
+        task_author_override=task_author_override,
     )
     handlers = _get_handlers()
     handler = handlers.get(name)

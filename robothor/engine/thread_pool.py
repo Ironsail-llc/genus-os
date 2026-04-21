@@ -7,7 +7,7 @@ creation is inline via ``update_task(tags=[..., 'thread'])`` from heartbeat
 instructions.
 
 Priority order (first → last):
-1. Philip-blocked: ``requires_human`` AND status = REVIEW
+1. Operator-blocked: ``requires_human`` AND status = REVIEW
 2. SLA-breached: ``sla_deadline_at < now``
 3. Most-escalated: ``escalation_count`` desc
 4. Oldest-touched: ``COALESCE(updated_at, created_at)`` asc
@@ -38,7 +38,7 @@ MAX_LINE_CHARS = 140
 
 # Stall classifier thresholds (Stage 3).
 # stall1: log a note but stay silent; stall2: flip to REVIEW + requires_human;
-# stall3: surface to Philip via Phase 3 "Need You" — the collaboration ping.
+# stall3: surface to the operator via Phase 3 "Need You" — the collaboration ping.
 STALL1_DAYS = 1
 STALL2_DAYS = 2
 STALL3_DAYS = 3
@@ -110,6 +110,7 @@ WHERE t.deleted_at IS NULL
   AND t.tenant_id = %s
   AND t.status != 'DONE'
   AND 'thread' = ANY(t.tags)
+  AND (t.follow_up_at IS NULL OR t.follow_up_at <= NOW())
 ORDER BY
   CASE WHEN t.requires_human AND t.status = 'REVIEW' THEN 0 ELSE 1 END,
   CASE WHEN t.sla_deadline_at IS NOT NULL AND t.sla_deadline_at < NOW() THEN 0 ELSE 1 END,
@@ -140,6 +141,7 @@ def list_threads(
     fetch_limit = limit * 2 if not include_pending else limit
     with get_connection() as conn:
         cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '3s'")
         cur.execute(_LIST_SQL, (tenant_id, fetch_limit))
         rows = cur.fetchall()
 
@@ -194,7 +196,7 @@ def format_thread_pool(threads: list[Thread]) -> str:
         if stall != "fresh":
             markers.append(f"[{stall}]")
         if t.requires_human and t.status == "REVIEW":
-            markers.append("🧑PHILIP")
+            markers.append("🧑OPERATOR")
         if t.sla_breached:
             markers.append("⏰SLA")
         if t.escalation_count > 0:
@@ -205,8 +207,11 @@ def format_thread_pool(threads: list[Thread]) -> str:
 
         marker_str = " ".join(markers)
         assignee = f" @{t.assigned_to_agent}" if t.assigned_to_agent else ""
+        # Emit the full 36-char UUID so the model can pass it directly to
+        # get_task / update_task. The 8-char short_id prefix caused failed
+        # tool calls that had to be recovered via search_records.
         line = (
-            f"[{t.short_id}][{t.status}][{t.stale_days}d] {title}"
+            f"[{t.id}][{t.status}][{t.stale_days}d] {title}"
             + (f"  {marker_str}" if marker_str else "")
             + assignee
         )
@@ -221,10 +226,17 @@ def _thread_pool_context(config: AgentConfig) -> str | None:
 
     Runs the auto-sweep (Stage 3) before reading so Main sees any newly
     completed parent threads in the REVIEW bucket. Returns None for any agent
-    other than main so other agents' warmups aren't cluttered. Swallows all
+    other than main so other agents' warmups aren't cluttered, and None for
+    interactive runs (Telegram, webchat, channel wake) so a direct operator
+    ask isn't buried under thread-management directives. Swallows all
     exceptions to match the warmup contract.
     """
     if config.id != "main":
+        return None
+    # Only inject into scheduled heartbeat runs, not interactive chat turns.
+    from robothor.engine.warmup import current_warmup_kind
+
+    if current_warmup_kind() != "cron":
         return None
     try:
         tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
@@ -233,10 +245,20 @@ def _thread_pool_context(config: AgentConfig) -> str | None:
         except Exception as exc:
             logger.debug("Auto-sweep failed: %s", exc)
             swept = []
+        planner_count = 0
+        try:
+            from robothor.engine.thread_planner import plan_all_stalled
+
+            plans = plan_all_stalled(tenant_id=tenant_id)
+            planner_count = sum(1 for p in plans if p.action in ("execute", "ask"))
+        except Exception as exc:
+            logger.debug("Thread planner failed: %s", exc)
         threads = list_threads(tenant_id=tenant_id)
         formatted = format_thread_pool(threads)
         if swept:
             formatted += f"\n(auto-sweep: flipped {len(swept)} parent thread(s) to REVIEW)"
+        if planner_count:
+            formatted += f"\n(planner: decided next-step for {planner_count} thread(s))"
         return formatted
     except Exception as exc:
         logger.debug("Thread pool hook failed: %s", exc)
@@ -352,7 +374,7 @@ def classify_stall(thread: Thread) -> str:
     - ``fresh``: <= STALL1_DAYS days since update
     - ``stall1``: >= STALL1_DAYS days — log a note, no escalation
     - ``stall2``: >= STALL2_DAYS or escalation_count >= 1 — flip to REVIEW
-    - ``stall3``: >= STALL3_DAYS in REVIEW+requires_human — ping Philip
+    - ``stall3``: >= STALL3_DAYS in REVIEW+requires_human — ping the operator
     """
     if thread.requires_human and thread.status == "REVIEW" and thread.stale_days >= STALL3_DAYS:
         return "stall3"
@@ -373,7 +395,9 @@ def auto_close_completed_threads(tenant_id: str = DEFAULT_TENANT) -> list[str]:
     Main picks them up in its next heartbeat's REVIEW scan and decides to
     close or re-open. Returns the list of task IDs that were flipped.
 
-    Fast, idempotent, no side effects beyond the status flip.
+    Fast, idempotent, no side effects beyond the status flip. Runs inside
+    the warmup executor, so the statement is hard-bounded to 3s to prevent
+    a row-lock contention from stalling the heartbeat.
     """
     from robothor.db.connection import get_connection
 
@@ -398,6 +422,10 @@ def auto_close_completed_threads(tenant_id: str = DEFAULT_TENANT) -> list[str]:
     flipped: list[str] = []
     with get_connection() as conn:
         cur = conn.cursor()
+        # Bound every statement in this txn so a stale row lock can't hang
+        # the warmup. 3s is well above typical (<50ms) but short enough that
+        # a stall never leaks into the stall-watchdog's 300s budget.
+        cur.execute("SET LOCAL statement_timeout = '3s'")
         cur.execute(sql, (tenant_id,))
         candidate_ids = [r[0] for r in cur.fetchall()]
         for task_id in candidate_ids:

@@ -237,6 +237,28 @@ class TestComputeAndDetect:
         assert breaches[0].goal_id == "delivery"
         assert breaches[0].consecutive_days_breached == 4
         assert breaches[0].actual == pytest.approx(0.85)  # most recent
+        # Window carries through so the grader can re-verify on the right slice.
+        assert breaches[0].window_days == 7
+
+    def test_detect_breach_propagates_window_days(self):
+        """A 30-day-window goal must carry window_days=30 on its breach, so
+        the grader re-verifies on the same slice Buddy flagged."""
+        goal = GoalSpec(
+            id="revert",
+            category="correctness",
+            metric="pr_revert_rate",
+            target="<0.10",
+            weight=1.0,
+            window_days=30,
+        )
+        daily_metrics = [{"pr_revert_rate": 0.20}] * 5
+        with patch(
+            "robothor.engine.goals._get_daily_metric_history",
+            return_value=daily_metrics,
+        ):
+            breaches = detect_goal_breach("some-agent", [goal])
+        assert len(breaches) == 1
+        assert breaches[0].window_days == 30
 
     def test_detect_breach_not_persistent(self):
         """Only 1 day of breach → not persistent, not reported."""
@@ -348,22 +370,34 @@ class TestCorrectiveActions:
             actual=85.0,
             consecutive_days_breached=4,
             weight=2.0,
+            window_days=7,
         )
         actions = suggest_corrective_actions(breach)
         assert any("instruction" in a.lower() for a in actions)
 
     def test_efficiency_breach_maps_to_efficiency_templates(self):
+        # Efficiency breaches now fall through to the generic diagnosis
+        # template — we no longer prescribe cap-based remedies
+        # (stall_timeout_seconds, hard_budget, cost_budget_usd). The
+        # playbook is observational: trim context, prune tools, check
+        # iteration loops. Cost and duration are tracked, not capped.
         breach = GoalBreach(
-            goal_id="timeouts",
+            goal_id="iteration-loops",
             category="efficiency",
-            metric="timeout_rate",
+            metric="error_rate",  # any efficiency-adjacent metric
             target="<0.05",
             actual=0.20,
             consecutive_days_breached=3,
             weight=2.0,
+            window_days=7,
         )
         actions = suggest_corrective_actions(breach)
-        assert any("stall_timeout" in a or "timeout" in a.lower() for a in actions)
+        assert actions, "efficiency breach should still return the default playbook"
+        joined = " ".join(actions).lower()
+        # Should talk about prompt/tool/iteration diagnostics, NOT caps.
+        assert "stall_timeout" not in joined
+        assert "hard_budget" not in joined
+        assert "cost_budget" not in joined
 
     def test_reach_breach_maps_to_reach_templates(self):
         breach = GoalBreach(
@@ -374,6 +408,7 @@ class TestCorrectiveActions:
             actual=0.80,
             consecutive_days_breached=5,
             weight=2.0,
+            window_days=7,
         )
         actions = suggest_corrective_actions(breach)
         assert any("channel" in a.lower() or "delivery" in a.lower() for a in actions)
@@ -387,6 +422,7 @@ class TestCorrectiveActions:
             actual=0.18,
             consecutive_days_breached=3,
             weight=1.0,
+            window_days=7,
         )
         actions = suggest_corrective_actions(breach)
         assert any(

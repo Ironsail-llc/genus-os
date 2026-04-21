@@ -764,6 +764,16 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Add a Google Meet video conference link (default true)",
                         "default": True,
                     },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Bypass the duplicate-meeting check. By default, a pre-insert search of ±14 days for an event with the same title and overlapping attendees will short-circuit creation; set force=true only when you have verified the existing event is not the one you want to create.",
+                        "default": False,
+                    },
+                    "attendee_confirmed": {
+                        "type": "boolean",
+                        "description": "Certify that the attendees have already confirmed this time out-of-band (e.g. the operator approved in chat, or an attendee replied 'yes' on an email thread). Bypasses the recurring_meeting_proposal_required guardrail for high-stakes invites. Never set this to true speculatively — only when you can point to the confirmation.",
+                        "default": False,
+                    },
                 },
                 "required": ["summary", "start", "end"],
             },
@@ -874,6 +884,16 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "integer",
                         "description": "Optional: cap timeout for the child run",
                     },
+                    "parent_task_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional: CRM task UUID this spawn is advancing. "
+                            "When set, the child receives the parent's objective "
+                            "and next_action in its prompt and is bound to them — "
+                            "use this any time you're spawning a worker to drive "
+                            "a specific task forward."
+                        ),
+                    },
                 },
                 "required": ["agent_id", "message"],
             },
@@ -904,6 +924,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                                     "type": "array",
                                     "items": {"type": "string"},
                                     "description": "Optional tools override",
+                                },
+                                "parent_task_id": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional CRM task UUID — child "
+                                        "receives parent objective + next_action"
+                                    ),
                                 },
                             },
                             "required": ["agent_id", "message"],
@@ -2386,14 +2413,94 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "function": {
             "name": "buddy_refresh",
             "description": (
-                "Compute daily fleet scores and flag underperforming agents. "
-                "Refreshes per-agent RPG stats (reliability, debugging, patience, chaos, overall), "
-                "XP, and levels. Creates optimization tasks for agents scoring below threshold."
+                "Compute today's fleet achievement scores and persist to "
+                "buddy_stats + agent_buddy_stats. Scores come from goals.py's "
+                "compute_achievement_score — 0-100 per agent, weighted across "
+                "that agent's declared goals."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {},
             },
+        },
+    }
+
+    schemas["buddy_review_pass"] = {
+        "type": "function",
+        "function": {
+            "name": "buddy_review_pass",
+            "description": (
+                "Sample recent runs for each agent with declared goals and "
+                "write Buddy reviews to agent_reviews. One review per sampled "
+                "run. Biased toward failures, runs with error steps, long runs. "
+                "Skips runs already reviewed by Buddy. Uses Sonnet 4.6 to phrase "
+                "evidence-grounded critiques — the LLM cannot invent content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "runs_per_agent": {
+                        "type": "integer",
+                        "description": "How many runs to sample per agent. Default 3.",
+                    }
+                },
+            },
+        },
+    }
+
+    schemas["buddy_aggregate_findings"] = {
+        "type": "function",
+        "function": {
+            "name": "buddy_aggregate_findings",
+            "description": (
+                "Aggregate recent Buddy reviews and goal breaches into "
+                "self-improve CRM tasks. For every (agent, breached_metric) "
+                "above severity threshold, creates one task tagged "
+                "nightwatch+self-improve+<agent>+<metric> assigned to auto-agent. "
+                "Dedups against open tasks for the same (agent, metric)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "window_hours": {
+                        "type": "integer",
+                        "description": "Review-aggregation window in hours. Default 24.",
+                    }
+                },
+            },
+        },
+    }
+
+    schemas["buddy_verify_pass"] = {
+        "type": "function",
+        "function": {
+            "name": "buddy_verify_pass",
+            "description": (
+                "Grade self-improve tasks. For every DONE self-improve task "
+                "older than 48h, re-compute the metric from goals.py and tag "
+                "verified_resolved or verify_failed (with escalation:N). At "
+                "escalation:2 the task is re-routed to auto-researcher; at "
+                "escalation:3 it is tagged requires_human=true. Also runs a "
+                "7-day hold check on previously-verified tasks to populate "
+                "the held_7d=true/false tag for the weekly auditor."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["buddy_audit"] = {
+        "type": "function",
+        "function": {
+            "name": "buddy_audit",
+            "description": (
+                "Weekly hold-rate audit. Computes the fraction of verified "
+                "self-improve fixes that held for 7 days over the last 14 days. "
+                "If the rate is below 30% (and there are at least 5 samples), "
+                "pauses Buddy's cron by editing docs/agents/buddy.yaml and "
+                "sends a critical alert to main. Above threshold: logs the "
+                "healthy rate and does nothing."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     }
 

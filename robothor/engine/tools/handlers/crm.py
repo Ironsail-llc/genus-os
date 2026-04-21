@@ -277,6 +277,10 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 }
             break  # Only check the first matching key
 
+    # Author attribution precedence: explicit arg > context override > agent_id.
+    # The context override lets the scout beat (running as agent_id='main')
+    # file tasks attributed to 'scout' for CRM timeline clarity.
+    author = args.get("createdByAgent") or ctx.task_author_override or ctx.agent_id
     task_id = await asyncio.to_thread(
         create_task,
         title=args.get("title", ""),
@@ -286,7 +290,7 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         person_id=args.get("personId"),
         company_id=args.get("companyId"),
         assigned_to_agent=args.get("assignedToAgent"),
-        created_by_agent=args.get("createdByAgent", ctx.agent_id),
+        created_by_agent=author,
         priority=args.get("priority", "normal"),
         tags=args.get("tags"),
         parent_task_id=args.get("parentTaskId"),
@@ -348,7 +352,11 @@ async def _update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "requiresHuman": "requires_human",
     }
     kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
-    ok = await asyncio.to_thread(update_task, tid, tenant_id=ctx.tenant_id, **kwargs)
+    # Author attribution for task history: context override > agent_id.
+    changed_by = ctx.task_author_override or ctx.agent_id
+    ok = await asyncio.to_thread(
+        update_task, tid, changed_by=changed_by, tenant_id=ctx.tenant_id, **kwargs
+    )
     return {"success": ok, "id": tid}
 
 
@@ -798,3 +806,64 @@ async def _get_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str
         get_review_summary, agent_id, days=days, tenant_id=ctx.tenant_id
     )
     return {"reviews": reviews, "summary": summary}
+
+
+# ── Contact 360 — agent-facing holistic lookup ───────────────────────────
+
+
+@_handler("get_contact_360")
+async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Return the unified view of a contact: identity + counts + recent
+    timeline + open tasks + recent notes + memory snippets.
+
+    Args:
+      id:              person_id UUID (preferred)
+      identifier:      OR a channel identifier string (email, phone, telegram id)
+      channel:         channel for identifier lookup — default 'email'
+      timeline_limit:  how many timeline rows to include (default 50)
+    """
+    from robothor.crm.dal import (
+        get_contact_360 as _dal_get_contact_360,
+    )
+    from robothor.crm.dal import (
+        resolve_contact,
+    )
+
+    person_id = (args.get("id") or "").strip()
+    if not person_id:
+        identifier = (args.get("identifier") or "").strip()
+        if not identifier:
+            return {"error": "id or identifier is required"}
+        channel = (args.get("channel") or "email").strip()
+        mapping = await asyncio.to_thread(resolve_contact, channel, identifier, None, ctx.tenant_id)
+        person_id = str(mapping.get("person_id") or "").strip()
+        if not person_id:
+            return {"error": f"no CRM person mapped to {channel}:{identifier}"}
+
+    timeline_limit = int(args.get("timeline_limit", 50))
+    return await asyncio.to_thread(
+        _dal_get_contact_360,
+        person_id,
+        tenant_id=ctx.tenant_id,
+        timeline_limit=timeline_limit,
+    )
+
+
+@_handler("list_contact_messages")
+async def _list_contact_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Fetch message bodies for a person, optionally filtered by channel."""
+    from robothor.crm.dal import get_person_messages
+
+    person_id = (args.get("id") or "").strip()
+    if not person_id:
+        return {"error": "id is required"}
+    channel = args.get("channel")
+    limit = int(args.get("limit", 100))
+    rows = await asyncio.to_thread(
+        get_person_messages,
+        person_id,
+        channel=channel,
+        limit=limit,
+        tenant_id=ctx.tenant_id,
+    )
+    return {"messages": rows}

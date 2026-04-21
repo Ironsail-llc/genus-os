@@ -58,38 +58,33 @@ def create_health_app(
 
     @app.get("/api/buddy/stats")
     async def buddy_stats() -> dict[str, Any]:
-        """Get current buddy stats, level, and streak."""
+        """Fleet achievement snapshot — aggregated goal satisfaction, not RPG."""
         from robothor.engine.buddy import BuddyEngine
 
         engine = BuddyEngine()
-        stats = engine.compute_daily_stats()
-        level = engine.get_level_info()
+        fleet = engine.compute_daily_stats()
         current_streak, longest_streak = engine.get_streak()
         return {
-            "level": level.level,
-            "level_name": level.level_name,
-            "total_xp": level.total_xp,
-            "progress_pct": level.progress_pct,
+            "stat_date": fleet.stat_date.isoformat(),
+            "fleet_achievement_score": fleet.fleet_achievement_score,
             "streak": {"current": current_streak, "longest": longest_streak},
-            "today": {
-                "tasks": stats.tasks_completed,
-                "emails": stats.emails_processed,
-                "insights": stats.insights_generated,
-                "dreams": stats.dreams_completed,
-                "errors_avoided": stats.errors_avoided,
-            },
-            "scores": {
-                "debugging": stats.debugging_score,
-                "patience": stats.patience_score,
-                "chaos": stats.chaos_score,
-                "wisdom": stats.wisdom_score,
-                "reliability": stats.reliability_score,
-            },
+            "today": {"tasks": fleet.tasks_completed},
+            "agents": [
+                {
+                    "agent_id": s.agent_id,
+                    "achievement_score": s.achievement_score,
+                    "rating": s.rating,
+                    "satisfied_goals": s.satisfied_goals,
+                    "breached_goals": s.breached_goals,
+                    "rank": s.rank,
+                }
+                for s in fleet.per_agent
+            ],
         }
 
     @app.get("/api/buddy/history")
     async def buddy_history(days: int = 7) -> dict[str, Any]:
-        """Get buddy stats history for the last N days."""
+        """Fleet achievement history for the last N days."""
         days = max(1, min(days, 365))
         from robothor.db.connection import get_connection
 
@@ -97,10 +92,8 @@ def create_health_app(
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT stat_date, tasks_completed, total_xp, level,
-                       current_streak_days,
-                       debugging_score, patience_score, chaos_score,
-                       wisdom_score, reliability_score
+                SELECT stat_date, tasks_completed, achievement_score,
+                       current_streak_days
                 FROM buddy_stats
                 ORDER BY stat_date DESC
                 LIMIT %s
@@ -113,16 +106,8 @@ def create_health_app(
                 {
                     "date": str(r[0]),
                     "tasks": r[1],
-                    "xp": r[2],
-                    "level": r[3],
-                    "streak": r[4],
-                    "scores": {
-                        "debugging": r[5],
-                        "patience": r[6],
-                        "chaos": r[7],
-                        "wisdom": r[8],
-                        "reliability": r[9],
-                    },
+                    "achievement_score": r[2],
+                    "streak": r[3],
                 }
                 for r in rows
             ]
@@ -130,60 +115,32 @@ def create_health_app(
 
     @app.get("/api/buddy/agents")
     async def buddy_agents() -> dict[str, Any]:
-        """Get fleet RPG leaderboard — all agents ranked by overall score."""
+        """Fleet leaderboard — agents ranked by achievement_score (goals.py)."""
         try:
-            from robothor.db.connection import get_connection
-            from robothor.engine.buddy import level_name
+            from robothor.engine.buddy import BuddyEngine
 
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT agent_id, debugging_score, patience_score, chaos_score,
-                           wisdom_score, reliability_score, overall_score,
-                           level, total_xp, daily_xp, tasks_completed,
-                           last_benchmark_score, last_benchmark_at,
-                           effectiveness_score, benchmark_dim_score
-                    FROM agent_buddy_stats
-                    WHERE stat_date = CURRENT_DATE
-                    ORDER BY overall_score DESC
-                    """
-                )
-                rows = cur.fetchall()
-            agents = []
-            for rank, r in enumerate(rows, 1):
-                lvl = r[7] or 1
-                agents.append(
+            scores = BuddyEngine().compute_fleet_scores()
+            return {
+                "agents": [
                     {
-                        "rank": rank,
-                        "agentId": r[0],
-                        "overall": r[6],
-                        "level": lvl,
-                        "levelName": level_name(lvl),
-                        "totalXp": r[8] or 0,
-                        "dailyXp": r[9] or 0,
-                        "tasksCompleted": r[10] or 0,
-                        "scores": {
-                            "debugging": r[1],
-                            "patience": r[2],
-                            "chaos": r[3],
-                            "wisdom": r[4],
-                            "reliability": r[5],
-                            "effectiveness": r[13] if r[13] is not None else 50,
-                            "benchmark": r[14] if r[14] is not None else 50,
-                        },
-                        "benchmarkScore": float(r[11]) if r[11] is not None else None,
-                        "benchmarkAt": r[12].isoformat() if r[12] else None,
+                        "rank": s.rank,
+                        "agentId": s.agent_id,
+                        "achievementScore": s.achievement_score,
+                        "rating": s.rating,
+                        "satisfiedGoals": s.satisfied_goals,
+                        "breachedGoals": s.breached_goals,
+                        "statDate": s.stat_date.isoformat(),
                     }
-                )
-            return {"agents": agents}
+                    for s in scores
+                ]
+            }
         except Exception as e:
             logger.warning("Failed to load buddy agents leaderboard: %s", e)
             return {"agents": [], "error": "Failed to load leaderboard"}
 
     @app.get("/api/buddy/agents/{agent_id}")
     async def buddy_agent_history(agent_id: str, days: int = 14) -> dict[str, Any]:
-        """Get per-agent RPG score history for sparkline/trend charts."""
+        """Per-agent achievement history for sparkline/trend charts."""
         days = max(1, min(days, 365))
         try:
             from robothor.db.connection import get_connection
@@ -192,9 +149,7 @@ def create_health_app(
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT stat_date, debugging_score, patience_score, chaos_score,
-                           wisdom_score, reliability_score, overall_score,
-                           level, total_xp, daily_xp, tasks_completed
+                    SELECT stat_date, achievement_score, tasks_completed
                     FROM agent_buddy_stats
                     WHERE agent_id = %s
                     ORDER BY stat_date DESC
@@ -208,18 +163,8 @@ def create_health_app(
                 "days": [
                     {
                         "date": str(r[0]),
-                        "scores": {
-                            "debugging": r[1],
-                            "patience": r[2],
-                            "chaos": r[3],
-                            "wisdom": r[4],
-                            "reliability": r[5],
-                        },
-                        "overall": r[6],
-                        "level": r[7],
-                        "totalXp": r[8],
-                        "dailyXp": r[9],
-                        "tasks": r[10],
+                        "achievementScore": r[1],
+                        "tasks": r[2],
                     }
                     for r in rows
                 ],
@@ -227,6 +172,380 @@ def create_health_app(
         except Exception as e:
             logger.warning("Failed to load buddy agent history: %s", e)
             return {"agentId": agent_id, "days": [], "error": "Failed to load agent history"}
+
+    @app.get("/api/buddy/ratings")
+    async def buddy_ratings() -> dict[str, Any]:
+        """Per-agent latest achievement + 7d trend — source of truth for the dashboard."""
+        from robothor.db.connection import get_connection
+
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (agent_id)
+                           agent_id, achievement_score, stat_date
+                    FROM agent_buddy_stats
+                    WHERE stat_date >= CURRENT_DATE - INTERVAL '1 day'
+                      AND achievement_score IS NOT NULL
+                    ORDER BY agent_id, stat_date DESC
+                    """
+                )
+                latest = {
+                    row[0]: {"score": row[1], "stat_date": str(row[2])} for row in cur.fetchall()
+                }
+
+                cur.execute(
+                    """
+                    SELECT agent_id, stat_date, achievement_score
+                    FROM agent_buddy_stats
+                    WHERE stat_date >= CURRENT_DATE - INTERVAL '7 days'
+                      AND achievement_score IS NOT NULL
+                    ORDER BY agent_id, stat_date
+                    """
+                )
+                trend: dict[str, list] = {}
+                for agent_id, stat_date, score in cur.fetchall():
+                    trend.setdefault(agent_id, []).append({"date": str(stat_date), "score": score})
+            return {
+                "agents": [
+                    {
+                        "agentId": aid,
+                        "latestScore": v["score"],
+                        "statDate": v["stat_date"],
+                        "trend": trend.get(aid, []),
+                    }
+                    for aid, v in sorted(latest.items(), key=lambda kv: -kv[1]["score"])
+                ]
+            }
+        except Exception as e:
+            logger.warning("Failed to load buddy ratings: %s", e)
+            return {"agents": [], "error": str(e)}
+
+    @app.get("/api/buddy/reviews")
+    async def buddy_reviews(limit: int = 50, agent_id: str | None = None) -> dict[str, Any]:
+        """Recent Buddy reviews — filter optionally by agent."""
+        limit = max(1, min(limit, 500))
+        from robothor.db.connection import get_connection
+
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                if agent_id:
+                    cur.execute(
+                        """
+                        SELECT id, agent_id, run_id, rating, categories, feedback,
+                               action_items, created_at
+                        FROM agent_reviews
+                        WHERE reviewer_type = 'buddy' AND agent_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (agent_id, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, agent_id, run_id, rating, categories, feedback,
+                               action_items, created_at
+                        FROM agent_reviews
+                        WHERE reviewer_type = 'buddy'
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+            return {
+                "reviews": [
+                    {
+                        "id": str(r[0]),
+                        "agentId": r[1],
+                        "runId": str(r[2]) if r[2] else None,
+                        "rating": r[3],
+                        "categories": r[4],
+                        "feedback": r[5],
+                        "actionItems": list(r[6]) if r[6] else [],
+                        "createdAt": r[7].isoformat() if r[7] else None,
+                    }
+                    for r in rows
+                ]
+            }
+        except Exception as e:
+            logger.warning("Failed to load buddy reviews: %s", e)
+            return {"reviews": [], "error": str(e)}
+
+    @app.get("/api/buddy/findings")
+    async def buddy_findings() -> dict[str, Any]:
+        """Open/in-progress/verifying/resolved/persistent self-improve findings."""
+        try:
+            from robothor.crm.dal import list_tasks
+
+            open_tasks = list_tasks(
+                tags=["self-improve"],
+                limit=500,
+                exclude_resolved=False,
+            )
+
+            def classify(task: dict) -> str | None:
+                tags = task.get("tags") or []
+                status = (task.get("status") or "").upper()
+                # Legacy pre-rebuild tasks (no buddy-baseline marker) are tagged
+                # legacy-no-baseline — exclude from the live findings summary.
+                if "legacy-no-baseline" in tags:
+                    return None
+                if task.get("requires_human") or "escalation:3" in tags:
+                    return "requires_human"
+                if "verified_resolved" in tags:
+                    return "resolved"
+                if "verify_failed" in tags:
+                    return "persistent"
+                if status == "DONE":
+                    return "verifying"
+                if status == "IN_PROGRESS":
+                    return "in_progress"
+                return "open"
+
+            buckets: dict[str, list] = {
+                "open": [],
+                "in_progress": [],
+                "verifying": [],
+                "resolved": [],
+                "persistent": [],
+                "requires_human": [],
+            }
+            for task in open_tasks:
+                classification = classify(task)
+                if classification is None:
+                    continue
+                buckets.setdefault(classification, []).append(
+                    {
+                        "id": str(task.get("id")),
+                        "title": task.get("title"),
+                        "tags": task.get("tags"),
+                        "status": task.get("status"),
+                        "priority": task.get("priority"),
+                        "createdAt": (
+                            task["created_at"].isoformat()
+                            if isinstance(task.get("created_at"), datetime)
+                            else task.get("created_at")
+                        ),
+                        "assignedToAgent": task.get("assigned_to_agent"),
+                    }
+                )
+            return {
+                "summary": {k: len(v) for k, v in buckets.items()},
+                "findings": buckets,
+            }
+        except Exception as e:
+            logger.warning("Failed to load buddy findings: %s", e)
+            return {"summary": {}, "findings": {}, "error": str(e)}
+
+    @app.get("/api/buddy/verifications")
+    async def buddy_verifications() -> dict[str, Any]:
+        """List of verified tasks with baseline → current → held_7d for auditor."""
+        try:
+            import re as _re
+
+            from robothor.crm.dal import list_tasks
+
+            pattern = _re.compile(r"<!--\s*buddy-baseline:\s*(\{.*?\})\s*-->", _re.DOTALL)
+            verified = list_tasks(
+                tags=["verified_resolved"],
+                limit=500,
+                exclude_resolved=False,
+            )
+            out = []
+            for task in verified:
+                body = task.get("body") or ""
+                m = pattern.search(body)
+                baseline_blob = None
+                if m:
+                    try:
+                        import json as _json
+
+                        baseline_blob = _json.loads(m.group(1))
+                    except Exception:
+                        baseline_blob = None
+                tags = task.get("tags") or []
+                held_7d = None
+                if "held_7d=true" in tags:
+                    held_7d = True
+                elif "held_7d=false" in tags:
+                    held_7d = False
+                out.append(
+                    {
+                        "id": str(task.get("id")),
+                        "title": task.get("title"),
+                        "tags": tags,
+                        "verifiedAt": (
+                            task["updated_at"].isoformat()
+                            if isinstance(task.get("updated_at"), datetime)
+                            else task.get("updated_at")
+                        ),
+                        "baseline": baseline_blob,
+                        "held7d": held_7d,
+                        "requiresHuman": bool(task.get("requires_human")),
+                    }
+                )
+            return {"verifications": out}
+        except Exception as e:
+            logger.warning("Failed to load buddy verifications: %s", e)
+            return {"verifications": [], "error": str(e)}
+
+    @app.get("/api/buddy/loop-health")
+    async def buddy_loop_health(
+        open_window_days: int = 30,
+        hold_window_days: int = 14,
+    ) -> dict[str, Any]:
+        """Fleet-level view of the self-improvement loop.
+
+        Returns four metrics derived from `crm_tasks` tags + timestamps
+        (no new table, no schema change):
+
+        - `open_breach_count_by_day` — count of non-DONE self-improve tasks
+          with created_at on each day, over `open_window_days`. Lets the
+          operator see whether the loop's backlog is rising or falling.
+        - `time_to_verified_resolved_ms` — p50/p95 latency from
+          created_at → verified_at tag. Measures how fast the loop closes
+          findings.
+        - `escalation_distribution` — count of currently-open tasks at each
+          escalation level (0, 1, 2) plus a `requires_human` bucket.
+        - `held_7d_rate_rolling_14d` — `held_7d=true / (true + false)` over
+          the last `hold_window_days` days (same computation as
+          buddy_auditor, exposed as a KPI).
+        """
+        import re as _re
+        from collections import Counter
+        from datetime import timedelta
+        from statistics import median
+
+        from robothor.crm.dal import list_tasks
+
+        open_window_days = max(1, min(open_window_days, 365))
+        hold_window_days = max(1, min(hold_window_days, 365))
+
+        verified_at_re = _re.compile(r"^verified_at:(.+)$")
+        escalation_re = _re.compile(r"^escalation:(\d+)$")
+
+        def _parse_verified_at(tags: list[str]) -> datetime | None:
+            for t in tags or []:
+                m = verified_at_re.match(str(t).strip())
+                if not m:
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(m.group(1).strip())
+                except ValueError:
+                    continue
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                return parsed
+            return None
+
+        def _as_dt(value: Any) -> datetime | None:
+            if isinstance(value, datetime):
+                return value if value.tzinfo else value.replace(tzinfo=UTC)
+            return None
+
+        now = datetime.now(UTC)
+        try:
+            tasks = list_tasks(
+                tags=["self-improve"],
+                limit=2000,
+                exclude_resolved=False,
+            )
+        except Exception as e:
+            logger.warning("loop-health: list_tasks failed: %s", e)
+            return {"error": str(e)}
+
+        # 1) Open breach count by day
+        open_cutoff = now - timedelta(days=open_window_days)
+        open_by_day: Counter[str] = Counter()
+        for t in tasks:
+            if (t.get("status") or "").upper() == "DONE":
+                continue
+            created = _as_dt(t.get("created_at"))
+            if created is None or created < open_cutoff:
+                continue
+            open_by_day[created.date().isoformat()] += 1
+        obd = [{"day": day, "count": open_by_day[day]} for day in sorted(open_by_day)]
+
+        # 2) Verification latency (created_at → verified_at tag)
+        latencies_ms: list[float] = []
+        for t in tasks:
+            tags = t.get("tags") or []
+            if "verified_resolved" not in tags:
+                continue
+            verified_at = _parse_verified_at(tags) or _as_dt(t.get("updated_at"))
+            created = _as_dt(t.get("created_at"))
+            if verified_at is None or created is None:
+                continue
+            latencies_ms.append((verified_at - created).total_seconds() * 1000)
+
+        def _percentile(values: list[float], pct: float) -> float | None:
+            if not values:
+                return None
+            values_sorted = sorted(values)
+            k = max(
+                0, min(len(values_sorted) - 1, int(round((pct / 100) * (len(values_sorted) - 1))))
+            )
+            return float(values_sorted[k])
+
+        latency = {
+            "p50_ms": float(median(latencies_ms)) if latencies_ms else None,
+            "p95_ms": _percentile(latencies_ms, 95.0),
+            "sample_size": len(latencies_ms),
+        }
+
+        # 3) Escalation distribution — current state of non-verified tasks
+        esc_counts: dict[str, int] = {"0": 0, "1": 0, "2": 0, "requires_human": 0}
+        for t in tasks:
+            tags = t.get("tags") or []
+            if "verified_resolved" in tags:
+                continue  # settled state, not an open escalation
+            if t.get("requires_human") or "escalation:3" in tags:
+                esc_counts["requires_human"] += 1
+                continue
+            level = 0
+            for tag in tags:
+                m = escalation_re.match(str(tag).strip())
+                if m:
+                    level = max(level, int(m.group(1)))
+            if level <= 2:
+                esc_counts[str(level)] += 1
+            else:
+                esc_counts["requires_human"] += 1
+
+        # 4) Rolling held_7d rate
+        hold_cutoff = now - timedelta(days=hold_window_days)
+        held_true = 0
+        held_false = 0
+        for t in tasks:
+            tags = t.get("tags") or []
+            if "verified_resolved" not in tags:
+                continue
+            updated = _as_dt(t.get("updated_at"))
+            if updated is None or updated < hold_cutoff:
+                continue
+            if "held_7d=true" in tags:
+                held_true += 1
+            elif "held_7d=false" in tags:
+                held_false += 1
+        scored = held_true + held_false
+        hold_rate = (held_true / scored) if scored > 0 else None
+
+        return {
+            "open_breach_count_by_day": obd,
+            "time_to_verified_resolved_ms": latency,
+            "escalation_distribution": esc_counts,
+            "held_7d_rate_rolling_14d": {
+                "held_true": held_true,
+                "held_false": held_false,
+                "rate": hold_rate,
+                "window_days": hold_window_days,
+            },
+            "generated_at": now.isoformat(),
+        }
 
     @app.get("/api/reviews/{agent_id}")
     async def api_get_reviews(agent_id: str, days: int = 30) -> dict[str, Any]:
@@ -510,6 +829,18 @@ def create_health_app(
             return tree
         except Exception:
             logger.exception("Failed to get run tree")
+            return {"error": "Internal server error"}
+
+    @app.get("/api/analytics/threads")
+    async def thread_pool_analytics(window_days: int = 7) -> dict[str, Any]:
+        """Stage 4 — thread pool metrics (advance rate, question answer rate,
+        stall rate, planner override rate)."""
+        try:
+            from robothor.engine.analytics import thread_pool_metrics
+
+            return thread_pool_metrics(tenant_id=config.tenant_id, window_days=window_days)
+        except Exception:
+            logger.exception("Failed to compute thread_pool_metrics")
             return {"error": "Internal server error"}
 
     @app.get("/costs")

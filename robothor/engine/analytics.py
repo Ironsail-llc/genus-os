@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import datetime
 
+import contextlib
+
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
@@ -245,6 +247,92 @@ def get_agent_stats(
         except Exception as e:
             logger.warning("agent_reviews query failed (migration 031 applied?): %s", e)
             stats["operator_rating_avg"] = None
+
+        # Build a window predicate that's qualified with `r.` so joins with
+        # agent_run_steps don't make `created_at` ambiguous.
+        if as_of is None:
+            r_window_sql = "r.created_at > NOW() - make_interval(days := %s)"
+        else:
+            r_window_sql = (
+                "r.created_at > %s::timestamptz - make_interval(days := %s) "
+                "AND r.created_at <= %s::timestamptz"
+            )
+
+        # Tool success rate — fraction of tool_call steps that did not error.
+        # Joins agent_run_steps to agent_runs so the window filter applies to
+        # the parent run, not the step row.
+        try:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE s.step_type = 'tool_call') AS tool_calls,
+                    COUNT(*) FILTER (
+                        WHERE s.step_type = 'tool_call' AND s.error_message IS NULL
+                    ) AS tool_ok
+                FROM agent_run_steps s
+                JOIN agent_runs r ON r.id = s.run_id
+                WHERE r.agent_id = %s
+                  AND r.tenant_id = %s
+                  AND r.parent_run_id IS NULL
+                  AND {r_window_sql}
+                """,  # noqa: S608 — r_window_sql is a literal
+                (agent_id, tenant_id, *window_params),
+            )
+            trow = cur.fetchone() or {}
+            tool_calls = trow.get("tool_calls") or 0
+            tool_ok = trow.get("tool_ok") or 0
+            stats["tool_success_rate"] = round(tool_ok / tool_calls, 4) if tool_calls > 0 else None
+        except Exception as e:
+            logger.warning("tool_success_rate query failed: %s", e)
+            stats["tool_success_rate"] = None
+            # Clear the aborted tx so the next query doesn't inherit it.
+            with contextlib.suppress(Exception):
+                conn.rollback()
+
+        # Recovery rate — fraction of runs that had an error step followed by
+        # a non-error step in the same run. 1.0 means every error was recovered
+        # from within the run; 0.0 means errors always terminated the run.
+        try:
+            cur.execute(
+                f"""
+                WITH error_runs AS (
+                    SELECT s.run_id, MIN(s.step_number) AS first_error
+                    FROM agent_run_steps s
+                    JOIN agent_runs r ON r.id = s.run_id
+                    WHERE r.agent_id = %s
+                      AND r.tenant_id = %s
+                      AND r.parent_run_id IS NULL
+                      AND {r_window_sql}
+                      AND s.step_type = 'error'
+                    GROUP BY s.run_id
+                ),
+                recovered AS (
+                    SELECT er.run_id
+                    FROM error_runs er
+                    WHERE EXISTS (
+                        SELECT 1 FROM agent_run_steps s2
+                        WHERE s2.run_id = er.run_id
+                          AND s2.step_number > er.first_error
+                          AND s2.step_type != 'error'
+                    )
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM error_runs) AS error_total,
+                    (SELECT COUNT(*) FROM recovered) AS recovered_total
+                """,  # noqa: S608
+                (agent_id, tenant_id, *window_params),
+            )
+            rrow2 = cur.fetchone() or {}
+            error_total = rrow2.get("error_total") or 0
+            recovered_total = rrow2.get("recovered_total") or 0
+            stats["recovery_rate"] = (
+                round(recovered_total / error_total, 4) if error_total > 0 else None
+            )
+        except Exception as e:
+            logger.warning("recovery_rate query failed: %s", e)
+            stats["recovery_rate"] = None
+            with contextlib.suppress(Exception):
+                conn.rollback()
 
     return stats
 
@@ -512,3 +600,124 @@ def get_failure_patterns(
         "total_clusters": len(patterns),
         "period_hours": hours,
     }
+
+
+def thread_pool_metrics(tenant_id: str = DEFAULT_TENANT, window_days: int = 7) -> dict[str, Any]:
+    """Stage 4 observability — how well is the thread pool advancing?
+
+    Returns counts and rates for:
+      - threads_advanced_per_beat — spawns with parent_task_id
+      - next_action_source — breakdown of who wrote the active next_action
+        (planner vs main-agent vs operator)
+      - questions_answered_within_24h — % of questions_for_operator that
+        received a history row within 24h of being set
+      - stall_rate — count of threads entering stall2 (requires_human flip)
+        per day in the window
+      - planner_override_rate — fraction of stall2 candidates where the
+        planner produced action=execute or a concrete question
+        (vs the legacy bare-flag flip)
+    """
+    out: dict[str, Any] = {
+        "threads_advanced_per_beat": 0,
+        "next_action_source": {"planner": 0, "agent": 0, "operator": 0},
+        "questions_answered_within_24h": 0.0,
+        "stall_rate": 0.0,
+        "planner_override_rate": 0.0,
+        "window_days": window_days,
+    }
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            # next_action_source breakdown — by changed_by on latest plan-kind
+            # history row per task.
+            cur.execute(
+                """SELECT COALESCE(h.changed_by, 'agent') AS source, COUNT(*) AS n
+                   FROM crm_tasks t
+                   LEFT JOIN LATERAL (
+                       SELECT changed_by
+                       FROM crm_task_history
+                       WHERE task_id = t.id
+                         AND (metadata->>'kind') = 'plan'
+                       ORDER BY created_at DESC
+                       LIMIT 1
+                   ) h ON TRUE
+                   WHERE t.tenant_id = %s
+                     AND t.deleted_at IS NULL
+                     AND t.next_action IS NOT NULL
+                     AND t.updated_at >= NOW() - (%s || ' days')::interval
+                   GROUP BY 1""",
+                (tenant_id, str(window_days)),
+            )
+            for row in cur.fetchall():
+                src = row["source"] or "agent"
+                if src not in out["next_action_source"]:
+                    out["next_action_source"][src] = 0
+                out["next_action_source"][src] = int(row["n"])
+
+            # questions_answered_within_24h — count of questions set in the
+            # window that moved off requires_human within 24h.
+            cur.execute(
+                """SELECT
+                       COUNT(*) FILTER (WHERE question_for_operator IS NOT NULL) AS asked,
+                       COUNT(*) FILTER (
+                           WHERE question_for_operator IS NOT NULL
+                             AND requires_human = FALSE
+                             AND updated_at <= created_at + INTERVAL '24 hours'
+                       ) AS answered
+                   FROM crm_tasks
+                   WHERE tenant_id = %s
+                     AND deleted_at IS NULL
+                     AND updated_at >= NOW() - (%s || ' days')::interval""",
+                (tenant_id, str(window_days)),
+            )
+            row = cur.fetchone() or {}
+            asked = int(row.get("asked") or 0)
+            answered = int(row.get("answered") or 0)
+            if asked:
+                out["questions_answered_within_24h"] = round(answered / asked, 3)
+
+            # stall_rate — threads flipped to REVIEW+requires_human via
+            # stall classifier in the window, normalized per day.
+            cur.execute(
+                """SELECT COUNT(*) AS n
+                   FROM crm_task_history
+                   WHERE tenant_id = %s
+                     AND (metadata->>'kind') = 'ask'
+                     AND created_at >= NOW() - (%s || ' days')::interval""",
+                (tenant_id, str(window_days)),
+            )
+            stall_count = int((cur.fetchone() or {}).get("n") or 0)
+            out["stall_rate"] = round(stall_count / max(1, window_days), 3) if window_days else 0.0
+
+            # planner_override_rate — fraction of stall2-candidate rows where
+            # the planner recorded a plan or question-with-planner-author.
+            cur.execute(
+                """SELECT
+                       COUNT(*) FILTER (WHERE changed_by = 'planner') AS planner,
+                       COUNT(*) AS total
+                   FROM crm_task_history
+                   WHERE tenant_id = %s
+                     AND (metadata->>'kind') IN ('plan', 'ask')
+                     AND created_at >= NOW() - (%s || ' days')::interval""",
+                (tenant_id, str(window_days)),
+            )
+            row = cur.fetchone() or {}
+            total = int(row.get("total") or 0)
+            by_planner = int(row.get("planner") or 0)
+            if total:
+                out["planner_override_rate"] = round(by_planner / total, 3)
+
+            # threads_advanced_per_beat — spawn runs with a parent_task_id
+            # recorded in agent_runs.trigger_detail in the window.
+            cur.execute(
+                """SELECT COUNT(*) AS n
+                   FROM agent_runs
+                   WHERE tenant_id = %s
+                     AND trigger_type = 'sub_agent'
+                     AND created_at >= NOW() - (%s || ' days')::interval""",
+                (tenant_id, str(window_days)),
+            )
+            out["threads_advanced_per_beat"] = int((cur.fetchone() or {}).get("n") or 0)
+    except Exception as e:
+        logger.debug("thread_pool_metrics failed: %s", e)
+    return out

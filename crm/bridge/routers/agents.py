@@ -305,73 +305,49 @@ def _build_agent_status() -> dict:
             }
         )
 
-    # ── Merge per-agent RPG scores ──────────────────────────────────────────
-    rpg_scores: dict[str, dict] = {}
+    # ── Merge per-agent achievement scores ──────────────────────────────────
+    achievement: dict[str, dict] = {}
     try:
         from robothor.db.connection import get_connection
-        from robothor.engine.buddy import level_name
 
-        cols = [
-            "agent_id",
-            "debugging_score",
-            "patience_score",
-            "chaos_score",
-            "wisdom_score",
-            "reliability_score",
-            "overall_score",
-            "level",
-            "total_xp",
-            "last_benchmark_score",
-            "stat_date",
-        ]
         with get_connection() as conn:
             cur = conn.cursor()
-            # Use DISTINCT ON to get the most recent row per agent (today or yesterday).
-            # This avoids a gap between midnight and the next refresh_daily().
+            # DISTINCT ON gets the most recent row per agent (today or yesterday).
+            # Covers the midnight gap before the next refresh_daily() runs.
             cur.execute(
                 """
                 SELECT DISTINCT ON (agent_id)
-                       agent_id, debugging_score, patience_score, chaos_score,
-                       wisdom_score, reliability_score, overall_score,
-                       level, total_xp, last_benchmark_score, stat_date
+                       agent_id, achievement_score, stat_date
                 FROM agent_buddy_stats
                 WHERE stat_date >= CURRENT_DATE - INTERVAL '1 day'
+                  AND achievement_score IS NOT NULL
                 ORDER BY agent_id, stat_date DESC
                 """
             )
             for row in cur.fetchall():
-                r = dict(zip(cols, row, strict=False))
-                lvl = r["level"] or 1
-                is_stale = str(r["stat_date"]) != str(datetime.now(UTC).date())
-                rpg_scores[r["agent_id"]] = {
-                    "overall": r["overall_score"],
-                    "level": lvl,
-                    "levelName": level_name(lvl),
-                    "totalXp": r["total_xp"] or 0,
-                    "scores": {
-                        "debugging": r["debugging_score"],
-                        "patience": r["patience_score"],
-                        "chaos": r["chaos_score"],
-                        "wisdom": r["wisdom_score"],
-                        "reliability": r["reliability_score"],
-                    },
-                    "benchmarkScore": float(r["last_benchmark_score"])
-                    if r["last_benchmark_score"] is not None
-                    else None,
+                agent_id, score, stat_date = row
+                is_stale = str(stat_date) != str(datetime.now(UTC).date())
+                achievement[agent_id] = {
+                    "achievementScore": int(score) if score is not None else None,
+                    "statDate": str(stat_date),
                     "stale": is_stale,
                 }
     except Exception as e:
-        logger.debug("Failed to load per-agent RPG scores: %s", e)
+        logger.debug("Failed to load per-agent achievement scores: %s", e)
 
-    # Assign ranks by overall score and merge into agent dicts
-    ranked_ids = sorted(rpg_scores.keys(), key=lambda k: rpg_scores[k]["overall"], reverse=True)
+    # Rank by achievement score (desc) and merge into agent dicts
+    ranked_ids = sorted(
+        achievement.keys(),
+        key=lambda k: achievement[k]["achievementScore"] or 0,
+        reverse=True,
+    )
     for rank, aid in enumerate(ranked_ids, 1):
-        rpg_scores[aid]["rank"] = rank
+        achievement[aid]["rank"] = rank
 
     for agent in agents:
-        rpg = rpg_scores.get(agent["agentId"])
-        if rpg:
-            agent["rpg"] = rpg
+        score = achievement.get(agent["agentId"])
+        if score:
+            agent["achievement"] = score
 
     return {"agents": agents, "summary": summary}
 

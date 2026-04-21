@@ -349,3 +349,134 @@ class TestBuildInteractivePreamble:
             )
 
             assert "Alice works at Acme" in result
+
+
+class TestInteractivePanoramicSections:
+    """Phase 4 — main's interactive warmup gets two new sections:
+    open task queue (grouped by agent) + recent fleet deliveries.
+    So main can answer 'what's going on?' without spinning tool calls.
+    """
+
+    def test_open_tasks_section_injected_for_main(self):
+        """Main on Telegram gets an OPEN TASKS summary in its preamble."""
+        from robothor.engine.warmup import build_interactive_preamble
+
+        mock_tasks = [
+            {
+                "id": "t1",
+                "title": "Reply to Kait",
+                "status": "TODO",
+                "assigned_to_agent": "main",
+                "objective": "close pricing thread",
+                "updated_at": None,
+            },
+            {
+                "id": "t2",
+                "title": "Deploy fix",
+                "status": "IN_PROGRESS",
+                "assigned_to_agent": "devops-manager",
+                "objective": None,
+                "updated_at": None,
+            },
+        ]
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=mock_tasks),
+                patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPEN TASKS" in result
+        assert "Reply to Kait" in result
+        assert "Deploy fix" in result
+        # Grouped by assigned agent for drill-down
+        assert "main" in result.lower() or "devops-manager" in result.lower()
+
+    def test_open_tasks_section_skipped_for_non_main(self):
+        """Other agents don't get the fleet-wide task summary."""
+        from robothor.engine.warmup import build_interactive_preamble
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.crm.dal.list_tasks") as mock_list,
+            ):
+                result = build_interactive_preamble(
+                    "email-classifier",  # not main
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPEN TASKS" not in result
+        mock_list.assert_not_called()
+
+    def test_fleet_surfaces_section_injected_for_main(self):
+        """Main on Telegram gets a RECENT FLEET SURFACES snippet."""
+        from robothor.engine.warmup import build_interactive_preamble
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch(
+                    "robothor.engine.warmup._recent_fleet_surfaces",
+                    return_value=(
+                        "--- RECENT FLEET SURFACES (last 6h) ---\n"
+                        "[@devops-manager 14:02] weekly report clean"
+                    ),
+                ),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "RECENT FLEET SURFACES" in result
+        assert "devops-manager" in result
+
+    def test_empty_queue_shows_nothing_open(self):
+        """When list_tasks returns nothing, the section still renders with a
+        'nothing open' line so main can confidently answer the operator."""
+        from robothor.engine.warmup import build_interactive_preamble
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="",
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPEN TASKS" in result
+        assert "Nothing open" in result or "nothing open" in result.lower()

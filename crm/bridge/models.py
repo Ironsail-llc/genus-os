@@ -95,6 +95,12 @@ class CreateTaskRequest(BaseModel):
     priority: str = "normal"
     tags: list[str] | None = None
     parentTaskId: str | None = None
+    objective: str | None = None
+    nextAction: str | None = None
+    nextActionAgent: str | None = None
+    blockers: list[dict] | None = None
+    questionForOperator: str | None = None
+    autonomyBudget: dict | None = None
 
     @field_validator("assignedToAgent", mode="before")
     @classmethod
@@ -121,6 +127,12 @@ class UpdateTaskRequest(BaseModel):
     tags: list[str] | None = None
     parentTaskId: str | None = None
     resolution: str | None = None
+    objective: str | None = None
+    nextAction: str | None = None
+    nextActionAgent: str | None = None
+    blockers: list[dict] | None = None
+    questionForOperator: str | None = None
+    autonomyBudget: dict | None = None
 
     @field_validator("assignedToAgent", mode="before")
     @classmethod

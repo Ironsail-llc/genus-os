@@ -152,8 +152,78 @@ async def _get_agent_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 @_handler("buddy_refresh")
 async def _buddy_refresh(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Compute and persist daily fleet scores, flag underperforming agents."""
+    """Compute and persist today's achievement scores into buddy_stats.
+
+    Scores come from goals.py's compute_achievement_score. Flagging + critique
+    now live in the Buddy agent (docs/agents/buddy.yaml), not here.
+    """
     from robothor.engine.buddy import BuddyEngine
 
     result = await asyncio.to_thread(BuddyEngine().refresh_daily)
     return result
+
+
+@_handler("buddy_review_pass")
+async def _buddy_review_pass(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Sample recent runs per agent and write Buddy reviews to agent_reviews.
+
+    One review per sampled run. Biases sampling toward failures, runs with
+    error steps, and long-duration runs. Uses Sonnet 4.6 to phrase
+    evidence-grounded critiques — LLM cannot invent content.
+    """
+    from robothor.engine.buddy_critic import run_review_pass
+
+    runs_per_agent = int(args.get("runs_per_agent", 3))
+    return await run_review_pass(runs_per_agent=runs_per_agent, tenant_id=ctx.tenant_id)
+
+
+@_handler("buddy_aggregate_findings")
+async def _buddy_aggregate_findings(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Aggregate recent Buddy reviews + goal breaches into self-improve tasks.
+
+    For every (agent, breached_metric) above the severity threshold, create
+    one CRM task tagged nightwatch+self-improve+<agent>+<metric>. Dedups
+    against open tasks for the same (agent, metric).
+    """
+    from robothor.engine.buddy_critic import run_aggregation_pass
+
+    window_hours = int(args.get("window_hours", 24))
+    return await asyncio.to_thread(
+        run_aggregation_pass, window_hours=window_hours, tenant_id=ctx.tenant_id
+    )
+
+
+@_handler("buddy_verify_pass")
+async def _buddy_verify_pass(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Grade self-improve tasks: verify fixes stuck, hold-check 7d later.
+
+    For every DONE self-improve task older than 48h, re-computes the metric
+    and tags verified_resolved or verify_failed (with escalation:N). At
+    escalation:3, sets requires_human=true and stops. Separately re-checks
+    verified_resolved tasks 7 days later for the hold-rate guardrail.
+    """
+    from robothor.engine.buddy_grader import run_verification_pass
+
+    return await asyncio.to_thread(run_verification_pass, tenant_id=ctx.tenant_id)
+
+
+@_handler("buddy_audit")
+async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Weekly hold-rate audit. Pauses Buddy if fixes aren't sticking.
+
+    Reads crm_tasks tagged verified_resolved over the last 14 days, counts
+    held_7d=true vs held_7d=false, and pauses Buddy's cron + alerts main
+    if the rate is below 30%. Insufficient samples (<5) means no action.
+    """
+    from robothor.engine.buddy_auditor import run_audit
+
+    outcome = await asyncio.to_thread(run_audit, tenant_id=ctx.tenant_id)
+    return {
+        "action": outcome.action,
+        "total_verifications": outcome.total_verifications,
+        "held_true": outcome.held_true,
+        "held_false": outcome.held_false,
+        "hold_rate": outcome.hold_rate,
+        "threshold": outcome.threshold,
+        "message": outcome.message,
+    }

@@ -281,6 +281,65 @@ class TestToolExecution:
             )
         assert mock_update.call_args[1]["requires_human"] is True
 
+    @pytest.mark.asyncio
+    async def test_create_task_respects_task_author_override(self):
+        """When task_author_override is set (e.g. scout beat running as 'main'),
+        created_by_agent is attributed to the override identity, not ctx.agent_id."""
+        with patch("robothor.crm.dal.create_task") as mock_create:
+            mock_create.return_value = "task-scout-1"
+            await _execute_tool(
+                "create_task",
+                {"title": "filed by scout"},
+                agent_id="main",
+                tenant_id="test-tenant",
+                task_author_override="scout",
+            )
+        assert mock_create.call_args[1]["created_by_agent"] == "scout"
+
+    @pytest.mark.asyncio
+    async def test_create_task_explicit_arg_beats_override(self):
+        """If the tool call explicitly passes createdByAgent, that wins over
+        the context override. (Rare — lets a run deliberately attribute to
+        a specific agent.)"""
+        with patch("robothor.crm.dal.create_task") as mock_create:
+            mock_create.return_value = "task-x"
+            await _execute_tool(
+                "create_task",
+                {"title": "explicit", "createdByAgent": "custom-agent"},
+                agent_id="main",
+                tenant_id="test-tenant",
+                task_author_override="scout",
+            )
+        assert mock_create.call_args[1]["created_by_agent"] == "custom-agent"
+
+    @pytest.mark.asyncio
+    async def test_create_task_no_override_uses_agent_id(self):
+        """Without override, falls back to agent_id (existing behaviour)."""
+        with patch("robothor.crm.dal.create_task") as mock_create:
+            mock_create.return_value = "task-y"
+            await _execute_tool(
+                "create_task",
+                {"title": "normal"},
+                agent_id="main",
+                tenant_id="test-tenant",
+            )
+        assert mock_create.call_args[1]["created_by_agent"] == "main"
+
+    @pytest.mark.asyncio
+    async def test_update_task_passes_override_as_changed_by(self):
+        """update_task threads task_author_override into the DAL's changed_by
+        param so task history reflects the scout identity."""
+        with patch("robothor.crm.dal.update_task") as mock_update:
+            mock_update.return_value = True
+            await _execute_tool(
+                "update_task",
+                {"id": "task-123", "status": "DONE"},
+                agent_id="main",
+                tenant_id="test-tenant",
+                task_author_override="scout",
+            )
+        assert mock_update.call_args[1]["changed_by"] == "scout"
+
 
 class TestObservabilityTools:
     @pytest.mark.asyncio

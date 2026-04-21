@@ -18,8 +18,8 @@ from apscheduler.triggers.cron import CronTrigger
 
 from robothor.engine.config import load_all_manifests, manifest_to_agent_config
 from robothor.engine.dedup import release, try_acquire
-from robothor.engine.delivery import deliver
-from robothor.engine.models import AgentConfig, AgentRun, TriggerType
+from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
+from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.tracking import delete_stale_schedules, update_schedule_state, upsert_schedule
 
@@ -31,6 +31,114 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
+
+
+def _is_heartbeat_trigger(trigger_detail: str | None) -> bool:
+    """True when this run was triggered by a heartbeat cron."""
+    return bool(trigger_detail and trigger_detail.startswith("heartbeat:"))
+
+
+async def _maybe_emit_heartbeat_status_ping(
+    agent_config: AgentConfig, run: AgentRun, dedup_key: str
+) -> None:
+    """Send a one-line health ping to Telegram when the heartbeat would
+    otherwise be silent. Only fires when the delivery did NOT produce visible
+    output for the operator.
+
+    Visible = delivery_status == "delivered". Anything else (no_output,
+    suppressed_trivial, silent, failed:*, timeout with no output) means the
+    operator saw nothing — so we ship a fallback status so they know the
+    engine is alive.
+    """
+    from robothor.engine.delivery import get_platform_sender
+
+    delivered = (run.delivery_status or "").startswith("delivered")
+    if delivered:
+        return
+
+    sender = get_platform_sender("telegram")
+    if sender is None:
+        logger.debug("No telegram sender registered — skipping status ping for %s", dedup_key)
+        return
+    chat_id = agent_config.delivery_to
+    if not chat_id or "${" in chat_id:
+        return
+
+    status = getattr(run.status, "value", str(run.status))
+    now_hm = datetime.now(UTC).strftime("%H:%M UTC")
+    delivery_status = run.delivery_status or "no_delivery"
+    short_err = ""
+    if run.error_message:
+        short_err = f" — {run.error_message.splitlines()[0][:120]}"
+    ping = (
+        f"⏱ {now_hm} heartbeat ping ({dedup_key}): "
+        f"run={status}, delivery={delivery_status}{short_err}"
+    )
+    try:
+        await sender(chat_id, ping)
+        logger.info("Emitted heartbeat status ping for %s: %s", dedup_key, delivery_status)
+    except Exception as e:
+        logger.warning("Failed to emit heartbeat status ping for %s: %s", dedup_key, e)
+
+
+def _filter_poisoned_history(history: list[dict[str, Any]], dedup_key: str) -> list[dict[str, Any]]:
+    """Drop assistant turns that look like mid-thought fragments.
+
+    The save-gate prevents new poison, but a session may already contain
+    bad turns from before the gate landed. Without this filter, the model
+    loads the prior fragment as context and continues the stale chain-of-
+    thought instead of starting a fresh scan-and-report.
+
+    Only assistant turns are filtered — user turns are kept verbatim so we
+    don't desynchronize exchange pairings.
+    """
+    if not history:
+        return history
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for msg in history:
+        role = msg.get("role") if isinstance(msg, dict) else None
+        content = (msg.get("content") or "") if isinstance(msg, dict) else ""
+        if role == "assistant" and isinstance(content, str):
+            text = content.strip()
+            if text and _looks_like_mid_thought(text):
+                dropped += 1
+                continue
+            if text and len(text) < 200 and "\n" not in text:
+                dropped += 1
+                continue
+        kept.append(msg)
+    if dropped:
+        logger.info(
+            "Filtered %d poisoned assistant turn(s) from persistent session cron:%s",
+            dropped,
+            dedup_key,
+        )
+    return kept
+
+
+def _persistent_save_skip_reason(run: AgentRun) -> str | None:
+    """Return a reason-string if this run should NOT be saved to the persistent
+    session, or None if it's safe to persist.
+
+    Degenerate outputs (mid-thought fragments, budget-capped runs, timeouts,
+    run-level errors) poison the next heartbeat by making the model continue
+    the stale chain-of-thought. Gate at persistence, not just at delivery.
+    """
+    if run.status != RunStatus.COMPLETED:
+        return f"status={getattr(run.status, 'value', run.status)}"
+    if getattr(run, "budget_exhausted", False):
+        return "budget_exhausted"
+    if _beat_incomplete(run):
+        return "beat_incomplete"
+    text = (run.output_text or "").strip()
+    if text and _looks_like_mid_thought(text):
+        return "mid_thought"
+    # Short output (< 200 chars) with no newlines looks like a fragment, not a
+    # structured beat report. Real reports have headers/bullets and newlines.
+    if text and len(text) < 200 and "\n" not in text:
+        return "short_no_structure"
+    return None
 
 
 class CronScheduler:
@@ -110,6 +218,62 @@ class CronScheduler:
                         "Invalid heartbeat cron for %s: %s — %s",
                         agent_config.id,
                         agent_config.heartbeat.cron_expr,
+                        e,
+                    )
+
+            # Register worker cron job if present (drain cycle — symmetric to heartbeat)
+            if agent_config.worker and agent_config.worker.cron_expr:
+                try:
+                    w_trigger = CronTrigger.from_crontab(
+                        agent_config.worker.cron_expr,
+                        timezone=agent_config.worker.timezone,
+                    )
+                    w_job_id = f"{agent_config.id}:worker"
+                    self.scheduler.add_job(
+                        self._run_worker,
+                        trigger=w_trigger,
+                        args=[agent_config.id],
+                        id=w_job_id,
+                        name=f"worker:{agent_config.name}",
+                        max_instances=1,
+                        coalesce=True,
+                        misfire_grace_time=120,
+                    )
+
+                    try:
+                        upsert_schedule(
+                            agent_id=w_job_id,
+                            tenant_id=self.config.tenant_id,
+                            enabled=True,
+                            cron_expr=agent_config.worker.cron_expr,
+                            timezone=agent_config.worker.timezone,
+                            timeout_seconds=agent_config.worker.timeout_seconds,
+                            model_primary=agent_config.model_primary,
+                            model_fallbacks=agent_config.model_fallbacks,
+                            delivery_mode=agent_config.worker.delivery_mode.value,
+                            delivery_channel=agent_config.worker.delivery_channel,
+                            delivery_to=agent_config.worker.delivery_to,
+                            session_target=agent_config.worker.session_target,
+                        )
+                        active_schedule_ids.add(w_job_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to upsert worker schedule for %s: %s",
+                            agent_config.id,
+                            e,
+                        )
+
+                    loaded += 1
+                    logger.info(
+                        "Registered worker for %s: %s",
+                        agent_config.id,
+                        agent_config.worker.cron_expr,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Invalid worker cron for %s: %s — %s",
+                        agent_config.id,
+                        agent_config.worker.cron_expr,
                         e,
                     )
 
@@ -244,10 +408,24 @@ class CronScheduler:
             if self._circuit_breaker_tripped(dedup_key, agent_config):
                 return
 
-            safety_timeout = agent_config.timeout_seconds + 120
-
+            # No scheduler-level wall-clock cap. When the agent has an
+            # explicit timeout_seconds > 0 the runner's asyncio.timeout
+            # handles it; otherwise the run goes until completion. A
+            # truly hung run (dead HTTP socket with no progress) would be
+            # caught by the progress-based stall watchdog if the operator
+            # opts in.
             try:
-                async with asyncio.timeout(safety_timeout):
+                if agent_config.timeout_seconds > 0:
+                    safety_timeout = agent_config.timeout_seconds + 120
+                    async with asyncio.timeout(safety_timeout):
+                        await self._execute_and_deliver(
+                            agent_id,
+                            dedup_key,
+                            agent_config,
+                            trigger_detail,
+                            downstream_agents=downstream_agents,
+                        )
+                else:
                     await self._execute_and_deliver(
                         agent_id,
                         dedup_key,
@@ -257,9 +435,7 @@ class CronScheduler:
                     )
             except TimeoutError:
                 logger.error(
-                    "Scheduler safety timeout (%ds) hit for %s — "
-                    "runner.execute() hung beyond timeout (%ds)",
-                    safety_timeout,
+                    "Scheduler safety timeout hit for %s (agent timeout=%ds)",
                     dedup_key,
                     agent_config.timeout_seconds,
                 )
@@ -350,9 +526,18 @@ class CronScheduler:
                 from robothor.engine.chat_store import load_session
 
                 session_key = f"cron:{dedup_key}"
-                session_data = await asyncio.to_thread(load_session, session_key, limit=20)
+                hist_limit = (
+                    agent_config.persistent_history_limit
+                    if agent_config.persistent_history_limit > 0
+                    else 20
+                )
+                session_data = await asyncio.to_thread(load_session, session_key, limit=hist_limit)
                 if session_data and session_data.get("history"):
-                    conversation_history = session_data["history"]
+                    raw_history = session_data["history"]
+                    # Drop any mid-thought assistant turns before they reach the
+                    # runner — defence against legacy poison persisted before
+                    # the save-gate existed.
+                    conversation_history = _filter_poisoned_history(raw_history, dedup_key)
                     logger.info(
                         "Loaded %d prior messages for persistent session %s",
                         len(conversation_history),
@@ -370,25 +555,38 @@ class CronScheduler:
             conversation_history=conversation_history,
         )
 
-        # Save session for persistent agents
+        # Save session for persistent agents — but only if the output is clean.
+        # Mid-thought fragments and budget-capped runs would poison the next beat
+        # by making the model continue a stale chain-of-thought. See
+        # delivery._beat_incomplete / _looks_like_mid_thought for the heuristics.
         if agent_config.session_target == "persistent" and run.output_text:
-            try:
-                from robothor.engine.chat_store import save_exchange
+            skip_reason = _persistent_save_skip_reason(run)
+            if skip_reason:
+                logger.info("Skipped persistent-save for cron:%s: %s", dedup_key, skip_reason)
+            else:
+                try:
+                    from robothor.engine.chat_store import save_exchange
 
-                session_key = f"cron:{dedup_key}"
-                await asyncio.to_thread(
-                    save_exchange,
-                    session_key,
-                    payload,
-                    run.output_text,
-                    channel="cron",
-                )
-                logger.debug("Saved persistent session for %s", session_key)
-            except Exception as e:
-                logger.warning("Failed to save persistent session for %s: %s", dedup_key, e)
+                    session_key = f"cron:{dedup_key}"
+                    await asyncio.to_thread(
+                        save_exchange,
+                        session_key,
+                        payload,
+                        run.output_text,
+                        channel="cron",
+                    )
+                    logger.debug("Saved persistent session for %s", session_key)
+                except Exception as e:
+                    logger.warning("Failed to save persistent session for %s: %s", dedup_key, e)
 
         # Deliver output
         await deliver(agent_config, run)
+
+        # Heartbeat status ping — operator is never blind. If the beat didn't
+        # surface anything visible to Telegram (timeout, no output, trivial
+        # suppression, delivery failure), emit a one-line health signal.
+        if _is_heartbeat_trigger(trigger_detail):
+            await _maybe_emit_heartbeat_status_ping(agent_config, run, dedup_key)
 
         # Persist delivery status back to DB
         if run.delivery_status or run.delivered_at:
@@ -465,6 +663,27 @@ class CronScheduler:
             downstream_agents=agent_config.downstream_agents,
         )
 
+    async def _resurface_followups_phase0(self, tenant_id: str, mode: str) -> None:
+        """Phase-0 hook for scout and drain: resurface tasks whose
+        follow_up_at has passed. Runs once at the start of each cycle;
+        cleared rows become visible to the thread pool / drain queue
+        naturally on their next query.
+        """
+        try:
+            from robothor.crm.dal import resurface_due_followups
+
+            resurfaced = await asyncio.to_thread(resurface_due_followups, tenant_id)
+            if resurfaced:
+                logger.info(
+                    "Resurfaced %d task(s) from follow-up before %s cycle: %s",
+                    len(resurfaced),
+                    mode,
+                    resurfaced[:10],
+                )
+        except Exception as e:
+            # Never fail the beat because of the resurface hook.
+            logger.warning("resurface_due_followups failed in %s phase-0: %s", mode, e)
+
     async def _run_heartbeat(self, agent_id: str) -> None:
         """Execute a heartbeat run for an agent."""
         from robothor.engine.config import load_agent_config
@@ -474,6 +693,10 @@ class CronScheduler:
             logger.error("Agent config or heartbeat not found for: %s", agent_id)
             return
 
+        # Phase-0: wake any tasks whose follow_up_at has passed so the
+        # thread pool + list_tasks queries see them on this beat.
+        await self._resurface_followups_phase0(self.config.tenant_id, "heartbeat")
+
         override_config = _build_heartbeat_config(agent_config)
 
         await self._run_scheduled(
@@ -482,6 +705,110 @@ class CronScheduler:
             override_config,
             f"heartbeat:{agent_config.heartbeat.cron_expr}",
         )
+
+    async def _run_worker(self, agent_id: str) -> None:
+        """Execute a drain/worker run for an agent.
+
+        Symmetric to _run_heartbeat but with the worker's override config.
+        Uses `{agent_id}:worker` dedup key so it never collides with the
+        heartbeat or an interactive session.
+        """
+        from robothor.engine.config import load_agent_config
+
+        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        if not agent_config or not agent_config.worker:
+            logger.debug("Agent config or worker not found for: %s", agent_id)
+            return
+
+        # Phase-0: wake any snoozing tasks whose follow_up_at has passed.
+        await self._resurface_followups_phase0(self.config.tenant_id, "worker")
+
+        override_config = _build_worker_config(agent_config)
+
+        await self._run_scheduled(
+            agent_id,
+            f"{agent_id}:worker",
+            override_config,
+            f"worker:{agent_config.worker.cron_expr}",
+        )
+
+    async def trigger_channel_event(
+        self,
+        tenant_id: str,
+        chat_id: str,
+        agents: list[str],
+        run_ids: list[str],
+    ) -> None:
+        """Wake main for a channel surface review (Phase 3 of the channel bus).
+
+        Called by ``WakeDebouncer._fire_after_delay`` after the 15s debounce
+        window closes on a burst of fleet deliveries. Uses a distinct dedup
+        key so it can't collide with main's heartbeat or a user-interactive
+        turn that happens to be in flight.
+        """
+        from robothor.engine.config import load_agent_config
+
+        agent_config = load_agent_config("main", self.config.manifest_dir)
+        if agent_config is None:
+            logger.warning("trigger_channel_event: main config not found")
+            return
+        if agent_config.channel_bus is None or not agent_config.channel_bus.wake_on_surface:
+            logger.debug("trigger_channel_event: wake_on_surface disabled, skipping")
+            return
+
+        dedup_key = "main:channel_wake"
+        if not await try_acquire(dedup_key):
+            logger.info("channel_wake skipped: %s already running", dedup_key)
+            return
+
+        try:
+            preamble = _build_channel_wake_preamble(agents, run_ids)
+
+            # Load main's canonical session so the wake run sees every fleet
+            # surface that was dual-written (plus its own prior turns).
+            conversation_history = None
+            try:
+                from robothor.engine.chat import get_main_session_key
+                from robothor.engine.chat_store import load_session
+
+                session_key = get_main_session_key()
+                hist_limit = (
+                    agent_config.channel_bus.wake_preamble_history_lines * 4
+                    if agent_config.channel_bus
+                    else 40
+                )
+                session_data = await asyncio.to_thread(
+                    load_session, session_key, limit=hist_limit, tenant_id=tenant_id
+                )
+                if session_data and session_data.get("history"):
+                    conversation_history = session_data["history"]
+            except Exception as e:
+                logger.debug("channel_wake: failed to load main session: %s", e)
+
+            trigger_detail = f"channel_event:{chat_id}:batch={len(run_ids)}"
+            try:
+                run = await self.runner.execute(
+                    agent_id="main",
+                    message=preamble,
+                    trigger_type=TriggerType.CHANNEL_EVENT,
+                    trigger_detail=trigger_detail,
+                    agent_config=agent_config,
+                    conversation_history=conversation_history,
+                    tenant_id=tenant_id,
+                )
+                logger.info(
+                    "channel_wake complete: status=%s agents=%s",
+                    run.status.value if run else "?",
+                    ",".join(agents),
+                )
+                if run is not None:
+                    from robothor.engine.delivery import deliver
+
+                    await deliver(agent_config, run)
+            except Exception as e:
+                logger.warning("channel_wake execute failed: %s", e)
+        finally:
+            await release(dedup_key)
 
     async def _run_workflow(self, workflow_id: str) -> None:
         """Execute a workflow as a scheduled cron job."""
@@ -556,6 +883,102 @@ class CronScheduler:
             logger.info("Cron scheduler stopped")
 
 
+def _build_channel_wake_preamble(agents: list[str], run_ids: list[str]) -> str:
+    """Compose the wake prompt handed to main during a CHANNEL_EVENT run.
+
+    Brief and directive: main should audit what just landed in the channel
+    (visible as recent assistant turns in its own session history) and
+    decide whether to respond, consolidate, or stay silent. Short preamble
+    keeps the run cheap — main already sees the full content upstream.
+    """
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    if agents:
+        agents_line = ", ".join(f"@{a}" for a in agents)
+    else:
+        agents_line = "(none listed — check session history)"
+    batch_note = (
+        f"{len(run_ids)} run{'s' if len(run_ids) != 1 else ''} in this batch"
+        if run_ids
+        else "debounce-only wake (no new run ids)"
+    )
+    return (
+        f"Channel surface review — {now}\n\n"
+        f"Since your last turn, {agents_line} posted to the channel ({batch_note}).\n"
+        f"Their messages are already in your session history above, labeled with "
+        f"[@agent-id] prefixes. Review them and decide:\n"
+        f"- respond in the channel if operator visibility is needed,\n"
+        f"- condense/consolidate if the fleet is repeating itself,\n"
+        f"- stay silent if the messages speak for themselves.\n\n"
+        f"Do not duplicate content the fleet already delivered. If nothing "
+        f"warrants a reply, output a single line such as 'noted' or stay "
+        f"silent — trivial outputs are suppressed by delivery."
+    )
+
+
+def _build_worker_config(agent_config: AgentConfig) -> AgentConfig:
+    """Build override AgentConfig for drain/worker runs.
+
+    Mirrors _build_heartbeat_config but for the drain cycle: full tool
+    inheritance by default (worker executes work; it needs spawn_agent,
+    gws_*, exec, etc.). Set `worker.tools_allowed` in the manifest to
+    restrict further if needed.
+    """
+    w = agent_config.worker
+    assert w is not None
+
+    warmup_memory_blocks = w.warmup_memory_blocks or agent_config.warmup_memory_blocks
+    warmup_context_files = w.warmup_context_files or agent_config.warmup_context_files
+    warmup_peer_agents = w.warmup_peer_agents or agent_config.warmup_peer_agents
+
+    max_cost_usd = w.cost_budget_usd or agent_config.max_cost_usd
+    hard_budget = w.cost_budget_usd > 0 or agent_config.hard_budget
+
+    tools_allowed = w.tools_allowed or agent_config.tools_allowed
+
+    return AgentConfig(
+        id=agent_config.id,
+        name=agent_config.name,
+        description=agent_config.description,
+        model_primary=agent_config.model_primary,
+        model_fallbacks=agent_config.model_fallbacks,
+        temperature=agent_config.temperature,
+        cron_expr=w.cron_expr,
+        timezone=w.timezone,
+        timeout_seconds=w.timeout_seconds,
+        max_iterations=w.max_iterations,
+        safety_cap=w.safety_cap,
+        session_target=w.session_target,
+        delivery_mode=w.delivery_mode,
+        delivery_channel=w.delivery_channel,
+        delivery_to=w.delivery_to,
+        tools_allowed=tools_allowed,
+        tools_denied=agent_config.tools_denied,
+        instruction_file=w.instruction_file,
+        bootstrap_files=w.bootstrap_files,
+        reports_to=agent_config.reports_to,
+        department=agent_config.department,
+        task_protocol=agent_config.task_protocol,
+        review_workflow=agent_config.review_workflow,
+        notification_inbox=agent_config.notification_inbox,
+        shared_working_state=agent_config.shared_working_state,
+        warmup_memory_blocks=warmup_memory_blocks,
+        warmup_context_files=warmup_context_files,
+        warmup_peer_agents=warmup_peer_agents,
+        stall_timeout_seconds=w.stall_timeout_seconds,
+        persistent_history_limit=w.persistent_history_limit,
+        error_feedback=agent_config.error_feedback,
+        max_cost_usd=max_cost_usd,
+        hard_budget=hard_budget,
+        can_spawn_agents=agent_config.can_spawn_agents,
+        max_nesting_depth=agent_config.max_nesting_depth,
+        sub_agent_max_iterations=agent_config.sub_agent_max_iterations,
+        sub_agent_timeout_seconds=agent_config.sub_agent_timeout_seconds,
+        # Drain runs do NOT override task authorship — filed tasks stay
+        # attributed to 'main' (the agent identity).
+        task_author_override="",
+    )
+
+
 def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
     """Build override AgentConfig for heartbeat runs.
 
@@ -578,12 +1001,16 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
     max_cost_usd = hb.cost_budget_usd or agent_config.max_cost_usd
     hard_budget = hb.cost_budget_usd > 0 or agent_config.hard_budget
 
+    # Model override: use heartbeat's model if set, else inherit from parent.
+    beat_model_primary = hb.model_primary or agent_config.model_primary
+    beat_model_fallbacks = hb.model_fallbacks or agent_config.model_fallbacks
+
     return AgentConfig(
         id=agent_config.id,
         name=agent_config.name,
         description=agent_config.description,
-        model_primary=agent_config.model_primary,
-        model_fallbacks=agent_config.model_fallbacks,
+        model_primary=beat_model_primary,
+        model_fallbacks=beat_model_fallbacks,
         temperature=agent_config.temperature,
         cron_expr=hb.cron_expr,
         timezone=hb.timezone,
@@ -594,7 +1021,7 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         delivery_mode=hb.delivery_mode,
         delivery_channel=hb.delivery_channel,
         delivery_to=hb.delivery_to,
-        tools_allowed=agent_config.tools_allowed,
+        tools_allowed=(hb.tools_allowed or agent_config.tools_allowed),
         tools_denied=agent_config.tools_denied,
         instruction_file=hb.instruction_file,
         bootstrap_files=hb.bootstrap_files,
@@ -608,6 +1035,7 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         warmup_context_files=warmup_context_files,
         warmup_peer_agents=warmup_peer_agents,
         stall_timeout_seconds=hb.stall_timeout_seconds,
+        persistent_history_limit=hb.persistent_history_limit,
         error_feedback=agent_config.error_feedback,
         max_cost_usd=max_cost_usd,
         hard_budget=hard_budget,
@@ -616,4 +1044,7 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         max_nesting_depth=agent_config.max_nesting_depth,
         sub_agent_max_iterations=agent_config.sub_agent_max_iterations,
         sub_agent_timeout_seconds=agent_config.sub_agent_timeout_seconds,
+        # Scout filings attributed to `hb.task_authorship_agent` (if set)
+        # for CRM timeline clarity — agent_id on the run stays 'main'.
+        task_author_override=hb.task_authorship_agent,
     )

@@ -6,7 +6,9 @@ Writes structured JSON to /tmp/devops_github_data.json.
 
 Called by the devops-report-pipeline workflow as a tool step (no LLM needed).
 
-Configure repos via DEVOPS_GITHUB_REPOS env var (comma-separated owner/repo).
+Configuration (in priority order):
+  1. DEVOPS_GITHUB_REPOS env var (comma-separated owner/repo — for CI/tests)
+  2. brain/memory/devops-config.json → github.org + github.active_repos (canonical for prod)
 """
 
 from __future__ import annotations
@@ -30,8 +32,24 @@ from robothor.engine.tools.handlers.github_api import (
 )
 
 OUTPUT_PATH = Path("/tmp/devops_github_data.json")
-_repos_env = os.environ.get("DEVOPS_GITHUB_REPOS", "")
-REPOS: list[str] = [r.strip() for r in _repos_env.split(",") if r.strip()]
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
+
+
+def _load_repos() -> list[str]:
+    env_val = os.environ.get("DEVOPS_GITHUB_REPOS", "")
+    if env_val:
+        return [r.strip() for r in env_val.split(",") if r.strip()]
+    if CONFIG_PATH.exists():
+        cfg = json.loads(CONFIG_PATH.read_text()).get("github", {})
+        org = cfg.get("org", "")
+        active = cfg.get("active_repos", [])
+        if not org or not active:
+            return []
+        return [f"{org}/{repo}" for repo in active]
+    return []
+
+
+REPOS: list[str] = _load_repos()
 CTX = ToolContext(agent_id="devops-manager")
 
 
@@ -96,19 +114,6 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
             "merged_by": result.get("merged_by", {}),
         }
 
-    # --- Legacy 30-day stats (for backward compat during transition) ---
-    result = await _github_pr_stats({"repo": repo, "days": 30}, CTX)
-    if "error" in result:
-        errors.append(f"{short}/pr_stats: {result['error']}")
-    else:
-        repo_data["pr_stats"] = {
-            "merged_count": result.get("merged_count", 0),
-            "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
-            "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
-            "authors": result.get("authors", {}),
-            "merged_by": result.get("merged_by", {}),
-        }
-
     # --- Review stats (30-day, unchanged) ---
     result = await _github_review_stats({"repo": repo, "days": 30}, CTX)
     if "error" in result:
@@ -166,7 +171,9 @@ async def collect() -> dict:
     for short, repo_data, stale, errors in results:
         if repo_data:
             data["repos"][short] = repo_data
-            data["totals"]["merged"] += repo_data.get("pr_stats", {}).get("merged_count", 0)
+            data["totals"]["merged"] += repo_data.get("pr_stats_current_week", {}).get(
+                "merged_count", 0
+            )
             data["totals"]["reviews"] += sum(
                 r["reviews_given"] for r in repo_data.get("review_stats", {}).get("reviewers", [])
             )
@@ -179,14 +186,21 @@ async def collect() -> dict:
 
 def main() -> int:
     if not REPOS:
-        print("DEVOPS_GITHUB_REPOS not set — skipping GitHub collection.", flush=True)
+        print(
+            f"No GitHub repos configured. Set DEVOPS_GITHUB_REPOS env var "
+            f"or populate github.org + github.active_repos in {CONFIG_PATH}.",
+            flush=True,
+        )
         OUTPUT_PATH.write_text(
             json.dumps(
                 {
                     "repos": {},
                     "totals": {"merged": 0, "reviews": 0},
                     "stale_prs": [],
-                    "errors": ["DEVOPS_GITHUB_REPOS not configured"],
+                    "errors": [
+                        f"No GitHub repos configured (env DEVOPS_GITHUB_REPOS empty "
+                        f"and {CONFIG_PATH} missing or has no github.active_repos)."
+                    ],
                 }
             )
         )

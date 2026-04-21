@@ -6,7 +6,9 @@ across configured JIRA projects. Writes structured JSON to /tmp/devops_jira_data
 
 Called by the devops-report-pipeline workflow as a tool step (no LLM needed).
 
-Configure projects via DEVOPS_JIRA_PROJECTS env var (comma-separated project keys).
+Configuration (in priority order):
+  1. DEVOPS_JIRA_PROJECTS env var (comma-separated — for CI/tests)
+  2. brain/memory/devops-config.json → jira.active_projects (canonical for prod)
 """
 
 from __future__ import annotations
@@ -26,8 +28,20 @@ from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.jira import _jira_search
 
 OUTPUT_PATH = Path("/tmp/devops_jira_data.json")
-_projects_env = os.environ.get("DEVOPS_JIRA_PROJECTS", "")
-PROJECTS: list[str] = [p.strip() for p in _projects_env.split(",") if p.strip()]
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
+
+
+def _load_projects() -> list[str]:
+    env_val = os.environ.get("DEVOPS_JIRA_PROJECTS", "")
+    if env_val:
+        return [p.strip() for p in env_val.split(",") if p.strip()]
+    if CONFIG_PATH.exists():
+        cfg = json.loads(CONFIG_PATH.read_text())
+        return list(cfg.get("jira", {}).get("active_projects", []))
+    return []
+
+
+PROJECTS: list[str] = _load_projects()
 CTX = ToolContext(agent_id="devops-manager")
 
 
@@ -157,13 +171,20 @@ async def collect() -> dict:
 
 def main() -> int:
     if not PROJECTS:
-        print("DEVOPS_JIRA_PROJECTS not set — skipping JIRA collection.", flush=True)
+        print(
+            f"No JIRA projects configured. Set DEVOPS_JIRA_PROJECTS env var "
+            f"or populate jira.active_projects in {CONFIG_PATH}.",
+            flush=True,
+        )
         OUTPUT_PATH.write_text(
             json.dumps(
                 {
                     "projects": {},
                     "totals": {"resolved": 0, "stale": 0},
-                    "errors": ["DEVOPS_JIRA_PROJECTS not configured"],
+                    "errors": [
+                        f"No JIRA projects configured (env DEVOPS_JIRA_PROJECTS empty "
+                        f"and {CONFIG_PATH} missing or has no jira.active_projects)."
+                    ],
                 }
             )
         )

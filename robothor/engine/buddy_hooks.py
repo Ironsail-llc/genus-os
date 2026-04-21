@@ -1,8 +1,8 @@
-"""Buddy lifecycle hooks — feed the gamification engine from real agent events.
+"""Buddy lifecycle hooks — feed the task counter from real agent events.
 
-Registers a single AGENT_END Python handler that increments the daily task
-counter in buddy_stats. The full RPG score computation happens in
-BuddyEngine.refresh_daily(), not here.
+Registers a single AGENT_END Python handler that increments the daily
+tasks_completed counter on buddy_stats / agent_buddy_stats. Achievement
+scoring happens in BuddyEngine.refresh_daily() via goals.py, not here.
 
 Usage (in daemon.py hook registry setup):
     from robothor.engine.buddy_hooks import register_buddy_hooks

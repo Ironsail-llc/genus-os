@@ -179,6 +179,7 @@ class ToolRegistry:
         user_role: str = "",
         accessible_tenant_ids: tuple[str, ...] = (),
         timeout: int = 120,
+        task_author_override: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -199,6 +200,7 @@ class ToolRegistry:
                         user_id=user_id,
                         user_role=user_role,
                         accessible_tenant_ids=accessible_tenant_ids,
+                        task_author_override=task_author_override,
                     )
             else:
                 return await _execute_tool(
@@ -210,6 +212,7 @@ class ToolRegistry:
                     user_id=user_id,
                     user_role=user_role,
                     accessible_tenant_ids=accessible_tenant_ids,
+                    task_author_override=task_author_override,
                 )
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)

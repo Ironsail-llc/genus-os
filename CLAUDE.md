@@ -44,7 +44,7 @@ Your `brain/CLAUDE.md` is where personal identity, preferences, and instance-spe
 5. **System-level systemd services** — every long-running process in `/etc/systemd/system/`, enabled on boot. `Restart=always`, `RestartSec=5`.
 6. **Manifests are source of truth for models** — check `docs/agents/*.yaml` `model:` blocks for current assignments.
 7. **No localhost URLs in agent instructions** — engine's `web_fetch` blocks loopback. Localhost is fine in internal code and infra docs.
-8. **Test before commit** — pre-commit: `pytest -m "not slow and not llm and not e2e"`. Full: `bash run_tests.sh`. Tests alongside code: `<module>/tests/test_<feature>.py`. Mock LLMs in unit tests.
+8. **TDD — write the failing test first.** RED (failing test, confirm it fails) → GREEN (minimum code to pass) → REFACTOR (keep tests green). Exempt: typos, docs, config-only edits. Test commands and conventions: `CONTRIBUTING.md`.
 9. **Update docs with the change** — see `docs/DOC_MAINTENANCE.md` for the checklist.
 10. **Async boundaries** — engine internals (`robothor/engine/`) are fully async. `asyncio.run()` only in entry points (daemon.py, cli.py) and standalone scripts.
 11. **Instance data is user-land** — `brain/`, `docs/agents/*.yaml`, and `docs/CRON_MAP.md` are .gitignored. They belong to the instance, not the platform. Agent configs survive platform upgrades.

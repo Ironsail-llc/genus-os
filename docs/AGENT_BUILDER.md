@@ -48,6 +48,32 @@ The main agent has `v2.can_spawn_agents: true` and access to all tools. Units ha
 
 ---
 
+## 2a. Honoring parent objectives — Stage 4/5 contract
+
+Any agent that can receive spawned work (i.e. anything called via `spawn_agent`) **must respect three rules**:
+
+**1. Read the `--- PARENT TASK ---` header.**
+If a spawn was called with `parent_task_id`, the runner prepends a block to the child's message:
+```
+--- PARENT TASK <uuid> ---
+Objective: <the parent task's objective>
+Next action: <what the planner said to do>
+Autonomy: <summary>
+DO NOT offer options that contradict the objective.
+--- END PARENT TASK ---
+```
+The child must treat that block as the goal — not whatever the surface message says. If the inbound email offers a meeting but the objective says "without scheduling a meeting", the child refuses the meeting and redirects.
+
+**See** `brain/agents/EMAIL_RESPONDER.md` Section 2a ("Before replying: honor the parent objective") for the canonical example. Every new worker should have an equivalent section when its action space could diverge from the parent objective.
+
+**2. Plan with `todo_write` if the run has ≥3 steps.**
+Call `todo_write` early in the run with the concrete steps. Mark `in_progress`/`completed` as you go. The list drives the runner's reminder injection every ~10 turns and surfaces to Telegram for human-facing runs.
+
+**3. Don't silently drop unfinished work.**
+If the run exhausts iterations/budget with `pending` or `in_progress` items AND `parent_task_id` was passed in, the runtime automatically writes `Continue: <first unfinished item>` to the parent's `next_action` and promotes the parent to a thread if not already tagged. This is `_escalate_unfinished_todos` in `robothor/engine/runner.py` — the agent doesn't have to do anything. But the agent DOES have to (a) actually use `todo_write` for this to work, and (b) leave items in the list truthfully — a `completed` status means the work is actually done.
+
+---
+
 ## 3. Orchestration Patterns
 
 ### Pattern A: Event-Driven Pipeline
@@ -76,7 +102,6 @@ triggers:
   - type: cron
     cron: "0 2 * * *"
     timezone: America/New_York
-timeout_seconds: 1800
 
 steps:
   - id: analyze
@@ -157,10 +182,17 @@ Schedule and session:
 schedule:
   cron: "0 6-22/4 * * *"       # APScheduler cron expression
   timezone: America/New_York
-  timeout_seconds: 300          # max run time
-  max_iterations: 10            # max LLM round-trips
+  max_iterations: 10            # infinite-loop protection; runs complete when the agent is done
   session_target: isolated      # isolated (fresh each run) or persistent (keeps history)
 ```
+
+> **No wall-clock timeouts, no cost budgets.** Runs are not killed on
+> elapsed time or dollar spend. Cost and duration are tracked in
+> `agent_runs` for dashboards, never enforced. `max_iterations` is the
+> only cap — and it exists to stop infinite loops, not to rush work.
+> Add `stall_timeout_seconds` only if this agent talks to a known-flaky
+> provider and you want a hang detector; default is off. See
+> `docs/agents/_defaults.yaml`.
 
 Delivery — units are silent:
 
@@ -211,7 +243,6 @@ v2 engine features (all optional):
 ```yaml
 v2:
   error_feedback: true          # inject error analysis when tools fail (default ON)
-  cost_budget_usd: 0.50         # max cost per run
   planning_enabled: false       # pre-execution planning phase
   guardrails: []                # no_destructive_writes, no_external_http, no_main_branch_push
   can_spawn_agents: false       # allow spawning sub-agents
@@ -504,7 +535,6 @@ model:
 schedule:
   cron: "0 6-22/2 * * *"       # safety net every 2h
   timezone: America/New_York
-  timeout_seconds: 300
   max_iterations: 10
   session_target: isolated
 
@@ -594,7 +624,6 @@ model:
 schedule:
   cron: "30 8-20/6 * * *"      # safety net every 6h
   timezone: America/New_York
-  timeout_seconds: 300
   max_iterations: 10
   session_target: isolated
 
@@ -647,7 +676,6 @@ model:
 schedule:
   cron: "0 8-20/2 * * *"
   timezone: America/New_York
-  timeout_seconds: 600
   max_iterations: 15
   session_target: isolated
 

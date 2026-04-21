@@ -49,6 +49,7 @@ def person_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         if row.get("company_id")
         else None,
         "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
+        "schedulingPolicy": row.get("scheduling_policy") or "stable",
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }
@@ -108,6 +109,14 @@ def task_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
         "requiresHuman": bool(row.get("requires_human", False)),
+        "objective": row.get("objective"),
+        "nextAction": row.get("next_action"),
+        "nextActionAgent": row.get("next_action_agent"),
+        "blockers": row.get("blockers") or [],
+        "questionForOperator": row.get("question_for_operator"),
+        "autonomyBudget": row.get("autonomy_budget") or {},
+        "lastPlannedAt": row["last_planned_at"].isoformat() if row.get("last_planned_at") else None,
+        "plannerVersion": row.get("planner_version") or 0,
     }
 
 

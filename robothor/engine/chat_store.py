@@ -59,8 +59,15 @@ def save_exchange(
     channel: str = "telegram",
     model_override: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    user_extras: dict[str, Any] | None = None,
+    assistant_extras: dict[str, Any] | None = None,
 ) -> list[int]:
     """Upsert session + insert user and assistant messages in one transaction.
+
+    ``user_extras``/``assistant_extras`` are additive JSONB fields merged into
+    the message payload (e.g. ``{"telegram_message_id": "123", "replies_to":
+    {...}}``). Used by the channel-bus reply-context path to preserve thread
+    information on inbound turns.
 
     Returns the inserted chat_messages ids (order: [user_id, assistant_id])
     so the async caller can schedule embedding without re-querying.
@@ -85,14 +92,20 @@ def save_exchange(
 
         # Insert both messages
         inserted_ids: list[int] = []
-        for role, content in [("user", user_content), ("assistant", assistant_content)]:
+        for role, content, extras in [
+            ("user", user_content, user_extras),
+            ("assistant", assistant_content, assistant_extras),
+        ]:
+            payload: dict[str, Any] = {"role": role, "content": content}
+            if extras:
+                payload.update(extras)
             cur.execute(
                 """
                 INSERT INTO chat_messages (session_id, message)
                 VALUES (%s, %s::jsonb)
                 RETURNING id
                 """,
-                (session_id, json.dumps({"role": role, "content": content})),
+                (session_id, json.dumps(payload)),
             )
             inserted_ids.append(int(cur.fetchone()["id"]))
 
@@ -131,6 +144,67 @@ def save_message(
             RETURNING id
             """,
             (session_id, json.dumps({"role": role, "content": content})),
+        )
+        message_id = int(cur.fetchone()["id"])
+
+        conn.commit()
+        return message_id
+
+
+def save_channel_surface(
+    session_key: str,
+    content: str,
+    author_agent_id: str,
+    author_display_name: str = "",
+    surfaced_from_run_id: str | None = None,
+    channel: str = "telegram",
+    tenant_id: str = DEFAULT_TENANT,
+) -> int | None:
+    """Persist a fleet agent's outbound message as an assistant turn in the
+    named session. Used by the channel bus: any agent that delivers to the
+    channel dual-writes the output into main's canonical session so main has
+    full visibility on its next run.
+
+    The JSONB shape is intentionally richer than save_message: it carries
+    author_agent_id, display name, and the source run id so history rendering
+    can label the turn as `[@devops-manager] ...` when it reaches the LLM.
+
+    Returns the chat_messages.id for the caller to record in channel_message_map.
+    """
+    payload: dict[str, Any] = {
+        "role": "assistant",
+        "content": content,
+        "author_agent_id": author_agent_id,
+        "origin": "channel_bus",
+    }
+    if author_display_name:
+        payload["author_display_name"] = author_display_name
+    if surfaced_from_run_id:
+        payload["surfaced_from_run_id"] = surfaced_from_run_id
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute(
+            """
+            INSERT INTO chat_sessions (tenant_id, session_key, channel, message_count)
+            VALUES (%s, %s, %s, 1)
+            ON CONFLICT (tenant_id, session_key) DO UPDATE SET
+                last_active_at = NOW(),
+                message_count = chat_sessions.message_count + 1
+            RETURNING id
+            """,
+            (tenant_id, session_key, channel),
+        )
+        session_id = cur.fetchone()["id"]
+
+        cur.execute(
+            """
+            INSERT INTO chat_messages (session_id, message)
+            VALUES (%s, %s::jsonb)
+            RETURNING id
+            """,
+            (session_id, json.dumps(payload)),
         )
         message_id = int(cur.fetchone()["id"])
 
@@ -374,8 +448,15 @@ async def save_exchange_async(
     channel: str = "telegram",
     model_override: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> None:
+    user_extras: dict[str, Any] | None = None,
+    assistant_extras: dict[str, Any] | None = None,
+) -> list[int] | None:
     """Non-blocking wrapper around save_exchange. Logs warning on failure.
+
+    Returns the inserted chat_messages ids ``[user_id, assistant_id]`` so
+    callers that need to link downstream writes (e.g. the channel bus
+    linking a platform_message_id to the assistant row) can do so without
+    a follow-up SELECT. Returns ``None`` on failure.
 
     Also schedules background embedding of the inserted turns for verbatim
     retrieval via search_chat_turns().
@@ -391,15 +472,19 @@ async def save_exchange_async(
                 channel=channel,
                 model_override=model_override,
                 tenant_id=tenant_id,
+                user_extras=user_extras,
+                assistant_extras=assistant_extras,
             ),
         )
     except Exception as e:
         logger.warning("Failed to persist chat exchange for %s: %s", session_key, e)
-        return
+        return None
 
     if inserted_ids:
         texts = [user_content, assistant_content]
         asyncio.create_task(_embed_turns(inserted_ids, texts))
+
+    return inserted_ids
 
 
 async def _embed_turns(message_ids: list[int], texts: list[str]) -> None:
@@ -562,6 +647,41 @@ async def save_message_async(
         )
     except Exception as e:
         logger.warning("Failed to persist chat message for %s: %s", session_key, e)
+
+
+async def save_channel_surface_async(
+    session_key: str,
+    content: str,
+    author_agent_id: str,
+    author_display_name: str = "",
+    surfaced_from_run_id: str | None = None,
+    channel: str = "telegram",
+    tenant_id: str = DEFAULT_TENANT,
+) -> int | None:
+    """Non-blocking wrapper around save_channel_surface. Returns chat_messages.id
+    so the caller can populate channel_message_map."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None,
+            lambda: save_channel_surface(
+                session_key,
+                content,
+                author_agent_id,
+                author_display_name=author_display_name,
+                surfaced_from_run_id=surfaced_from_run_id,
+                channel=channel,
+                tenant_id=tenant_id,
+            ),
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to persist channel surface for %s from %s: %s",
+            session_key,
+            author_agent_id,
+            e,
+        )
+        return None
 
 
 async def clear_session_async(

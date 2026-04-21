@@ -17,6 +17,10 @@ brain/agents/
 brain/instructions/
 brain/scripts/
 brain/memory/
+brain/archives/
+brain/journals/
+brain/db.sqlite3
+brain/*.sqlite3
 docs/agents/*.yaml
 docs/agents/*.md
 docs/agents/retired/
@@ -27,6 +31,11 @@ docs/agents/retired/
 docs/CRON_MAP.md
 docs/experiments/
 docs/workflows/retired/
+
+# Instance reports (operator-specific daily/weekly output)
+/daily-reports/
+/reports/
+/download.html
 
 # Instance runtime state (root memory/ is agent working data)
 memory/

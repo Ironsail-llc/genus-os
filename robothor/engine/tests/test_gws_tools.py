@@ -458,6 +458,170 @@ class TestGwsCalendarCreate:
             params = json.loads(cmd[params_idx + 1])
             assert "conferenceDataVersion" not in params
 
+    def test_create_dedupes_against_existing_matching_event(self):
+        # First subprocess.run (events list) returns one matching event;
+        # second would be insert but dedup should short-circuit before it runs.
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "existing123",
+                            "summary": "Team Weekly",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-04-21T14:00:00-04:00"},
+                            "attendees": [
+                                {"email": "alice@example.com"},
+                                {"email": "bob@example.com"},
+                                {"email": "carol@example.com"},
+                            ],
+                            "htmlLink": "https://cal/existing123",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with (
+            patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run", return_value=list_result
+            ) as mock_run,
+            patch.dict("os.environ", {"ROBOTHOR_OWNER_EMAIL": "robothor@example.com"}),
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Team Weekly Leadership",
+                    "start": "2026-04-20T09:00:00-04:00",
+                    "end": "2026-04-20T09:30:00-04:00",
+                    "attendees": [
+                        "alice@example.com",
+                        "bob@example.com",
+                        "carol@example.com",
+                    ],
+                },
+            )
+
+            assert result["status"] == "deduped"
+            assert result["existing_event_id"] == "existing123"
+            assert result["summary"] == "Team Weekly"
+            # Only one subprocess call — list — and no insert.
+            assert mock_run.call_count == 1
+            cmd = mock_run.call_args[0][0]
+            assert "list" in cmd
+            assert "insert" not in cmd
+
+    def test_create_no_dedup_when_attendees_do_not_overlap(self):
+        # Matching title but no overlapping non-operator attendees — should create.
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "otherteam",
+                            "summary": "Weekly Sync",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-05-04T10:00:00-04:00"},
+                            "attendees": [
+                                {"email": "unrelated1@example.com"},
+                                {"email": "unrelated2@example.com"},
+                            ],
+                        }
+                    ]
+                }
+            ),
+        )
+        insert_result = MagicMock(returncode=0, stdout='{"id":"new1","summary":"Weekly Sync"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[list_result, insert_result],
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Weekly Sync",
+                    "start": "2026-05-01T10:00:00-04:00",
+                    "end": "2026-05-01T10:30:00-04:00",
+                    "attendees": ["colleague@example.com"],
+                },
+            )
+
+            assert result.get("id") == "new1"
+            assert mock_run.call_count == 2
+
+    def test_create_force_bypasses_dedup(self):
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "dupe",
+                            "summary": "Team Weekly",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-04-21T14:00:00-04:00"},
+                            "attendees": [
+                                {"email": "alice@example.com"},
+                                {"email": "bob@example.com"},
+                            ],
+                        }
+                    ]
+                }
+            ),
+        )
+        insert_result = MagicMock(returncode=0, stdout='{"id":"forced","summary":"Team Weekly"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[insert_result, list_result],
+        ) as mock_run:
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Team Weekly",
+                    "start": "2026-04-28T14:00:00-04:00",
+                    "end": "2026-04-28T14:30:00-04:00",
+                    "attendees": ["alice@example.com", "bob@example.com"],
+                    "force": True,
+                },
+            )
+
+            assert result.get("id") == "forced"
+            # With force, the list is skipped entirely — only insert runs.
+            assert mock_run.call_count == 1
+            cmd = mock_run.call_args[0][0]
+            assert "insert" in cmd
+
+    def test_create_skips_dedup_when_list_fails(self):
+        # If the pre-check list errors, fall through to create (best-effort dedup).
+        list_fail = MagicMock(returncode=1, stdout="", stderr="auth fail")
+        insert_ok = MagicMock(returncode=0, stdout='{"id":"e9","summary":"Meeting"}')
+
+        with patch(
+            "robothor.engine.tools.handlers.gws.subprocess.run",
+            side_effect=[list_fail, insert_ok],
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Meeting",
+                    "start": "2026-06-01T10:00:00-04:00",
+                    "end": "2026-06-01T10:30:00-04:00",
+                },
+            )
+            assert result.get("id") == "e9"
+
     def test_create_requires_fields(self):
         from robothor.engine.tools import _handle_gws_tool
 
@@ -726,6 +890,40 @@ class TestGwsGmailReply:
                 {"thread_id": "t1", "body": "Reply"},
             )
             assert result.get("status") == "skipped"
+
+    def test_reply_does_not_skip_when_robothor_email_unset(self):
+        """Regression: empty ROBOTHOR_EMAIL must NOT match every From header.
+
+        `"" in anything` is True in Python. Before the truthiness guard
+        was added, every reply was silently dropped as "already replied"
+        when ROBOTHOR_AI_EMAIL was unset.
+        """
+        thread_json = self._thread_response(last_from="alice@example.com")
+        thread_result = MagicMock(returncode=0, stdout=thread_json)
+        send_result = MagicMock(returncode=0, stdout='{"id":"r1","threadId":"t1"}')
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return thread_result if call_count == 1 else send_result
+
+        with patch("robothor.engine.tools.handlers.gws.ROBOTHOR_EMAIL", ""):
+            with patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run",
+                side_effect=side_effect,
+            ):
+                from robothor.engine.tools import _handle_gws_tool
+
+                result = _handle_gws_tool(
+                    "gws_gmail_reply",
+                    {"thread_id": "t1", "body": "Here is the HTML research."},
+                )
+                assert result.get("status") != "skipped", (
+                    "Empty ROBOTHOR_EMAIL incorrectly matched last_from — reply was dropped"
+                )
+                assert "error" not in result
 
     def test_reply_missing_message_id(self):
         """Reply still sends when last message has no Message-ID header."""
@@ -1002,6 +1200,45 @@ class TestGwsGmailSendDuplicateGuard:
                 },
             )
             assert result.get("status") == "skipped"
+
+    def test_send_does_not_skip_when_robothor_email_unset(self):
+        """Regression: empty ROBOTHOR_EMAIL must NOT match every From header.
+
+        Parallel to the reply path — the send path has its own duplicate
+        guard (line ~649) that was also vulnerable to the empty-string bug.
+        """
+        thread_result = MagicMock(
+            returncode=0, stdout=self._thread_response(last_from="alice@example.com")
+        )
+        send_result = MagicMock(returncode=0, stdout='{"id":"s2","threadId":"t1"}')
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return thread_result if call_count == 1 else send_result
+
+        with patch("robothor.engine.tools.handlers.gws.ROBOTHOR_EMAIL", ""):
+            with patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run",
+                side_effect=side_effect,
+            ):
+                from robothor.engine.tools import _handle_gws_tool
+
+                result = _handle_gws_tool(
+                    "gws_gmail_send",
+                    {
+                        "to": "alice@example.com",
+                        "subject": "Re: Research",
+                        "body": "<p>HTML summary</p>",
+                        "content_type": "html",
+                        "thread_id": "t1",
+                    },
+                )
+                assert result.get("status") != "skipped", (
+                    "Empty ROBOTHOR_EMAIL incorrectly matched last_from — send was dropped"
+                )
 
     def test_guard_exception_does_not_block_send(self):
         """If the guard throws, the send still proceeds."""

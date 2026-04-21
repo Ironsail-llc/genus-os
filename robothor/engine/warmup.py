@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.constants import DEFAULT_TENANT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
 
@@ -31,6 +33,28 @@ logger = logging.getLogger(__name__)
 MAX_WARMTH_CHARS = 4000
 MAX_BLOCK_CHARS = 800
 MAX_FILE_CHARS = 600
+
+# ── Warmup kind (cron | interactive) ──────────────────────────────
+# Runner sets this around the warmup call so hooks can discriminate
+# between scheduled heartbeat runs and interactive chat turns. ContextVars
+# do not auto-propagate to executors, so runner sets it *inside* the
+# executor closure via `set_warmup_kind`.
+
+_CURRENT_WARMUP_KIND: ContextVar[str | None] = ContextVar("robothor_warmup_kind", default=None)
+
+
+@contextmanager
+def set_warmup_kind(kind: str | None) -> Iterator[None]:
+    token = _CURRENT_WARMUP_KIND.set(kind)
+    try:
+        yield
+    finally:
+        _CURRENT_WARMUP_KIND.reset(token)
+
+
+def current_warmup_kind() -> str | None:
+    return _CURRENT_WARMUP_KIND.get()
+
 
 # ── Dynamic context hooks ─────────────────────────────────────────
 # Callables that return optional context strings. Called during warmup
@@ -83,80 +107,73 @@ def build_warmth_preamble(
     if no warmup config or all sections fail.
     """
     sections: list[str] = []
+    total_start = time.monotonic()
+    # Section timings for stall diagnosis — heartbeat runs have been timing
+    # out before the first LLM call, and warmup is the biggest blocking
+    # slab in init. Log anything > 500ms per section, and total > 5s.
+    _section_timings: dict[str, float] = {}
 
-    # 1. Session history
-    try:
-        history = _build_history_section(config.id)
-        if history:
-            sections.append(history)
-    except Exception as e:
-        logger.debug("Warmup history failed for %s: %s", config.id, e)
+    def _run_section(name: str, fn: Callable[[], str | None]) -> None:
+        start = time.monotonic()
+        try:
+            result = fn()
+        except Exception as e:
+            logger.debug("Warmup %s failed for %s: %s", name, config.id, e)
+            result = None
+        elapsed = time.monotonic() - start
+        _section_timings[name] = elapsed
+        if elapsed > 0.5:
+            logger.info("warmup %s: section=%s ms=%d", config.id, name, int(elapsed * 1000))
+        if result:
+            sections.append(result)
 
-    # 2. Memory blocks
-    try:
-        blocks = _build_memory_blocks_section(config.warmup_memory_blocks, tenant_id=tenant_id)
-        if blocks:
-            sections.append(blocks)
-    except Exception as e:
-        logger.debug("Warmup memory blocks failed for %s: %s", config.id, e)
+    _run_section("history", lambda: _build_history_section(config.id))
+    _run_section(
+        "memory_blocks",
+        lambda: _build_memory_blocks_section(config.warmup_memory_blocks, tenant_id=tenant_id),
+    )
+    _run_section(
+        "context_files",
+        lambda: _build_context_files_section(config.warmup_context_files, workspace),
+    )
+    _run_section("peers", lambda: _build_peer_section(config.warmup_peer_agents))
+    _run_section("context_hooks", _run_context_hooks)
 
-    # 3. Context files
-    try:
-        files = _build_context_files_section(config.warmup_context_files, workspace)
-        if files:
-            sections.append(files)
-    except Exception as e:
-        logger.debug("Warmup context files failed for %s: %s", config.id, e)
-
-    # 4. Peer agent status
-    try:
-        peers = _build_peer_section(config.warmup_peer_agents)
-        if peers:
-            sections.append(peers)
-    except Exception as e:
-        logger.debug("Warmup peer status failed for %s: %s", config.id, e)
-
-    # 5. Dynamic context hooks (date, travel, weather, etc.)
-    try:
-        situational = _run_context_hooks()
-        if situational:
-            sections.append(situational)
-    except Exception as e:
-        logger.debug("Warmup context hooks failed for %s: %s", config.id, e)
-
-    # 5b. Agent breadcrumbs — mid-task state from recent runs of this agent.
-    try:
+    def _breadcrumbs() -> str | None:
         from robothor.memory.breadcrumbs import (
             format_breadcrumbs_for_warmup,
             load_recent_breadcrumbs,
         )
 
         breadcrumbs = load_recent_breadcrumbs(config.id, limit=5, tenant_id=tenant_id)
-        bc_section = format_breadcrumbs_for_warmup(breadcrumbs)
-        if bc_section:
-            sections.append(bc_section)
-    except Exception as e:
-        logger.debug("Warmup breadcrumbs failed for %s: %s", config.id, e)
+        return format_breadcrumbs_for_warmup(breadcrumbs)
 
-    # 5c. Stale preferences — surface anything needing re-confirmation.
-    try:
+    _run_section("breadcrumbs", _breadcrumbs)
+
+    def _preferences() -> str | None:
         from robothor.memory.preferences import get_stale_preferences
 
         stale = get_stale_preferences(tenant_id=tenant_id)
-        if stale:
-            lines = ["# Preferences flagged as possibly stale (verify with operator)"]
-            lines.extend(f"- {p.get('preference', '?')}" for p in stale[:5])
-            sections.append("\n".join(lines))
-    except Exception as e:
-        logger.debug("Warmup preferences failed for %s: %s", config.id, e)
+        if not stale:
+            return None
+        lines = ["# Preferences flagged as possibly stale (verify with operator)"]
+        lines.extend(f"- {p.get('preference', '?')}" for p in stale[:5])
+        return "\n".join(lines)
 
-    # 6. Agent-aware context hooks (git status, etc.)
-    try:
-        agent_ctx = _run_agent_context_hooks(config)
-        if agent_ctx:
-            sections.append(agent_ctx)
-    except Exception as e:
-        logger.debug("Warmup agent hooks failed for %s: %s", config.id, e)
+    _run_section("preferences", _preferences)
+    _run_section("agent_hooks", lambda: _run_agent_context_hooks(config))
+
+    total_elapsed = time.monotonic() - total_start
+    if total_elapsed > 5.0:
+        breakdown = " ".join(
+            f"{k}={int(v * 1000)}" for k, v in _section_timings.items() if v > 0.05
+        )
+        logger.warning(
+            "warmup %s: total_ms=%d breakdown=%s",
+            config.id,
+            int(total_elapsed * 1000),
+            breakdown,
+        )
 
     if not sections:
         return ""
@@ -278,6 +295,84 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
+    """Render the top open tasks grouped by assigned agent.
+
+    For main's Telegram warmup — lets the supervisor answer 'what's open?'
+    without spinning tool calls.
+    """
+    try:
+        from robothor.crm.dal import list_tasks
+
+        rows = list_tasks(
+            tenant_id=tenant_id,
+            exclude_resolved=True,
+            limit=limit,
+        )
+        if not rows:
+            return "--- OPEN TASKS ---\nNothing open."
+        grouped: dict[str, list[dict]] = {}
+        for t in rows:
+            key = t.get("assigned_to_agent") or "unassigned"
+            grouped.setdefault(key, []).append(t)
+        lines = ["--- OPEN TASKS ---"]
+        for agent, tasks in sorted(grouped.items()):
+            lines.append(f"[{agent}]")
+            for t in tasks[:5]:
+                obj = t.get("objective") or ""
+                obj_part = f" — {obj}" if obj else ""
+                short_id = str(t.get("id") or "")[:8]
+                lines.append(
+                    f"  • {t.get('title', '(no title)')} "
+                    f"({t.get('status', '?')}{obj_part}) [{short_id}]"
+                )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug("Open-tasks section failed: %s", e)
+        return ""
+
+
+def _recent_fleet_surfaces(tenant_id: str, hours: int = 6, limit: int = 6) -> str:
+    """Pull recent fleet agent deliveries from the channel bus (dual-writes
+    into main's session with origin='channel_bus'). Gives main awareness of
+    what other agents posted to the operator's Telegram channel in the last
+    few hours.
+    """
+    try:
+        from robothor.db import get_connection
+
+        sql = """
+            SELECT
+                cm.created_at,
+                cm.message->>'author_agent_id' AS author,
+                COALESCE(cm.message->>'content', '') AS content
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            WHERE cs.tenant_id = %s
+              AND cm.message->>'origin' = 'channel_bus'
+              AND cm.message->>'author_agent_id' IS NOT NULL
+              AND cm.message->>'author_agent_id' != 'main'
+              AND cm.created_at > NOW() - (%s || ' hours')::interval
+            ORDER BY cm.created_at DESC
+            LIMIT %s
+        """
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (tenant_id, str(hours), limit))
+                rows = cur.fetchall()
+        if not rows:
+            return ""
+        lines = [f"--- RECENT FLEET SURFACES (last {hours}h) ---"]
+        for created_at, author, content in rows:
+            ts = created_at.strftime("%H:%M") if created_at else "?"
+            snippet = (content or "").strip().split("\n", 1)[0][:140]
+            lines.append(f"[@{author} {ts}] {snippet}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug("Fleet surfaces section failed: %s", e)
+        return ""
+
+
 def build_interactive_preamble(
     agent_id: str,
     user_message: str = "",
@@ -349,6 +444,16 @@ def build_interactive_preamble(
             sections.append(situational)
     except Exception as e:
         logger.debug("Interactive warmup context hooks failed: %s", e)
+
+    # Main-only panoramic sections: open task queue + recent fleet surfaces.
+    # These let the supervisor answer "what's going on?" from context alone.
+    if agent_id == "main":
+        tasks_section = _open_tasks_section(tenant_id=tenant_id)
+        if tasks_section:
+            sections.append(tasks_section)
+        fleet_section = _recent_fleet_surfaces(tenant_id=tenant_id)
+        if fleet_section:
+            sections.append(fleet_section)
 
     if not sections:
         return ""
@@ -622,68 +727,11 @@ def _git_status_context(config: AgentConfig) -> str | None:
     return "Git:\n" + "\n".join(parts) if parts else None
 
 
-def _buddy_status_context(config: AgentConfig) -> str | None:
-    """Inject live buddy fleet pulse into main agent warmup.
-
-    Shows current level, scores, deltas, and fleet rankings.
-    Does NOT include events — those flow exclusively through the
-    delivery reflection path with cooldown gating.
-    """
-    if config.id != "main":
-        return None
-    try:
-        from robothor.engine.buddy import BuddyEngine
-
-        ctx = BuddyEngine().get_buddy_status()
-        li = ctx["level_info"]
-        streak_current, streak_longest = ctx["streak"]
-        scores = ctx["scores_today"]
-        deltas = ctx.get("score_deltas", {})
-
-        lines = [
-            f"[FLEET PULSE] Level {li.level} {li.level_name} ({li.total_xp:,} XP) | "
-            f"{streak_current}-day streak"
-            + (f" (record: {streak_longest})" if streak_longest > streak_current else ""),
-            f"Scores: D:{scores.debugging_score} P:{scores.patience_score} "
-            f"Eff:{scores.effectiveness_score} Bench:{scores.benchmark_dim_score} R:{scores.reliability_score}",
-        ]
-
-        if deltas:
-            delta_parts = []
-            for dim in ("reliability", "debugging", "patience", "effectiveness", "benchmark"):
-                d = deltas.get(dim, 0)
-                if d != 0:
-                    delta_parts.append(f"{dim[0].upper()}{'+' if d > 0 else ''}{d}")
-            if delta_parts:
-                lines.append(f"vs yesterday: {', '.join(delta_parts)}")
-
-        fleet_top = ctx.get("fleet_top", [])
-        if fleet_top:
-            top_strs = [f"{a['agent_id']} ({a['overall_score']})" for a in fleet_top[:3]]
-            lines.append(f"Fleet top: {', '.join(top_strs)}")
-
-        return "\n".join(lines)
-    except Exception:
-        # Fall back to stale memory block if live computation fails
-        try:
-            from robothor.memory.blocks import read_block
-
-            _tid = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
-            result = read_block("buddy_status", tenant_id=_tid)
-            content = result.get("content", "") if isinstance(result, dict) else ""
-            if content and content.strip():
-                return f"[BUDDY] {content.strip()}"
-        except Exception:
-            pass
-    return None
-
-
 # Register built-in hooks on import
 register_context_hook(_date_context)
 register_context_hook(_travel_status)
 register_context_hook(_weather_context)
 register_agent_context_hook(_git_status_context)
-register_agent_context_hook(_buddy_status_context)
 
 from robothor.engine.thread_pool import _thread_pool_context  # noqa: E402
 

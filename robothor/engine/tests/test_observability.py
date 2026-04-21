@@ -189,8 +189,13 @@ class TestLogToolEvent:
 # ─── Buddy Reflection in Delivery Tests ──────────────────────────
 
 
-class TestBuddyReflection:
-    """Tests for buddy post-delivery reflection — TDD."""
+class TestHeartbeatHasNoBuddyAppendix:
+    """Buddy no longer appends anything to heartbeat delivery.
+
+    The old reflection pipeline was deleted — main agent output reaches Telegram
+    exactly as the agent wrote it. Buddy runs as its own scheduled agent and
+    communicates via CRM tasks + agent_reviews, never by bolting text onto main.
+    """
 
     @pytest.fixture(autouse=True)
     def _setup_sender(self):
@@ -199,99 +204,37 @@ class TestBuddyReflection:
         yield sender
         set_telegram_sender(None)  # type: ignore[arg-type]
 
-    @pytest.mark.asyncio
-    async def test_reflection_skipped_for_non_heartbeat(self):
-        """Buddy reflection only fires for heartbeat runs."""
-        from robothor.engine.delivery import _maybe_append_buddy_reflection
+    def test_reflection_helpers_are_deleted(self):
+        """Dead-code regression check: reflection helpers stay removed."""
+        from robothor.engine import delivery
 
-        config = _make_config(id="main")
-        run = _make_run(trigger_detail=None)  # not a heartbeat
-        result, has_reflection = await _maybe_append_buddy_reflection("Hello world", run, config)
-        assert result == "Hello world"  # unchanged
-        assert has_reflection is False
-
-    @pytest.mark.asyncio
-    async def test_reflection_skipped_for_non_main_agent(self):
-        """Buddy reflection only fires for the main agent."""
-        from robothor.engine.delivery import _maybe_append_buddy_reflection
-
-        config = _make_config(id="email-classifier")
-        run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
-        assert result == "Report here"  # unchanged
-        assert has_reflection is False
+        for name in (
+            "_maybe_append_buddy_reflection",
+            "_generate_buddy_reflection",
+            "_get_buddy_context",
+        ):
+            assert not hasattr(delivery, name), (
+                f"delivery.{name} was resurrected — Buddy must not bolt text onto heartbeat"
+            )
 
     @pytest.mark.asyncio
-    @patch("robothor.engine.delivery._get_buddy_context")
-    async def test_reflection_skipped_when_no_events(self, mock_ctx):
-        """Buddy stays silent when there are no noteworthy events (cooldowns block all)."""
-        from robothor.engine.delivery import _maybe_append_buddy_reflection
-
-        mock_ctx.return_value = None  # _get_buddy_context returns None when no events pass cooldown
-        config = _make_config(id="main")
-        run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
-        assert result == "Report here"  # unchanged
-        assert has_reflection is False
-
-    @pytest.mark.asyncio
-    @patch("robothor.engine.delivery._generate_buddy_reflection")
-    @patch("robothor.engine.delivery._get_buddy_context")
-    async def test_reflection_appended_when_events_exist(self, mock_ctx, mock_gen):
-        """Buddy appends a reflection when there are notable events."""
-        from robothor.engine.delivery import _maybe_append_buddy_reflection
-
-        mock_ctx.return_value = {"events": ["Level up to Blaze!"]}
-        mock_gen.return_value = "The fleet just leveled up — momentum is building."
-
-        config = _make_config(id="main")
-        run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
-
-        assert "Report here" in result
-        assert "---" in result
-        assert "momentum is building" in result
-        assert has_reflection is True
-
-    @pytest.mark.asyncio
-    @patch("robothor.engine.delivery._generate_buddy_reflection")
-    @patch("robothor.engine.delivery._get_buddy_context")
-    async def test_reflection_empty_response_no_append(self, mock_ctx, mock_gen):
-        """If LLM returns empty, no reflection is appended."""
-        from robothor.engine.delivery import _maybe_append_buddy_reflection
-
-        mock_ctx.return_value = {"events": ["minor score change"]}
-        mock_gen.return_value = None  # LLM decided to stay silent
-
-        config = _make_config(id="main")
-        run = _make_run(trigger_detail="heartbeat:0 6-22 * * *")
-        result, has_reflection = await _maybe_append_buddy_reflection("Report here", run, config)
-        assert result == "Report here"
-        assert has_reflection is False
-
-    @pytest.mark.asyncio
-    @patch("robothor.engine.delivery._generate_buddy_reflection")
-    @patch("robothor.engine.delivery._get_buddy_context")
-    async def test_reflection_with_trivial_heartbeat_still_delivers(
-        self, mock_ctx, mock_gen, _setup_sender
-    ):
-        """If heartbeat is trivial but buddy has something to say, output is delivered."""
-        mock_ctx.return_value = {"events": ["14-day streak milestone!"]}
-        mock_gen.return_value = "Two weeks straight — the fleet hasn't missed a beat."
-
+    async def test_heartbeat_carries_no_buddy_appendix(self, _setup_sender):
+        """Main-agent heartbeat output reaches Telegram with no Buddy text bolted on."""
+        original_body = "Morning report: 3 tasks done, 1 PR open."
         config = _make_config(id="main")
         run = _make_run(
-            output_text="All quiet — nothing new.",
+            output_text=original_body,
             trigger_detail="heartbeat:0 6-22 * * *",
         )
         result = await deliver(config, run)
-
-        # Buddy reflection appended → text is longer and different from trivial pattern
         assert result is True
-        assert run.delivery_status == "delivered"
-        # Verify the sender got the combined text
         sent_text = _setup_sender.call_args[0][1] if _setup_sender.call_args else ""
-        assert "Two weeks straight" in sent_text
+        # Body stays as-is (Telegram sender may prefix with agent name header).
+        assert original_body in sent_text
+        # No Buddy-reflection separator or canned phrases appended.
+        assert "\n---\n" not in sent_text
+        for phrase in ("momentum is building", "Level up", "streak milestone", "FLEET PULSE"):
+            assert phrase not in sent_text
 
 
 # ─── Tool Stats Tests ──────────────────────────────────────────────

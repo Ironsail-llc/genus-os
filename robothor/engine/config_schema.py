@@ -61,6 +61,8 @@ _KNOWN_GUARDRAILS = frozenset(
         "write_path_restrict",
         "desktop_safety",
         "human_approval",
+        "requires_human_task_closure",
+        "recurring_meeting_proposal_required",
     }
 )
 

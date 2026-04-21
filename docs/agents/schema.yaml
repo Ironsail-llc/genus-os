@@ -44,7 +44,12 @@ recommended:
       default: UTC
     timeout_seconds:
       type: integer
-      default: 300
+      default: 0
+      description: >
+        Wall-clock cap (seconds). Default 0 = disabled. Runs complete
+        when the agent says it's done; they are not killed on elapsed
+        time. Set a positive value only if you explicitly want a
+        circuit breaker for this agent (not recommended).
     max_iterations:
       type: integer
       default: 10
@@ -200,7 +205,17 @@ optional:
       default: 15
     timeout_seconds:
       type: integer
-      default: 600
+      default: 0
+      description: >
+        Wall-clock cap for heartbeat runs (seconds). Default 0 = no cap.
+        See schedule.timeout_seconds for semantics.
+    persistent_history_limit:
+      type: integer
+      default: 20
+      description: >
+        How many prior messages to replay at the top of a session-resumed
+        heartbeat run. Smaller is cheaper; larger preserves more context.
+        Only honoured when session_target=persistent.
     delivery:
       mode:
         type: string

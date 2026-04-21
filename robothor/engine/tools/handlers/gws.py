@@ -16,10 +16,335 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ROBOTHOR_EMAIL = os.environ.get("ROBOTHOR_AI_EMAIL", "")
+
+def _resolve_robothor_email() -> str:
+    """Resolve the bot's own email for duplicate-reply detection.
+
+    ROBOTHOR_AI_EMAIL is the bot's sending address (e.g. bot@example.com).
+    This must NOT use owner_config/ROBOTHOR_OWNER_EMAIL — that is the operator's
+    address, and stripping it from reply recipients causes "No recipients
+    found in thread" errors on every thread the operator is part of.
+
+    Callers MUST truthiness-check before substring matching —
+    `"" in <anything>` is True, which silently drops every reply.
+    """
+    # ROBOTHOR_AI_EMAIL is the bot's email — always prefer it
+    ai_email = os.environ.get("ROBOTHOR_AI_EMAIL", "").lower().strip()
+    if ai_email:
+        return ai_email
+    # Fallback: try owner_config only if AI email not set (legacy installs)
+    try:
+        from robothor.owner_config import load_owner_config
+
+        cfg = load_owner_config()
+        if cfg is not None and cfg.email:
+            return cfg.email.lower().strip()
+    except Exception:
+        pass
+    return ""
+
+
+ROBOTHOR_EMAIL = _resolve_robothor_email()
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 
 HANDLERS: dict[str, Any] = {}
+
+
+# ── Contact 360 write-through helpers ────────────────────────────────────────
+# After a successful gws Gmail / Calendar write, mirror it into the Contact
+# 360 fabric (message + message_participant + timeline_activity, or
+# calendar_event + participants). Best-effort — failure does not propagate.
+
+
+def _resolve_person_by_email(email: str) -> str | None:
+    """Look up person_id for an email address. Checks contact_identifiers
+    across any channel (production data has operator emails on channel='api'
+    and channel='email' mixed), and falls back to crm_people.email /
+    additional_emails so the operator and any other person who only has
+    their address on the person row still resolves."""
+    try:
+        from robothor.db.connection import get_connection
+
+        addr = email.lower().strip()
+        if not addr:
+            return None
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # 1. contact_identifiers — any channel where identifier matches.
+            cur.execute(
+                """
+                SELECT ci.person_id
+                  FROM contact_identifiers ci
+                  JOIN crm_people p ON p.id = ci.person_id
+                 WHERE lower(ci.identifier) = %s
+                   AND p.deleted_at IS NULL
+                 LIMIT 1
+                """,
+                (addr,),
+            )
+            row = cur.fetchone()
+            if row:
+                pid = row[0] if not isinstance(row, dict) else row.get("person_id")
+                if pid:
+                    return str(pid)
+            # 2. crm_people direct match (primary email + additional_emails JSONB).
+            cur.execute(
+                """
+                SELECT id
+                  FROM crm_people
+                 WHERE deleted_at IS NULL
+                   AND (lower(email) = %s
+                        OR additional_emails::text ILIKE %s)
+                 LIMIT 1
+                """,
+                (addr, f'%"{addr}"%'),
+            )
+            row = cur.fetchone()
+            if row:
+                pid = row[0] if not isinstance(row, dict) else row.get("id")
+                return str(pid) if pid else None
+            return None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("email person resolve failed: %s", e)
+        return None
+
+
+def _record_sent_email(
+    *,
+    result: dict[str, Any],
+    to: str,
+    cc: str,
+    subject: str,
+    body: str,
+    tenant_id: str | None = None,
+) -> None:
+    """Write message_thread + message + message_participant + timeline_activity
+    for a gmail send response. Called only on success (no 'error' key).
+    """
+    try:
+        from robothor.constants import DEFAULT_TENANT
+        from robothor.db.connection import get_connection
+
+        if not isinstance(result, dict) or "error" in result:
+            return
+        gmail_id = result.get("id")
+        thread_id_ext = result.get("threadId") or gmail_id
+        if not gmail_id or not thread_id_ext:
+            return
+        tenant_id = tenant_id or DEFAULT_TENANT
+
+        recipients = [addr for addr in _EMAIL_RE.findall(to or "") if addr]
+        cc_recipients = [addr for addr in _EMAIL_RE.findall(cc or "") if addr]
+        if not recipients and not cc_recipients:
+            return
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+
+            # 1. message_thread upsert.
+            cur.execute(
+                """
+                INSERT INTO message_thread
+                    (tenant_id, channel, external_thread_id, subject,
+                     last_message_at, message_count)
+                VALUES (%s, 'email', %s, %s, NOW(), 1)
+                ON CONFLICT (tenant_id, channel, external_thread_id)
+                DO UPDATE SET last_message_at = EXCLUDED.last_message_at,
+                              message_count   = message_thread.message_count + 1,
+                              updated_at      = NOW()
+                RETURNING id
+                """,
+                (tenant_id, str(thread_id_ext), subject or None),
+            )
+            row = cur.fetchone()
+            thread_row_id = row[0] if not isinstance(row, dict) else row["id"]
+
+            # 2. message insert.
+            snippet = (body or "")[:200]
+            cur.execute(
+                """
+                INSERT INTO message
+                    (tenant_id, thread_id, channel, direction,
+                     external_message_id, subject, body_text, snippet, occurred_at)
+                VALUES (%s, %s, 'email', 'outbound', %s, %s, %s, %s, NOW())
+                ON CONFLICT (tenant_id, channel, external_message_id)
+                DO UPDATE SET thread_id = EXCLUDED.thread_id
+                RETURNING id, (xmax = 0) AS inserted
+                """,
+                (
+                    tenant_id,
+                    thread_row_id,
+                    str(gmail_id),
+                    subject or None,
+                    body or None,
+                    snippet or None,
+                ),
+            )
+            r = cur.fetchone()
+            if isinstance(r, dict):
+                message_id, inserted = r["id"], r["inserted"]
+            else:
+                message_id, inserted = r[0], r[1]
+            if not inserted:
+                return  # already linked — don't duplicate participants/timeline
+
+            # 3. participants per role. Sender is the operator (ROBOTHOR_EMAIL).
+            for role, addrs in (("to", recipients), ("cc", cc_recipients)):
+                for addr in addrs:
+                    pid = _resolve_person_by_email(addr)
+                    cur.execute(
+                        """
+                        INSERT INTO message_participant
+                            (tenant_id, message_id, role, person_id, handle)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (tenant_id, message_id, role, pid, addr),
+                    )
+                    # 4. timeline_activity for resolved recipients.
+                    if pid:
+                        cur.execute(
+                            """
+                            INSERT INTO timeline_activity
+                                (tenant_id, person_id, occurred_at, activity_type,
+                                 source_table, source_id, channel, direction,
+                                 title, snippet)
+                            VALUES (%s, %s, NOW(), 'email', 'message', %s,
+                                    'email', 'outbound', %s, %s)
+                            ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING
+                            """,
+                            (
+                                tenant_id,
+                                pid,
+                                str(message_id),
+                                subject or None,
+                                snippet or None,
+                            ),
+                        )
+
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gws email write-through failed: %s", e)
+
+
+def _record_calendar_event(
+    *,
+    result: dict[str, Any],
+    tenant_id: str | None = None,
+) -> None:
+    """Upsert calendar_event + calendar_event_participant rows from a gws
+    calendar-create response. Emits timeline_activity per resolved attendee."""
+    try:
+        from robothor.constants import DEFAULT_TENANT
+        from robothor.db.connection import get_connection
+
+        if not isinstance(result, dict) or "error" in result:
+            return
+        google_id = result.get("id")
+        if not google_id:
+            return
+        tenant_id = tenant_id or DEFAULT_TENANT
+
+        summary = result.get("summary")
+        status = result.get("status")
+        html_link = result.get("htmlLink")
+        description = result.get("description")
+        location = result.get("location")
+        start_at = (result.get("start") or {}).get("dateTime") or (result.get("start") or {}).get(
+            "date"
+        )
+        end_at = (result.get("end") or {}).get("dateTime") or (result.get("end") or {}).get("date")
+        attendees = result.get("attendees") or []
+        organizer_email = (result.get("organizer") or {}).get("email")
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO calendar_event
+                    (tenant_id, google_event_id, title, description, location,
+                     start_at, end_at, organizer_email, hangout_link, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, google_event_id)
+                DO UPDATE SET title            = EXCLUDED.title,
+                              description      = EXCLUDED.description,
+                              location         = EXCLUDED.location,
+                              start_at         = EXCLUDED.start_at,
+                              end_at           = EXCLUDED.end_at,
+                              organizer_email  = EXCLUDED.organizer_email,
+                              hangout_link     = EXCLUDED.hangout_link,
+                              status           = EXCLUDED.status,
+                              updated_at       = NOW()
+                RETURNING id
+                """,
+                (
+                    tenant_id,
+                    str(google_id),
+                    summary,
+                    description,
+                    location,
+                    start_at,
+                    end_at,
+                    organizer_email,
+                    html_link,
+                    status,
+                ),
+            )
+            row = cur.fetchone()
+            event_id = row[0] if not isinstance(row, dict) else row["id"]
+
+            # Purge previous participants for this event and re-insert (keeps
+            # response_status fresh on repeat calls).
+            cur.execute("DELETE FROM calendar_event_participant WHERE event_id = %s", (event_id,))
+
+            for att in attendees:
+                email = (att.get("email") or "").lower().strip()
+                if not email:
+                    continue
+                pid = _resolve_person_by_email(email)
+                is_organizer = bool(att.get("organizer"))
+                cur.execute(
+                    """
+                    INSERT INTO calendar_event_participant
+                        (tenant_id, event_id, person_id, role, email,
+                         display_name, response_status, organizer)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        tenant_id,
+                        event_id,
+                        pid,
+                        "organizer" if is_organizer else "attendee",
+                        email,
+                        att.get("displayName"),
+                        att.get("responseStatus"),
+                        is_organizer,
+                    ),
+                )
+                if pid:
+                    cur.execute(
+                        """
+                        INSERT INTO timeline_activity
+                            (tenant_id, person_id, occurred_at, activity_type,
+                             source_table, source_id, channel, title, snippet)
+                        VALUES (%s, %s, %s, 'calendar_event', 'calendar_event', %s,
+                                'calendar', %s, %s)
+                        ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING
+                        """,
+                        (
+                            tenant_id,
+                            pid,
+                            start_at,
+                            str(event_id),
+                            summary,
+                            (description or summary or "")[:200]
+                            if (description or summary)
+                            else None,
+                        ),
+                    )
+
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gws calendar write-through failed: %s", e)
 
 
 def _resolve_owner_email() -> str:
@@ -33,6 +358,112 @@ def _resolve_owner_email() -> str:
     except Exception:
         logger.debug("owner_config unavailable; using env fallback", exc_info=True)
     return os.environ.get("ROBOTHOR_OWNER_EMAIL", "").strip().lower()
+
+
+def _normalize_summary(s: str) -> str:
+    """Lowercase, collapse whitespace, strip punctuation for loose title matching."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s)).strip().lower()
+
+
+def _summaries_match(a: str, b: str) -> bool:
+    """True when two meeting titles likely name the same series.
+
+    Either normalized string contains the other (catches "Team Weekly" vs
+    "Team Weekly Leadership"), OR normalized strings are equal.
+    """
+    na, nb = _normalize_summary(a), _normalize_summary(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    return na in nb or nb in na
+
+
+def _attendee_set(event_like: Any) -> set[str]:
+    """Extract attendee emails (lowercased) from a create-payload list or a gws event dict."""
+    out: set[str] = set()
+    if isinstance(event_like, list):
+        for entry in event_like:
+            if isinstance(entry, str):
+                out.add(entry.strip().lower())
+            elif isinstance(entry, dict) and entry.get("email"):
+                out.add(str(entry["email"]).strip().lower())
+    elif isinstance(event_like, dict):
+        for entry in event_like.get("attendees", []) or []:
+            if isinstance(entry, dict) and entry.get("email"):
+                out.add(str(entry["email"]).strip().lower())
+    return out
+
+
+def _attendees_overlap(proposed: set[str], existing: set[str], owner_email: str) -> bool:
+    """Overlap rule for dedup.
+
+    Ignore the operator's own email on both sides (it's auto-added, not a signal).
+    Match if the smaller side has at least half its attendees in the other side,
+    OR absolute overlap is at least 2.
+    """
+    a = {e for e in proposed if e and e != owner_email}
+    b = {e for e in existing if e and e != owner_email}
+    if not a or not b:
+        return False
+    inter = a & b
+    if len(inter) >= 2:
+        return True
+    smaller = min(len(a), len(b))
+    return smaller > 0 and (len(inter) / smaller) >= 0.5
+
+
+def _find_duplicate_event(
+    summary: str,
+    start: str,
+    attendees: list[str],
+    calendar_id: str,
+    owner_email: str,
+    window_days: int = 14,
+) -> dict[str, Any] | None:
+    """Return an existing event dict if one in the ±window overlaps this proposal, else None.
+
+    Only dedups against events with same-or-substring summary AND attendee overlap
+    (per _attendees_overlap). Silent on any list failure — dedup is best-effort.
+    """
+    import json as _json
+    from datetime import datetime, timedelta
+
+    try:
+        base = datetime.fromisoformat(start)
+    except ValueError:
+        logger.debug("gws_calendar_create dedup: unparseable start=%s — skipping check", start)
+        return None
+
+    time_min = (base - timedelta(days=window_days)).isoformat()
+    time_max = (base + timedelta(days=window_days)).isoformat()
+
+    cal_params = {
+        "calendarId": calendar_id,
+        "timeMin": time_min,
+        "timeMax": time_max,
+        "singleEvents": True,
+        "orderBy": "startTime",
+        "maxResults": 250,
+    }
+    listed = _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+    if not isinstance(listed, dict) or "error" in listed:
+        logger.debug("gws_calendar_create dedup: list failed — skipping (result=%s)", listed)
+        return None
+
+    proposed_attendees = _attendee_set(attendees)
+    for event in listed.get("items", []) or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("status") == "cancelled":
+            continue
+        if not _summaries_match(summary, event.get("summary", "") or ""):
+            continue
+        existing_attendees = _attendee_set(event)
+        if not _attendees_overlap(proposed_attendees, existing_attendees, owner_email):
+            continue
+        return event
+    return None
 
 
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
@@ -126,9 +557,11 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         for h in last_msg.get("payload", {}).get("headers", []):
             last_headers[h["name"]] = h["value"]
 
-        # Duplicate guard: skip if last message is already from us
+        # Duplicate guard: skip if last message is already from us.
+        # MUST truthiness-check — empty ROBOTHOR_EMAIL is a substring of
+        # every string, so a bare `in` check would drop every reply.
         last_from = last_headers.get("From", "")
-        if ROBOTHOR_EMAIL in last_from.lower():
+        if ROBOTHOR_EMAIL and ROBOTHOR_EMAIL in last_from.lower():
             return {
                 "status": "skipped",
                 "reason": "Already replied to this thread — last message is from robothor",
@@ -179,7 +612,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
         reply_json: dict[str, Any] = {"raw": raw, "threadId": thread_id}
 
-        return _run_gws(
+        reply_result = _run_gws(
             [
                 "gmail",
                 "users",
@@ -192,6 +625,14 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             ],
             timeout=30,
         )
+        _record_sent_email(
+            result=reply_result if isinstance(reply_result, dict) else {},
+            to=", ".join(to_addresses),
+            cc=", ".join(cc_addresses),
+            subject=subject,
+            body=body,
+        )
+        return reply_result
 
     if name == "gws_gmail_send":
         import base64
@@ -244,7 +685,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                             if h.get("name") == "From"
                         }
                         last_from = headers.get("From", "")
-                        if ROBOTHOR_EMAIL in last_from.lower():
+                        if ROBOTHOR_EMAIL and ROBOTHOR_EMAIL in last_from.lower():
                             return {
                                 "status": "skipped",
                                 "reason": "Already replied to this thread — last message is from robothor",
@@ -253,6 +694,19 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 logger.debug("Gmail send duplicate guard failed", exc_info=True)
 
         content_type = args.get("content_type", "text")
+        # Defensive: if the caller forgot content_type but the body is clearly HTML
+        # (starts with <!DOCTYPE or <html), treat it as HTML. Prevents agents from
+        # silently sending rendered HTML as plaintext and showing raw tags.
+        if content_type != "html":
+            body_head = body.lstrip()[:15].lower()
+            if body_head.startswith("<!doctype html") or body_head.startswith("<html"):
+                logger.warning(
+                    "gws_gmail_send: body looks like HTML but content_type=%r; "
+                    "auto-upgrading to html. to=%s",
+                    content_type,
+                    to,
+                )
+                content_type = "html"
         subtype = "html" if content_type == "html" else "plain"
         msg = MIMEText(body, _subtype=subtype)
         msg["To"] = to
@@ -295,6 +749,13 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "Use gws_gmail_reply to reply within existing conversations."
             )
 
+        _record_sent_email(
+            result=result if isinstance(result, dict) else {},
+            to=to,
+            cc=cc,
+            subject=subject,
+            body=body,
+        )
         return result
 
     if name == "gws_gmail_modify":
@@ -346,6 +807,41 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not summary or not start or not end:
             return {"error": "summary, start, and end are required"}
 
+        calendar_id = args.get("calendar_id", "primary")
+        owner_email = _resolve_owner_email()
+
+        if not args.get("force"):
+            dup = _find_duplicate_event(
+                summary=summary,
+                start=start,
+                attendees=args.get("attendees", []) or [],
+                calendar_id=calendar_id,
+                owner_email=owner_email,
+            )
+            if dup is not None:
+                existing_start = (dup.get("start") or {}).get("dateTime") or (
+                    dup.get("start") or {}
+                ).get("date", "")
+                logger.warning(
+                    "gws_calendar_create deduped against existing event %s "
+                    "(summary=%r start=%s) — use force=true to override",
+                    dup.get("id"),
+                    dup.get("summary"),
+                    existing_start,
+                )
+                return {
+                    "status": "deduped",
+                    "existing_event_id": dup.get("id"),
+                    "summary": dup.get("summary"),
+                    "start": existing_start,
+                    "htmlLink": dup.get("htmlLink"),
+                    "reason": (
+                        "An event with a matching title and overlapping attendees "
+                        "already exists within ±14 days. Not creating a duplicate. "
+                        "Pass force=true to bypass this check."
+                    ),
+                }
+
         event_body: dict[str, Any] = {
             "summary": summary,
             "start": {"dateTime": start},
@@ -356,7 +852,6 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("location"):
             event_body["location"] = args["location"]
         attendees = [{"email": e} for e in args.get("attendees", [])]
-        owner_email = _resolve_owner_email()
         if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
             attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
@@ -371,12 +866,11 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 }
             }
 
-        calendar_id = args.get("calendar_id", "primary")
         cal_params = {"calendarId": calendar_id}
         if with_meet:
             cal_params["conferenceDataVersion"] = 1
 
-        return _run_gws(
+        cal_result = _run_gws(
             [
                 "calendar",
                 "events",
@@ -387,6 +881,8 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 _json.dumps(event_body),
             ]
         )
+        _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
+        return cal_result
 
     if name == "gws_calendar_delete":
         event_id = args.get("event_id", "")

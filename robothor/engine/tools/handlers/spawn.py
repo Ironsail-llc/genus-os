@@ -64,6 +64,51 @@ def _get_spawn_semaphore() -> asyncio.Semaphore:
     return _spawn_semaphore
 
 
+def _build_parent_context_block(parent_task_id: str, tenant_id: str = "") -> str | None:
+    """Fetch the parent task and render the --- PARENT TASK --- header block.
+
+    Returned string is prepended to the child's message so workers drive the
+    parent objective, not the local thread. Returns None if the task can't
+    be found or has no objective/next_action set.
+    """
+    from robothor.crm.dal import get_task
+
+    try:
+        task = (
+            get_task(parent_task_id, tenant_id=tenant_id) if tenant_id else get_task(parent_task_id)
+        )
+    except Exception as e:
+        logger.warning("Failed to load parent task %s: %s", parent_task_id, e)
+        return None
+    if not task:
+        return None
+
+    objective = task.get("objective") or ""
+    next_action = task.get("nextAction") or ""
+    question = task.get("questionForOperator") or ""
+    autonomy = task.get("autonomyBudget") or {}
+    if not objective and not next_action and not question:
+        # Nothing structured to inject — don't spam an empty header.
+        return None
+
+    autonomy_summary = (
+        autonomy.get("summary")
+        if isinstance(autonomy, dict) and autonomy.get("summary")
+        else "ask-before-commit"
+    )
+    lines = [f"--- PARENT TASK {parent_task_id} ---"]
+    if objective:
+        lines.append(f"Objective: {objective}")
+    if next_action:
+        lines.append(f"Next action: {next_action}")
+    if question:
+        lines.append(f"Question pending to operator: {question}")
+    lines.append(f"Autonomy: {autonomy_summary}")
+    lines.append("DO NOT offer options that contradict the objective.")
+    lines.append("--- END PARENT TASK ---")
+    return "\n".join(lines)
+
+
 async def _handle_spawn_agent(
     args: dict[str, Any],
     ctx: ToolContext | None = None,
@@ -90,6 +135,13 @@ async def _handle_spawn_agent(
     message = args.get("message", "")
     if not child_agent_id or not message:
         return {"error": "agent_id and message are required"}
+
+    parent_task_id = args.get("parent_task_id")
+    if parent_task_id:
+        tenant_id = ctx.tenant_id if ctx else ""
+        header = _build_parent_context_block(parent_task_id, tenant_id=tenant_id)
+        if header:
+            message = f"{header}\n\n{message}"
 
     # Depth check
     child_depth = spawn_ctx.nesting_depth + 1
@@ -119,10 +171,20 @@ async def _handle_spawn_agent(
     child_max_iters = min(child_max_iters, 30)
     child_config.max_iterations = child_max_iters
 
-    # Apply timeout override
+    # Apply timeout override. 0 on either side means "no cap"; otherwise
+    # the stricter positive value wins. Previously min() treated 0 as the
+    # strictest — that killed spawned children immediately once the
+    # default moved to 0 (no cap).
     requested_timeout = args.get("timeout_seconds")
     if requested_timeout is not None:
-        child_config.timeout_seconds = min(child_config.timeout_seconds, int(requested_timeout))
+        req = int(requested_timeout)
+        cur = int(child_config.timeout_seconds)
+        if req <= 0:
+            pass  # caller said "no cap"; respect current value
+        elif cur <= 0:
+            child_config.timeout_seconds = req
+        else:
+            child_config.timeout_seconds = min(cur, req)
 
     # Force delivery to NONE — sub-agents never message the owner
     child_config.delivery_mode = DeliveryMode.NONE
@@ -143,6 +205,7 @@ async def _handle_spawn_agent(
         remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
         parent_trace_id=spawn_ctx.parent_trace_id,
         parent_span_id=spawn_ctx.parent_span_id,
+        parent_task_id=parent_task_id,  # Stage 5 — lift unfinished todos back to this task
     )
 
     # Namespaced dedup key — includes message hash so the same agent can be
@@ -238,6 +301,8 @@ async def _handle_spawn_agents(
         }
         if "tools_override" in spec:
             spawn_args["tools_override"] = spec["tools_override"]
+        if "parent_task_id" in spec:
+            spawn_args["parent_task_id"] = spec["parent_task_id"]
         coros.append(_handle_spawn_agent(spawn_args, agent_id=agent_id))
 
     raw_results = await asyncio.gather(*coros, return_exceptions=True)

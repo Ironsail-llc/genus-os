@@ -96,3 +96,76 @@ class TestFailedRunDelivery:
         result = await deliver(config, run)
         assert result is True
         assert run.delivery_status == "no_output"
+
+
+class TestMidThoughtDetection:
+    """_looks_like_mid_thought catches fragments observed in production.
+
+    Each pattern here is from a real heartbeat beat on 2026-04-20 that
+    shipped a mid-chain-of-thought fragment to the operator. The old
+    heuristic (AND-gate of opener + ends-with-punct) missed all of these.
+    """
+
+    def test_catches_colon_ended_continuation(self):
+        """'All 3 deleted. Now reply to the thread: archive:' — trailing colon."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = "All 3 deleted. Now reply to the thread confirming, and archive the emails:"
+        assert _looks_like_mid_thought(text)
+
+    def test_catches_dash_ended_continuation(self):
+        """'Good — I can see the thread... using the GWS tools —' trailing dash."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = (
+            "Good — I can see the thread. The reply came to `bot@example.com`. "
+            "Now let me send the reply directly using the GWS tools —"
+        )
+        assert _looks_like_mid_thought(text)
+
+    def test_catches_reference_to_earlier_report(self):
+        """'The verification flags are expected — they're the same issues...' —
+        starts with a back-reference that only makes sense mid-conversation."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = "The verification flags are expected — they're the same issues I already reported in Phase 3."
+        assert _looks_like_mid_thought(text)
+
+    def test_catches_plain_opener_without_trailing_punct(self):
+        """'Now let me do X.' (ends with period) — still a mid-action narration."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = "Now let me send the reply directly."
+        assert _looks_like_mid_thought(text)
+
+    def test_catches_trailing_ellipsis(self):
+        """Trailing ellipsis alone is a clear mid-thought signal."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = "The next thing I need to do is check the task list..."
+        assert _looks_like_mid_thought(text)
+
+    def test_does_not_flag_clean_beat_report(self):
+        """A real structured beat report must NOT be flagged."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = (
+            "**⚡ MON APR 20 — 6:00 AM ET**\n\n"
+            "- 0 open tasks\n"
+            "- Fleet green\n"
+            "- No anomalies to report."
+        )
+        assert not _looks_like_mid_thought(text)
+
+    def test_does_not_flag_trivial_quiet_output(self):
+        """'All quiet, nothing to report.' — trivial but not a mid-thought."""
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        text = "All quiet — nothing actionable this beat."
+        assert not _looks_like_mid_thought(text)
+
+    def test_empty_string_is_not_midthought(self):
+        from robothor.engine.delivery import _looks_like_mid_thought
+
+        assert not _looks_like_mid_thought("")
+        assert not _looks_like_mid_thought("   ")

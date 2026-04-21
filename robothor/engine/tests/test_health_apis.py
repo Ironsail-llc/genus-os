@@ -43,47 +43,175 @@ class TestBuddyStatsEndpoint:
         """Mock BuddyEngine methods, verify response shape."""
         from datetime import date
 
-        from robothor.engine.buddy import DailyStats, LevelInfo
+        from robothor.engine.buddy import AgentScore, FleetStatus
 
-        mock_stats = DailyStats(
-            stat_date=date(2026, 4, 3),
+        mock_fleet = FleetStatus(
+            stat_date=date(2026, 4, 18),
+            fleet_achievement_score=72,
             tasks_completed=10,
-            emails_processed=5,
-            insights_generated=3,
-            errors_avoided=1,
-            dreams_completed=2,
-            debugging_score=70,
-            patience_score=60,
-            chaos_score=40,
-            wisdom_score=80,
-            reliability_score=90,
-        )
-        mock_level = LevelInfo(
-            level=7,
-            total_xp=2800,
-            xp_for_current_level=700,
-            xp_for_next_level=800,
-            progress_pct=0.35,
+            per_agent=[
+                AgentScore(
+                    agent_id="email-responder",
+                    achievement_score=84,
+                    rating=4,
+                    satisfied_goals=3,
+                    breached_goals=1,
+                    stat_date=date(2026, 4, 18),
+                    rank=1,
+                ),
+                AgentScore(
+                    agent_id="chat-monitor",
+                    achievement_score=60,
+                    rating=3,
+                    satisfied_goals=2,
+                    breached_goals=2,
+                    stat_date=date(2026, 4, 18),
+                    rank=2,
+                ),
+            ],
         )
 
         with (
-            patch("robothor.engine.buddy.BuddyEngine.compute_daily_stats", return_value=mock_stats),
-            patch("robothor.engine.buddy.BuddyEngine.get_level_info", return_value=mock_level),
+            patch("robothor.engine.buddy.BuddyEngine.compute_daily_stats", return_value=mock_fleet),
             patch("robothor.engine.buddy.BuddyEngine.get_streak", return_value=(5, 12)),
         ):
             resp = client.get("/api/buddy/stats")
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["level"] == 7
-        assert data["level_name"] == "Flame"
-        assert data["total_xp"] == 2800
+        assert data["stat_date"] == "2026-04-18"
+        assert data["fleet_achievement_score"] == 72
         assert data["streak"]["current"] == 5
         assert data["streak"]["longest"] == 12
         assert data["today"]["tasks"] == 10
-        assert data["today"]["emails"] == 5
-        assert data["scores"]["debugging"] == 70
-        assert data["scores"]["wisdom"] == 80
+        assert len(data["agents"]) == 2
+        assert data["agents"][0]["agent_id"] == "email-responder"
+        assert data["agents"][0]["achievement_score"] == 84
+        assert data["agents"][0]["satisfied_goals"] == 3
+
+
+class TestBuddyLoopHealthEndpoint:
+    """GET /api/buddy/loop-health — fleet-level view of the self-improve loop.
+
+    Derived entirely from `crm_tasks` tags + timestamps (no new table).
+    Surfaces four things the operator needs to decide if the loop is working:
+    open-breach trend, finding→verified latency, escalation distribution,
+    and rolling hold-rate.
+    """
+
+    def test_returns_expected_shape(self, client: TestClient) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        # A mix of task states that exercises every KPI field.
+        tasks = [
+            # Open breach — unresolved, counts in open_breach_count_by_day
+            {
+                "id": "t-open-1",
+                "status": "TODO",
+                "tags": ["nightwatch", "self-improve", "main", "error_rate"],
+                "created_at": now - timedelta(days=2),
+                "updated_at": now - timedelta(days=2),
+                "body": "",
+            },
+            {
+                "id": "t-open-2",
+                "status": "IN_PROGRESS",
+                "tags": ["nightwatch", "self-improve", "main", "error_rate"],
+                "created_at": now - timedelta(days=1),
+                "updated_at": now - timedelta(days=1),
+                "body": "",
+            },
+            # Escalation distribution samples
+            {
+                "id": "t-esc-1",
+                "status": "IN_PROGRESS",
+                "tags": ["self-improve", "escalation:1"],
+                "created_at": now - timedelta(days=4),
+                "updated_at": now - timedelta(days=4),
+                "body": "",
+            },
+            {
+                "id": "t-esc-2",
+                "status": "IN_PROGRESS",
+                "tags": ["self-improve", "escalation:2"],
+                "created_at": now - timedelta(days=4),
+                "updated_at": now - timedelta(days=4),
+                "body": "",
+            },
+            # Verified resolved — contributes to latency + held stats
+            {
+                "id": "t-verif-1",
+                "status": "DONE",
+                "tags": [
+                    "self-improve",
+                    "verified_resolved",
+                    f"verified_at:{(now - timedelta(days=8)).isoformat()}",
+                    "held_7d=true",
+                ],
+                "created_at": now - timedelta(days=10),
+                "updated_at": now - timedelta(days=8),
+                "body": "",
+            },
+            {
+                "id": "t-verif-2",
+                "status": "DONE",
+                "tags": [
+                    "self-improve",
+                    "verified_resolved",
+                    f"verified_at:{(now - timedelta(days=9)).isoformat()}",
+                    "held_7d=false",
+                ],
+                "created_at": now - timedelta(days=12),
+                "updated_at": now - timedelta(days=9),
+                "body": "",
+            },
+            # requires_human
+            {
+                "id": "t-human",
+                "status": "IN_PROGRESS",
+                "tags": ["self-improve", "escalation:3"],
+                "created_at": now - timedelta(days=5),
+                "updated_at": now - timedelta(days=5),
+                "body": "",
+                "requires_human": True,
+            },
+        ]
+
+        with patch("robothor.crm.dal.list_tasks", return_value=tasks):
+            resp = client.get("/api/buddy/loop-health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        # Required top-level keys
+        assert "open_breach_count_by_day" in data
+        assert "time_to_verified_resolved_ms" in data
+        assert "escalation_distribution" in data
+        assert "held_7d_rate_rolling_14d" in data
+
+        # Open-breach count is a list of {day, count} over 30d
+        obd = data["open_breach_count_by_day"]
+        assert isinstance(obd, list)
+        assert len(obd) > 0
+        assert all("day" in entry and "count" in entry for entry in obd)
+
+        # Latency metrics populated from the two verified tasks
+        lat = data["time_to_verified_resolved_ms"]
+        assert lat["p50_ms"] is not None
+        assert lat["p95_ms"] is not None
+        assert lat["sample_size"] == 2
+
+        # Escalation buckets: seen at least 1/2/requires_human
+        esc = data["escalation_distribution"]
+        assert esc["1"] >= 1
+        assert esc["2"] >= 1
+        assert esc["requires_human"] >= 1
+
+        # Hold rate: 1 held=true / 2 scored = 0.5
+        hold = data["held_7d_rate_rolling_14d"]
+        assert hold["held_true"] == 1
+        assert hold["held_false"] == 1
+        assert hold["rate"] == pytest.approx(0.5)
 
 
 class TestBuddyHistoryEndpoint:
@@ -92,8 +220,8 @@ class TestBuddyHistoryEndpoint:
     def test_buddy_history_endpoint(self, client: TestClient) -> None:
         """Mock get_connection, verify response returns days array."""
         mock_rows = [
-            ("2026-04-03", 10, 2800, 7, 5, 70, 60, 40, 80, 90),
-            ("2026-04-02", 8, 2500, 6, 4, 65, 55, 35, 75, 85),
+            ("2026-04-18", 10, 72, 5),
+            ("2026-04-17", 8, 68, 4),
         ]
 
         mock_cursor = MagicMock()
@@ -111,8 +239,8 @@ class TestBuddyHistoryEndpoint:
         assert "days" in data
         assert len(data["days"]) == 2
         assert data["days"][0]["tasks"] == 10
-        assert data["days"][0]["xp"] == 2800
-        assert data["days"][0]["scores"]["debugging"] == 70
+        assert data["days"][0]["achievement_score"] == 72
+        assert data["days"][0]["streak"] == 5
 
 
 class TestKairosDreamsEndpoint:

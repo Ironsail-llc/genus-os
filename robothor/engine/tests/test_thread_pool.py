@@ -20,6 +20,7 @@ from robothor.engine.thread_pool import (
     pending_marker,
     run_accept,
 )
+from robothor.engine.warmup import set_warmup_kind
 
 
 def _make_thread(
@@ -174,13 +175,13 @@ class TestFormatThreadPool:
         # one header + one thread line
         assert len([ln for ln in out.split("\n") if ln]) == 2
 
-    def test_philip_marker_appears_on_review_plus_requires_human(self):
+    def test_operator_marker_appears_on_review_plus_requires_human(self):
         t = _make_thread(status="REVIEW", requires_human=True)
-        assert "🧑PHILIP" in format_thread_pool([t])
+        assert "🧑OPERATOR" in format_thread_pool([t])
 
-    def test_no_philip_marker_when_review_without_requires_human(self):
+    def test_no_operator_marker_when_review_without_requires_human(self):
         t = _make_thread(status="REVIEW", requires_human=False)
-        assert "🧑PHILIP" not in format_thread_pool([t])
+        assert "🧑OPERATOR" not in format_thread_pool([t])
 
     def test_sla_marker_when_breached(self):
         t = _make_thread(sla_breached=True)
@@ -225,7 +226,8 @@ class TestFormatThreadPool:
 class TestThreadPoolContext:
     def test_returns_none_for_non_main_agent(self):
         config = SimpleNamespace(id="email-classifier")
-        assert _thread_pool_context(config) is None
+        with set_warmup_kind("cron"):
+            assert _thread_pool_context(config) is None
 
     @patch("robothor.engine.thread_pool.list_threads")
     def test_returns_formatted_pool_for_main(self, mock_list):
@@ -233,7 +235,8 @@ class TestThreadPoolContext:
             _make_thread(id_="abcd1234-aaaa-bbbb-cafe-eeeeeeeeeeee", title="Test")
         ]
         config = SimpleNamespace(id="main")
-        out = _thread_pool_context(config)
+        with set_warmup_kind("cron"):
+            out = _thread_pool_context(config)
         assert out is not None
         assert "THREAD POOL" in out
         assert "Test" in out
@@ -242,7 +245,8 @@ class TestThreadPoolContext:
     def test_returns_empty_pool_message_when_no_threads(self, mock_list):
         mock_list.return_value = []
         config = SimpleNamespace(id="main")
-        out = _thread_pool_context(config)
+        with set_warmup_kind("cron"):
+            out = _thread_pool_context(config)
         assert out is not None
         assert "(empty)" in out
 
@@ -251,7 +255,41 @@ class TestThreadPoolContext:
         mock_list.side_effect = RuntimeError("db down")
         config = SimpleNamespace(id="main")
         # Hook contract: never raise — warmup survives DB outages.
+        with set_warmup_kind("cron"):
+            assert _thread_pool_context(config) is None
+
+    @patch("robothor.engine.thread_pool.list_threads")
+    def test_returns_none_for_interactive_main_run(self, mock_list):
+        """Thread pool must NOT inject into interactive (Telegram/webchat) runs.
+
+        Regression: when main is triggered by a direct operator message, the
+        model should focus on the user's ask, not be handed a thread-
+        management directive. Only scheduled heartbeat (cron) runs get the
+        thread pool context.
+        """
+        mock_list.return_value = [
+            _make_thread(id_="abcd1234-aaaa-bbbb-cafe-eeeeeeeeeeee", title="Test")
+        ]
+        config = SimpleNamespace(id="main")
+        with set_warmup_kind("interactive"):
+            assert _thread_pool_context(config) is None
+        # And with no kind set at all (defensive default)
         assert _thread_pool_context(config) is None
+
+    @patch("robothor.engine.thread_pool.list_threads")
+    def test_formatted_line_contains_full_uuid_not_short_id(self, mock_list):
+        """Regression: the model calls get_task(id) off the bracketed id in the
+        thread-pool line. If we emit the 8-char short_id, every such call
+        fails and the agent burns tokens recovering via search_records."""
+        full_id = "230d4039-6a32-4b8a-82ab-24d0132ecd9b"
+        mock_list.return_value = [_make_thread(id_=full_id, title="Fix bug")]
+        config = SimpleNamespace(id="main")
+        with set_warmup_kind("cron"):
+            out = _thread_pool_context(config)
+        assert out is not None
+        assert full_id in out, "Full 36-char UUID must be in thread-pool output"
+        # And the 8-char prefix must not appear bracketed on its own.
+        assert f"[{full_id[:8]}]" not in out
 
 
 # ─── Priority ordering (integration — checks SQL construction) ─────────
@@ -472,8 +510,8 @@ class TestAutoCloseCompletedThreads:
 
         result = auto_close_completed_threads()
         assert result == ["abcd1234-aaaa-bbbb-cafe-000000000000"]
-        # SELECT + UPDATE + commit
-        assert cursor.execute.call_count == 2
+        # statement_timeout + SELECT + UPDATE
+        assert cursor.execute.call_count == 3
         assert conn.commit.called
 
     @patch("robothor.db.connection.get_connection")
@@ -497,7 +535,8 @@ class TestHookRunsAutoSweep:
         mock_sweep.return_value = ["abc"]
         mock_list.return_value = []
         config = SimpleNamespace(id="main")
-        out = _thread_pool_context(config)
+        with set_warmup_kind("cron"):
+            out = _thread_pool_context(config)
         assert mock_sweep.called
         assert "auto-sweep: flipped 1 parent thread" in out
 
@@ -508,7 +547,8 @@ class TestHookRunsAutoSweep:
         mock_list.return_value = []
         config = SimpleNamespace(id="main")
         # Sweep failure must not block the pool view.
-        out = _thread_pool_context(config)
+        with set_warmup_kind("cron"):
+            out = _thread_pool_context(config)
         assert out is not None
         assert "auto-sweep" not in out
 
@@ -524,9 +564,9 @@ class TestPriorityOrdering:
     @patch("robothor.db.connection.get_connection")
     def test_rows_are_returned_in_query_order(self, mock_get_conn):
         # Mock the DB returning rows in a deliberate order — parser must preserve.
-        philip_blocked = (
+        operator_blocked = (
             "11111111-aaaa-bbbb-cccc-dddddddddddd",
-            "Philip-blocked",
+            "Operator-blocked",
             "REVIEW",
             "high",
             True,  # requires_human
@@ -570,8 +610,10 @@ class TestPriorityOrdering:
             None,
         )
         # Simulating the ORDER BY from thread_pool._LIST_SQL returning these
-        # in this sequence: Philip-blocked → SLA-breached → stale.
-        mock_get_conn.return_value = _mock_conn_with_rows([philip_blocked, sla_breached, old_stale])
+        # in this sequence: operator-blocked → SLA-breached → stale.
+        mock_get_conn.return_value = _mock_conn_with_rows(
+            [operator_blocked, sla_breached, old_stale]
+        )
         threads = list_threads()
         assert [t.short_id for t in threads] == ["11111111", "22222222", "33333333"]
         assert threads[0].requires_human is True

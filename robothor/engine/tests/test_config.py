@@ -14,7 +14,13 @@ from robothor.engine.config import (
     load_manifest,
     manifest_to_agent_config,
 )
-from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, HeartbeatConfig
+from robothor.engine.models import (
+    AgentConfig,
+    AgentHook,
+    DeliveryMode,
+    HeartbeatConfig,
+    WorkerConfig,
+)
 
 
 class TestEngineConfig:
@@ -296,6 +302,110 @@ class TestManifestToAgentConfig:
         config = manifest_to_agent_config(manifest)
         assert config.heartbeat is not None
         assert config.heartbeat.timezone == "UTC"
+
+    def test_heartbeat_tools_allowed_parsed(self):
+        """`heartbeat_tools_allowed` restricts scout's tool list without
+        touching the parent agent's `tools_allowed`."""
+        manifest = {
+            "id": "main",
+            "heartbeat": {
+                "cron": "0 * * * *",
+                "heartbeat_tools_allowed": [
+                    "list_tasks",
+                    "create_task",
+                    "update_task",
+                    "read_file",
+                ],
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.tools_allowed == [
+            "list_tasks",
+            "create_task",
+            "update_task",
+            "read_file",
+        ]
+
+    def test_heartbeat_tools_allowed_default_empty(self):
+        """When not set, heartbeat.tools_allowed is empty (inherits parent)."""
+        manifest = {"id": "main", "heartbeat": {"cron": "0 * * * *"}}
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.tools_allowed == []
+
+    def test_heartbeat_task_authorship_agent(self):
+        """`task_authorship_agent` lets scout file tasks under a distinct
+        author id (e.g. 'scout') for CRM timeline attribution."""
+        manifest = {
+            "id": "main",
+            "heartbeat": {
+                "cron": "0 * * * *",
+                "task_authorship_agent": "scout",
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.heartbeat is not None
+        assert config.heartbeat.task_authorship_agent == "scout"
+
+
+class TestWorkerConfigParsing:
+    """`worker:` block parses into WorkerConfig (symmetric to heartbeat)."""
+
+    def test_worker_parsed_from_manifest(self):
+        manifest = {
+            "id": "main",
+            "name": "Robothor",
+            "schedule": {"timezone": "America/New_York"},
+            "worker": {
+                "cron": "0 */2 7-22 * * *",
+                "instruction_file": "brain/WORKER.md",
+                "session_target": "persistent",
+                "max_iterations": 30,
+                "timeout_seconds": 900,
+                "cost_budget_usd": 2.0,
+                "persistent_history_limit": 6,
+                "delivery": {
+                    "mode": "announce",
+                    "channel": "telegram",
+                    "to": "99999999",
+                },
+            },
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.worker is not None
+        assert isinstance(config.worker, WorkerConfig)
+        assert config.worker.cron_expr == "0 */2 7-22 * * *"
+        assert config.worker.instruction_file == "brain/WORKER.md"
+        assert config.worker.session_target == "persistent"
+        assert config.worker.max_iterations == 30
+        assert config.worker.timeout_seconds == 900
+        assert config.worker.cost_budget_usd == 2.0
+        assert config.worker.persistent_history_limit == 6
+        assert config.worker.delivery_mode == DeliveryMode.ANNOUNCE
+        assert config.worker.delivery_to == "99999999"
+
+    def test_worker_missing_is_none(self):
+        config = manifest_to_agent_config({"id": "bare"})
+        assert config.worker is None
+
+    def test_worker_without_cron_is_none(self):
+        manifest = {
+            "id": "main",
+            "worker": {"instruction_file": "brain/WORKER.md"},
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.worker is None
+
+    def test_worker_inherits_timezone(self):
+        manifest = {
+            "id": "main",
+            "schedule": {"timezone": "US/Eastern"},
+            "worker": {"cron": "0 */2 * * *"},
+        }
+        config = manifest_to_agent_config(manifest)
+        assert config.worker is not None
+        assert config.worker.timezone == "US/Eastern"
 
 
 class TestLoadAgentConfig:

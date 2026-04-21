@@ -20,3 +20,8 @@ agent@example.com
 # Path patterns that are references, not hardcoded usage
 Path.home()
 ROBOTHOR_WORKSPACE
+
+# Test UUID constants — phone-number regex false-positive on "000-0000-0000"
+# subpatterns inside these. These are well-known test fixture UUIDs.
+00000000-0000-0000-0000-000000000000
+11111111-2222-3333-4444-555555555555

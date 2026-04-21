@@ -23,12 +23,13 @@ direction: maximize
 search_space: |
   You may modify:
   - brain/agents/*.md (agent instruction files — tone, procedures, rules)
-  - docs/agents/*.yaml (manifest settings — model, max_iterations, timeout, v2 flags)
+  - docs/agents/*.yaml (manifest settings — model, max_iterations, v2 flags)
   You may NOT modify:
   - robothor/engine/ (engine source code)
   - robothor/memory/ (memory system code)
   - Database schema or migrations
   - Systemd service files
+  Do NOT re-introduce timeout_seconds, stall_timeout_seconds, cost_budget_usd, or hard_budget as "fixes" — those caps are deliberately off fleet-wide.
 
 max_iterations: 15
 min_improvement_pct: 1.0
@@ -36,5 +37,4 @@ measurement_samples: 3
 measurement_delay_seconds: 0
 revert_command: "git checkout -- brain/agents/ docs/agents/"
 notify_on_improvement_pct: 5.0
-cost_budget_usd: 3.0
 tags: [autoresearch, fleet-health]

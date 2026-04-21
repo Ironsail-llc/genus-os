@@ -728,6 +728,17 @@ def create_note(
             """,
                 (note_id, title, body, person_id, company_id, tenant_id),
             )
+            if person_id:
+                cur.execute(
+                    """
+                    INSERT INTO timeline_activity
+                        (tenant_id, person_id, occurred_at, activity_type,
+                         source_table, source_id, title, snippet)
+                    VALUES (%s, %s, NOW(), 'note', 'crm_notes', %s, %s, %s)
+                    ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING
+                    """,
+                    (tenant_id, person_id, note_id, title, (body or "")[:200]),
+                )
             conn.commit()
             _safe_audit("create", "note", note_id, details={"title": title})
             return note_id
@@ -989,12 +1000,27 @@ def create_task(
     tags: list[str] | None = None,
     parent_task_id: str | None = None,
     requires_human: bool = False,
+    objective: str | None = None,
+    next_action: str | None = None,
+    next_action_agent: str | None = None,
+    blockers: list[dict] | None = None,
+    question_for_operator: str | None = None,
+    autonomy_budget: dict | None = None,
+    follow_up_at: str | datetime | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
-    """Create a task. Returns task UUID."""
+    """Create a task. Returns task UUID.
+
+    ``follow_up_at`` (optional): when set in the future, the task is treated as
+    snoozed — filtered out of the thread pool and drain queue. When the time
+    passes, ``resurface_due_followups()`` clears the field and the task flows
+    back into normal queues.
+    """
     task_id = str(uuid.uuid4())
     sla_deadline = _compute_sla_deadline(priority)
     started = datetime.now(UTC) if status == "IN_PROGRESS" else None
+    blockers_json = json.dumps(blockers or [])
+    autonomy_json = json.dumps(autonomy_budget or {})
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
@@ -1003,8 +1029,12 @@ def create_task(
                 INSERT INTO crm_tasks (id, title, body, status, due_at, person_id, company_id,
                                        created_by_agent, assigned_to_agent, priority, tags,
                                        parent_task_id, sla_deadline_at, started_at, requires_human,
-                                       tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       objective, next_action, next_action_agent,
+                                       blockers, question_for_operator, autonomy_budget,
+                                       follow_up_at, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s::jsonb, %s, %s::jsonb,
+                        %s, %s)
             """,
                 (
                     task_id,
@@ -1022,6 +1052,13 @@ def create_task(
                     sla_deadline,
                     started,
                     requires_human,
+                    objective,
+                    next_action,
+                    next_action_agent,
+                    blockers_json,
+                    question_for_operator,
+                    autonomy_json,
+                    follow_up_at,
                     tenant_id,
                 ),
             )
@@ -1034,6 +1071,25 @@ def create_task(
                 reason="Task created",
                 tenant_id=tenant_id,
             )
+            if person_id:
+                cur.execute(
+                    """
+                    INSERT INTO timeline_activity
+                        (tenant_id, person_id, occurred_at, activity_type,
+                         source_table, source_id, title, snippet, agent_id, metadata)
+                    VALUES (%s, %s, NOW(), 'task', 'crm_tasks', %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING
+                    """,
+                    (
+                        tenant_id,
+                        person_id,
+                        task_id,
+                        title,
+                        (body or "")[:200] if body else None,
+                        created_by_agent,
+                        json.dumps({"status": status, "priority": priority}),
+                    ),
+                )
             conn.commit()
             _safe_audit(
                 "create",
@@ -1098,9 +1154,16 @@ def list_tasks(
     parent_task_id: str | None = None,
     exclude_resolved: bool = True,
     requires_human: bool | None = None,
+    include_snoozed: bool = False,
     tenant_id: str = DEFAULT_TENANT,
 ) -> list[dict[str, Any]]:
-    """List tasks with optional filters."""
+    """List tasks with optional filters.
+
+    By default, tasks with a future ``follow_up_at`` are hidden (they're
+    "snoozing" until the resurface job clears the field). Pass
+    ``include_snoozed=True`` to see them anyway (useful for debugging /
+    operator listings).
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         conditions = ["deleted_at IS NULL", "tenant_id = %s"]
@@ -1131,6 +1194,11 @@ def list_tasks(
         if requires_human is not None:
             conditions.append("requires_human = %s")
             params.append(requires_human)
+        # Filter out tasks that are snoozing (follow_up_at in the future).
+        # The resurface job clears follow_up_at when it's due; this filter is
+        # the user-visible side of the snooze semantic.
+        if not include_snoozed:
+            conditions.append("(follow_up_at IS NULL OR follow_up_at <= NOW())")
         params.append(limit)
         cur.execute(
             f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)} "
@@ -1173,6 +1241,11 @@ def update_task(
         "resolved_at": "resolved_at",
         "resolution": "resolution",
         "requires_human": "requires_human",
+        "objective": "objective",
+        "next_action": "next_action",
+        "next_action_agent": "next_action_agent",
+        "question_for_operator": "question_for_operator",
+        "follow_up_at": "follow_up_at",
     }
     sets: list[str] = []
     vals: list[Any] = []
@@ -1184,6 +1257,13 @@ def update_task(
     if "tags" in fields and fields["tags"] is not None:
         sets.append("tags = %s")
         vals.append(fields["tags"])
+    # JSONB fields
+    if "blockers" in fields and fields["blockers"] is not None:
+        sets.append("blockers = %s::jsonb")
+        vals.append(json.dumps(fields["blockers"]))
+    if "autonomy_budget" in fields and fields["autonomy_budget"] is not None:
+        sets.append("autonomy_budget = %s::jsonb")
+        vals.append(json.dumps(fields["autonomy_budget"]))
     if not sets:
         return False
     sets.append("updated_at = NOW()")
@@ -1243,6 +1323,207 @@ def update_task(
             conn.rollback()
             logger.error("Failed to update task %s: %s", task_id, e)
             return False
+
+
+def set_next_action(
+    task_id: str,
+    next_action: str,
+    agent: str | None = None,
+    by: str = "planner",
+    planner_version: int = 1,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Set the forward planner's inferred next step for a task.
+
+    Writes next_action + next_action_agent + last_planned_at + planner_version
+    and records a crm_task_history row tagged kind=plan so the transition is
+    visible in the audit log.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            # Fetch current status — history rows require non-null to_status
+            # even for non-transition events like plan-only writes.
+            cur.execute(
+                "SELECT status FROM crm_tasks WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s",
+                (task_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            current_status = row["status"]
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET next_action = %s,
+                       next_action_agent = %s,
+                       last_planned_at = NOW(),
+                       planner_version = %s,
+                       updated_at = NOW()
+                   WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s""",
+                (next_action, agent, planner_version, task_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+            if ok:
+                cur.execute(
+                    """INSERT INTO crm_task_history
+                           (id, task_id, from_status, to_status, changed_by, reason, metadata, tenant_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)""",
+                    (
+                        str(uuid.uuid4()),
+                        task_id,
+                        current_status,
+                        current_status,
+                        by,
+                        next_action,
+                        json.dumps({"kind": "plan", "agent": agent}),
+                        tenant_id,
+                    ),
+                )
+            conn.commit()
+            if ok:
+                _safe_audit(
+                    "plan",
+                    "task",
+                    task_id,
+                    details={"next_action": next_action, "agent": agent, "by": by},
+                )
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to set_next_action on %s: %s", task_id, e)
+            return False
+
+
+def set_question(
+    task_id: str,
+    question: str,
+    by: str = "planner",
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Handoff to the operator — write a concrete question, flip requires_human,
+    move to REVIEW, and bump escalation_count. Replaces the bare-flag stall flip.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """SELECT status, escalation_count
+                   FROM crm_tasks
+                   WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s""",
+                (task_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            prev_status = row["status"]
+            prev_escalation = row.get("escalation_count") or 0
+            new_status = "REVIEW" if prev_status not in ("DONE", "CANCELED") else prev_status
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET question_for_operator = %s,
+                       requires_human = TRUE,
+                       status = %s,
+                       escalation_count = %s,
+                       updated_at = NOW()
+                   WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s""",
+                (question, new_status, prev_escalation + 1, task_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+            if ok:
+                # Always record the ask — even if status didn't change (re-ask
+                # on an already-REVIEW thread still needs an audit trail and
+                # drives the planner_override_rate metric).
+                _record_transition(
+                    cur,
+                    task_id,
+                    prev_status,
+                    new_status,
+                    changed_by=by,
+                    reason=question,
+                    metadata={"kind": "ask", "question": question},
+                    tenant_id=tenant_id,
+                )
+            conn.commit()
+            if ok:
+                _safe_audit(
+                    "ask_operator",
+                    "task",
+                    task_id,
+                    details={"question": question, "by": by},
+                )
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to set_question on %s: %s", task_id, e)
+            return False
+
+
+def resurface_due_followups(tenant_id: str = DEFAULT_TENANT) -> list[str]:
+    """Clear follow_up_at on tasks whose snooze time has passed.
+
+    For each task where ``follow_up_at <= NOW()`` AND status is still
+    actionable (TODO/IN_PROGRESS/REVIEW), clear ``follow_up_at`` and write a
+    history row attributing the resurface to ``system:follow_up``. The task
+    then flows back into the normal thread pool / drain queue.
+
+    Called at the start of every scout beat and drain cycle.
+
+    Returns the list of task ids that were resurfaced (for the caller's
+    digest — scout includes them in its "Resurfaced from follow-up" line).
+    """
+    resurfaced: list[str] = []
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """
+                SELECT id::text AS id, status, follow_up_at
+                FROM crm_tasks
+                WHERE tenant_id = %s
+                  AND deleted_at IS NULL
+                  AND status IN ('TODO', 'IN_PROGRESS', 'REVIEW')
+                  AND follow_up_at IS NOT NULL
+                  AND follow_up_at <= NOW()
+                FOR UPDATE
+                """,
+                (tenant_id,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                conn.commit()
+                return []
+
+            ids = [r["id"] for r in rows]
+            # Clear follow_up_at in bulk. Cast to uuid[] so psycopg doesn't
+            # compare uuid against text.
+            cur.execute(
+                """
+                UPDATE crm_tasks
+                SET follow_up_at = NULL
+                WHERE id = ANY(%s::uuid[]) AND tenant_id = %s
+                """,
+                (ids, tenant_id),
+            )
+            # Record one history row per resurfaced task for provenance.
+            # to_status is NOT NULL on crm_task_history — resurface isn't a
+            # status change, so we echo the current status as both from/to.
+            for r in rows:
+                _record_transition(
+                    cur,
+                    r["id"],
+                    r["status"],
+                    r["status"],
+                    changed_by="system:follow_up",
+                    reason=f"resurfaced from follow_up_at={r['follow_up_at'].isoformat()}",
+                    tenant_id=tenant_id,
+                )
+                resurfaced.append(str(r["id"]))
+            conn.commit()
+            return resurfaced
+        except Exception as e:
+            conn.rollback()
+            logger.error("resurface_due_followups failed: %s", e)
+            return []
 
 
 def delete_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
@@ -2817,3 +3098,267 @@ def get_review_summary(
             "avg_rating": avg_rating,
             "recent_feedback": recent_feedback,
         }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Contact 360 — unified per-person view across every channel.
+#
+# timeline_activity is the denormalized index; per-channel fetchers return
+# full bodies joined back via participant junctions.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def get_person_timeline(
+    person_id: str,
+    *,
+    limit: int = 50,
+    before: Any = None,
+    channels: list[str] | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    """Merged chronological feed for a contact (one indexed scan)."""
+    where = ["tenant_id = %s", "person_id = %s"]
+    params: list[Any] = [tenant_id, person_id]
+    if before is not None:
+        where.append("occurred_at < %s")
+        params.append(before)
+    if channels:
+        where.append("channel = ANY(%s)")
+        params.append(list(channels))
+    params.append(limit)
+    sql = f"""
+        SELECT id, occurred_at, activity_type, source_table, source_id,
+               channel, direction, title, snippet, agent_id, metadata
+          FROM timeline_activity
+         WHERE {" AND ".join(where)}
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT %s
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_summary(
+    person_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """Count per activity_type + last touch across all channels."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT activity_type, COUNT(*) AS n
+              FROM timeline_activity
+             WHERE tenant_id = %s AND person_id = %s
+             GROUP BY activity_type
+            """,
+            (tenant_id, person_id),
+        )
+        counts = {r["activity_type"]: r["n"] for r in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT MAX(occurred_at) AS last_touched_at
+              FROM timeline_activity
+             WHERE tenant_id = %s AND person_id = %s
+            """,
+            (tenant_id, person_id),
+        )
+        row = cur.fetchone()
+        last_touched_at = row["last_touched_at"] if row else None
+
+    return {"counts": counts, "last_touched_at": last_touched_at}
+
+
+def get_person_messages(
+    person_id: str,
+    *,
+    channel: str | None = None,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    """Full message bodies joined via message_participant."""
+    where = ["m.tenant_id = %s", "mp.person_id = %s"]
+    params: list[Any] = [tenant_id, person_id]
+    if channel:
+        where.append("m.channel = %s")
+        params.append(channel)
+    params.append(limit)
+    sql = f"""
+        SELECT DISTINCT ON (m.id)
+               m.id, m.thread_id, m.channel, m.direction,
+               m.external_message_id, m.subject, m.body_text, m.snippet,
+               m.occurred_at, m.created_at, mp.role
+          FROM message m
+          JOIN message_participant mp ON mp.message_id = m.id
+         WHERE {" AND ".join(where)}
+         ORDER BY m.id, m.occurred_at DESC
+         LIMIT %s
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_calls(
+    person_id: str,
+    *,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, direction, from_number, to_number, status,
+                   duration_ms, twilio_call_sid, recording_url,
+                   ai_summary, started_at, ended_at
+              FROM call_log
+             WHERE tenant_id = %s AND person_id = %s
+             ORDER BY started_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_events(
+    person_id: str,
+    *,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT DISTINCT ON (ce.id)
+                   ce.id, ce.google_event_id, ce.title, ce.description,
+                   ce.location, ce.start_at, ce.end_at, ce.hangout_link,
+                   ce.status, cep.role, cep.response_status
+              FROM calendar_event ce
+              JOIN calendar_event_participant cep ON cep.event_id = ce.id
+             WHERE ce.tenant_id = %s
+               AND cep.person_id = %s
+             ORDER BY ce.id, ce.start_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_tasks(
+    person_id: str,
+    *,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, title, body, status, due_at, created_at, updated_at
+              FROM crm_tasks
+             WHERE tenant_id = %s AND person_id = %s
+               AND deleted_at IS NULL
+             ORDER BY updated_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_notes(
+    person_id: str,
+    *,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, title, body, created_at, updated_at
+              FROM crm_notes
+             WHERE tenant_id = %s AND person_id = %s
+               AND deleted_at IS NULL
+             ORDER BY updated_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_runs(
+    person_id: str,
+    *,
+    limit: int = 100,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, agent_id, trigger_type, status, started_at,
+                   completed_at, duration_ms, output_text
+              FROM agent_runs
+             WHERE tenant_id = %s AND person_id = %s
+             ORDER BY created_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_person_memory(
+    person_id: str,
+    *,
+    limit: int = 50,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, fact_text, category, entities, importance_score,
+                   decay_score, created_at, last_accessed
+              FROM memory_facts
+             WHERE tenant_id = %s AND person_id = %s
+               AND is_active = TRUE
+             ORDER BY importance_score DESC, created_at DESC
+             LIMIT %s
+            """,
+            (tenant_id, person_id, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_contact_360(
+    person_id: str,
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    timeline_limit: int = 50,
+) -> dict[str, Any]:
+    """One-call holistic view: person + summary + recent timeline + open
+    tasks + recent notes + memory snippets. Agent-facing convenience."""
+    person = get_person(person_id, tenant_id=tenant_id)
+    if not person:
+        return {"error": f"person not found: {person_id}"}
+    return {
+        "person": person,
+        "summary": get_person_summary(person_id, tenant_id=tenant_id),
+        "timeline": get_person_timeline(person_id, limit=timeline_limit, tenant_id=tenant_id),
+        "open_tasks": [
+            t for t in get_person_tasks(person_id, tenant_id=tenant_id) if t.get("status") != "DONE"
+        ],
+        "recent_notes": get_person_notes(person_id, limit=10, tenant_id=tenant_id),
+        "memory": get_person_memory(person_id, limit=10, tenant_id=tenant_id),
+    }

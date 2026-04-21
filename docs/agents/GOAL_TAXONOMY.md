@@ -1,6 +1,6 @@
 # Agent Goal Taxonomy
 
-Every agent in Robothor has an explicit **goals** contract in its YAML manifest. Goals are the primary signal the self-improvement loop uses to decide what to fix. When a goal breaches persistently, the improvement-analyst selects a corrective-action template (see `docs/agents/corrective-actions.yaml`) and queues a Nightwatch task to fix the root cause — prompt, flow, tools, model, config, whatever is needed to restore the goal.
+Every agent in Robothor has an explicit **goals** contract in its YAML manifest. Goals are the primary signal the self-improvement loop uses to decide what to fix. When a goal breaches persistently, the `buddy` agent selects a corrective-action template (see `docs/agents/corrective-actions.yaml`), grounds it in recent agent_reviews evidence, and queues a self-improve task for `auto-agent`. The fix is then verified by `buddy-grader` 48h after it ships.
 
 This file is the shared reference. Every manifest must follow it.
 
@@ -12,7 +12,7 @@ Goals fall into exactly one of these categories. Each category maps to a remedia
 | --------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | **reach**       | Did the output get to the intended recipient?                 | Delivery channel config, bot token, routing rules, fallback channel.              |
 | **quality**     | Is the output substantive and accurate?                       | Instruction prompt, warmup context, tool selection, model tier, required sections. |
-| **efficiency**  | Was it produced within budget (cost, time, iterations)?       | `max_iterations`, `stall_timeout_seconds`, model (Opus→Sonnet→MiMo), prompt size. |
+| **efficiency**  | Did it minimize unnecessary iteration or tool noise?          | `max_iterations`, prompt size, tool pruning, model tier. Cost and duration are **tracked**, never capped — see Observability below. |
 | **correctness** | Did the run complete without errors or wrong outcomes?        | Tool implementation, guardrail config, flow restructure, schema validation.       |
 
 ## Standard metric vocabulary
@@ -27,17 +27,34 @@ Use these metric names consistently so cross-agent analytics work:
 | `required_sections_present`           | quality      | fraction of outputs containing all declared sections       |
 | `operator_rating_avg`                 | quality      | `agent_reviews` rating avg (`reviewer_type='operator'`)    |
 | `substantive_output_rate`             | quality      | fraction where `char_length(output_text) >= min_output`    |
-| `avg_duration_ms`                     | efficiency   | mean `duration_ms` over window                             |
-| `p95_duration_ms`                     | efficiency   | 95th percentile `duration_ms`                              |
-| `avg_cost_usd`                        | efficiency   | mean `total_cost_usd`                                      |
-| `p95_cost_usd`                        | efficiency   | 95th percentile cost                                       |
-| `timeout_rate`                        | efficiency   | `status='timeout'` / total runs                            |
 | `error_rate`                          | correctness  | `status='failed'` / total runs                             |
-| `tool_success_rate`                   | correctness  | fraction of tool calls with no error                       |
+| `tool_success_rate`                   | correctness  | fraction of tool_call steps with no `error_message`        |
+| `recovery_rate`                       | correctness  | fraction of runs where an error step was followed by a non-error step in the same run |
 | `task_completion_rate`                | correctness  | resolved tasks / created tasks                             |
 | `experiment_measure_success_rate`     | correctness  | experiment_measure calls without error (auto-researcher)   |
 | `pr_merge_rate`                       | quality      | merged PRs / created PRs (Nightwatch)                      |
 | `pr_revert_rate`                      | correctness  | reverted-after-merge PRs / merged PRs                      |
+
+## Observability metrics — tracked, never targeted
+
+These are written to `agent_runs` on every run and surfaced in
+dashboards / reports. They are **not** goals. We do not set targets
+for them, and the self-improvement loop does not act on them alone.
+If cost or duration spikes unexpectedly, an operator looks and
+decides; no automatic cap ever fires.
+
+| Metric                     | Computed from                                             |
+| -------------------------- | --------------------------------------------------------- |
+| `avg_duration_ms`          | mean `duration_ms` over window                            |
+| `p95_duration_ms`          | 95th percentile `duration_ms`                             |
+| `avg_cost_usd`             | mean `total_cost_usd`                                     |
+| `p95_cost_usd`             | 95th percentile `total_cost_usd`                          |
+| `total_cost_usd_window`    | sum of `total_cost_usd` over window (spend tracking)      |
+| `timeout_rate`             | `status='timeout'` / total runs (should be ~0; non-zero means a genuine provider hang caught by an opt-in stall watchdog) |
+| `input_tokens_avg`         | mean `input_tokens` (context size diagnostic)             |
+
+If you want any of these *investigated* (not enforced), point the
+buddy review pass at them via a standing note, not a goal target.
 
 ## The goals block shape
 
@@ -76,18 +93,19 @@ As a calibration guide:
 
 - `weight: 3.0` — existential for the agent's purpose (e.g. overnight-pr's `pr_merge_rate`).
 - `weight: 2.0` — mission-critical (delivery to operator, no errors).
-- `weight: 1.0` — important default (normal timeouts, cost).
-- `weight: 0.5` — preference, not blocking (nice-to-have speed targets).
+- `weight: 1.0` — important default (error rate, recovery rate).
+- `weight: 0.5` — preference, not blocking.
 
 ## How goals drive self-improvement
 
-1. **Compute** — nightly, `robothor.engine.goals.compute_goal_metrics(agent_id)` runs for every active agent.
-2. **Detect** — `detect_goal_breach(agent_id)` flags persistent breaches.
-3. **Classify** — each breach is categorized (reach/quality/efficiency/correctness). The category maps to a remediation template.
-4. **Queue** — the improvement-analyst selects the highest-priority breach and queues a Nightwatch task with the template's investigation + fix scope.
-5. **Execute** — overnight-pr receives the focused brief and opens a PR.
-6. **Review** — the operator (or automated tests + CI) approves or rejects.
-7. **Close the loop** — after 2 windows, `compute_goal_metrics` re-runs. Goal recovered → record success in `agent_reviews`. Still breached → escalate to the next template in the list.
+The `buddy` agent (docs/agents/buddy.yaml) runs this loop. Previously split between `improvement-analyst` (analysis) and manual review; unified on 2026-04-19.
+
+1. **Review** — every hour, `buddy_review_pass` samples recent runs per agent and writes `agent_reviews` rows (`reviewer_type='buddy'`) with rating + dimension + specific_issue + suggested_action. Sonnet 4.6 phrases evidence, never invents content.
+2. **Aggregate** — every 6 hours, `buddy_aggregate_findings` groups recent reviews with goal breaches from `detect_goal_breach`. Each finding carries the current metric value as a `baseline` for later verification.
+3. **Queue** — one CRM task per finding, tagged `nightwatch+self-improve+<agent>+<metric>`, assigned to `auto-agent`. Dedups against open tasks for the same (agent, metric).
+4. **Execute** — `auto-agent` picks up the task, reads the evidence + corrective-action template, and proposes a fix (instruction edit, manifest tuning, code change via overnight-pr, etc.).
+5. **Verify** — 48h after the task moves to DONE, `buddy-grader` re-computes the metric. Pass → tag `verified_resolved`. Fail → tag `verify_failed`, re-open at `escalation:N`. At escalation:2 the task routes to `auto-researcher`; at escalation:3 it is marked `requires_human=true` and auto-escalation stops.
+6. **Hold-check** — 7 days after `verified_resolved`, the grader re-checks again and tags `held_7d=true|false`. The weekly `buddy-auditor` reads the hold-rate and auto-pauses the loop if fixes aren't sticking.
 
 ## Anti-patterns to avoid
 

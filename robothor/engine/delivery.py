@@ -107,107 +107,144 @@ def _is_trivial_output(text: str) -> bool:
     return any(re.search(r"\b" + re.escape(p) + r"\b", lower) for p in _TRIVIAL_PATTERNS)
 
 
-# ── Buddy reflection (subconscious one-liner) ────────────────────────────
+# ── Mid-thought / incomplete-beat detection ──────────────────────────
+# When a heartbeat hits a budget cap or gets cancelled, the last LLM
+# turn is often mid-chain-of-thought narration ("Now let me send it
+# using the GWS tools:"). Shipping that as the beat report gaslights
+# the operator — they get an unfinished sentence, not a status. These
+# heuristics detect that case so deliver() can re-frame it.
+
+_MID_THOUGHT_LEADERS = (
+    "good —",
+    "good,",
+    "okay —",
+    "okay,",
+    "ok,",
+    "ok —",
+    "alright",
+    "right —",
+    "now let me",
+    "let me now",
+    "let me",
+    "i'll ",
+    "i will ",
+    "now i'll",
+    "now i will",
+    "next, i'll",
+    "next i'll",
+    "first, i'll",
+    "first i'll",
+    "so i'll",
+    "going to",
+    # Back-references to prior-beat content — only make sense mid-conversation.
+    # Real first-turn beat reports don't open with "the X are...", "these Y...".
+    "the verification",
+    "the flags",
+    "these issues",
+    "these findings",
+    "these errors",
+    "these results",
+    "all 3",
+    "all three",
+    "all four",
+    "all five",
+    "next step",
+    "next steps",
+    "finally,",
+)
 
 
-def _get_buddy_context() -> dict[str, Any] | None:
-    """Get buddy events gated by cooldowns.
+def _looks_like_mid_thought(text: str) -> bool:
+    """Heuristic: the model's final turn was narration about what it
+    was *about to do*, not a summary of what it did.
 
-    Returns context only when there are new, non-cooldown events.
-    Calling this consumes eligible events (marks their cooldowns).
+    Any of these signals on its own is enough (previously required BOTH):
+    - Ends with a colon, ellipsis, or dash (classic "and then..." tail).
+    - Starts with a mid-action tell ("Good —", "Now let me", "I'll").
+    - Starts with a conversational back-reference that only makes sense
+      mid-stream ("The verification flags are...", "These issues...").
+
+    Tightening the net here: false positives become reframed diagnostics,
+    which is still better for the operator than shipping a fragment.
     """
-    try:
-        from robothor.engine.buddy import BuddyEngine
-
-        ctx = BuddyEngine().get_buddy_events()
-        if not ctx or not ctx.get("events"):
-            return None
-        return ctx
-    except Exception:
-        logger.debug("Failed to get buddy context for reflection")
-        return None
+    stripped = text.strip()
+    if not stripped:
+        return False
+    tail = stripped.rstrip()
+    ends_mid = tail.endswith((":", "…", "...", "—"))
+    lower = stripped.lower()
+    leads_mid = any(lower.startswith(p) for p in _MID_THOUGHT_LEADERS)
+    return ends_mid or leads_mid
 
 
-async def _generate_buddy_reflection(heartbeat_text: str, buddy_ctx: dict[str, Any]) -> str | None:
-    """Generate a buddy reflection via a lightweight LLM call.
+def _beat_incomplete(run: AgentRun) -> bool:
+    """Return True when the run ended in a degenerate state that shouldn't
+    ship its raw output_text.
 
-    Returns a short reflection (2-3 sentences), or None if buddy decides to stay silent.
+    Currently: hard-budget exhaustion, a trailing ``error`` step (hard
+    timeout, stall, model failure), or mid-thought narration in
+    output_text. These cases get re-framed by ``_reframe_beat_output``.
     """
-    events_str = ", ".join(buddy_ctx.get("events", []))
-    overall = buddy_ctx.get("overall_score", 50)
-    streak = buddy_ctx.get("streak", (0, 0))
-    deltas = buddy_ctx.get("score_deltas", {})
-    level_info = buddy_ctx.get("level_info")
-    level_str = f"Level {level_info.level} {level_info.level_name}" if level_info else "Unknown"
-
-    fleet_top = buddy_ctx.get("fleet_top", [])
-    fleet_str = (
-        ", ".join(f"{a['agent_id']}={a['overall_score']}" for a in fleet_top[:3])
-        if fleet_top
-        else "no fleet data"
-    )
-
-    # Format deltas as readable string
-    delta_parts = []
-    for dim in ("reliability", "debugging", "patience", "effectiveness", "benchmark"):
-        d = deltas.get(dim, 0)
-        if d != 0:
-            delta_parts.append(f"{dim} {'+' if d > 0 else ''}{d}")
-    deltas_str = ", ".join(delta_parts) if delta_parts else "no changes"
-
-    prompt = (
-        "You are Buddy — the fleet's subconscious. Something notable just happened. "
-        "Reflect in exactly 2 sentences. Be specific about scores and agents. "
-        "If you have nothing insightful to add, return ONLY the word SILENT.\n\n"
-        f"Fleet: {level_str} | {streak[0]}-day streak | overall: {overall}\n"
-        f"Changes: {deltas_str}\n"
-        f"Top agents: {fleet_str}\n"
-        f"Events: {events_str}\n\n"
-        "2 sentences:"
-    )
-
-    try:
-        from robothor.engine.llm_client import llm_call
-
-        response = await llm_call(
-            messages=[{"role": "user", "content": prompt}],
-            model="openrouter/xiaomi/mimo-v2-pro",
-            temperature=0.7,
-            max_tokens=300,
-            timeout=15,
-        )
-        text = str(response.choices[0].message.content or "").strip()
-        if not text or text.upper() == "SILENT":
-            return None
-        return text
-    except Exception as e:
-        logger.debug("Buddy reflection LLM call failed: %s", e)
-        return None
+    if getattr(run, "budget_exhausted", False):
+        return True
+    steps = getattr(run, "steps", None) or []
+    if steps and getattr(steps[-1], "step_type", None):
+        st = steps[-1].step_type
+        # Support StepType enum or raw string
+        st_val = getattr(st, "value", st)
+        if str(st_val) == "error":
+            return True
+    return bool(run.output_text and _looks_like_mid_thought(run.output_text))
 
 
-async def _maybe_append_buddy_reflection(
-    text: str, run: AgentRun, config: AgentConfig
-) -> tuple[str, bool]:
-    """Optionally append a buddy one-liner to heartbeat output.
+def _reframe_beat_output(run: AgentRun) -> str:
+    """Build a structured status line for an incomplete heartbeat beat.
 
-    Only fires for the main agent's heartbeat runs. Stays silent when
-    there are no noteworthy events.
-
-    Returns (text, has_reflection) tuple.
+    Replaces output_text for delivery ONLY — the raw model output is
+    still persisted in agent_runs.output_text for debugging. The goal
+    is that the operator sees a diagnostic, not a fragment of
+    mid-chain-of-thought.
     """
-    if not _is_heartbeat_run(run):
-        return text, False
-    if config.id != "main":
-        return text, False
+    steps = getattr(run, "steps", None) or []
 
-    ctx = _get_buddy_context()
-    if not ctx:
-        return text, False
+    # Tally tool calls by name.
+    tool_counts: dict[str, int] = {}
+    last_tool = ""
+    for s in steps:
+        st = getattr(s, "step_type", None)
+        st_val = str(getattr(st, "value", st))
+        if st_val == "tool_call":
+            name = getattr(s, "tool_name", "") or "?"
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+            last_tool = name
 
-    reflection = await _generate_buddy_reflection(text, ctx)
-    if reflection:
-        return f"{text}\n\n---\n{reflection}", True
-    return text, False
+    # Identify the failure mode.
+    err = ""
+    if getattr(run, "budget_exhausted", False):
+        err = "Budget cap reached before finishing."
+    elif steps:
+        last = steps[-1]
+        st_val = str(getattr(getattr(last, "step_type", None), "value", ""))
+        if st_val == "error":
+            err = (getattr(last, "error_message", "") or "Run ended in error step.").strip()
+
+    lines = [
+        f"\u26a0\ufe0f Beat ended incomplete: {err}"
+        if err
+        else "\u26a0\ufe0f Beat ended mid-action."
+    ]
+    if tool_counts:
+        summary = ", ".join(f"{name}:{n}" for name, n in sorted(tool_counts.items()))
+        lines.append(f"Tools completed ({sum(tool_counts.values())}): {summary}")
+    if last_tool:
+        lines.append(f"Last completed action: {last_tool}")
+    if run.output_text:
+        tail = run.output_text.strip()
+        if len(tail) > 400:
+            tail = tail[-400:]
+        lines.append("Model was about to say (truncated):")
+        lines.append(tail)
+    return "\n".join(lines)
 
 
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
@@ -276,14 +313,30 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
             await _persist_delivery_status(run)
             return True
 
-    text = run.output_text.strip()
-
-    # Buddy reflection — append subconscious one-liner to main heartbeat
-    text, has_reflection = await _maybe_append_buddy_reflection(text, run, config)
+    # Re-frame heartbeat output when the beat ended incomplete — otherwise
+    # the operator gets a fragment of mid-chain-of-thought ("Now let me
+    # send it using the GWS tools:") and has no idea what actually
+    # happened. The raw output_text stays in agent_runs; only the
+    # delivered body is swapped.
+    if _is_heartbeat_run(run) and _beat_incomplete(run):
+        reframed = _reframe_beat_output(run)
+        logger.info(
+            "Heartbeat reframed for %s: budget=%s last_step_err=%s",
+            config.id,
+            getattr(run, "budget_exhausted", False),
+            bool(
+                run.steps
+                and str(getattr(getattr(run.steps[-1], "step_type", None), "value", "")) == "error"
+            )
+            if getattr(run, "steps", None)
+            else False,
+        )
+        text = reframed
+    else:
+        text = run.output_text.strip()
 
     # Suppress trivial heartbeat output — short filler like "All quiet" or "Nothing new"
-    # Skip suppression if buddy added a reflection (it decided something was worth saying)
-    if _is_heartbeat_run(run) and _is_trivial_output(text) and not has_reflection:
+    if _is_heartbeat_run(run) and _is_trivial_output(text):
         logger.debug("Suppressed trivial heartbeat output for %s: %s", config.id, text[:80])
         run.delivery_status = "suppressed_trivial"
         await _persist_delivery_status(run)
@@ -332,16 +385,79 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
         header = f"*{config.name}*\n\n"
         full_text = header + text
 
-        await sender(chat_id, full_text)
+        sent = await sender(chat_id, full_text)
 
         run.delivery_status = "delivered"
         run.delivered_at = datetime.now(UTC)
         run.delivery_channel = "telegram"
+
+        platform_message_ids: list[str] = []
+        if sent:
+            for msg in sent:
+                mid = getattr(msg, "message_id", None)
+                if mid is not None:
+                    platform_message_ids.append(str(mid))
+
+        await _dispatch_post_delivery(
+            config=config,
+            run=run,
+            text=full_text,
+            channel="telegram",
+            chat_id=chat_id,
+            platform_message_ids=platform_message_ids,
+        )
         return True
     except Exception as e:
         logger.error("Telegram delivery failed for %s: %s", config.id, e)
         run.delivery_status = f"failed: {e}"
         return False
+
+
+async def _dispatch_post_delivery(
+    config: AgentConfig,
+    run: AgentRun,
+    text: str,
+    channel: str,
+    chat_id: str,
+    platform_message_ids: list[str],
+) -> None:
+    """Fire the POST_DELIVERY lifecycle hook with channel-bus metadata.
+
+    Best-effort: any failure here must not break delivery. The channel bus
+    handler (robothor.engine.channel_bus.on_post_delivery) is the primary
+    consumer.
+    """
+    try:
+        from robothor.engine.hook_registry import (
+            HookContext,
+            HookEvent,
+            get_hook_registry,
+        )
+
+        hr = get_hook_registry()
+        if hr is None:
+            return
+        tenant_id = (
+            getattr(run, "tenant_id", None) or getattr(config, "tenant_id", None) or "default"
+        )
+        ctx = HookContext(
+            event=HookEvent.POST_DELIVERY,
+            agent_id=config.id,
+            run_id=run.id or "",
+            output_text=text,
+            metadata={
+                "channel": channel,
+                "chat_id": chat_id,
+                "platform_message_ids": platform_message_ids,
+                "author_display_name": config.name,
+                "surface_to_channel": getattr(config, "surface_to_channel", True),
+                "tenant_id": tenant_id,
+                "trigger_detail": getattr(run, "trigger_detail", "") or "",
+            },
+        )
+        await hr.dispatch(HookEvent.POST_DELIVERY, ctx)
+    except Exception as e:
+        logger.debug("POST_DELIVERY dispatch failed (non-fatal): %s", e)
 
 
 async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> bool:

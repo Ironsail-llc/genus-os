@@ -1,7 +1,7 @@
 # Genus OS — System Architecture
 
 > Technical reference for the Genus OS platform.
-> Last updated: 2026-02-20
+> Last updated: 2026-04-19
 
 ---
 
@@ -15,14 +15,15 @@
 6. [Data Layer](#data-layer)
 7. [Intelligence Pipeline](#intelligence-pipeline)
 8. [Triage & Heartbeat Pipeline](#triage--heartbeat-pipeline)
-9. [Vision System](#vision-system)
-10. [CRM Stack](#crm-stack)
-11. [Memory System](#memory-system)
-12. [Communications Layer](#communications-layer)
-13. [Tool Access Topology](#tool-access-topology)
-14. [Cron Schedule](#cron-schedule)
-15. [Backup & Recovery](#backup--recovery)
-16. [Folder Structure](#folder-structure)
+9. [Self-Improvement Loop (Buddy)](#self-improvement-loop-buddy)
+10. [Vision System](#vision-system)
+11. [CRM Stack](#crm-stack)
+12. [Memory System](#memory-system)
+13. [Communications Layer](#communications-layer)
+14. [Tool Access Topology](#tool-access-topology)
+15. [Cron Schedule](#cron-schedule)
+16. [Backup & Recovery](#backup--recovery)
+17. [Folder Structure](#folder-structure)
 
 ---
 
@@ -364,6 +365,115 @@ Converts raw log data into prioritized actions, with an LLM gatekeeper controlli
 - Python relay is the only script that calls the Telegram Bot API (meeting alerts only)
 - Only 3 Engine jobs deliver to Telegram: Morning Briefing, Evening Wind-Down, SMS Status Check
 - Calendar items older than 24h auto-expire in triage_prep
+
+---
+
+## Task Lifecycle — short list ↔ thread pool
+
+Every task lives in one of two tiers, and flows between them automatically.
+
+**Short list (in-run, ephemeral) — `todo_write`.**
+Implemented in `robothor/engine/todolist.py`. An agent inside a single LLM loop calls `todo_write` with the steps it's about to execute, marks them `in_progress`/`completed` as it goes, and the runner injects a reminder every ~10 turns. The list evaporates when the run ends — it's per-run working memory, not persistent state.
+
+**Long list (cross-beat, persistent) — the THREAD POOL.**
+Tasks tagged `thread` in `crm_tasks`. Lives across heartbeats. Every main heartbeat, the warmup hook runs `auto_close_completed_threads()` → `plan_all_stalled()` → renders the pool (`robothor/engine/thread_pool.py:_thread_pool_context`). The forward planner (`robothor/engine/thread_planner.py`, Stage 4) reads each stalled thread's history and either writes a concrete `next_action` (heuristic matched) or `question_for_operator` (needs the operator). Autonomy decisions go through `robothor/engine/autonomy.py::classify_action` where objective vetoes beat numeric budgets.
+
+**Connecting wire — auto-escalation (Stage 5).**
+When a worker spawn carries `parent_task_id`, that ID is stored on `SpawnContext` (`robothor/engine/models.py`). At run end, `_escalate_unfinished_todos` (`robothor/engine/runner.py`) inspects `session.todo_list`. If any items are `pending` or `in_progress`:
+
+1. Writes `Continue: <first unfinished item>` as the parent's `next_action` via `dal.set_next_action`
+2. Adds `thread` tag if missing; seeds `objective` from the title if empty
+
+Next heartbeat, the task appears in the pool with a concrete next step — closed loop.
+
+```
+create_task ──▶ worker run (todo_write)
+                     │
+                     ├─ all completed ──▶ resolve_task
+                     │
+                     └─ items pending ──▶ parent gets next_action + thread tag
+                                              │
+                                              ▼
+                                        THREAD POOL
+                                              │
+                                 (next heartbeat) forward planner
+                                              │
+                                   ┌──────────┴──────────┐
+                                   ▼                     ▼
+                           main spawns worker      set_question →
+                           with parent_task_id     operator decides
+                                   │                     │
+                                   └──────── loop ──────┘
+```
+
+**Flags.**
+| Env var | Default | Controls |
+|---|---|---|
+| `ROBOTHOR_PLANNER_ENABLED` | `0` (off) | The Stage 4 forward planner. Off → stage-3 bare-flag stall2 behavior. |
+| `ROBOTHOR_TODO_ESCALATE_ENABLED` | `1` (on) | Stage 5 escalation at run end. Only fires when both `parent_task_id` is set AND items remain unfinished. |
+
+**Activation:**
+```
+sudo systemctl edit robothor-engine
+  [Service]
+  Environment="ROBOTHOR_PLANNER_ENABLED=1"
+sudo systemctl restart robothor-engine
+```
+Kill switch: unset the env var, restart.
+
+**Verification:**
+```
+curl localhost:18800/api/analytics/threads | jq
+  # Watch planner_override_rate > 0.2, questions_answered_within_24h stable or rising
+```
+
+---
+
+## Self-Improvement Loop (Buddy)
+
+Rebuilt 2026-04-19 from a gamification scoreboard into an active reviewer + grader + guardrail triad. The core loop is: **observe real behaviour → rate it → flag what's broken → let auto-agent fix it → verify the fix held**. No free-form LLM commentary on heartbeats, ever.
+
+### Scoring — `robothor/engine/goals.py`
+
+Every agent declares a `goals:` block in its manifest (see `docs/agents/GOAL_TAXONOMY.md`). `compute_achievement_score(agent_id)` returns a weighted 0.0-1.0 score over the agent's goals, scaled to 0-100 and persisted to `agent_buddy_stats.achievement_score` by `BuddyEngine.refresh_daily()`. Legacy RPG columns (xp, level, debugging_score, patience_score, chaos_score, wisdom_score, …) were removed — migration 034 added `achievement_score`; migration 035 drops the legacy columns after a 30-day soak.
+
+### Review — `robothor/engine/buddy_critic.py`
+
+The `buddy` agent (`docs/agents/buddy.yaml`, cron `0 6-22 * * *`) runs two passes:
+
+- **Hourly review pass** — for each agent with goals, sample up to 2 recent top-level runs biased toward failures / error steps / long durations and not already reviewed. Build a structured `Evidence` dict from `agent_runs` + `agent_run_steps`. Sonnet 4.6 phrases a rating (1-5) + dimension + `specific_issue` (≤ 80 chars referencing concrete evidence) + `suggested_action` (≤ 120 chars). Persist to `agent_reviews` with `reviewer_type='buddy'`.
+- **6-hourly aggregation pass** — run `detect_goal_breach` per agent. For breaches with `priority_score ≥ 3.0` *and* a non-null current metric value, build a `Finding`: 3 representative reviews, corrective-action template from `docs/agents/corrective-actions.yaml`, live baseline metric. Create one `crm_tasks` row per finding tagged `nightwatch+self-improve+<agent>+<metric>` assigned to `auto-agent`. Dedups against open tasks for the same (agent, metric). The task body embeds a machine-readable `<!-- buddy-baseline: {...} -->` marker the grader parses later.
+
+The LLM cannot invent findings — it only phrases pre-computed evidence. This closes the hallucination surface that produced filler in the previous design.
+
+### Verify — `robothor/engine/buddy_grader.py`
+
+The `buddy-grader` agent (`docs/agents/buddy-grader.yaml`, cron `7 * * * *`) closes the loop:
+
+1. For every DONE self-improve task older than 48 hours with no verification tag yet, parse the baseline marker and re-run `compute_goal_metrics` for that metric.
+2. Metric satisfies target → tag `verified_resolved` + resolution note.
+3. Metric still breached → tag `verify_failed` + increment `escalation:N`, transition back to IN_PROGRESS. At `escalation:2` the task re-routes to `auto-researcher`; at `escalation:3` it's tagged `requires_human=true` and auto-escalation stops. This terminal state is mandatory — endless churn is worse than a known-open issue.
+4. Separately, 7 days after `verified_resolved`, re-check the metric and tag `held_7d=true|false`. That's the data source for the weekly guardrail.
+
+Env flag `ROBOTHOR_BUDDY_GRADER_DRYRUN=1` computes verdicts without writing, for operator-driven simulation.
+
+### Guardrail — `robothor/engine/buddy_auditor.py`
+
+The `buddy-auditor` agent (`docs/agents/buddy-auditor.yaml`, cron `0 7 * * 1`) is the falsifiability clause. Weekly, it reads the `held_7d=true|false` tag distribution over the last 14 days. If **under 30%** of fixes held for 7 days (min 5 samples), it pauses Buddy's cron by editing `docs/agents/buddy.yaml` and sends a critical alert to `main`. Re-enabling is a deliberate human decision.
+
+Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/buddy_review_quality_sentinel.py`) flags filler output if ≥ 20% of recent Buddy reviews fail a concrete-evidence heuristic.
+
+### Observability
+
+- `GET /api/buddy/ratings` — per-agent latest achievement + 7-day trend.
+- `GET /api/buddy/reviews` — recent Buddy reviews, paginated.
+- `GET /api/buddy/findings` — open/in-progress/verifying/resolved/persistent/requires_human buckets.
+- `GET /api/buddy/verifications` — verified tasks with baseline → current → held_7d for the auditor.
+- `brain/journals/buddy/YYYY-MM-DD.jsonl` — append-only audit trail of every review, finding, verification, hold-check, and audit.
+
+### What was deleted
+
+`buddy_watch.py` (parallel LLM cron), `_maybe_append_buddy_reflection` in `delivery.py` (heartbeat appendix), `_buddy_status_context` warmup hook, `flag_underperformers` + escalation mechanics in `buddy.py`, XP/level/streak gamification (constants, LevelInfo, DailyStats dataclasses), `improvement-analyst` agent + workflow (subsumed by `buddy`'s aggregation pass). Legacy `docs/workflows/nightwatch.yaml` is retired.
 
 ---
 

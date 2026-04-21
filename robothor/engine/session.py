@@ -27,6 +27,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
+    """Strip channel-bus metadata and re-label fleet surfaces before the
+    message reaches the LLM. Keeps only role + content on the wire.
+
+    When a non-main fleet agent's output was dual-written into main's
+    session, the JSONB carries ``author_agent_id`` and ``origin=channel_bus``.
+    To help main tell its own prior turns apart from a peer agent's report,
+    we prefix the rendered content with ``[@agent-id] ``. User turns that
+    replied to a surfaced message already carry the quote inline, so they
+    are passed through verbatim.
+    """
+    role = msg.get("role", "")
+    content = msg.get("content", "")
+    author = msg.get("author_agent_id")
+    if role == "assistant" and author and author != "main":
+        display = msg.get("author_display_name") or author
+        content = f"[@{display}] {content}"
+    return {"role": role, "content": content}
+
+
 # Role for engine-injected context (plan, scratchpad, budget warnings, etc.)
 # LiteLLM translates "developer" → "system" for non-OpenAI providers.
 ENGINE_CONTEXT_ROLE = "developer"
@@ -89,6 +109,14 @@ class AgentSession:
         If conversation_history is provided, prior messages are inserted
         between the system prompt and the current user message to give
         the LLM conversational context.
+
+        Channel-bus rendering: history entries with ``author_agent_id`` set
+        (fleet surfaces dual-written by the channel bus) are re-rendered
+        with an ``[@agent-id] …`` prefix so the LLM can distinguish between
+        its own prior turns and reports surfaced by other agents. JSONB
+        metadata keys (origin, surfaced_from_run_id, telegram_message_id,
+        replies_to) are dropped before the envelope reaches the LLM —
+        only role + content go on the wire.
         """
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
@@ -98,9 +126,13 @@ class AgentSession:
         self.run.delivery_mode = delivery_mode
         self._start_time = time.monotonic()
 
+        rendered_history: list[dict[str, Any]] = []
+        for msg in conversation_history or []:
+            rendered_history.append(_render_history_for_llm(msg))
+
         self.messages = [
             {"role": "system", "content": system_prompt},
-            *(conversation_history or []),
+            *rendered_history,
             {"role": "user", "content": user_message},
         ]
 
@@ -253,11 +285,16 @@ class AgentSession:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
 
-    def timeout(self) -> AgentRun:
-        """Mark the run as timed out."""
+    def timeout(self, reason: str | None = None) -> AgentRun:
+        """Mark the run as timed out.
+
+        Pass ``reason`` to record a specific cause (e.g. the stall
+        watchdog's abort reason with last-activity context). When
+        omitted, falls back to a generic message.
+        """
         self.run.status = RunStatus.TIMEOUT
         self.run.completed_at = datetime.now(UTC)
-        self.run.error_message = "Agent execution timed out"
+        self.run.error_message = reason or "Agent execution timed out"
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
@@ -294,6 +331,43 @@ class AgentSession:
     def record_step_cost(self, cost: float) -> None:
         """Record an LLM call cost for projection purposes."""
         self._step_costs.append(cost)
+
+    # ── Incremental step persistence ────────────────────────────────
+
+    def flush_new_steps_sync(self) -> int:
+        """Persist any steps that haven't reached the DB yet.
+
+        Called synchronously (expected to be invoked via
+        ``run_in_executor`` from the async run loop) after each
+        iteration and at key progress boundaries, so a cancelled or
+        timed-out run still leaves a per-step audit trail. Safe to
+        call repeatedly — only unpublished steps are written.
+
+        Uses ``self.run.persisted_step_count`` as the boundary so
+        ``_persist_run_sync`` can see the index and avoid re-inserting
+        already-committed rows.
+
+        Returns the number of steps that were flushed.
+        """
+        # Lazy import to avoid circular dep at module load.
+        from robothor.engine.tracking import create_step, create_steps_batch
+
+        start = self.run.persisted_step_count
+        pending = self.run.steps[start:]
+        if not pending:
+            return 0
+        try:
+            create_steps_batch(pending)
+        except Exception:
+            # Fall back to per-step inserts so a single malformed
+            # step doesn't sink the whole batch.
+            for step in pending:
+                try:
+                    create_step(step)
+                except Exception as e:
+                    logger.warning("Failed to record step: %s", e)
+        self.run.persisted_step_count = len(self.run.steps)
+        return len(pending)
 
     # ── Eager tool result compression ──────────────────────────────
 

@@ -16,7 +16,14 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from robothor.engine.models import AgentConfig, AgentHook, DeliveryMode, HeartbeatConfig
+from robothor.engine.models import (
+    AgentConfig,
+    AgentHook,
+    ChannelBusConfig,
+    DeliveryMode,
+    HeartbeatConfig,
+    WorkerConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,15 +215,19 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             hb_delivery_mode = DeliveryMode(hb_delivery_mode_str)
         except ValueError:
             hb_delivery_mode = DeliveryMode.ANNOUNCE
+        # Parse optional model override for heartbeat runs
+        hb_model = raw_heartbeat.get("model", {})
         heartbeat = HeartbeatConfig(
             cron_expr=raw_heartbeat["cron"],
             timezone=raw_heartbeat.get("timezone", schedule.get("timezone", "America/New_York")),
             instruction_file=raw_heartbeat.get("instruction_file", ""),
             session_target=raw_heartbeat.get("session_target", "isolated"),
+            model_primary=hb_model.get("primary", ""),
+            model_fallbacks=hb_model.get("fallbacks", []),
             max_iterations=int(raw_heartbeat.get("max_iterations", 15)),
             safety_cap=int(raw_heartbeat.get("safety_cap", 50)),
-            timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 600)),
-            stall_timeout_seconds=int(raw_heartbeat.get("stall_timeout_seconds", 300)),
+            timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 0)),
+            stall_timeout_seconds=int(raw_heartbeat.get("stall_timeout_seconds", 0)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
             delivery_to=hb_delivery.get("to", "")
@@ -227,7 +238,59 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
             bootstrap_files=raw_heartbeat.get("bootstrap_files", []),
             cost_budget_usd=float(raw_heartbeat.get("cost_budget_usd", 0.0)),
+            persistent_history_limit=int(raw_heartbeat.get("persistent_history_limit", 20)),
+            tools_allowed=raw_heartbeat.get("heartbeat_tools_allowed", []),
+            task_authorship_agent=raw_heartbeat.get("task_authorship_agent", ""),
             # token_budget is auto-derived at runtime from model registry × max_iterations
+        )
+
+    # Parse worker config (drain cycle — symmetric to heartbeat)
+    raw_worker = manifest.get("worker", {})
+    worker: WorkerConfig | None = None
+    if raw_worker and raw_worker.get("cron"):
+        w_delivery = raw_worker.get("delivery", {})
+        w_delivery_mode_str = w_delivery.get("mode", "announce")
+        try:
+            w_delivery_mode = DeliveryMode(w_delivery_mode_str)
+        except ValueError:
+            w_delivery_mode = DeliveryMode.ANNOUNCE
+        worker = WorkerConfig(
+            cron_expr=raw_worker["cron"],
+            timezone=raw_worker.get("timezone", schedule.get("timezone", "America/New_York")),
+            instruction_file=raw_worker.get("instruction_file", ""),
+            session_target=raw_worker.get("session_target", "persistent"),
+            max_iterations=int(raw_worker.get("max_iterations", 30)),
+            safety_cap=int(raw_worker.get("safety_cap", 80)),
+            timeout_seconds=int(raw_worker.get("timeout_seconds", 0)),
+            stall_timeout_seconds=int(raw_worker.get("stall_timeout_seconds", 0)),
+            delivery_mode=w_delivery_mode,
+            delivery_channel=w_delivery.get("channel", ""),
+            delivery_to=w_delivery.get("to", "")
+            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
+            or os.environ.get("TELEGRAM_CHAT_ID", ""),
+            warmup_context_files=raw_worker.get("context_files", []),
+            warmup_peer_agents=raw_worker.get("peer_agents", []),
+            warmup_memory_blocks=raw_worker.get("memory_blocks", []),
+            bootstrap_files=raw_worker.get("bootstrap_files", []),
+            cost_budget_usd=float(raw_worker.get("cost_budget_usd", 0.0)),
+            persistent_history_limit=int(raw_worker.get("persistent_history_limit", 20)),
+            tools_allowed=raw_worker.get("worker_tools_allowed", []),
+        )
+
+    # Channel-bus config — main only. Parsed here so the scheduler can read
+    # the debounce window and the runtime can honour the per-agent rate limit.
+    raw_channel_bus = manifest.get("channel_bus", {})
+    channel_bus_config: ChannelBusConfig | None = None
+    if raw_channel_bus:
+        channel_bus_config = ChannelBusConfig(
+            wake_on_surface=bool(raw_channel_bus.get("wake_on_surface", False)),
+            wake_debounce_seconds=int(raw_channel_bus.get("wake_debounce_seconds", 15)),
+            wake_cost_budget_usd=float(raw_channel_bus.get("wake_cost_budget_usd", 0.0)),
+            per_agent_rate_limit_per_hour=int(
+                raw_channel_bus.get("per_agent_rate_limit_per_hour", 20)
+            ),
+            main_wake_cooldown_seconds=int(raw_channel_bus.get("main_wake_cooldown_seconds", 300)),
+            wake_preamble_history_lines=int(raw_channel_bus.get("wake_preamble_history_lines", 8)),
         )
 
     # v2 enhancement fields
@@ -241,9 +304,9 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         model_fallbacks=model.get("fallbacks", []),
         cron_expr=schedule.get("cron", ""),
         timezone=schedule.get("timezone", "America/New_York"),
-        timeout_seconds=schedule.get("timeout_seconds", 600),
+        timeout_seconds=schedule.get("timeout_seconds", 0),
         max_iterations=schedule.get("max_iterations", 20),
-        stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 300)),
+        stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 0)),
         # ── Cross-run persistent journal ──
         journal_file=schedule.get("journal_file", ""),
         journal_checkpoint_interval=int(schedule.get("journal_checkpoint_interval", 5)),
@@ -257,6 +320,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         delivery_to=delivery.get("to", "")
         or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
         or os.environ.get("TELEGRAM_CHAT_ID", ""),
+        surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
         instruction_file=manifest.get("instruction_file", ""),
@@ -279,13 +343,15 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         downstream_agents=manifest.get("downstream_agents", []),
         hooks=parsed_hooks,
         heartbeat=heartbeat,
+        worker=worker,
+        channel_bus=channel_bus_config,
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         # v2 enhancements — sub-agent spawning
         can_spawn_agents=v2.get("can_spawn_agents", False),
         max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
         sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
-        sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 120)),
+        sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 0)),
         max_concurrent_spawns=int(v2.get("max_concurrent_spawns", 0)),
         max_spawn_batch=int(v2.get("max_spawn_batch", 0)),
         mcp_servers=v2.get("mcp_servers", []),

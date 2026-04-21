@@ -1,8 +1,9 @@
 # Corrective-Action Templates
 #
-# When a goal breaches persistently, the improvement-analyst looks up the
-# matching template here and uses it to write a focused brief for the
-# Nightwatch overnight-pr pipeline.
+# When a goal breaches persistently, the `buddy` agent looks up the matching
+# template here and attaches it to the self-improve CRM task it creates for
+# `auto-agent`. The template is part of the evidence bundle, alongside the
+# Buddy reviews of the specific failing runs.
 #
 # Key format: "<category>.<metric_name>" (e.g. "quality.min_output_chars").
 # If no specific key matches, fall back to "<category>.default".
@@ -72,52 +73,35 @@ quality.default:
     - "Adjust warmup context"
 
 # ─── Efficiency breaches ─────────────────────────────────────────────
-
-efficiency.timeout_rate:
-  description: "Too many runs hitting timeout"
-  investigation_steps:
-    - "Classify timeouts by in-flight tool call (run_steps table)"
-    - "Check if most are stuck in init (Reaped by watchdog) or in a specific tool"
-    - "Look for trigger_type pattern (sub_agent vs cron vs telegram)"
-  remediations_in_order:
-    - "Lower stall_timeout_seconds to fail fast on wedged tool calls"
-    - "If hitting max_iterations without converging, reduce it or simplify the task scope"
-    - "Trim instruction file + warmup to reduce token latency"
-    - "If sub-agents wedging in init, tighten sub_agent_timeout_seconds"
-
-efficiency.avg_duration_ms:
-  description: "Runs taking longer than target"
-  investigation_steps:
-    - "Percentile breakdown — is it long tail or all runs?"
-    - "Which tool calls dominate the duration?"
-  remediations_in_order:
-    - "Reduce max_iterations"
-    - "Trim prompt size"
-    - "Downgrade model (Opus→Sonnet, Sonnet→MiMo) if quality goals are still met"
-
-efficiency.p95_duration_ms:
-  description: "Slow tail latency"
-  investigation_steps:
-    - "Pull slowest 10 runs and look for common tool patterns"
-  remediations_in_order:
-    - "Apply stall_timeout to kill wedged outliers"
-    - "Add tool-specific timeouts"
-
-efficiency.p95_cost_usd:
-  description: "Cost tail runaway"
-  investigation_steps:
-    - "Pull highest-cost runs; check input/output token ratios"
-  remediations_in_order:
-    - "Enable hard_budget with cost_budget_usd ceiling"
-    - "Trim warmup context"
-    - "Downgrade model tier"
+#
+# Cost and duration are OBSERVED, not capped. We do not enforce wall-
+# clock timeouts or cost budgets, and the self-improvement loop does
+# not "fix" runs for taking too long or costing too much. If cost or
+# duration trends unexpectedly, an operator investigates and decides —
+# the playbook below is for narrowing the diagnosis, not applying
+# ceilings.
+#
+# The only real efficiency lever the loop still acts on is
+# `max_iterations` (infinite-loop protection) and prompt/tool surface
+# size. Everything else in the old playbook — stall_timeout_seconds,
+# sub_agent_timeout_seconds, hard_budget, cost_budget_usd — is gone.
 
 efficiency.default:
-  description: "Efficiency target missed — generic path"
+  description: "Efficiency regression (iterations or tool noise)"
+  investigation_steps:
+    - "Pull slowest and most-expensive runs — is it a long tail or uniform drift?"
+    - "Which tool calls dominate the duration or token count?"
+    - "Is the agent hitting max_iterations without converging?"
   remediations_in_order:
-    - "Classify where time/cost is going"
-    - "Apply ceilings (timeout, iterations, cost)"
-    - "Consider model tier"
+    - "Trim instruction file and warmup context (fewer input tokens)"
+    - "Prune tools_allowed to the set the agent actually uses"
+    - "Downgrade model tier if quality goals are still met"
+    - "Lower max_iterations only if the agent is looping unproductively"
+
+# NOTE: cost and duration diagnostics live on dashboards and in
+# post-run analytics. If you need a one-off investigation of high
+# cost / long runs, look at agent_runs.total_cost_usd and duration_ms
+# directly. Do not add them back as self-improvement goal targets.
 
 # ─── Reach breaches ──────────────────────────────────────────────────
 

@@ -30,7 +30,7 @@ class TestCreateReview:
 
         review_id = create_review(
             agent_id="email-classifier",
-            reviewer="philip",
+            reviewer="operator",
             reviewer_type="operator",
             rating=4,
             feedback="Good classification accuracy",
@@ -51,7 +51,7 @@ class TestCreateReview:
 
         review_id = create_review(
             agent_id="main",
-            reviewer="philip",
+            reviewer="operator",
             reviewer_type="operator",
             rating=5,
             categories={"accuracy": 5, "speed": 4, "tone": 5},
@@ -111,7 +111,7 @@ class TestGetReviews:
                 {
                     "id": "review-1",
                     "agent_id": "email-classifier",
-                    "reviewer": "philip",
+                    "reviewer": "operator",
                     "reviewer_type": "operator",
                     "rating": 4,
                     "categories": json.dumps({"accuracy": 4}),
@@ -129,7 +129,7 @@ class TestGetReviews:
         reviews = get_reviews("email-classifier", days=30)
         assert len(reviews) == 1
         assert reviews[0]["rating"] == 4
-        assert reviews[0]["reviewer"] == "philip"
+        assert reviews[0]["reviewer"] == "operator"
 
     @patch("robothor.crm.dal.get_connection")
     def test_get_reviews_empty(self, mock_get_conn):
@@ -164,7 +164,7 @@ class TestGetReviewSummary:
             "avg_rating": 3.8,
         }
         mock_cur.fetchall.return_value = [
-            {"feedback": "Good accuracy", "rating": 4, "reviewer": "philip"},
+            {"feedback": "Good accuracy", "rating": 4, "reviewer": "operator"},
             {"feedback": "Slow responses", "rating": 3, "reviewer": "buddy"},
         ]
         mock_get_conn.return_value = mock_conn

@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import re
 from datetime import UTC
+from typing import TYPE_CHECKING
 
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse
-from models import (
-    ApproveTaskRequest,
-    CreateNoteRequest,
-    CreateTaskRequest,
-    RejectTaskRequest,
-    UpdateTaskRequest,
-)
 
 from robothor.crm.dal import (
     approve_task,
@@ -35,6 +29,15 @@ from robothor.crm.dal import (
     update_task,
 )
 from robothor.events.bus import publish
+
+if TYPE_CHECKING:
+    from models import (
+        ApproveTaskRequest,
+        CreateNoteRequest,
+        CreateTaskRequest,
+        RejectTaskRequest,
+        UpdateTaskRequest,
+    )
 
 router = APIRouter(prefix="/api", tags=["notes", "tasks"])
 
@@ -148,6 +151,12 @@ async def api_create_task(
         priority=body.priority,
         tags=body.tags,
         parent_task_id=body.parentTaskId,
+        objective=body.objective,
+        next_action=body.nextAction,
+        next_action_agent=body.nextActionAgent,
+        blockers=body.blockers,
+        question_for_operator=body.questionForOperator,
+        autonomy_budget=body.autonomyBudget,
         tenant_id=tenant_id,
     )
     if task_id:
@@ -232,6 +241,12 @@ async def api_update_task(
         "tags": "tags",
         "parentTaskId": "parent_task_id",
         "resolution": "resolution",
+        "objective": "objective",
+        "nextAction": "next_action",
+        "nextActionAgent": "next_action_agent",
+        "blockers": "blockers",
+        "questionForOperator": "question_for_operator",
+        "autonomyBudget": "autonomy_budget",
     }
     for api_key, dal_key in field_map.items():
         val = getattr(body, api_key, None)
