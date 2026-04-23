@@ -84,6 +84,18 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 # rather than the real content the agent was supposed to broadcast.
 ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
+# Fleet-wide runaway-token thresholds. Applied to the cumulative
+# session.run.input_tokens + session.run.output_tokens across the run.
+#   - Crossing ALERT fires a one-time Telegram warning so the operator can
+#     decide whether to intervene.
+#   - Reaching HARD_CAP stops the loop cleanly with budget_exhausted=True.
+# These are fleet-wide constants (not per-agent configurable) so a
+# misconfigured manifest can never disable the protection. A main run at
+# Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
+# breaker; this guard would have stopped it at 5M.
+RUNAWAY_TOKEN_ALERT = 500_000
+RUNAWAY_TOKEN_HARD_CAP = 5_000_000
+
 
 class _StallWatchdog:
     """Kills a run if no activity occurs for stall_timeout seconds.
@@ -1162,6 +1174,7 @@ class AgentRunner:
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
+        _runaway_alerted = False  # one-shot latch for 500K alert
 
         while True:
             # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
@@ -1172,6 +1185,56 @@ class AgentRunner:
                 )
                 session.record_error(self._active_watchdog.abort_reason)
                 return
+
+            # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──
+            _used_tokens = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
+            if _used_tokens >= RUNAWAY_TOKEN_HARD_CAP:
+                reason = f"runaway_token_cap_hit ({_used_tokens}/{RUNAWAY_TOKEN_HARD_CAP})"
+                logger.error(
+                    "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
+                    agent_config.id,
+                    session.run_id,
+                    _used_tokens,
+                )
+                # Fire-and-forget alert — don't block the stop path.
+                try:
+                    from robothor.engine.alerts import alert as _alert
+
+                    asyncio.create_task(
+                        _alert(
+                            "critical",
+                            f"Runaway-token hard cap: {agent_config.id}",
+                            f"run_id={session.run_id} tokens={_used_tokens:,} "
+                            f"model={session.run.model_used}",
+                        )
+                    )
+                except Exception:
+                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
+                session.run.budget_exhausted = True
+                session.record_error(reason)
+                return
+            if not _runaway_alerted and _used_tokens >= RUNAWAY_TOKEN_ALERT:
+                _runaway_alerted = True
+                logger.warning(
+                    "Runaway-token alert: agent=%s run=%s tokens=%d",
+                    agent_config.id,
+                    session.run_id,
+                    _used_tokens,
+                )
+                try:
+                    from robothor.engine.alerts import alert as _alert
+
+                    asyncio.create_task(
+                        _alert(
+                            "warning",
+                            f"Runaway-token alert: {agent_config.id}",
+                            f"run_id={session.run_id} tokens={_used_tokens:,} "
+                            f"(hard cap at {RUNAWAY_TOKEN_HARD_CAP:,}) "
+                            f"model={session.run.model_used}",
+                        )
+                    )
+                except Exception:
+                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
             if _iteration >= _safety_cap:
@@ -2654,6 +2717,27 @@ class AgentRunner:
         return cleaned if dropped else messages
 
     @staticmethod
+    def _guard_trailing_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop a trailing assistant message before an LLM call.
+
+        OpenRouter-proxied Anthropic (via Azure/Google) rejects requests whose
+        final message is an assistant turn with:
+            "This model does not support assistant message prefill.
+             The conversation must end with a user message."
+
+        A trailing assistant normally indicates an orphaned turn — e.g. a prior
+        run's response that was carried into history without its follow-up, or
+        a checkpoint restored after a user turn was lost. Drop it so the LLM
+        call can proceed.
+        """
+        if messages and messages[-1].get("role") == "assistant":
+            logger.warning(
+                "Dropping trailing assistant message before LLM call (prefill-rejection guard)"
+            )
+            return messages[:-1]
+        return messages
+
+    @staticmethod
     def _build_llm_kwargs(
         model: str,
         messages: list[dict[str, Any]],
@@ -2712,6 +2796,10 @@ class AgentRunner:
         # Defense in depth: drop orphaned tool_result messages that would
         # cause "unexpected tool_use_id" API errors.
         messages = AgentRunner._validate_tool_pairs(messages)
+
+        # Defense in depth: drop a trailing assistant message, which OpenRouter-
+        # proxied Anthropic rejects with "model does not support prefill".
+        messages = AgentRunner._guard_trailing_assistant(messages)
 
         kwargs: dict[str, Any] = {
             "model": actual_model,

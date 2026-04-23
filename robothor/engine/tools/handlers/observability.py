@@ -94,6 +94,69 @@ async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     }
 
 
+@_handler("classify_run_failure")
+async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Return ground-truth classification of a run's failure.
+
+    Investigators (main, failure-analyzer, improvement-analyst) should call
+    this instead of parsing agent_runs.error_message, because the reaper's
+    error_message is a label, not a diagnosis. This tool inspects the
+    underlying step history and the daemon's boot timestamp to produce a
+    structured diagnosis.
+    """
+    import os
+
+    from robothor.engine.tracking import get_run, list_steps
+
+    run_id = args.get("run_id")
+    if not run_id:
+        return {"error": "run_id is required"}
+
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        return {"error": f"run not found: {run_id}"}
+
+    steps = await asyncio.to_thread(list_steps, run_id)
+
+    llm_steps = [s for s in steps if s.get("step_type") in ("llm_call", "llm_response")]
+    llm_was_called = len(llm_steps) > 0
+    last_step = steps[-1] if steps else None
+
+    # Derive category the same way the reaper does (reuse classify_reap_reason
+    # so the tool and the reaper can never disagree).
+    from robothor.engine.daemon import classify_reap_reason
+
+    daemon_start_ts = os.environ.get("ROBOTHOR_DAEMON_START_TS")
+    started_at = run.get("started_at")
+    started_iso = (
+        started_at.isoformat() if hasattr(started_at, "isoformat") else str(started_at or "")
+    )
+    category, _ = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
+
+    tokens_used = int(run.get("input_tokens") or 0) + int(run.get("output_tokens") or 0)
+    started_before_daemon = bool(daemon_start_ts and started_iso and started_iso < daemon_start_ts)
+
+    return {
+        "run_id": str(run_id),
+        "agent_id": run.get("agent_id"),
+        "status": run.get("status"),
+        "category": category,
+        "raw_error_message": run.get("error_message"),
+        "last_step_type": str(last_step.get("step_type")) if last_step else None,
+        "last_step_tool": (last_step or {}).get("tool_name"),
+        "last_step_error": (last_step or {}).get("error_message"),
+        "llm_was_called": llm_was_called,
+        "total_llm_calls": len(llm_steps),
+        "total_steps": len(steps),
+        "model_used": run.get("model_used"),
+        "tokens_used": tokens_used,
+        "started_at": started_iso or None,
+        "completed_at": str(run["completed_at"]) if run.get("completed_at") else None,
+        "daemon_started_at": daemon_start_ts,
+        "daemon_restart_in_window": started_before_daemon,
+    }
+
+
 @_handler("list_agent_schedules")
 async def _list_agent_schedules(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import list_schedules

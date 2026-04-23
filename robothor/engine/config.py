@@ -392,6 +392,24 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         config.max_iterations = max(config.max_iterations, 100)
         config.checkpoint_enabled = True
 
+    # Clamp out-of-range numerics to valid values rather than just warning.
+    # A max_iterations=0 was observed leaking through sub_agent spawns and
+    # producing zero-iteration runs; validator's warning was ignored.
+    if config.max_iterations < 1:
+        logger.info(
+            "Clamping max_iterations %d → 1 for agent=%s",
+            config.max_iterations,
+            config.id,
+        )
+        config.max_iterations = 1
+    elif config.max_iterations > 10000:
+        logger.info(
+            "Clamping max_iterations %d → 10000 for agent=%s",
+            config.max_iterations,
+            config.id,
+        )
+        config.max_iterations = 10000
+
     return config
 
 

@@ -745,6 +745,73 @@ def create_health_app(
                 {"status": "error", "error": "Internal server error"}, status_code=500
             )
 
+    @app.get("/health/timeouts/last-24h")
+    async def timeouts_last_24h() -> dict[str, Any]:
+        """Per-category breakdown of timeout runs in the last 24h.
+
+        The `reap_category` column (migration 038) gives the true cause of
+        each reap event rather than the reaper's generic error_message.
+        Helm dashboard reads this to render a meaningful breakdown.
+
+        Returned shape::
+
+            {
+                "categories": [
+                    {"category": "post_tool_crash", "count": 4,
+                     "example_agents": ["buddy", "main"]},
+                    ...
+                ],
+                "total": 12,
+                "uncategorized": 3,   # timeouts without reap_category set
+                "window_hours": 24,
+            }
+        """
+        from robothor.db.connection import get_connection
+
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT
+                        reap_category,
+                        COUNT(*) AS cnt,
+                        array_agg(DISTINCT agent_id) AS agents
+                    FROM agent_runs
+                    WHERE status = 'timeout'
+                      AND started_at > NOW() - INTERVAL '24 hours'
+                    GROUP BY reap_category
+                    ORDER BY cnt DESC
+                    """
+                )
+                rows = cur.fetchall()
+        except Exception as e:
+            logger.exception("timeouts_last_24h query failed")
+            return {"error": f"query failed: {e}"}
+
+        categories: list[dict[str, Any]] = []
+        uncategorized = 0
+        total = 0
+        for cat, cnt, agents in rows:
+            total += int(cnt or 0)
+            if cat is None:
+                uncategorized = int(cnt or 0)
+                continue
+            categories.append(
+                {
+                    "category": cat,
+                    "count": int(cnt or 0),
+                    "example_agents": sorted(agents or [])[:5],
+                }
+            )
+
+        return {
+            "categories": categories,
+            "total": total,
+            "uncategorized": uncategorized,
+            "window_hours": 24,
+        }
+
     @app.on_event("startup")
     async def _mark_startup_complete() -> None:
         """Mark startup as complete once FastAPI is serving."""
