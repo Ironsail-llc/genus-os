@@ -750,7 +750,78 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
             f"after {iteration_number} iterations"
         )
 
+    # Live-goal verification: when a benchmark experiment terminates with a
+    # positive cumulative improvement, enqueue a 7-day follow-up for
+    # buddy-grader to confirm the target agent's real goal metric moved.
+    # Benchmark wins can overfit the scorer; this is the ground-truth check.
+    if (
+        verdict == "keep"
+        and state["status"] == "completed"
+        and config.get("mode") == "benchmark"
+        and config.get("benchmark_agent_id")
+        and state.get("cumulative_improvement_pct", 0) > 0
+    ):
+        _enqueue_live_goal_verification(experiment_id, state, iteration_number)
+
     return response
+
+
+def _enqueue_live_goal_verification(
+    experiment_id: str, state: dict[str, Any], iteration_number: int
+) -> None:
+    """Schedule a 7-day live-goal check for a shipped benchmark win.
+
+    Snapshots the target agent's current goal metrics into the task body so the
+    grader can compute a before/after delta without needing to reconstruct the
+    pre-ship window. Failures are swallowed — a missing verification task is a
+    warning, not a reason to fail the experiment commit.
+    """
+    try:
+        from datetime import timedelta
+
+        from robothor.crm.dal import create_task
+        from robothor.engine.goals import compute_goal_metrics
+
+        config = state["config"]
+        agent_id = config["benchmark_agent_id"]
+        snapshot = compute_goal_metrics(agent_id, window_days=7)
+        follow_up_at = datetime.now(UTC) + timedelta(days=7)
+
+        body = (
+            f"Benchmark experiment '{experiment_id}' closed with "
+            f"{state['cumulative_improvement_pct']:+.2f}% vs baseline "
+            f"({state['baseline_value']} -> {state['current_best_value']}, "
+            f"{iteration_number} iterations).\n\n"
+            "Verify that the agent's LIVE goal metrics moved in the same direction "
+            "over the 7 days since the ship.\n\n"
+            "## Pre-ship goal metrics snapshot (7-day window before ship)\n"
+            "```json\n"
+            f"{json.dumps(snapshot, indent=2, default=str)}\n"
+            "```\n\n"
+            "Procedure:\n"
+            "1. Call compute_goal_metrics(agent_id, window_days=7) now.\n"
+            "2. Compare against the snapshot above.\n"
+            "3. Append one line to autoagent_learnings: "
+            "`YYYY-MM-DD | {agent_id} | {experiment_id}: benchmark +X% → live {metric} "
+            "Δ {pre → post}`.\n"
+            "4. If live metrics regressed or are flat, file a follow-up task tagged "
+            "`benchmark-overfit` so auto-agent re-evaluates the harness change."
+        )
+        create_task(
+            title=f"Verify live-goal impact: {agent_id} after {experiment_id}",
+            body=body,
+            assigned_to_agent="auto-agent",
+            created_by_agent="experiment_commit",
+            priority="normal",
+            tags=["live-goal-verify", agent_id, experiment_id],
+            follow_up_at=follow_up_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not enqueue live-goal verification for %s: %s",
+            experiment_id,
+            exc,
+        )
 
 
 @_handler("experiment_status")

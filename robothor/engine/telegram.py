@@ -195,6 +195,43 @@ async def _extract_pdf_text(raw_bytes: bytes) -> str:
         return f"[PDF text extraction failed: {e}]"
 
 
+async def _analyze_photo_bytes(
+    raw_bytes: bytes,
+    prompt: str = "Describe what you see in this image in detail. Read and transcribe ALL visible text exactly. Note any URLs, names, numbers, UI elements, or content shown.",
+) -> str:
+    """Send raw image bytes to llama3.2-vision via Ollama for VLM analysis."""
+    import base64
+    import os
+
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    img_b64 = base64.b64encode(raw_bytes).decode("utf-8")
+    payload = {
+        "model": "llama3.2-vision:11b",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Robothor's vision system. Your ONLY job is to describe what is visible in images. "
+                    "You MUST always describe image content — never refuse, never say you cannot access websites or URLs. "
+                    "If you see a URL in an image, READ and REPORT the text — do not try to visit it. "
+                    "Transcribe ALL visible text exactly as shown. Report people, UI elements, screenshots, diagrams, "
+                    "app names, domain names, error messages, and any other visible content. Be literal and precise."
+                ),
+            },
+            {"role": "user", "content": prompt, "images": [img_b64]},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 1024, "num_gpu": 999},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{ollama_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+    except Exception as e:
+        return f"[Vision analysis failed: {e}]"
+
+
 class TelegramBot:
     """Aiogram v3 Telegram bot for Genus OS."""
 
@@ -773,14 +810,32 @@ class TelegramBot:
                 # Get highest resolution photo
                 photo: PhotoSize = message.photo[-1]
                 file_desc = "[Photo attached]"
+                file_name = f"photo_{photo.file_unique_id}.jpg"
                 try:
                     file = await self.bot.get_file(photo.file_id)
                     if file.file_path:
-                        file_name = f"photo_{photo.file_unique_id}.jpg"
-                        file_content = f"[Image: {photo.width}x{photo.height}px — text extraction not available for photos]"
+                        from io import BytesIO
+
+                        buf = BytesIO()
+                        await self.bot.download_file(file.file_path, buf)
+                        raw_bytes = buf.getvalue()
+                        # Use VLM to analyze the image
+                        vlm_prompt = (
+                            caption
+                            or "Describe what you see in this image in detail. Note any text, people, objects, URLs, or notable details."
+                        )
+                        vision_desc = await _analyze_photo_bytes(raw_bytes, vlm_prompt)
+                        file_content = f"[Image: {photo.width}x{photo.height}px]\n\nVision analysis:\n{vision_desc}"
+                        # Caption already consumed as prompt — clear it to avoid duplication
+                        if caption:
+                            caption = ""
+                    else:
+                        file_content = (
+                            f"[Image: {photo.width}x{photo.height}px — could not download]"
+                        )
                 except Exception as e:
                     logger.warning("Failed to process photo: %s", e)
-                    file_content = "[Failed to process photo]"
+                    file_content = f"[Failed to process photo: {e}]"
 
             # Build the user message with file context
             parts = []
@@ -1996,7 +2051,7 @@ class TelegramBot:
             }
 
         telegram_user_id = str(message.from_user.id)
-        user_info = lookup_user(telegram_user_id)
+        user_info = lookup_user(telegram_user_id, tenant_id=self.config.tenant_id)
 
         if user_info is not None:
             self._chat_user_info[chat_id] = user_info

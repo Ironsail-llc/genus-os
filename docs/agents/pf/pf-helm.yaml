@@ -8,7 +8,7 @@ reports_to: main
 escalates_to: main
 
 model:
-  primary: openrouter/xiaomi/mimo-v2-pro
+  primary: openrouter/xiaomi/mimo-v2.5-pro
   fallbacks:
     - ollama_chat/qwen3:8b
   payload_alias: mimo

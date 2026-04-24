@@ -14,6 +14,7 @@ brain/*.md
 brain/*.bak
 !brain/README.md
 brain/agents/
+brain/delphi/
 brain/instructions/
 brain/scripts/
 brain/memory/
@@ -24,6 +25,8 @@ brain/*.sqlite3
 docs/agents/*.yaml
 docs/agents/*.md
 docs/agents/retired/
+docs/agents/delphi/
+docs/workflows/delphi/
 !docs/agents/schema.yaml
 !docs/agents/INSTRUCTION_CONTRACT.md
 !docs/agents/GOAL_TAXONOMY.md
