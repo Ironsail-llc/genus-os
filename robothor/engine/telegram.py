@@ -367,6 +367,14 @@ class TelegramBot:
             else:
                 await message.answer("Nothing running.")
 
+        @self.dp.message(Command("restart"))
+        async def cmd_restart(message: Message) -> None:
+            await self._handle_restart_command(message, "robothor-engine.service")
+
+        @self.dp.message(Command("restart_delphi"))
+        async def cmd_restart_delphi(message: Message) -> None:
+            await self._handle_restart_command(message, "robothor-delphi-engine.service")
+
         @self.dp.message(Command("context"))
         async def cmd_context(message: Message) -> None:
             chat_id = str(message.chat.id)
@@ -2085,6 +2093,62 @@ class TelegramBot:
         info = self._chat_user_info.get(chat_id)
         return info["tenant_id"] if info else self.config.tenant_id
 
+    async def _handle_restart_command(self, message: Message, unit_name: str) -> None:
+        """Acknowledge in chat, then detach a `systemctl restart` via systemd-run.
+
+        Owner-only (gate on default_chat_id). Uses ``systemd-run --no-block
+        --collect`` so the restart request runs in a transient unit *outside*
+        our cgroup — systemd-killing our own main process (for
+        robothor-engine.service) does not kill the queued restart.
+
+        For a healthy engine this is a clean reboot; it is not a recovery
+        path for a crash-looping engine (Telegram polling has to be up to
+        receive the command). The real escape hatch for a dead engine is
+        still SSH + ``sudo systemctl restart``.
+        """
+        import shutil
+        import subprocess
+
+        chat_id = str(message.chat.id)
+        if chat_id != str(self.config.default_chat_id):
+            logger.warning(
+                "Unauthorized /restart attempt from chat_id=%s user_id=%s",
+                chat_id,
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Unauthorized.")
+            return
+
+        if not shutil.which("systemd-run"):
+            await message.answer("systemd-run not available on this host.")
+            return
+
+        await message.answer(f"Restarting {unit_name}…")
+
+        transient_unit = f"{unit_name.replace('.service', '')}-restart-request"
+        try:
+            subprocess.Popen(
+                [
+                    "sudo",
+                    "-n",
+                    "systemd-run",
+                    "--no-block",
+                    "--collect",
+                    f"--unit={transient_unit}",
+                    "--description=Deferred engine restart from Telegram /restart",
+                    "/bin/sh",
+                    "-c",
+                    f"sleep 2 && systemctl restart {unit_name}",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:
+            logger.exception("Failed to queue restart of %s", unit_name)
+            await message.answer(f"Failed to queue restart: {e}")
+
     def _session_key(self, chat_id: str) -> str:
         """Return a DB session key for a Telegram chat.
 
@@ -2277,6 +2341,10 @@ class TelegramBot:
                 BotCommand(command="buddy", description="Full buddy profile"),
                 BotCommand(command="reset", description="Reset model + history"),
                 BotCommand(command="stop", description="Cancel current response"),
+                BotCommand(command="restart", description="Restart the engine (owner only)"),
+                BotCommand(
+                    command="restart_delphi", description="Restart the Delphi engine (owner only)"
+                ),
                 BotCommand(command="help", description="Show commands"),
             ]
             # Set for both default and private-chat scopes so DMs see the full menu

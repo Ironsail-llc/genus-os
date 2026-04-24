@@ -1,9 +1,14 @@
-"""Tests that out-of-range max_iterations is clamped, not just warned about.
+"""Tests for the max_iterations clamp in ``manifest_to_agent_config``.
 
-Previously, config validation only emitted a warning for max_iterations=0;
-nothing enforced the range. `main` sub_agent spawns were running with 0
-iterations (which means the loop never reaches the LLM, reported to the
-operator as a timeout).
+max_iterations=0 is the manifest sentinel for "no check-in interval"
+(main.yaml heartbeat + worker both use 0 per operator directive
+2026-04-20). The run loop guards with ``_checkin_interval > 0``, so 0
+at this layer is valid.
+
+A floor-at-1 clamp here regressed the main heartbeat on 2026-04-24 —
+"Safety limit reached (0 iterations)" — because the clamp interacted
+badly with safety_cap=0. Sub-agent spawns that genuinely need a
+positive floor apply their own clamp in ``tools/handlers/spawn.py``.
 """
 
 from __future__ import annotations
@@ -28,13 +33,13 @@ def _base_manifest(**overrides) -> dict:
 
 
 class TestMaxIterationsClamp:
-    def test_zero_clamps_to_one(self) -> None:
+    def test_zero_preserved_as_unlimited_sentinel(self) -> None:
         config = manifest_to_agent_config(_base_manifest(max_iterations=0))
-        assert config.max_iterations == 1
+        assert config.max_iterations == 0
 
-    def test_negative_clamps_to_one(self) -> None:
+    def test_negative_clamps_to_zero(self) -> None:
         config = manifest_to_agent_config(_base_manifest(max_iterations=-5))
-        assert config.max_iterations == 1
+        assert config.max_iterations == 0
 
     def test_valid_value_preserved(self) -> None:
         config = manifest_to_agent_config(_base_manifest(max_iterations=42))

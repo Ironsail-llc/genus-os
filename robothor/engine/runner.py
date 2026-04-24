@@ -1237,7 +1237,10 @@ class AgentRunner:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
-            if _iteration >= _safety_cap:
+            # safety_cap=0 is the manifest sentinel for "no cap" (main.yaml sets
+            # this for heartbeat + worker per operator directive 2026-04-20). The
+            # check only fires when the cap is positive.
+            if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(
                     session,
                     models,
