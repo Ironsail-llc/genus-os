@@ -100,11 +100,13 @@ def build_warmth_preamble(
     config: AgentConfig,
     workspace: Path,
     tenant_id: str = DEFAULT_TENANT,
-) -> str:
+) -> tuple[str, dict[str, float]]:
     """Build a warmth preamble string for an agent run.
 
-    Returns up to MAX_WARMTH_CHARS of pre-loaded context. Empty string
-    if no warmup config or all sections fail.
+    Returns (preamble, section_timings) where preamble is up to
+    MAX_WARMTH_CHARS of pre-loaded context (empty string if none) and
+    section_timings is a dict mapping section name -> elapsed seconds.
+    The caller can record per-section warmup_phase steps using this data.
     """
     sections: list[str] = []
     total_start = time.monotonic()
@@ -176,13 +178,13 @@ def build_warmth_preamble(
         )
 
     if not sections:
-        return ""
+        return "", _section_timings
 
     preamble = "\n\n".join(sections)
     if len(preamble) > MAX_WARMTH_CHARS:
         preamble = preamble[:MAX_WARMTH_CHARS] + "\n[warmup truncated]"
 
-    return preamble
+    return preamble, _section_timings
 
 
 def _build_history_section(agent_id: str) -> str:

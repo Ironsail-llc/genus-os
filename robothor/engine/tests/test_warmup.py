@@ -49,7 +49,7 @@ class TestBuildWarmthPreamble:
         _CONTEXT_HOOKS.clear()
         try:
             with patch(TRACKING_PATCH, return_value=None):
-                result = build_warmth_preamble(empty_config, tmp_path)
+                result, _ = build_warmth_preamble(empty_config, tmp_path)
             assert result == ""
         finally:
             _CONTEXT_HOOKS.extend(saved)
@@ -67,7 +67,7 @@ class TestBuildWarmthPreamble:
             "consecutive_errors": 3,
         }
         with patch(TRACKING_PATCH, return_value=schedule):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert "WARNING" in result
         assert "3 consecutive errors" in result
 
@@ -81,7 +81,7 @@ class TestBuildWarmthPreamble:
         _CONTEXT_HOOKS.clear()
         try:
             with patch(TRACKING_PATCH, return_value=None):
-                result = build_warmth_preamble(config, tmp_path)
+                result, _ = build_warmth_preamble(config, tmp_path)
             assert result == ""
         finally:
             _CONTEXT_HOOKS.extend(saved)
@@ -96,7 +96,7 @@ class TestBuildWarmthPreamble:
             patch(TRACKING_PATCH, return_value=None),
             patch(BLOCK_PATCH, return_value={"content": "Key finding: system is healthy."}),
         ):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert "MEMORY BLOCKS" in result
         assert "operational_findings" in result
         assert "Key finding" in result
@@ -114,7 +114,7 @@ class TestBuildWarmthPreamble:
                 patch(TRACKING_PATCH, return_value=None),
                 patch(BLOCK_PATCH, return_value={"content": ""}),
             ):
-                result = build_warmth_preamble(config, tmp_path)
+                result, _ = build_warmth_preamble(config, tmp_path)
             assert result == ""
         finally:
             _CONTEXT_HOOKS.extend(saved)
@@ -129,7 +129,7 @@ class TestBuildWarmthPreamble:
         status_file.write_text("Last run: 2026-02-27 OK\nProcessed 5 emails.")
 
         with patch(TRACKING_PATCH, return_value=None):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert "CONTEXT FILES" in result
         assert "status.md" in result
         assert "Last run: 2026-02-27 OK" in result
@@ -144,7 +144,7 @@ class TestBuildWarmthPreamble:
         _CONTEXT_HOOKS.clear()
         try:
             with patch(TRACKING_PATCH, return_value=None):
-                result = build_warmth_preamble(config, tmp_path)
+                result, _ = build_warmth_preamble(config, tmp_path)
             assert result == ""
         finally:
             _CONTEXT_HOOKS.extend(saved)
@@ -174,7 +174,7 @@ class TestBuildWarmthPreamble:
             return None
 
         with patch(TRACKING_PATCH, side_effect=side_effect):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert "PEER AGENTS" in result
         assert "email-classifier: completed" in result
         assert "email-analyst: failed" in result
@@ -194,7 +194,7 @@ class TestBuildWarmthPreamble:
             patch(TRACKING_PATCH, return_value=None),
             patch(BLOCK_PATCH, return_value={"content": "x" * 5000}),
         ):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert len(result) <= MAX_WARMTH_CHARS + 50  # allow for truncation marker
 
     def test_history_section_completed_run(self, tmp_path: Path) -> None:
@@ -210,7 +210,7 @@ class TestBuildWarmthPreamble:
             "consecutive_errors": 0,
         }
         with patch(TRACKING_PATCH, return_value=schedule):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
         assert "SESSION HISTORY" in result
         assert "completed" in result
         assert "12345ms" in result
@@ -248,7 +248,7 @@ class TestBuildWarmthPreamble:
             patch(TRACKING_PATCH, side_effect=schedule_side_effect),
             patch(BLOCK_PATCH, return_value={"content": "block content here"}),
         ):
-            result = build_warmth_preamble(config, tmp_path)
+            result, _ = build_warmth_preamble(config, tmp_path)
 
         assert "SESSION HISTORY" in result
         assert "MEMORY BLOCKS" in result

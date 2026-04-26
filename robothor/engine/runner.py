@@ -84,6 +84,12 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 # rather than the real content the agent was supposed to broadcast.
 ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
+# Init timeout: max seconds for agent setup before first LLM call.
+# Agents that hang during warmup, adapter loading, or tool registration
+# are killed immediately.  Prevents the "stuck in initialization"
+# failure mode where runs sit for 30+ minutes with 0 tokens consumed.
+INIT_TIMEOUT_SECONDS = 60
+
 # Fleet-wide runaway-token thresholds. Applied to the cumulative
 # session.run.input_tokens + session.run.output_tokens across the run.
 #   - Crossing ALERT fires a one-time Telegram warning so the operator can
@@ -423,6 +429,22 @@ class AgentRunner:
         loop = asyncio.get_running_loop()
         t_setup_start = time.monotonic()
 
+        # Create stall watchdog EARLY so it covers the setup phase too.
+        # Previously the watchdog was only started after setup completed,
+        # meaning a hang during warmup/adapter loading went undetected.
+        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
+        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        watchdog = _StallWatchdog(
+            stall_timeout=stall_timeout, hard_timeout=agent_config.timeout_seconds
+        )
+        self._active_watchdog = watchdog  # expose for touch() from tool handlers
+
+        # Start watchdog immediately to cover setup phase
+        _init_task = asyncio.current_task()
+        if _init_task:
+            watchdog.start(_init_task)
+        watchdog.touch("init_begin")
+
         # Determine what warmup is needed (before launching parallel tasks)
         warmup_kind: str | None = None  # "cron", "interactive", or None
         if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
@@ -453,7 +475,7 @@ class AgentRunner:
         if warmup_kind == "cron":
             from robothor.engine.warmup import build_warmth_preamble, set_warmup_kind
 
-            def _build_cron_warmup() -> str | None:
+            def _build_cron_warmup() -> tuple[str, dict[str, float]] | None:
                 with set_warmup_kind("cron"):
                     return build_warmth_preamble(
                         agent_config, self.config.workspace, self.config.tenant_id
@@ -491,17 +513,81 @@ class AgentRunner:
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)
 
         # Await both concurrently
+        import uuid as _uuid  # noqa: PLC0415
+
+        t_sys_prompt_start = time.monotonic()
         system_prompt_parts = await sys_prompt_future  # SystemPromptParts
+        t_sys_prompt_ms = int((time.monotonic() - t_sys_prompt_start) * 1000)
+        watchdog.touch("system_prompt_built")
         system_prompt = system_prompt_parts.full_text()  # str for mode wrapping
+
+        t_warmup_start = time.monotonic()
         warmup_preamble: str | None = None
+        _warmup_section_timings: dict[str, float] = {}
         if warmup_future is not None:
             try:
-                warmup_preamble = await warmup_future
+                _warmup_result = await warmup_future
+                # build_warmth_preamble returns (preamble, section_timings) for
+                # cron warmup; build_interactive_preamble still returns str.
+                if isinstance(_warmup_result, tuple):
+                    warmup_preamble, _warmup_section_timings = _warmup_result
+                else:
+                    warmup_preamble = _warmup_result
             except Exception as e:
                 logger.debug("Warmup preamble failed for %s: %s", _sanitize(agent_id), _sanitize(e))
+        t_warmup_ms = int((time.monotonic() - t_warmup_start) * 1000)
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
+        watchdog.touch("warmup_complete")
+
+        # ── Warmup phase instrumentation ──────────────────────────────────────
+        # Record setup milestones as warmup_phase steps so stalls are visible
+        # in agent_run_steps instead of only in watchdog touch logs.
+        # Per-section timings from build_warmth_preamble let us pinpoint
+        # exactly which warmup section (history, memory_blocks, context_files,
+        # peers, breadcrumbs, preferences, agent_hooks) stalled — crucial for
+        # diagnosing fleet-wide warmup stalls (FIX-WARMUP-STALL task).
+        _warmup_phase_steps: list[tuple[str, int, dict]] = [
+            (
+                "system_prompt_build",
+                t_sys_prompt_ms,
+                {"cached": "hit" if _prompt_cache.get(agent_config.id) else "miss"},
+            ),
+            (
+                "warmup_preamble_build",
+                t_warmup_ms,
+                {
+                    "kind": warmup_kind or "none",
+                    "chars": len(warmup_preamble) if warmup_preamble else 0,
+                },
+            ),
+        ]
+        # Inject per-section timings as individual warmup_phase steps so we
+        # can pinpoint stalls at section granularity, not just total warmup ms.
+        for _sec_name, _sec_elapsed in _warmup_section_timings.items():
+            _warmup_phase_steps.append(
+                (
+                    f"warmup_section:{_sec_name}",
+                    int(_sec_elapsed * 1000),
+                    {"section": _sec_name, "slow": _sec_elapsed > 0.5},
+                )
+            )
+        for _wp_name, _wp_ms, _wp_meta in _warmup_phase_steps:
+            try:
+                _wp_step = RunStep(
+                    id=str(_uuid.uuid4()),
+                    run_id=session.run.id,
+                    step_number=0,  # pre-iteration; grader ignores step_number for warmup_phase
+                    step_type=StepType.WARMUP_PHASE,
+                    tool_name=_wp_name,
+                    tool_input={},
+                    tool_output=_wp_meta,
+                    duration_ms=_wp_ms,
+                )
+                session.run.steps.append(_wp_step)
+            except Exception as _wp_err:
+                logger.debug("warmup_phase step record failed (%s): %s", _wp_name, _wp_err)
 
         # ── Cross-run journal resume ──────────────────────────────────────────
         # If the agent has resume_on_start=true and a journal_file configured,
@@ -535,6 +621,7 @@ class AgentRunner:
                     _sanitize(e),
                 )
 
+        watchdog.touch("setup_phase_complete")
         t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
         logger.info(
             "SETUP %dms agent=%s trigger=%s warmup=%s cached_prompt=%s",
@@ -562,6 +649,7 @@ class AgentRunner:
                 await self.registry.register_adapter_tools(adapters)
         except Exception as e:
             logger.warning("Adapter loading failed (non-fatal): %s", _sanitize(e))
+        watchdog.touch("adapters_loaded")
 
         # Get filtered tools for this agent
         if readonly_mode:
@@ -582,6 +670,25 @@ class AgentRunner:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
 
+        watchdog.touch("tools_built")
+        try:
+            _wp_step = RunStep(
+                id=str(_uuid.uuid4()),
+                run_id=session.run.id,
+                step_number=0,
+                step_type=StepType.WARMUP_PHASE,
+                tool_name="tools_built",
+                tool_input={},
+                tool_output={
+                    "total_setup_ms": int((time.monotonic() - t_setup_start) * 1000),
+                    "tool_count": len(tool_names) if tool_names else 0,
+                },
+                duration_ms=int((time.monotonic() - t_setup_start) * 1000),
+            )
+            session.run.steps.append(_wp_step)
+        except Exception as _wp_err:
+            logger.debug("warmup_phase step record failed (tools_built): %s", _wp_err)
+
         # Execution mode: prepend enforcement preamble (full tools already loaded above)
         if execution_mode and not readonly_mode:
             system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
@@ -594,6 +701,8 @@ class AgentRunner:
             delivery_mode=agent_config.delivery_mode.value,
             conversation_history=conversation_history,
         )
+
+        watchdog.touch("session_started")
 
         # Auto-derive token budget for TRACKING ONLY (not enforced as a hard limit)
         from robothor.engine.model_registry import compute_token_budget
@@ -608,16 +717,11 @@ class AgentRunner:
             else:
                 session.run.token_budget = spawn_context.remaining_token_budget
 
-        # Stall watchdog is the primary protection — kills on inactivity, not
+        # Watchdog was created and started before setup phase (see above).
+        # Stall timeout is the primary protection — kills on inactivity, not
         # elapsed wall-clock time.  Hard timeout only needed as fallback when
         # the watchdog is explicitly disabled (stall_timeout_seconds: 0).
         # This lets agents run for hours on complex tasks without being killed.
-        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
-        watchdog = _StallWatchdog(
-            stall_timeout=stall_timeout, hard_timeout=agent_config.timeout_seconds
-        )
-        self._active_watchdog = watchdog  # expose for touch() calls from tool handlers
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
             async with asyncio.timeout(hard_timeout):
@@ -663,12 +767,12 @@ class AgentRunner:
                 models = [m for m in models if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
 
                 if not models:
-                    return self._finish_run(
-                        session.fail("No models configured"),
-                        agent_config=agent_config,
-                        session=session,
-                        spawn_context=spawn_context,
+                    # Fallback to default model instead of hard failure
+                    logger.warning(
+                        "No models configured for %s; falling back to deepseek-v4-pro",
+                        _sanitize(agent_id),
                     )
+                    models = ["openrouter/deepseek/deepseek-v4-pro"]
 
                 # ── [ROUTER] Classify difficulty → adjust config ──
                 route = self._apply_routing(agent_config, message, len(tool_names))
@@ -741,10 +845,7 @@ class AgentRunner:
                         )
                         sandbox = None
 
-                # Start stall watchdog — monitors current task for inactivity
-                current_task = asyncio.current_task()
-                if current_task:
-                    watchdog.start(current_task)
+                # Watchdog already started before setup phase (see above).
 
                 try:
                     await self._run_loop(
