@@ -2504,4 +2504,76 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["get_fleet_achievement_score"] = {
+        "type": "function",
+        "function": {
+            "name": "get_fleet_achievement_score",
+            "description": (
+                "Aggregate fleet quality signal: today's average "
+                "achievement_score across all agents with declared goals, "
+                "the prior-week average, the week-over-week delta, and the "
+                "buddy-grader 14-day hold rate (% of verified fixes that "
+                "held for 7 days). Pure read-only — Buddy populates the "
+                "underlying tables daily. Use this for the heartbeat fleet "
+                "quality line; surface it when |delta| > 5 points or when "
+                "hold rate drops."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["list_agent_reviews"] = {
+        "type": "function",
+        "function": {
+            "name": "list_agent_reviews",
+            "description": (
+                "List recent Buddy reviews of agent runs. Each review is "
+                "evidence-grounded against a specific run_id. Returns rating "
+                "(1-5), feedback excerpt, and action_items count. Use this "
+                "before planning fleet-level optimization to ground "
+                "recommendations in observed evidence rather than priors. "
+                "Fetch full feedback via get_agent_review."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Filter to one agent. Omit to scan the fleet.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max reviews to return. Default 20.",
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "description": "Lookback window in hours. Default 168 (7d).",
+                    },
+                },
+            },
+        },
+    }
+
+    schemas["get_agent_review"] = {
+        "type": "function",
+        "function": {
+            "name": "get_agent_review",
+            "description": (
+                "Fetch one Buddy review by id with full feedback text and "
+                "action items array. Use after list_agent_reviews when an "
+                "excerpt is interesting enough to read in full."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "review_id": {
+                        "type": "string",
+                        "description": "UUID of the review (from list_agent_reviews).",
+                    },
+                },
+                "required": ["review_id"],
+            },
+        },
+    }
+
     return schemas

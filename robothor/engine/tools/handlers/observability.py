@@ -270,6 +270,169 @@ async def _buddy_verify_pass(args: dict[str, Any], ctx: ToolContext) -> dict[str
     return await asyncio.to_thread(run_verification_pass, tenant_id=ctx.tenant_id)
 
 
+@_handler("get_fleet_achievement_score")
+async def _get_fleet_achievement_score(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Aggregate fleet quality signal for the heartbeat.
+
+    Three numbers — today's fleet average achievement_score, the prior-week
+    average, and the buddy-grader 14-day hold rate. Pure read-only SQL
+    against tables Buddy already populates daily.
+
+    Designed to give the operator one trustworthy line in the heartbeat
+    instead of the per-agent self-rated outcome_assessment, which is
+    >95% "successful" across the board and carries no signal.
+    """
+    from robothor.db.connection import get_connection
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            # Today's fleet average — agents with a goals contract only.
+            cur.execute(
+                """
+                SELECT AVG(achievement_score)::float, COUNT(*)
+                FROM agent_buddy_stats
+                WHERE stat_date = CURRENT_DATE AND achievement_score IS NOT NULL
+                """
+            )
+            today_avg, today_n = cur.fetchone()
+
+            # Prior-week average (last 7 days, excluding today).
+            cur.execute(
+                """
+                SELECT AVG(achievement_score)::float
+                FROM agent_buddy_stats
+                WHERE stat_date BETWEEN CURRENT_DATE - INTERVAL '7 days'
+                                    AND CURRENT_DATE - INTERVAL '1 day'
+                  AND achievement_score IS NOT NULL
+                """
+            )
+            (prior_week_avg,) = cur.fetchone()
+
+            # Hold rate — verified_resolved fixes that held vs failed
+            # over the last 14 days. Buddy-grader records the outcome
+            # via tags `held_7d=true` / `held_7d=false` on the same task
+            # (see robothor/engine/health.py:530 for the canonical source).
+            cur.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN 'held_7d=true' = ANY(tags) THEN 1 ELSE 0 END)::int,
+                    SUM(CASE WHEN 'held_7d=true' = ANY(tags)
+                              OR 'held_7d=false' = ANY(tags) THEN 1 ELSE 0 END)::int
+                FROM crm_tasks
+                WHERE 'verified_resolved' = ANY(tags)
+                  AND created_at > NOW() - INTERVAL '14 days'
+                """
+            )
+            held_true, held_total = cur.fetchone()
+
+            hold_rate = (
+                round(100.0 * held_true / held_total, 1)
+                if held_total and held_true is not None
+                else None
+            )
+            return {
+                "today_score": round(today_avg, 1) if today_avg is not None else None,
+                "today_agents_scored": today_n or 0,
+                "prior_week_score": round(prior_week_avg, 1)
+                if prior_week_avg is not None
+                else None,
+                "delta_vs_prior_week": (
+                    round(today_avg - prior_week_avg, 1)
+                    if today_avg is not None and prior_week_avg is not None
+                    else None
+                ),
+                "hold_rate_14d_pct": hold_rate,
+                "hold_samples_14d": held_total or 0,
+            }
+
+    return await asyncio.to_thread(_query)
+
+
+@_handler("list_agent_reviews")
+async def _list_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """List recent Buddy reviews for an agent.
+
+    Used by agent-architect (and any caller) to read evidence-grounded
+    critiques before planning a fix or dispatching work. Returns rating,
+    feedback summary, and action_items — full review fetched via
+    `get_agent_review(review_id)`.
+    """
+    from robothor.db.connection import get_connection
+
+    agent_id = args.get("agent_id")
+    limit = int(args.get("limit", 20))
+    since_hours = int(args.get("since_hours", 168))  # default 7 days
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            params: list[Any] = [ctx.tenant_id, since_hours]
+            agent_clause = ""
+            if agent_id:
+                agent_clause = "AND agent_id = %s"
+                params.append(agent_id)
+            params.append(limit)
+            cur.execute(
+                f"""
+                SELECT id, agent_id, run_id, reviewer, reviewer_type, rating,
+                       LEFT(feedback, 280) AS feedback_excerpt,
+                       array_length(action_items, 1) AS action_items_count,
+                       created_at
+                FROM agent_reviews
+                WHERE tenant_id = %s
+                  AND created_at > NOW() - (INTERVAL '1 hour' * %s)
+                  {agent_clause}
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, r, strict=False)) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("created_at"):
+                    r["created_at"] = str(r["created_at"])
+                if r.get("run_id"):
+                    r["run_id"] = str(r["run_id"])
+                if r.get("id"):
+                    r["id"] = str(r["id"])
+            return {"reviews": rows, "count": len(rows)}
+
+    return await asyncio.to_thread(_query)
+
+
+@_handler("get_agent_review")
+async def _get_agent_review(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Fetch one full Buddy review by id, including full feedback + action items."""
+    from robothor.db.connection import get_connection
+
+    review_id = args["review_id"]
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, agent_id, run_id, reviewer, reviewer_type, rating,
+                       categories, feedback, action_items, created_at
+                FROM agent_reviews
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (ctx.tenant_id, review_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": f"Review {review_id} not found"}
+            cols = [d.name for d in cur.description]
+            r = dict(zip(cols, row, strict=False))
+            if r.get("created_at"):
+                r["created_at"] = str(r["created_at"])
+            if r.get("run_id"):
+                r["run_id"] = str(r["run_id"])
+            r["id"] = str(r["id"])
+            return r
+
+    return await asyncio.to_thread(_query)
+
+
 @_handler("buddy_audit")
 async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Weekly hold-rate audit. Pauses Buddy if fixes aren't sticking.
