@@ -228,6 +228,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             safety_cap=int(raw_heartbeat.get("safety_cap", 50)),
             timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 0)),
             stall_timeout_seconds=int(raw_heartbeat.get("stall_timeout_seconds", 0)),
+            early_stall_timeout_seconds=int(raw_heartbeat.get("early_stall_timeout_seconds", 0)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
             delivery_to=hb_delivery.get("to", "")
@@ -263,6 +264,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             safety_cap=int(raw_worker.get("safety_cap", 80)),
             timeout_seconds=int(raw_worker.get("timeout_seconds", 0)),
             stall_timeout_seconds=int(raw_worker.get("stall_timeout_seconds", 0)),
+            early_stall_timeout_seconds=int(raw_worker.get("early_stall_timeout_seconds", 0)),
             delivery_mode=w_delivery_mode,
             delivery_channel=w_delivery.get("channel", ""),
             delivery_to=w_delivery.get("to", "")
@@ -307,6 +309,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         timeout_seconds=schedule.get("timeout_seconds", 0),
         max_iterations=schedule.get("max_iterations", 20),
         stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 0)),
+        early_stall_timeout_seconds=int(schedule.get("early_stall_timeout_seconds", 0)),
         # ── Cross-run persistent journal ──
         journal_file=schedule.get("journal_file", ""),
         journal_checkpoint_interval=int(schedule.get("journal_checkpoint_interval", 5)),

@@ -118,15 +118,50 @@ class _StallWatchdog:
     async HTTP libraries (litellm/httpx).
     """
 
-    def __init__(self, stall_timeout: int, hard_timeout: int) -> None:
+    # Touch descriptions that indicate the model has actually started
+    # producing work. Setup/warmup signals don't count — those happen
+    # before any LLM round-trip.
+    _OUTPUT_TOUCH_PREFIXES: tuple[str, ...] = (
+        "llm_response",
+        "stream_text",
+        "stream_tool",
+        "tool:",
+    )
+
+    def __init__(
+        self,
+        stall_timeout: int,
+        hard_timeout: int,
+        early_stall_timeout: int = 0,
+        tick_seconds: float = 30.0,
+    ) -> None:
         self._stall_timeout = stall_timeout
         self._hard_timeout = hard_timeout
+        # Background-loop tick interval. Default 30s — tests use a
+        # smaller value (e.g. 0.1) to avoid waiting for real wall-clock
+        # in the early-stall test suite.
+        self._tick_seconds = tick_seconds
+        # Pre-output stall window. Trips when this many seconds have
+        # passed AND no real progress signal has been seen. Fires even
+        # while the post-progress _stall_timeout is still being reset
+        # by warmup touches. 0 = disabled.
+        self._early_stall_timeout = early_stall_timeout
         self._last_activity = time.monotonic()
         self._last_activity_desc: str = "run_start"
         self._task: asyncio.Task[None] | None = None
         self._cancelled = False
         self._abort_event = asyncio.Event()
         self._abort_reason: str = ""
+        # Set True on the first touch() that names an output-bearing
+        # event (LLM response, stream chunk, tool completion). Setup
+        # touches like init_begin / warmup_complete / session_started
+        # do not flip this — they are explicitly excluded so the early-
+        # stall guard can fire while warmup keeps refreshing the
+        # last-activity timestamp.
+        self._saw_output_signal = False
+        # Set on start() so callers can compute "time since run began" even
+        # when the watchdog itself didn't trip (e.g. external cancellation).
+        self._start_time: float = time.monotonic()
 
     def touch(self, description: str = "") -> None:
         """Record activity — resets the stall timer.
@@ -134,10 +169,17 @@ class _StallWatchdog:
         Pass ``description`` to name the progress signal (e.g.
         ``"llm_response:sonnet-4.6"`` or ``"tool:list_tasks"``) so the
         stall abort reason can point at the last thing that worked.
+
+        Touches whose description matches an output-prefix
+        (`llm_response`, `stream_text`, `stream_tool`, `tool:`) also
+        flip the watchdog's "model started talking" flag, which clears
+        the early-stall guard. Setup/warmup touches do not flip it.
         """
         self._last_activity = time.monotonic()
         if description:
             self._last_activity_desc = description
+            if not self._saw_output_signal and description.startswith(self._OUTPUT_TOUCH_PREFIXES):
+                self._saw_output_signal = True
 
     @property
     def last_activity_desc(self) -> str:
@@ -145,7 +187,7 @@ class _StallWatchdog:
 
     def start(self, monitored_task: asyncio.Task[Any]) -> None:
         """Start the watchdog background loop."""
-        if self._stall_timeout <= 0 and self._hard_timeout <= 0:
+        if self._stall_timeout <= 0 and self._hard_timeout <= 0 and self._early_stall_timeout <= 0:
             return
         self._start_time = time.monotonic()
         self._task = asyncio.create_task(self._watch(monitored_task))
@@ -153,7 +195,7 @@ class _StallWatchdog:
     async def _watch(self, monitored_task: asyncio.Task[Any]) -> None:
         try:
             while not monitored_task.done():
-                await asyncio.sleep(30)
+                await asyncio.sleep(self._tick_seconds)
                 if monitored_task.done():
                     break
                 now = time.monotonic()
@@ -172,6 +214,34 @@ class _StallWatchdog:
                     self._abort_reason = (
                         f"Circuit-breaker hard timeout ({self._hard_timeout}s) "
                         f"after {elapsed:.0f}s; last activity: {self._last_activity_desc}"
+                    )
+                    self._cancelled = True
+                    self._abort_event.set()
+                    monitored_task.cancel()
+                    return
+
+                # Early-stall detection — fires before any output has been
+                # produced. Specifically targets the "warmup completes →
+                # silence" wedge pattern that the post-progress stall can't
+                # see (warmup touches keep resetting `idle`). Safe alongside
+                # the save-gate: with no output, nothing can poison the next
+                # heartbeat session.
+                if (
+                    self._early_stall_timeout > 0
+                    and not self._saw_output_signal
+                    and elapsed > self._early_stall_timeout
+                ):
+                    logger.warning(
+                        "Stall watchdog: early stall (%ds) — no LLM output after %.0fs; "
+                        "last_activity=%s",
+                        self._early_stall_timeout,
+                        elapsed,
+                        self._last_activity_desc,
+                    )
+                    self._abort_reason = (
+                        f"Early stall: no LLM output after {elapsed:.0f}s "
+                        f"(threshold {self._early_stall_timeout}s); "
+                        f"last activity: {self._last_activity_desc}"
                     )
                     self._cancelled = True
                     self._abort_event.set()
@@ -215,6 +285,60 @@ class _StallWatchdog:
     @property
     def was_stall_timeout(self) -> bool:
         return self._cancelled
+
+    @property
+    def elapsed_seconds(self) -> float:
+        """Seconds since start() was called (0 if never started)."""
+        return max(0.0, time.monotonic() - self._start_time)
+
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since the last touch() call."""
+        return max(0.0, time.monotonic() - self._last_activity)
+
+
+def _build_cancel_diagnostic(watchdog: _StallWatchdog, agent_id: str) -> str:
+    """Capture asyncio context at the moment of an external cancellation.
+
+    Used to investigate the noon-storm symptom (multiple agents die at
+    `12:00:00.05–12:00:00.12` with `Run cancelled externally; last
+    activity: session_started`). Without context, the post-mortem is a
+    guess; with it, we can see whether something else is calling
+    `.cancel()` on the run task and what it is.
+
+    Returns a multi-line diagnostic string suitable for
+    ``agent_runs.error_traceback``.
+    """
+    lines: list[str] = []
+    try:
+        lines.append(f"agent_id={agent_id}")
+        lines.append(f"elapsed_since_start={watchdog.elapsed_seconds:.2f}s")
+        lines.append(f"idle_since_last_touch={watchdog.idle_seconds:.2f}s")
+        lines.append(f"last_activity={watchdog.last_activity_desc}")
+        try:
+            current = asyncio.current_task()
+            current_name = current.get_name() if current else "<no-current-task>"
+        except RuntimeError:
+            current_name = "<no-running-loop>"
+        lines.append(f"current_task={current_name}")
+        try:
+            alive = list(asyncio.all_tasks())
+        except RuntimeError:
+            alive = []
+        lines.append(f"alive_tasks_count={len(alive)}")
+        # Truncate to 20 task names — past that the dump is noise. Sort
+        # by name for stable output across runs.
+        names = sorted({t.get_name() for t in alive})[:20]
+        lines.extend(f"  task: {n}" for n in names)
+        # Walltime + pid help correlate with external events (cron,
+        # systemd, daemon restart) that show up at the same instant.
+        from datetime import UTC, datetime
+
+        lines.append(f"walltime_utc={datetime.now(UTC).isoformat()}")
+        lines.append(f"pid={os.getpid()}")
+    except Exception as e:  # diagnostic must never raise
+        lines.append(f"diagnostic_error={e!r}")
+    return "\n".join(lines)
 
 
 if TYPE_CHECKING:
@@ -434,8 +558,11 @@ class AgentRunner:
         # meaning a hang during warmup/adapter loading went undetected.
         stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
         hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
         watchdog = _StallWatchdog(
-            stall_timeout=stall_timeout, hard_timeout=agent_config.timeout_seconds
+            stall_timeout=stall_timeout,
+            hard_timeout=agent_config.timeout_seconds,
+            early_stall_timeout=early_stall_timeout,
         )
         self._active_watchdog = watchdog  # expose for touch() from tool handlers
 
@@ -917,8 +1044,12 @@ class AgentRunner:
             )
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
+            # Diagnostic dump for the noon-storm investigation. Captures
+            # who else is alive at cancel time, the watchdog's last touch,
+            # and elapsed-since-start. Lands in agent_runs.error_traceback.
+            diag = _build_cancel_diagnostic(watchdog, agent_id)
             return self._finish_run(
-                session.timeout(reason=reason),
+                session.timeout(reason=reason, traceback=diag),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1740,6 +1871,19 @@ class AgentRunner:
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
                 _tool_timeout = getattr(agent_config, "tool_timeout_seconds", 120)
+                # Benchmark and experiment tools legitimately run 5+ sub-agents;
+                # raise their timeout floor to 600s regardless of agent-level setting.
+                _LONG_RUNNING_TOOLS = frozenset(  # noqa: N806 — module-internal constant kept here for locality
+                    {
+                        "benchmark_run",
+                        "experiment_measure",
+                        "benchmark_compare",
+                        "spawn_agent",
+                        "spawn_agents",
+                    }
+                )
+                if tool_name in _LONG_RUNNING_TOOLS:
+                    _tool_timeout = max(_tool_timeout, 600)
                 if trace:
                     with trace.span("tool_call", tool=tool_name) as _span:
                         result = await self.registry.execute(
@@ -1924,6 +2068,8 @@ class AgentRunner:
                         from robothor.engine.models import ErrorType
 
                         escalation.record_error(error_type or ErrorType.UNKNOWN)
+                        # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
+                        escalation.record_error_kind(tool_name, error_msg)
                     else:
                         escalation.record_success()
 
@@ -2029,6 +2175,9 @@ class AgentRunner:
                 error_lines = "\n".join(
                     f"- {name}: {msg}" for name, msg, _etype in iteration_errors
                 )
+                # Inject STOP RETRYING hints for error types repeated >= 2 times
+                stop_hints = escalation.get_repeated_error_hints(threshold=2) if escalation else []
+                stop_hints_text = ("\n\n" + "\n".join(stop_hints)) if stop_hints else ""
                 session.messages.append(
                     {
                         "role": ENGINE_CONTEXT_ROLE,
@@ -2039,6 +2188,7 @@ class AgentRunner:
                             "2. Is there an alternative approach or different tool?\n"
                             "3. Should you skip this step and continue?\n"
                             "Do NOT retry the exact same call with the same arguments."
+                            f"{stop_hints_text}"
                         ),
                     }
                 )
