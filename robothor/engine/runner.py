@@ -3066,6 +3066,21 @@ class AgentRunner:
                 else LLM_REQUEST_TIMEOUT
             ),
         }
+        # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
+        # backend. OpenRouter's default load-balancing also fans out to Google
+        # Vertex and Amazon Bedrock, both of which reject assistant-prefill
+        # ("This model does not support assistant message prefill") and
+        # ephemeral-cache_control content blocks. Anthropic-direct supports
+        # both. allow_fallbacks=False means an Anthropic outage falls through
+        # to our existing model_fallbacks chain (MiMo, DeepSeek, etc.) rather
+        # than silently routing to a less-compatible backend.
+        if model.startswith("openrouter/anthropic/"):
+            kwargs["extra_body"] = {
+                "provider": {
+                    "order": ["Anthropic"],
+                    "allow_fallbacks": False,
+                }
+            }
         if stream:
             kwargs["stream"] = True
         if tools:
