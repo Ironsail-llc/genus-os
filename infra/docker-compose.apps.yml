@@ -1,0 +1,136 @@
+# Application services (engine, bridge, orchestrator, dashboard).
+# Layered on top of docker-compose.yml.
+#
+# Usage:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.apps.yml up -d --build
+#
+# All cross-service URLs and credentials live in infra/.env. Each service
+# loads it via `env_file:`. The `environment:` block here only carries
+# Telegram gating since that uses compose substitution syntax.
+
+services:
+  engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile.python
+    image: genusos/python:dev
+    container_name: robothor-engine
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    env_file:
+      - .env
+    # NOTE: HEAD's robothor.engine.daemon instantiates TelegramBot
+    # unconditionally (aiogram crashes on empty token). To run without
+    # Telegram, comment out ROBOTHOR_TELEGRAM_BOT_TOKEN in infra/.env or
+    # apply the daemon guard from this session's stash.
+    ports:
+      - "127.0.0.1:18800:18800"
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+      - ../brain:/app/brain:ro
+      - ../docs:/app/docs:ro
+      - robothor_workspace:/var/lib/robothor
+      - robothor_logs:/var/log/robothor
+      - ${USERPROFILE:-${HOME}}/.robothor:/root/.robothor:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:18800/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  bridge:
+    image: genusos/python:dev
+    container_name: robothor-bridge
+    restart: always
+    depends_on:
+      engine:
+        condition: service_started
+    working_dir: /app/crm/bridge
+    command: ["python", "bridge_service.py"]
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+      - ../brain:/app/brain:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9100/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  orchestrator:
+    image: genusos/python:dev
+    container_name: robothor-orchestrator
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:9099:9099"
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile.app
+    image: genusos/dashboard:dev
+    container_name: robothor-dashboard
+    restart: always
+    depends_on:
+      bridge:
+        condition: service_started
+      orchestrator:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      # Browser-visible URL (the marketplace component proxies through Next's
+      # own /api). Must reach the dashboard's published origin from a browser.
+      NEXT_PUBLIC_BRIDGE_URL: http://localhost:3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ../app:/app
+      - dashboard_node_modules:/app/node_modules
+      - dashboard_next:/app/.next
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  robothor_workspace:
+    driver: local
+  robothor_logs:
+    driver: local
+  dashboard_node_modules:
+    driver: local
+  dashboard_next:
+    driver: local

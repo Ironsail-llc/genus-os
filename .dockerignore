@@ -1,0 +1,31 @@
+# Keep Python images thin
+venv/
+.venv/
+.venv-test/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.scannerwork/
+htmlcov/
+coverage*.json
+.coverage
+*.egg-info/
+
+# Keep dashboard image thin
+app/node_modules/
+app/.next/
+app/dist/
+
+# Misc
+.git/
+.github/
+docs/
+brain/
+local/
+logs/
+*.log
+.env
+.env.*
+*.tar.gz
