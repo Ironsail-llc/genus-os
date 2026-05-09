@@ -79,6 +79,58 @@ def main(argv: list[str] | None = None) -> int:
     # mcp
     subparsers.add_parser("mcp", help="Start the MCP server (stdio transport)")
 
+    # goal — long-running session goal (operator objective).
+    # Backed by a crm_task with the session_goal tag; see migration 065.
+    goal_parser = subparsers.add_parser("goal", help="Manage the active long-running session goal")
+    goal_parser.add_argument(
+        "--tenant",
+        default=None,
+        help="Tenant ID (defaults to ROBOTHOR_DEFAULT_TENANT or 'default')",
+    )
+    goal_parser.add_argument(
+        "--agent",
+        default="",
+        help="Agent ID for a per-agent goal (workspace goal otherwise, owner=main)",
+    )
+    goal_sub = goal_parser.add_subparsers(dest="goal_command")
+
+    goal_set = goal_sub.add_parser("set", help="Create the active session goal")
+    goal_set.add_argument("objective", help="Goal objective (one sentence)")
+    goal_set.add_argument(
+        "--criteria",
+        action="append",
+        default=[],
+        help="Success criterion; repeat to provide an explicit completion contract",
+    )
+    goal_set.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
+
+    goal_status = goal_sub.add_parser("status", help="Show the active session goal")
+    goal_status.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
+
+    goal_evidence = goal_sub.add_parser("evidence", help="Record typed evidence")
+    goal_evidence.add_argument(
+        "--kind",
+        required=True,
+        choices=["test_run", "commit", "ci_run", "note"],
+        help=(
+            "test_run: pytest:passed:N or run UUID; "
+            "commit: git SHA validated via git cat-file; "
+            "ci_run: https URL; "
+            "note: free-form (does not satisfy completion)"
+        ),
+    )
+    goal_evidence.add_argument("--summary", required=True, help="Short evidence summary")
+    goal_evidence.add_argument("--reference", default="", help="Verifiable reference for this kind")
+    goal_evidence.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
+    goal_complete = goal_sub.add_parser("complete", help="Mark the active session goal complete")
+    goal_complete.add_argument("note", help="Completion note")
+    goal_complete.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
     # status
     subparsers.add_parser("status", help="Show system status")
 
@@ -317,6 +369,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_mcp
 
         return cmd_mcp()
+    if args.command == "goal":
+        from robothor.cli.goal import cmd_goal
+
+        return cmd_goal(args)
     if args.command == "status":
         from robothor.cli.admin import cmd_status
 

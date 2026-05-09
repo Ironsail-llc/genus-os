@@ -1458,6 +1458,293 @@ def set_question(
             return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Session goals — long-running operator objectives backed by a crm_task row.
+# A session goal is a crm_task with the `session_goal` tag. Workspace-scoped
+# goals carry only that tag; agent-scoped goals also carry `agent:<agent_id>`.
+# Structured payload (success criteria, evidence, completion note) lives in
+# the `session_goal_meta` JSONB column added in migration 065.
+# ─────────────────────────────────────────────────────────────────────────────
+
+SESSION_GOAL_TAG = "session_goal"
+
+
+def _agent_scope_tag(agent_id: str) -> str:
+    return f"agent:{agent_id}"
+
+
+def get_active_session_goal(
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str = "",
+) -> dict[str, Any] | None:
+    """Return the active session goal for a tenant, optionally agent-scoped.
+
+    With ``agent_id`` set, returns the most recent active goal carrying the
+    ``agent:<agent_id>`` tag. Without it, returns the most recent active goal
+    that has *no* ``agent:*`` tag (workspace scope). "Active" = status NOT IN
+    ('DONE', 'CANCELED'). Returns the row dict (with ``session_goal_meta``
+    inlined) or None.
+    """
+    required_tags: list[str] = [SESSION_GOAL_TAG]
+    if agent_id:
+        required_tags.append(_agent_scope_tag(agent_id))
+        scope_clause = ""
+    else:
+        # Workspace lookup: exclude any row that carries an agent:* tag so
+        # agent-scoped goals don't leak into the workspace bucket.
+        # %% escapes psycopg2's parameter substitution.
+        scope_clause = "AND NOT EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE t LIKE 'agent:%%') "
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"""
+            SELECT * FROM crm_tasks
+            WHERE deleted_at IS NULL
+              AND tenant_id = %s
+              AND tags @> %s
+              AND status NOT IN ('DONE', 'CANCELED')
+              {scope_clause}
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (tenant_id, required_tags),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def create_session_goal(
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    objective: str,
+    success_criteria: list[str],
+    agent_id: str = "",
+    created_by_agent: str = "operator",
+) -> str | None:
+    """Create a session-goal crm_task. Returns task UUID."""
+    tags = [SESSION_GOAL_TAG]
+    if agent_id:
+        tags.append(_agent_scope_tag(agent_id))
+    title = (objective or "").strip()[:100] or "Session goal"
+    initial_meta = {
+        "success_criteria": list(success_criteria or []),
+        "evidence": [],
+        "completion_note": "",
+    }
+    task_id = str(uuid.uuid4())
+    sla_deadline = _compute_sla_deadline("high")
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """
+                INSERT INTO crm_tasks (id, title, body, status, priority, tags,
+                                       created_by_agent, assigned_to_agent,
+                                       sla_deadline_at, requires_human, objective,
+                                       session_goal_meta, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                """,
+                (
+                    task_id,
+                    title,
+                    "",
+                    "TODO",
+                    "high",
+                    tags,
+                    created_by_agent,
+                    agent_id or "main",
+                    sla_deadline,
+                    False,
+                    objective,
+                    json.dumps(initial_meta),
+                    tenant_id,
+                ),
+            )
+            _record_transition(
+                cur,
+                task_id,
+                None,
+                "TODO",
+                changed_by=created_by_agent,
+                reason="Session goal created",
+                tenant_id=tenant_id,
+            )
+            conn.commit()
+            _safe_audit(
+                "create",
+                "session_goal",
+                task_id,
+                details={
+                    "objective": objective,
+                    "agent_id": agent_id,
+                    "tenant_id": tenant_id,
+                },
+            )
+            return task_id
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to create session goal: %s", e)
+            return None
+
+
+def update_session_goal_meta(
+    task_id: str,
+    meta: dict[str, Any],
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Replace the session_goal_meta JSONB blob on a task."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET session_goal_meta = %s::jsonb,
+                       updated_at = NOW()
+                   WHERE id = %s
+                     AND deleted_at IS NULL
+                     AND tenant_id = %s
+                     AND %s = ANY(tags)""",
+                (json.dumps(meta), task_id, tenant_id, SESSION_GOAL_TAG),
+            )
+            ok: bool = cur.rowcount > 0
+            conn.commit()
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to update session_goal_meta on %s: %s", task_id, e)
+            return False
+
+
+def add_session_goal_evidence(
+    task_id: str,
+    *,
+    kind: str,
+    summary: str,
+    reference: str = "",
+    valid: bool = True,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Append an evidence item to the session_goal_meta.evidence list."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """SELECT session_goal_meta FROM crm_tasks
+                   WHERE id = %s AND deleted_at IS NULL
+                     AND tenant_id = %s AND %s = ANY(tags)""",
+                (task_id, tenant_id, SESSION_GOAL_TAG),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            meta = dict(
+                row.get("session_goal_meta")
+                or {
+                    "success_criteria": [],
+                    "evidence": [],
+                    "completion_note": "",
+                }
+            )
+            evidence_list = list(meta.get("evidence") or [])
+            evidence_list.append(
+                {
+                    "kind": kind,
+                    "summary": summary,
+                    "reference": reference,
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                    "valid": bool(valid),
+                }
+            )
+            meta["evidence"] = evidence_list
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET session_goal_meta = %s::jsonb,
+                       updated_at = NOW()
+                   WHERE id = %s
+                     AND deleted_at IS NULL
+                     AND tenant_id = %s""",
+                (json.dumps(meta), task_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+            conn.commit()
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to add session goal evidence on %s: %s", task_id, e)
+            return False
+
+
+def complete_session_goal(
+    task_id: str,
+    completion_note: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Mark a session-goal task DONE and persist the completion note in meta.
+
+    Caller is responsible for verifying the completion guard (structured
+    evidence) before calling this — the DAL trusts the caller. The status
+    transition still flows through CRM history.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """SELECT status, session_goal_meta FROM crm_tasks
+                   WHERE id = %s AND deleted_at IS NULL
+                     AND tenant_id = %s AND %s = ANY(tags)""",
+                (task_id, tenant_id, SESSION_GOAL_TAG),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            current_status = row["status"]
+            meta = dict(
+                row.get("session_goal_meta")
+                or {
+                    "success_criteria": [],
+                    "evidence": [],
+                    "completion_note": "",
+                }
+            )
+            meta["completion_note"] = completion_note
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET status = 'DONE',
+                       resolved_at = NOW(),
+                       resolution = %s,
+                       session_goal_meta = %s::jsonb,
+                       updated_at = NOW()
+                   WHERE id = %s
+                     AND deleted_at IS NULL
+                     AND tenant_id = %s""",
+                (completion_note[:500], json.dumps(meta), task_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+            if ok and current_status != "DONE":
+                _record_transition(
+                    cur,
+                    task_id,
+                    current_status,
+                    "DONE",
+                    changed_by="operator",
+                    reason=completion_note,
+                    tenant_id=tenant_id,
+                )
+            conn.commit()
+            if ok:
+                _safe_audit(
+                    "complete",
+                    "session_goal",
+                    task_id,
+                    details={"note": completion_note},
+                )
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to complete session goal %s: %s", task_id, e)
+            return False
+
+
 def resurface_due_followups(tenant_id: str = DEFAULT_TENANT) -> list[str]:
     """Clear follow_up_at on tasks whose snooze time has passed.
 
@@ -2810,10 +3097,10 @@ def resolve_contact(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Check existing mapping
+        # Check existing mapping (scoped to tenant — unique key is (tenant_id, channel, identifier))
         cur.execute(
-            "SELECT * FROM contact_identifiers WHERE channel = %s AND identifier = %s",
-            (channel, identifier),
+            "SELECT * FROM contact_identifiers WHERE tenant_id = %s AND channel = %s AND identifier = %s",
+            (tenant_id, channel, identifier),
         )
         existing = cur.fetchone()
 
@@ -2854,18 +3141,18 @@ def resolve_contact(
                     first, last, email=email, phone=phone, tenant_id=tenant_id
                 )
 
-        # Upsert the mapping
+        # Upsert the mapping — must match the (tenant_id, channel, identifier) unique key
         cur.execute(
             """
-            INSERT INTO contact_identifiers (channel, identifier, display_name, person_id)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (channel, identifier) DO UPDATE SET
+            INSERT INTO contact_identifiers (tenant_id, channel, identifier, display_name, person_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, channel, identifier) DO UPDATE SET
                 display_name = COALESCE(EXCLUDED.display_name, contact_identifiers.display_name),
                 person_id = COALESCE(EXCLUDED.person_id, contact_identifiers.person_id),
                 updated_at = NOW()
             RETURNING *
             """,
-            (channel, identifier, display, person_id),
+            (tenant_id, channel, identifier, display, person_id),
         )
         result = cur.fetchone()
         conn.commit()

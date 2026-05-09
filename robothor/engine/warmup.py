@@ -165,6 +165,16 @@ def build_warmth_preamble(
     _run_section("preferences", _preferences)
     _run_section("agent_hooks", lambda: _run_agent_context_hooks(config))
 
+    def _session_goal() -> str | None:
+        # Late import: session_goal imports robothor.crm.dal which transitively
+        # touches DB drivers. Keep warmup lightweight when unused.
+        from robothor.engine.session_goal import build_goal_context
+
+        ctx = build_goal_context(tenant_id=tenant_id, agent_id=config.id)
+        return ctx or None
+
+    _run_section("session_goal", _session_goal)
+
     total_elapsed = time.monotonic() - total_start
     if total_elapsed > 5.0:
         breakdown = " ".join(
@@ -456,6 +466,16 @@ def build_interactive_preamble(
         fleet_section = _recent_fleet_surfaces(tenant_id=tenant_id)
         if fleet_section:
             sections.append(fleet_section)
+
+    # Active session goal — owner-only scoping enforced inside build_goal_context.
+    try:
+        from robothor.engine.session_goal import build_goal_context
+
+        goal_section = build_goal_context(tenant_id=tenant_id, agent_id=agent_id)
+        if goal_section:
+            sections.append(goal_section)
+    except Exception as e:
+        logger.debug("Interactive warmup session_goal failed: %s", e)
 
     if not sections:
         return ""

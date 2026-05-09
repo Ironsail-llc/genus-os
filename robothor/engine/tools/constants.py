@@ -33,6 +33,9 @@ BROWSER_TOOLS = frozenset({"browser"})
 # In-conversation todo list
 TODO_TOOLS = frozenset({"todo_write"})
 
+# Long-running per-agent goals
+GOAL_TOOLS = frozenset({"create_goal", "get_goal", "update_goal"})
+
 # Desktop control tools (computer use)
 DESKTOP_TOOLS = frozenset(
     {
@@ -83,7 +86,15 @@ EXPERIMENT_TOOLS = frozenset(
 )
 
 # AutoAgent benchmark tools
-BENCHMARK_TOOLS = frozenset({"benchmark_define", "benchmark_run", "benchmark_compare"})
+BENCHMARK_TOOLS = frozenset(
+    {
+        "benchmark_define",
+        "benchmark_run",
+        "benchmark_compare",
+        "benchmark_run_for_agent",
+        "benchmark_run_fleet",
+    }
+)
 
 # Apollo.io contact enrichment & search tools
 APOLLO_TOOLS = frozenset(
@@ -185,6 +196,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_agent_run",
         "list_agent_schedules",
         "get_agent_stats",
+        "get_goal",
         # Vault read-only tools
         "vault_get",
         "vault_list",

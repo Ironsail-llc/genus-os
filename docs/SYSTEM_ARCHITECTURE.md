@@ -412,6 +412,29 @@ create_task ──▶ worker run (todo_write)
 | `ROBOTHOR_PLANNER_ENABLED` | `0` (off) | The Stage 4 forward planner. Off → stage-3 bare-flag stall2 behavior. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | `1` (on) | Stage 5 escalation at run end. Only fires when both `parent_task_id` is set AND items remain unfinished. |
 
+### Session Goals — operator's active objective
+
+Distinct from the per-agent benchmark `goals.py` (which scores agents on `docs/benchmarks/<agent>/suite.yaml` pass rates), a **session goal** is a long-running operator objective that survives across runs and is auto-injected into the owner agent's prompt every turn.
+
+**Storage.** A `crm_tasks` row tagged `session_goal`. Workspace-scoped goals carry only that tag; agent-scoped goals also carry `agent:<id>`. Structured payload (success criteria, typed evidence, completion note) lives in the `session_goal_meta` JSONB column (migration 065). `brain/GOAL.md` is a denormalized read-cache regenerated on every mutation; hand-edits are advisory only.
+
+**Owner-only injection.** `robothor/engine/session_goal.py::build_goal_context` resolves which goal an agent should see:
+1. If an agent-scoped goal exists for this `agent_id`, render it.
+2. Else if `agent_id == "main"`, render the workspace goal.
+3. Else return empty — workers (delivery: none) never see goals that aren't theirs.
+
+The block is pulled in via the `session_goal` warmup phase (`robothor/engine/warmup.py`), so it shows up as a `warmup_section:session_goal` step in `agent_run_steps` for telemetry alongside other warmup phases.
+
+**Real completion guard.** `complete_goal` refuses to mark the task DONE unless evidence includes:
+- ≥1 valid `test_run` evidence — reference matching `pytest:(passed|failed):N` or a UUID resolvable as an `agent_run_steps` row id, AND
+- ≥1 valid `commit` evidence — reference is a 7+ char SHA validated via `git cat-file -e`.
+
+Other kinds: `ci_run` (https URL) and `note` (free-form, never satisfies completion).
+
+**Composition with the thread pool.** Because session goals are crm_tasks, they participate in the same machinery: thread pool surfacing, stall classification, forward planner next-action writes, autonomy budget enforcement, and Stage 5 todo escalation when worker runs are spawned with `parent_task_id` pointing at the goal task.
+
+**Surfaces.** `/goal` (Telegram), `robothor goal …` (CLI), and the `create_goal` / `get_goal` / `update_goal` tools — all backed by the same DAL helpers in `robothor/crm/dal.py`. The Telegram handler also exposes shortcuts: `/goal evidence-test pytest:passed:N` and `/goal evidence-commit HEAD`.
+
 **Activation:**
 ```
 sudo systemctl edit robothor-engine

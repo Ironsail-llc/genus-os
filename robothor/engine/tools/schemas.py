@@ -1630,6 +1630,78 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["benchmark_run_fleet"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_run_fleet",
+            "description": (
+                "Run benchmark suites for every agent that has one in docs/benchmarks/. "
+                "Single tool call covers the entire fleet. Used by the daily benchmark cron."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tag": {
+                        "type": "string",
+                        "description": "Run label (default: cron-YYYY-MM-DD)",
+                    },
+                    "triggered_by": {
+                        "type": "string",
+                        "description": "Trigger source (default: 'cron')",
+                    },
+                    "skip": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Agent IDs to skip",
+                    },
+                    "only": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Restrict to these agent IDs (default: all)",
+                    },
+                },
+            },
+        },
+    }
+    schemas["benchmark_run_for_agent"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_run_for_agent",
+            "description": (
+                "Run an agent's on-disk benchmark suite (docs/benchmarks/<agent>/suite.yaml) "
+                "in one call. Loads the suite, runs every task as a sub-agent, scores them, "
+                "and writes a row to the benchmark_results table. This is the canonical entry "
+                "point for the daily benchmark cron and the Auto Researcher before/after gate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent to benchmark",
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Unique label for this run (e.g. 'cron-2026-05-06', 'auto-researcher:before:exp-id')",
+                    },
+                    "triggered_by": {
+                        "type": "string",
+                        "description": "How this run was triggered: 'cron' | 'manual' | 'auto-researcher:before' | 'auto-researcher:after'",
+                    },
+                    "experiment_id": {
+                        "type": "string",
+                        "description": "Optional link to docs/experiments/<id>.yaml",
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of task IDs to run (default: all)",
+                    },
+                },
+                "required": ["agent_id", "tag"],
+            },
+        },
+    }
     schemas["benchmark_compare"] = {
         "type": "function",
         "function": {
@@ -2065,6 +2137,107 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                 },
                 "required": ["todos"],
+            },
+        },
+    }
+
+    # ── Long-running goal tracking ──
+
+    schemas["create_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "create_goal",
+            "description": (
+                "Create an active long-running session goal. Refuses to overwrite an "
+                "existing active goal in the same scope. Workspace goals (no agent_id) "
+                "auto-inject only into the main agent; agent-scoped goals inject only "
+                "into the named agent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "Concrete objective the agent should keep pursuing.",
+                    },
+                    "success_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit completion contract.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
+                "required": ["objective"],
+            },
+        },
+    }
+    schemas["get_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "get_goal",
+            "description": (
+                "Return the active long-running session goal for the current scope, "
+                "including objective, evidence count, and remaining completion "
+                "requirements."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
+            },
+        },
+    }
+    schemas["update_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "update_goal",
+            "description": (
+                "Record typed evidence on a long-running session goal or mark it "
+                "complete. Completion requires at least one validated 'test_run' AND "
+                "one validated 'commit' evidence item. The reference field is verified "
+                "per kind: pytest summary or UUID for test_run; git SHA validated via "
+                "git cat-file for commit; https URL for ci_run."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "complete"],
+                        "description": "Set to complete only when the goal is truly finished.",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["test_run", "commit", "ci_run", "note"],
+                        "description": "Evidence kind. Only test_run + commit satisfy completion.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Short evidence summary.",
+                    },
+                    "reference": {
+                        "type": "string",
+                        "description": (
+                            "Verifiable reference: pytest:passed:N or run UUID for "
+                            "test_run; 7+ hex SHA for commit; https URL for ci_run."
+                        ),
+                    },
+                    "completion_note": {
+                        "type": "string",
+                        "description": "Required when status is complete.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
             },
         },
     }
@@ -2522,6 +2695,33 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["get_agent_performance_summary"] = {
+        "type": "function",
+        "function": {
+            "name": "get_agent_performance_summary",
+            "description": (
+                "Per-agent grade card from the latest benchmark_results row. "
+                "Returns each agent's job pass_rate (0.0-1.0), pass/fail counts, "
+                "trend vs prior run, failing case IDs, and category breakdown. "
+                "This is the canonical 'did the agent do its job?' read — used by "
+                "the morning briefing Agent Performance section, the /goals "
+                "Telegram command, and the end-of-day summary."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional — filter to a single agent",
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "description": "Exclude rows older than this (default 48)",
+                    },
+                },
+            },
+        },
+    }
     schemas["list_agent_reviews"] = {
         "type": "function",
         "function": {

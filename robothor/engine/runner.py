@@ -647,6 +647,10 @@ class AgentRunner:
         t_sys_prompt_ms = int((time.monotonic() - t_sys_prompt_start) * 1000)
         watchdog.touch("system_prompt_built")
         system_prompt = system_prompt_parts.full_text()  # str for mode wrapping
+        # Session-goal injection moved into the warmup pipeline (build_warmth_preamble
+        # / build_interactive_preamble). Owner-only scoping is enforced there so
+        # workers don't see other agents' goals, and the warmup_section:session_goal
+        # step shows up in agent_run_steps for telemetry.
 
         t_warmup_start = time.monotonic()
         warmup_preamble: str | None = None

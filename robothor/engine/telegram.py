@@ -15,9 +15,12 @@ import asyncio
 import contextlib
 import html
 import logging
+import os
 import re
+import subprocess
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -141,10 +144,10 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
+    "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
-    "MiMo-V2-Pro": "openrouter/xiaomi/mimo-v2-pro",
-    "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
-    "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
+    "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
+    "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
 }
 
 # Reverse lookup: model id → display name
@@ -291,6 +294,8 @@ class TelegramBot:
                 "/deep — Deep reasoning via RLM ($0.50-$2.00)\n"
                 "/plan — Plan before executing (review + approve)\n"
                 "/model — Switch AI model\n"
+                "/goal — Show or update the active session goal\n"
+                "/goals — Show each agent's benchmark grade\n"
                 "/clear — Clear conversation history\n"
                 "/context — Context window stats\n"
                 "/reset — Reset model + history\n"
@@ -318,6 +323,10 @@ class TelegramBot:
                 f"{status_line}\n\nTap to switch:",
                 reply_markup=kb,
             )
+
+        @self.dp.message(Command("goal"))
+        async def cmd_goal(message: Message) -> None:
+            await self._handle_goal_command(message)
 
         @self.dp.message(Command("clear"))
         async def cmd_clear(message: Message) -> None:
@@ -593,6 +602,63 @@ class TelegramBot:
             except Exception as e:
                 await message.answer(f"Buddy unavailable: {html.escape(str(e))}")
 
+        @self.dp.message(Command("goals"))
+        async def cmd_goals(message: Message) -> None:
+            """Show each agent's job grade — pass rate on its benchmark suite."""
+            try:
+                from robothor.constants import DEFAULT_TENANT
+                from robothor.db.connection import get_connection
+
+                tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", DEFAULT_TENANT)
+                with get_connection() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT ON (agent_id)
+                          agent_id, suite_id, run_at, total_cases, passed,
+                          pass_rate, failures
+                        FROM benchmark_results
+                        WHERE tenant_id = %s
+                          AND run_at >= NOW() - INTERVAL '48 hours'
+                        ORDER BY agent_id, run_at DESC
+                        """,
+                        (tenant_id,),
+                    )
+                    rows = cur.fetchall()
+
+                if not rows:
+                    await message.answer(
+                        "<b>Agent Performance</b>\n\nBenchmark cron hasn't run yet — "
+                        "check back after 4 AM ET tomorrow, or trigger benchmark-runner manually."
+                    )
+                    return
+
+                # Sort worst → best for prominence
+                rows = sorted(rows, key=lambda r: r[5])
+                lines = ["<b>Agent Performance — job pass rate</b>", ""]
+                for r in rows:
+                    agent_id, _suite_id, _run_at, total, passed, pass_rate, failures = r
+                    pct = int(round(float(pass_rate) * 100))
+                    failures_payload = failures or []
+                    if isinstance(failures_payload, str):
+                        import json as _json
+
+                        failures_payload = _json.loads(failures_payload)
+                    failing_ids = [f.get("case_id") for f in failures_payload if f.get("case_id")][
+                        :3
+                    ]
+                    tail = f"  ↳ failing: {', '.join(failing_ids)}" if failing_ids else ""
+                    lines.append(f"  {agent_id:<22s}{passed}/{total} ({pct}%)")
+                    if tail:
+                        lines.append(tail)
+                lines.append("")
+                lines.append(
+                    "<i>Each line is the agent's grade on its docs/benchmarks/&lt;agent&gt;/suite.yaml. "
+                    "Cost is observed, never optimized.</i>"
+                )
+                await message.answer("\n".join(lines))
+            except Exception as e:
+                await message.answer(f"Goals unavailable: {html.escape(str(e))}")
+
         # ── Inline keyboard callbacks ──
 
         @self.dp.callback_query(F.data.startswith("plan:"))
@@ -748,6 +814,135 @@ class TelegramBot:
             with contextlib.suppress(Exception):
                 if msg and hasattr(msg, "edit_reply_markup"):
                     await msg.edit_reply_markup(reply_markup=None)
+
+        # ── Delphi proposal approval callbacks ──
+        # callback_data shape: ``dp:a:<32-hex>`` (approve) or ``dp:r:<32-hex>``
+        # (reject). The Delphi engine runs a separate daemon (port 18801) but
+        # uses the same engine codebase, so this handler ships in the shared
+        # telegram.py and only fires when a Delphi proposal is in flight.
+        @self.dp.callback_query(F.data.startswith("dp:"))
+        async def on_delphi_proposal_decision(callback: CallbackQuery) -> None:
+            import asyncio as _asyncio
+            import hashlib as _hashlib
+            import hmac as _hmac
+            import os as _os
+            import uuid as _uuid
+
+            msg = callback.message
+            if not msg or not hasattr(msg, "chat"):
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+            if str(msg.chat.id) != str(self.config.default_chat_id):
+                logger.warning(
+                    "Unauthorized delphi-proposal callback from chat_id=%s user_id=%s",
+                    msg.chat.id,
+                    callback.from_user.id if callback.from_user else "unknown",
+                )
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+
+            if not callback.data:
+                await callback.answer("Invalid callback data")
+                return
+            parts = callback.data.split(":", 2)
+            if len(parts) != 3 or parts[0] != "dp":
+                await callback.answer("Invalid callback data")
+                return
+            action_short = parts[1]
+            short_hex = parts[2]
+            if action_short == "a":
+                action = "approve"
+            elif action_short == "r":
+                action = "reject"
+            else:
+                await callback.answer("Invalid action")
+                return
+            try:
+                proposal_uuid = str(_uuid.UUID(short_hex))
+            except (TypeError, ValueError):
+                await callback.answer("Invalid proposal id")
+                return
+
+            # Compute the HMAC token here, in the engine process — the secret
+            # is not exposed to agents or callback_data.
+            secret = _os.environ.get("DELPHI_PROPOSAL_HMAC_SECRET", "")
+            if not secret:
+                logger.error(
+                    "DELPHI_PROPOSAL_HMAC_SECRET unset — cannot dispatch %s",
+                    proposal_uuid,
+                )
+                await callback.answer(
+                    "Engine misconfigured (no HMAC secret)",
+                    show_alert=True,
+                )
+                return
+            token = _hmac.new(
+                secret.encode("utf-8"),
+                f"{proposal_uuid}:{action}".encode(),
+                _hashlib.sha256,
+            ).hexdigest()
+
+            # Run the apply script as a subprocess. Async-safe: we use
+            # asyncio.create_subprocess_exec so we don't block the event loop.
+            # The script lives in scripts/, ROBOTHOR_TENANT_ID is forced to
+            # 'delphi' inside the script's preamble.
+            workspace_root = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+            script_path = f"{workspace_root}/scripts/delphi_apply_proposal.py"
+            python_path = f"{workspace_root}/venv/bin/python"
+            try:
+                proc = await _asyncio.create_subprocess_exec(
+                    python_path,
+                    script_path,
+                    "--proposal-id",
+                    proposal_uuid,
+                    "--action",
+                    action,
+                    "--token",
+                    token,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                    env={**_os.environ, "DELPHI_PROPOSAL_HMAC_SECRET": secret},
+                )
+                stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=15)
+                rc = proc.returncode
+            except TimeoutError:
+                logger.error("delphi_apply_proposal.py timed out for %s", proposal_uuid)
+                await callback.answer("Apply timed out", show_alert=True)
+                return
+            except Exception:
+                logger.exception("Failed to invoke delphi_apply_proposal.py")
+                await callback.answer("Apply failed (see logs)", show_alert=True)
+                return
+
+            if rc == 0:
+                verb = "Applied" if action == "approve" else "Rejected"
+                await callback.answer(verb)
+                with contextlib.suppress(Exception):
+                    if msg and hasattr(msg, "edit_reply_markup"):
+                        await msg.edit_reply_markup(reply_markup=None)
+                with contextlib.suppress(Exception):
+                    # Append a small footer to the message so the operator
+                    # has a record without scrolling away.
+                    if msg and hasattr(msg, "edit_text") and getattr(msg, "text", None):
+                        new_text = msg.text + f"\n\n_{verb} ✓_"
+                        await msg.edit_text(new_text, parse_mode="Markdown")
+            else:
+                err = (stderr or b"").decode("utf-8", errors="replace")[:200]
+                logger.warning(
+                    "delphi_apply_proposal rc=%s stderr=%s",
+                    rc,
+                    err.strip(),
+                )
+                # Common rc codes (see delphi_apply_proposal.py): 3=bad token,
+                # 4=not found, 5=not pending, 6=expired, 7=dispatch error.
+                msg_map = {
+                    3: "HMAC mismatch (engine bug?)",
+                    4: "Proposal not found",
+                    5: "Already decided",
+                    6: "Expired",
+                    7: "Apply failed",
+                }
+                await callback.answer(msg_map.get(rc, f"Apply failed (rc={rc})"), show_alert=True)
 
         # ── File/document/photo messages ──
 
@@ -2149,6 +2344,210 @@ class TelegramBot:
             logger.exception("Failed to queue restart of %s", unit_name)
             await message.answer(f"Failed to queue restart: {e}")
 
+    async def _handle_goal_command(self, message: Message) -> None:
+        """Manage the operator's long-running session goal from Telegram.
+
+        Backed by a crm_task with the session_goal tag. Evidence is typed:
+          - test_run  reference must match pytest:passed:N or be a UUID
+          - commit    reference must be a git SHA (validated via git cat-file)
+          - ci_run    reference must be an https:// URL
+          - note      free-form (does not satisfy completion guard)
+
+        Shortcuts:
+          /goal evidence-commit HEAD          — resolves HEAD via `git rev-parse`
+          /goal evidence-test pytest:passed:N — short alias for `evidence test_run …`
+        """
+        from robothor.engine.session_goal import (
+            add_evidence,
+            complete_goal,
+            create_active_goal,
+            get_active_goal,
+            regenerate_goal_md_cache,
+        )
+
+        text = (message.text or "").strip()
+        arg = text.removeprefix("/goal").strip()
+        agent_id = self.config.default_chat_agent
+        tenant_id = self.config.tenant_id
+        workspace = self.config.workspace
+
+        try:
+            if not arg or arg == "status":
+                goal = get_active_goal(tenant_id=tenant_id, agent_id=agent_id)
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            command, _, rest = arg.partition(" ")
+            command = command.lower()
+            rest = rest.strip()
+
+            if command == "set":
+                if not rest:
+                    await message.answer(
+                        "Usage: <code>/goal set &lt;objective&gt;</code>\n"
+                        "An active goal must be completed (<code>/goal done &lt;note&gt;</code>) "
+                        "before a new one can be created."
+                    )
+                    return
+                try:
+                    goal = create_active_goal(
+                        tenant_id=tenant_id, objective=rest, agent_id=agent_id
+                    )
+                except ValueError as exc:
+                    if "active goal already exists" not in str(exc):
+                        raise
+                    await message.answer(
+                        "An active goal already exists. Complete it first with "
+                        "<code>/goal done &lt;note&gt;</code>."
+                    )
+                    return
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence":
+                kind, _, summary = rest.partition(" ")
+                kind = kind.strip().lower()
+                summary, _, reference = summary.strip().partition("--ref=")
+                summary = summary.strip()
+                reference = reference.strip()
+                if kind not in {"test_run", "commit", "ci_run", "note"}:
+                    await message.answer(
+                        "Usage: <code>/goal evidence &lt;kind&gt; &lt;summary&gt; "
+                        "[--ref=&lt;reference&gt;]</code>\n"
+                        "kind must be one of: test_run, commit, ci_run, note"
+                    )
+                    return
+                if not summary:
+                    await message.answer("Evidence summary is required.")
+                    return
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind=kind,
+                    summary=summary,
+                    reference=reference,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence-commit":
+                # `/goal evidence-commit HEAD` or `/goal evidence-commit <sha>`
+                ref = (rest or "HEAD").strip()
+                if ref.upper() == "HEAD":
+                    try:
+                        result = subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=str(workspace),
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if result.returncode != 0:
+                            await message.answer(
+                                f"git rev-parse HEAD failed: {html.escape(result.stderr.strip())}"
+                            )
+                            return
+                        ref = result.stdout.strip()
+                    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                        await message.answer(f"git unavailable: {exc}")
+                        return
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind="commit",
+                    summary=f"committed {ref[:12]}",
+                    reference=ref,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence-test":
+                ref = rest.strip() or "pytest:passed:0"
+                summary = f"recorded {ref}"
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind="test_run",
+                    summary=summary,
+                    reference=ref,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command in {"done", "complete"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal done &lt;completion note&gt;</code>")
+                    return
+                goal = complete_goal(
+                    tenant_id=tenant_id,
+                    note=rest,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            await message.answer(
+                "<b>Goal commands</b>\n\n"
+                "/goal — show active goal\n"
+                "/goal set &lt;objective&gt; — create if none exists\n"
+                "/goal evidence &lt;kind&gt; &lt;summary&gt; [--ref=&lt;ref&gt;] — record evidence\n"
+                "  kinds: test_run, commit, ci_run, note\n"
+                "/goal evidence-commit &lt;sha|HEAD&gt; — shortcut, validates SHA\n"
+                "/goal evidence-test pytest:passed:N — shortcut for test_run\n"
+                "/goal done &lt;note&gt; — complete after one valid test_run AND one valid commit"
+            )
+        except Exception as e:
+            logger.exception("Telegram /goal failed")
+            await message.answer(f"Goal unavailable: {html.escape(str(e))}")
+
+    def _format_goal_status(self, goal: Any, *, agent_id: str) -> str:
+        """Format a session goal for Telegram HTML."""
+        from robothor.engine.session_goal import summarize_goal
+
+        if goal is None:
+            return (
+                f"<b>Active goal</b> — {html.escape(agent_id)}\n\n"
+                "No active goal.\n"
+                "Set one with <code>/goal set &lt;objective&gt;</code>."
+            )
+
+        data = summarize_goal(goal, workspace=self.config.workspace)
+        lines = [
+            f"<b>Active goal</b> — {html.escape(agent_id)}",
+            f"Status: <code>{html.escape(str(data['status']))}</code>",
+            f"Objective: {html.escape(str(data['objective']))}",
+            f"Evidence: {data['valid_evidence_count']}/{data['evidence_count']} validated",
+        ]
+
+        missing = data.get("missing_completion_requirements") or []
+        if missing:
+            lines.append("")
+            lines.append("<b>Missing before completion</b>:")
+            lines.extend(f"- {html.escape(str(item))}" for item in missing)
+        else:
+            lines.append("")
+            lines.append("Ready for completion.")
+        return "\n".join(lines)
+
     def _session_key(self, chat_id: str) -> str:
         """Return a DB session key for a Telegram chat.
 
@@ -2334,6 +2733,8 @@ class TelegramBot:
                 BotCommand(command="deep", description="Deep reasoning via RLM"),
                 BotCommand(command="plan", description="Plan before executing"),
                 BotCommand(command="model", description="Switch AI model"),
+                BotCommand(command="goal", description="Show or update the active session goal"),
+                BotCommand(command="goals", description="Agent benchmark grades"),
                 BotCommand(command="clear", description="Clear conversation history"),
                 BotCommand(command="context", description="Context window stats"),
                 BotCommand(command="status", description="Engine health"),
