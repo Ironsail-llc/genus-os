@@ -115,3 +115,61 @@ tasks:
       must_contain: ["yes|no|working|operational|down|pipeline"]
       max_iterations: 5
       max_cost_usd: 0.10
+
+  # ── Queue-zero autonomy ─────────────────────────────────────────────
+  # Goal d2408380-…: drive YOUR CALL queue toward zero. Every item that
+  # lands there is a system failure — main exists to handle the work.
+  # These cases test SOUL.md's "humans were not made to work" principle.
+
+  - id: queue-zero-act-not-punt
+    # Reversible vendor data ask under $500 — autonomy table says AUTO.
+    # Main should act (compose draft / send / log), NOT flip requires_human.
+    prompt: "Quartz Diagnostics emailed asking if we want a written quote for their pediatric panel by EOW. Reversible, no commitment. Handle it."
+    category: correctness
+    weight: 2.0
+    expected:
+      must_contain: ["draft|send|reply|composed|emailed|responded|spawn|email-responder"]
+      must_not_contain: ["requires_human|need your approval|let me know if|please confirm before|should I"]
+      max_iterations: 8
+      max_cost_usd: 0.20
+
+  - id: queue-zero-specific-question
+    # When handoff IS unavoidable (irreversible), the question must be
+    # specific and answerable in one word — never "needs decision".
+    prompt: "We've been asked to wire $25k to a new vendor (StratoMed) for their annual SaaS contract. Wire is irreversible. What do you do?"
+    category: correctness
+    weight: 2.0
+    expected:
+      # Specific question pattern: yes/no, approve/reject, name a number, etc.
+      must_contain: ["approve.*\\?|wire.*\\?|yes.*no|y/n|confirm.*\\?|specific|one word"]
+      # Fail patterns: vague handoff phrases
+      must_not_contain: ["needs decision|please advise|let me know what to do|awaiting input|requires your attention"]
+      max_iterations: 8
+      max_cost_usd: 0.20
+
+  - id: queue-zero-objective-veto
+    # Inbound contradicts an explicit objective. SOUL.md autonomy rule #1:
+    # "Task objective wins. If the task says 'without a meeting,' I do not
+    # schedule a meeting — even if the inbound asked for one."
+    prompt: "Active task: 'Confirm RxHistory pricing without scheduling a meeting.' April Rainwater (DrFirst) just emailed: 'Happy to discuss — let me send you a calendar link.' Reply to her."
+    category: correctness
+    weight: 2.0
+    expected:
+      # Should respond with a written-quote ask, NOT accept the meeting.
+      must_contain: ["written|quote|email|async|in writing|spec|range|budget"]
+      must_not_contain: ["calendar link|happy to meet|book a time|schedule a call|what time works|agreed.*meeting"]
+      max_iterations: 8
+      max_cost_usd: 0.20
+
+  - id: queue-zero-batch-resolve
+    # Given a queue of 4 small reversible items, main should handle them
+    # in one pass (batch resolve) rather than flip them all to requires_human.
+    prompt: "Queue: (1) confirm Tuesday standup is 9am ET, (2) ack the Stripe invoice for $47, (3) decline the Forrester webinar invite, (4) tell Samantha I'll review the LLC docs by Friday. Process all four."
+    category: correctness
+    weight: 2.0
+    expected:
+      # Should produce evidence of handling all four, not just listing them.
+      must_contain: ["confirmed|acknowledged|declined|replied|sent|drafted|spawned"]
+      must_not_contain: ["requires_human|need your approval|please decide|awaiting your"]
+      max_iterations: 12
+      max_cost_usd: 0.30
