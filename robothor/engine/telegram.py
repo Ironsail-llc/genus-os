@@ -2358,11 +2358,14 @@ class TelegramBot:
           /goal evidence-test pytest:passed:N — short alias for `evidence test_run …`
         """
         from robothor.engine.session_goal import (
+            add_criterion,
             add_evidence,
             complete_goal,
             create_active_goal,
+            edit_objective,
             get_active_goal,
             regenerate_goal_md_cache,
+            set_metric_target,
         )
 
         text = (message.text or "").strip()
@@ -2505,10 +2508,58 @@ class TelegramBot:
                 await message.answer(self._format_goal_status(goal, agent_id=agent_id))
                 return
 
+            if command in {"edit-objective", "edit"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal edit-objective &lt;text&gt;</code>")
+                    return
+                goal = edit_objective(tenant_id=tenant_id, agent_id=agent_id, objective=rest)
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command in {"add-criterion", "add-crit"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal add-criterion &lt;text&gt;</code>")
+                    return
+                goal = add_criterion(tenant_id=tenant_id, agent_id=agent_id, text=rest)
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "set-target":
+                # Format: /goal set-target <metric> <op><value>
+                # e.g.    /goal set-target error_rate <0.02
+                parts = rest.split(maxsplit=1)
+                if len(parts) != 2:
+                    await message.answer(
+                        "Usage: <code>/goal set-target &lt;metric&gt; "
+                        "&lt;op&gt;&lt;value&gt;</code>"
+                    )
+                    return
+                metric, target = parts[0].strip(), parts[1].strip()
+                goal = set_metric_target(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    metric=metric,
+                    target=target,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
             await message.answer(
                 "<b>Goal commands</b>\n\n"
                 "/goal — show active goal\n"
                 "/goal set &lt;objective&gt; — create if none exists\n"
+                "/goal edit-objective &lt;text&gt; — replace objective in place\n"
+                "/goal add-criterion &lt;text&gt; — append a success criterion\n"
+                "/goal set-target &lt;metric&gt; &lt;op&gt;&lt;value&gt; — add/replace metric target\n"
                 "/goal evidence &lt;kind&gt; &lt;summary&gt; [--ref=&lt;ref&gt;] — record evidence\n"
                 "  kinds: test_run, commit, ci_run, note\n"
                 "/goal evidence-commit &lt;sha|HEAD&gt; — shortcut, validates SHA\n"

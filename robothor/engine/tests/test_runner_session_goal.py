@@ -39,59 +39,57 @@ def _row(*, tags: list[str], objective: str = "Ship session goal"):
 
 
 @patch("robothor.engine.session_goal.dal.get_active_session_goal")
-def test_owner_warmup_records_session_goal_section(mock_get, tmp_path):
-    # Workspace goal exists; owner=main asks warmup → section recorded.
+def test_agent_warmup_records_agent_goal_section(mock_get, tmp_path):
+    # v2: every agent has its own goal task, looked up by agent_id.
     def side_effect(*, tenant_id, agent_id=""):
-        if agent_id:
-            return None
-        return _row(tags=["session_goal"])
+        if agent_id == "main":
+            return _row(tags=["session_goal", "agent:main", "thread"])
+        return None
 
     mock_get.side_effect = side_effect
 
     cfg = _FakeConfig("main")
     preamble, timings = warmup_mod.build_warmth_preamble(cfg, tmp_path, tenant_id="default")
 
-    assert "ACTIVE SHORT-TERM GOAL" in preamble
-    assert "session_goal" in timings, f"section timings: {timings}"
+    assert "ACTIVE AGENT GOAL" in preamble
+    assert "agent_goal" in timings, f"section timings: {timings}"
 
 
 @patch("robothor.engine.session_goal.dal.get_active_session_goal")
-def test_worker_warmup_does_not_inject_session_goal(mock_get, tmp_path):
-    # Workspace goal exists; worker (email-classifier) → not injected.
-    def side_effect(*, tenant_id, agent_id=""):
-        if agent_id:
-            return None
-        return _row(tags=["session_goal"])
-
-    mock_get.side_effect = side_effect
-
+def test_worker_with_no_goal_renders_no_section(mock_get, tmp_path):
+    # No goal task for this worker → no agent_goal block in preamble.
+    mock_get.return_value = None
     cfg = _FakeConfig("email-classifier")
-    preamble, timings = warmup_mod.build_warmth_preamble(cfg, tmp_path, tenant_id="default")
-
-    assert "ACTIVE SHORT-TERM GOAL" not in preamble
-    # The section is run (so timing is captured even when result empty), but
-    # the rendered preamble must not include the goal block.
+    preamble, _timings = warmup_mod.build_warmth_preamble(cfg, tmp_path, tenant_id="default")
+    assert "ACTIVE AGENT GOAL" not in preamble
 
 
 @patch("robothor.engine.session_goal.dal.get_active_session_goal")
-def test_agent_scoped_goal_injects_only_for_owner(mock_get, tmp_path):
-    # Agent-scoped goal for delphi exists.
+def test_each_agent_sees_only_its_own_goal(mock_get, tmp_path):
+    # delphi has its own goal; email-classifier has its own; they don't bleed.
     def side_effect(*, tenant_id, agent_id=""):
         if agent_id == "delphi":
-            return _row(tags=["session_goal", "agent:delphi"], objective="Delphi work")
+            return _row(tags=["session_goal", "agent:delphi", "thread"], objective="Delphi work")
+        if agent_id == "email-classifier":
+            return _row(
+                tags=["session_goal", "agent:email-classifier", "thread"],
+                objective="Email triage",
+            )
         return None
 
     mock_get.side_effect = side_effect
 
-    own_preamble, _ = warmup_mod.build_warmth_preamble(
+    delphi_preamble, _ = warmup_mod.build_warmth_preamble(
         _FakeConfig("delphi"), tmp_path, tenant_id="default"
     )
-    assert "Delphi work" in own_preamble
+    assert "Delphi work" in delphi_preamble
+    assert "Email triage" not in delphi_preamble
 
-    other_preamble, _ = warmup_mod.build_warmth_preamble(
+    email_preamble, _ = warmup_mod.build_warmth_preamble(
         _FakeConfig("email-classifier"), tmp_path, tenant_id="default"
     )
-    assert "Delphi work" not in other_preamble
+    assert "Email triage" in email_preamble
+    assert "Delphi work" not in email_preamble
 
 
 @patch("robothor.engine.session_goal.dal.get_active_session_goal")
@@ -100,7 +98,7 @@ def test_no_active_goal_no_block(mock_get, tmp_path):
     preamble, _ = warmup_mod.build_warmth_preamble(
         _FakeConfig("main"), tmp_path, tenant_id="default"
     )
-    assert "ACTIVE SHORT-TERM GOAL" not in preamble
+    assert "ACTIVE AGENT GOAL" not in preamble
 
 
 @patch("robothor.engine.session_goal.dal.get_active_session_goal")
@@ -111,5 +109,5 @@ def test_session_goal_section_swallows_dal_exceptions(mock_get, tmp_path):
         _FakeConfig("main"), tmp_path, tenant_id="default"
     )
     # _run_section catches; section appears in timings but not in preamble.
-    assert "ACTIVE SHORT-TERM GOAL" not in preamble
-    assert "session_goal" in timings
+    assert "ACTIVE AGENT GOAL" not in preamble
+    assert "agent_goal" in timings

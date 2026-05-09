@@ -376,6 +376,122 @@ def get_active_goal(
     return _goal_from_row(row) if row else None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# In-place edits — v2 unified model
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def edit_objective(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str,
+    objective: str,
+) -> SessionGoal:
+    """Edit the goal's objective in place. Requires the goal task to exist."""
+    objective = (objective or "").strip()
+    if not objective:
+        raise ValueError("objective cannot be empty")
+    row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if not row:
+        raise ValueError("no active goal — create one first with `goal set`")
+    ok = dal.update_goal_objective(task_id=str(row["id"]), objective=objective, tenant_id=tenant_id)
+    if not ok:
+        raise RuntimeError("failed to update objective")
+    refreshed = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    return _goal_from_row(refreshed) if refreshed else _goal_from_row(row)
+
+
+def add_criterion(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str,
+    text: str,
+) -> SessionGoal:
+    """Append a success criterion to the goal."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("criterion text cannot be empty")
+    row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if not row:
+        raise ValueError("no active goal")
+    meta = row.get("session_goal_meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    criteria = list(meta.get("success_criteria") or [])
+    criteria.append(text)
+    ok = dal.update_goal_criteria(
+        task_id=str(row["id"]),
+        success_criteria=criteria,
+        tenant_id=tenant_id,
+    )
+    if not ok:
+        raise RuntimeError("failed to update criteria")
+    refreshed = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    return _goal_from_row(refreshed) if refreshed else _goal_from_row(row)
+
+
+def set_metric_target(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str,
+    metric: str,
+    target: str,
+    weight: float = 1.0,
+    window_days: int = 7,
+    category: str = "correctness",
+    target_id: str | None = None,
+) -> SessionGoal:
+    """Add or replace a metric target on the goal."""
+    metric = (metric or "").strip()
+    target = (target or "").strip()
+    if not metric or not target:
+        raise ValueError("metric and target are required")
+    row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if not row:
+        raise ValueError("no active goal")
+    new_target = {
+        "id": (target_id or metric).strip(),
+        "category": category,
+        "metric": metric,
+        "target": target,
+        "weight": float(weight),
+        "window_days": int(window_days),
+        "extras": {},
+    }
+    ok = dal.add_goal_metric_target(
+        task_id=str(row["id"]),
+        metric_target=new_target,
+        tenant_id=tenant_id,
+    )
+    if not ok:
+        raise RuntimeError("failed to add metric target")
+    refreshed = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    return _goal_from_row(refreshed) if refreshed else _goal_from_row(row)
+
+
+def remove_metric_target(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str,
+    target_id: str,
+) -> SessionGoal:
+    """Remove a metric target from the goal by id."""
+    if not target_id:
+        raise ValueError("target_id required")
+    row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if not row:
+        raise ValueError("no active goal")
+    ok = dal.remove_goal_metric_target(
+        task_id=str(row["id"]),
+        target_id=target_id,
+        tenant_id=tenant_id,
+    )
+    if not ok:
+        raise RuntimeError("failed to remove metric target")
+    refreshed = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    return _goal_from_row(refreshed) if refreshed else _goal_from_row(row)
+
+
 def default_success_criteria(objective: str) -> list[str]:
     text = (objective or "").strip()
     criteria = [
@@ -404,12 +520,9 @@ def build_goal_context(
 ) -> str:
     """Render the goal context block for an agent run, or '' if none applies.
 
-    Resolution rules:
-      1. Look up an agent-scoped goal (tag `agent:<agent_id>`). If present
-         and active, render and return.
-      2. If no agent-scoped goal AND the agent is the owner (`main`), look up
-         the workspace goal (no `agent:*` tag) and render.
-      3. Otherwise return '' — workers never see other agents' goals.
+    Legacy (v1) owner-only scoping. New code should call
+    ``build_agent_goal_context`` instead — every agent has its own goal
+    in the v2 unified model.
     """
     if agent_id:
         agent_row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
@@ -422,6 +535,103 @@ def build_goal_context(
             return _render_context(_goal_from_row(workspace_row))
 
     return ""
+
+
+def build_agent_goal_context(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    agent_id: str,
+    manifest_path: str | None = None,
+) -> str:
+    """Render the unified per-agent goal block for warmup injection.
+
+    Every agent sees its own goal — the v2 model gives each agent exactly
+    one persistent goal task. The block carries:
+      - the operator's objective (or a placeholder when never set)
+      - success criteria
+      - metric_targets the agent is being scored on
+      - recent metric values (best-effort, swallows on failure)
+      - alignment score (rolling 7d) when present
+
+    Returns '' when no goal task exists (e.g. agent not yet seeded).
+    """
+    if not agent_id:
+        return ""
+    row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if not row:
+        return ""
+    goal = _goal_from_row(row)
+    meta_raw = row.get("session_goal_meta") or {}
+    metric_targets: list[dict[str, Any]] = []
+    if isinstance(meta_raw, dict):
+        targets = meta_raw.get("metric_targets") or []
+        if isinstance(targets, list):
+            metric_targets = [t for t in targets if isinstance(t, dict)]
+
+    # Best-effort current metric values + alignment score.
+    metrics: dict[str, Any] = {}
+    alignment: float | None = None
+    try:
+        from robothor.engine.goals import (
+            _get_session_goal_alignment_score,
+            compute_goal_metrics,
+        )
+
+        metrics = compute_goal_metrics(agent_id=agent_id, tenant_id=tenant_id) or {}
+        alignment = _get_session_goal_alignment_score(agent_id=agent_id, tenant_id=tenant_id)
+    except Exception as exc:
+        logger.debug("agent_goal warmup metrics lookup failed: %s", exc)
+
+    return _render_agent_goal_context(
+        goal=goal,
+        metric_targets=metric_targets,
+        current_metrics=metrics,
+        alignment_score=alignment,
+    )
+
+
+def _render_agent_goal_context(
+    *,
+    goal: SessionGoal,
+    metric_targets: list[dict[str, Any]],
+    current_metrics: dict[str, Any],
+    alignment_score: float | None,
+) -> str:
+    if not goal or not goal.is_active:
+        return ""
+
+    objective = goal.objective or "(no objective set yet — operator: edit me)"
+    criteria_lines = "\n".join(f"- {c}" for c in goal.success_criteria) or "- none yet"
+
+    target_lines = []
+    for t in metric_targets:
+        metric = t.get("metric") or "?"
+        target = t.get("target") or "?"
+        weight = t.get("weight", 1.0)
+        current = current_metrics.get(metric)
+        cur_str = f"{current}" if current is not None else "—"
+        target_lines.append(f"- {metric} {target} (weight {weight}) — current: {cur_str}")
+    targets_block = "\n".join(target_lines) or "- (no metric targets defined)"
+
+    alignment_line = (
+        f"Buddy alignment score (7d): {alignment_score:.2f}"
+        if alignment_score is not None
+        else "Buddy alignment score (7d): not yet measured"
+    )
+
+    return (
+        "--- ACTIVE AGENT GOAL ---\n"
+        f"Goal task: {goal.id}\n"
+        f"Agent: {goal.agent_id or 'workspace'}\n"
+        f"Objective: {objective}\n"
+        "Success criteria:\n"
+        f"{criteria_lines}\n"
+        "Metric targets you're being scored on:\n"
+        f"{targets_block}\n"
+        f"{alignment_line}\n"
+        "Buddy reviews each run for alignment with this objective. Drift triggers "
+        "self-improvement tasks. Stay focused on the objective and the metric targets."
+    )
 
 
 def _render_context(goal: SessionGoal) -> str:

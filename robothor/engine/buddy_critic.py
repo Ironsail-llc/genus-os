@@ -29,9 +29,9 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.goals import (
     EXCLUDED_FROM_SELF_IMPROVE,
     GoalBreach,
+    compose_goals,
     compute_goal_metrics,
     detect_goal_breach,
-    parse_goals_from_manifest,
     suggest_corrective_actions,
 )
 
@@ -111,9 +111,15 @@ class Evidence:
     error_steps: list[dict[str, Any]] = field(default_factory=list)
     tool_call_count: int = 0
     tool_error_count: int = 0
+    # Active session-goal context for the agent. Populated by build_evidence
+    # when the agent has an active session_goal task. When absent, the buddy
+    # review prompt skips the alignment ask and persist_review skips the
+    # session_goal_alignment row.
+    session_goal_objective: str | None = None
+    session_goal_criteria: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "run_id": self.run_id,
             "agent_id": self.agent_id,
             "status": self.status,
@@ -126,6 +132,12 @@ class Evidence:
             "tool_call_count": self.tool_call_count,
             "tool_error_count": self.tool_error_count,
         }
+        if self.session_goal_objective:
+            d["session_goal"] = {
+                "objective": self.session_goal_objective,
+                "criteria": list(self.session_goal_criteria or []),
+            }
+        return d
 
 
 @dataclass
@@ -139,6 +151,10 @@ class Review:
     specific_issue: str  # <=80 chars, refers to concrete evidence
     suggested_action: str  # <=120 chars, corrective-action category
     raw_evidence: Evidence
+    # Session-goal alignment is only set when the run was reviewed with
+    # an active goal in the evidence. 0.0 = no progress, 1.0 = perfect.
+    session_goal_alignment: float | None = None
+    session_goal_alignment_reason: str | None = None
 
 
 @dataclass
@@ -336,6 +352,27 @@ def build_evidence(run_id: str, *, tenant_id: str = DEFAULT_TENANT) -> Evidence 
         tool_calls = int(trow[0] or 0)
         tool_errors = int(trow[1] or 0)
 
+    # Pull the agent's active session-goal context (if any) so the LLM can
+    # rate alignment. Soft failure — if the lookup throws, the review still
+    # happens, just without the alignment dimension.
+    session_objective: str | None = None
+    session_criteria: list[str] = []
+    try:
+        from robothor.crm.dal import get_active_session_goal
+
+        goal_row = get_active_session_goal(tenant_id=tenant_id, agent_id=str(row[1]))
+        if goal_row:
+            meta = goal_row.get("session_goal_meta") or {}
+            if isinstance(meta, dict):
+                obj = (meta.get("objective") or "").strip()
+                if obj:
+                    session_objective = obj
+                    raw_criteria = meta.get("success_criteria") or []
+                    if isinstance(raw_criteria, list):
+                        session_criteria = [str(c) for c in raw_criteria][:10]
+    except Exception as exc:
+        logger.debug("session_goal lookup failed for evidence build: %s", exc)
+
     return Evidence(
         run_id=str(row[0]),
         agent_id=str(row[1]),
@@ -348,6 +385,8 @@ def build_evidence(run_id: str, *, tenant_id: str = DEFAULT_TENANT) -> Evidence 
         error_steps=error_steps,
         tool_call_count=tool_calls,
         tool_error_count=tool_errors,
+        session_goal_objective=session_objective,
+        session_goal_criteria=session_criteria,
     )
 
 
@@ -363,12 +402,16 @@ Rules:
 - `specific_issue` MUST quote or reference concrete evidence from the input. No generic filler.
 - `specific_issue` max 80 chars. `suggested_action` max 120 chars.
 - If the run looks fine, rate 4 or 5 and say what worked well.
+- If the evidence carries a `session_goal` block, ALSO rate `session_goal_alignment` 0.0-1.0
+  (0 = run did nothing toward the goal, 1.0 = directly advanced it) plus a one-line
+  `session_goal_alignment_reason` (max 120 chars). Score against the listed criteria.
 
 Evidence:
 {evidence_json}
 
 Respond with JSON matching this shape:
-{{"rating": <int>, "dimension": "<category>", "specific_issue": "<text>", "suggested_action": "<text>"}}"""
+{{"rating": <int>, "dimension": "<category>", "specific_issue": "<text>", "suggested_action": "<text>",
+  "session_goal_alignment": <0.0-1.0 or omit>, "session_goal_alignment_reason": "<text or omit>"}}"""
 
 
 async def review_run(
@@ -429,6 +472,24 @@ async def review_run(
     if not specific_issue:
         return None  # refuse to persist content-free reviews
 
+    # Optional session-goal alignment — only when the evidence carried a
+    # session_goal block. Otherwise we drop any alignment field the LLM
+    # might have hallucinated, so reviews of agents without active goals
+    # don't pollute agent_reviews with synthetic alignment rows.
+    alignment: float | None = None
+    alignment_reason: str | None = None
+    if evidence.session_goal_objective:
+        raw_alignment = parsed.get("session_goal_alignment")
+        if raw_alignment is not None:
+            try:
+                alignment = float(raw_alignment)
+                alignment = max(0.0, min(1.0, alignment))
+            except (TypeError, ValueError):
+                alignment = None
+            raw_reason = parsed.get("session_goal_alignment_reason")
+            if raw_reason is not None:
+                alignment_reason = str(raw_reason).strip()[:120] or None
+
     return Review(
         agent_id=evidence.agent_id,
         run_id=evidence.run_id,
@@ -437,6 +498,8 @@ async def review_run(
         specific_issue=specific_issue,
         suggested_action=suggested_action,
         raw_evidence=evidence,
+        session_goal_alignment=alignment,
+        session_goal_alignment_reason=alignment_reason,
     )
 
 
@@ -471,7 +534,14 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
 
 
 def persist_review(review: Review, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
-    """Write the review to agent_reviews with reviewer_type='buddy'."""
+    """Write the review to agent_reviews with reviewer_type='buddy'.
+
+    When the review carries a non-None ``session_goal_alignment`` score,
+    a SECOND row is written with ``categories.dimension =
+    'session_goal_alignment'`` and ``rating`` mapped from 0.0-1.0 to 1-5
+    so ``compute_goal_metrics`` can read the rolling average via
+    ``_get_session_goal_alignment_score``.
+    """
     from robothor.crm.dal import create_review
 
     categories = {
@@ -505,6 +575,39 @@ def persist_review(review: Review, *, tenant_id: str = DEFAULT_TENANT) -> str | 
             "suggested_action": review.suggested_action,
         },
     )
+
+    # Second row: session_goal alignment dimension. Mapped to a 1-5
+    # rating so the existing rating column can carry it; goals.py reverses
+    # the map when computing session_goal_alignment_score.
+    if review.session_goal_alignment is not None:
+        alignment = max(0.0, min(1.0, float(review.session_goal_alignment)))
+        rating_1_5 = max(1, min(5, int(round(alignment * 4)) + 1))
+        align_categories = {
+            "dimension": "session_goal_alignment",
+            "alignment_score": alignment,
+        }
+        feedback = review.session_goal_alignment_reason or (
+            f"alignment toward objective: {alignment:.2f}"
+        )
+        try:
+            create_review(
+                agent_id=review.agent_id,
+                reviewer="buddy",
+                reviewer_type="buddy",
+                rating=rating_1_5,
+                categories=align_categories,
+                feedback=feedback,
+                action_items=None,
+                run_id=review.run_id,
+                tenant_id=tenant_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist session_goal_alignment review for run %s: %s",
+                review.run_id,
+                exc,
+            )
+
     return review_id
 
 
@@ -526,7 +629,7 @@ def aggregate_findings(
     for agent_id, manifest in _load_manifests():
         if agent_id in EXCLUDED_FROM_SELF_IMPROVE:
             continue
-        goals = parse_goals_from_manifest(manifest)
+        goals = compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=tenant_id)
         if not goals:
             continue
         breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
@@ -539,6 +642,12 @@ def aggregate_findings(
 
         for breach in breaches:
             if breach.priority_score < FINDING_SEVERITY_THRESHOLD:
+                continue
+            # 2026-05-06 operator directive: cost / latency / token metrics
+            # are observed but never optimized. Skip findings on those metrics
+            # so Buddy doesn't open self-improve tasks for cost ceilings.
+            _forbidden = ("cost", "tokens", "token", "latency", "duration", "p95")
+            if any(term in breach.metric.lower() for term in _forbidden):
                 continue
             # Pull up to 3 worst reviews whose dimension matches this breach's category
             relevant = [r for r in reviews_for_agent if r.get("dimension") == breach.category]
@@ -728,7 +837,7 @@ async def run_review_pass(
     skipped = 0
     persist_failed = 0
     for agent_id, manifest in _load_manifests():
-        if not parse_goals_from_manifest(manifest):
+        if not compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=tenant_id):
             continue  # agents without goals can't be fairly reviewed
         run_ids = sample_runs_to_review(agent_id, n=runs_per_agent, hours=24, tenant_id=tenant_id)
         for run_id in run_ids:

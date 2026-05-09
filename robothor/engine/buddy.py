@@ -23,7 +23,10 @@ from typing import Any
 import yaml
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.goals import compute_achievement_score, parse_goals_from_manifest
+from robothor.engine.goals import (
+    compose_goals,
+    compute_achievement_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +113,7 @@ class BuddyEngine:
                 stat_date=target_date or datetime.now(UTC).date(),
             )
 
-        goals = parse_goals_from_manifest(manifest)
+        goals = compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=self.tenant_id)
         if not goals:
             return AgentScore(
                 agent_id=agent_id,
@@ -135,7 +138,7 @@ class BuddyEngine:
         """Rank all agents by achievement score (desc). Agents with no goals are omitted."""
         scores: list[AgentScore] = []
         for agent_id, manifest in _load_manifests():
-            if not parse_goals_from_manifest(manifest):
+            if not compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=self.tenant_id):
                 continue
             scores.append(self.compute_agent_score(agent_id, manifest, target_date))
         scores.sort(key=lambda s: (-s.achievement_score, s.agent_id))

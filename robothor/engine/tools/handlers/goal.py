@@ -79,9 +79,17 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
       - ci_run:   ``https://`` URL
       - note:     free-form (does not satisfy completion guard)
     """
-    from robothor.engine.session_goal import add_evidence, complete_goal, summarize_goal
+    from robothor.engine.session_goal import (
+        add_criterion,
+        add_evidence,
+        complete_goal,
+        edit_objective,
+        set_metric_target,
+        summarize_goal,
+    )
 
     status = str(args.get("status") or "").strip().lower()
+    edit_op = str(args.get("edit_op") or "").strip().lower()
     agent_id = _target_agent(args, ctx)
 
     try:
@@ -97,12 +105,46 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
             )
             return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
 
+        if edit_op == "objective":
+            objective = str(args.get("objective") or "").strip()
+            if not objective:
+                return {"error": "objective is required for edit_op='objective'"}
+            goal = edit_objective(tenant_id=ctx.tenant_id, agent_id=agent_id, objective=objective)
+            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+
+        if edit_op == "criterion":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return {"error": "text is required for edit_op='criterion'"}
+            goal = add_criterion(tenant_id=ctx.tenant_id, agent_id=agent_id, text=text)
+            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+
+        if edit_op == "metric_target":
+            metric = str(args.get("metric") or "").strip()
+            target = str(args.get("target") or "").strip()
+            if not metric or not target:
+                return {"error": "metric and target are required for edit_op='metric_target'"}
+            goal = set_metric_target(
+                tenant_id=ctx.tenant_id,
+                agent_id=agent_id,
+                metric=metric,
+                target=target,
+                weight=float(args.get("weight") or 1.0),
+                window_days=int(args.get("window_days") or 7),
+                category=str(args.get("category") or "correctness"),
+                target_id=str(args.get("target_id") or metric),
+            )
+            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+
         kind = str(args.get("kind") or args.get("evidence_kind") or "").strip()
         summary = str(args.get("summary") or args.get("evidence_summary") or "").strip()
         reference = str(args.get("reference") or "").strip()
         if not kind or not summary:
             return {
-                "error": ("provide kind and summary, or set status='complete' with completion_note")
+                "error": (
+                    "provide kind+summary (evidence) OR edit_op (objective|"
+                    "criterion|metric_target) OR status='complete' with completion_note"
+                )
             }
         if kind not in ("test_run", "commit", "ci_run", "note"):
             return {"error": ("kind must be one of: test_run, commit, ci_run, note")}

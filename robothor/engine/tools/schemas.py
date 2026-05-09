@@ -2213,6 +2213,49 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "enum": ["active", "complete"],
                         "description": "Set to complete only when the goal is truly finished.",
                     },
+                    "edit_op": {
+                        "type": "string",
+                        "enum": ["objective", "criterion", "metric_target"],
+                        "description": (
+                            "Edit operation: 'objective' (with objective=<text>), "
+                            "'criterion' (with text=<text>), or 'metric_target' "
+                            "(with metric, target, optional weight/window_days/category)."
+                        ),
+                    },
+                    "objective": {
+                        "type": "string",
+                        "description": "New objective text when edit_op='objective'.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Criterion text when edit_op='criterion'.",
+                    },
+                    "metric": {
+                        "type": "string",
+                        "description": (
+                            "Metric name when edit_op='metric_target' (e.g. "
+                            "benchmark_pass_rate, error_rate)."
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Target comparator when edit_op='metric_target' (e.g. '>=0.85')."
+                        ),
+                    },
+                    "weight": {
+                        "type": "number",
+                        "description": "Goal weight (default 1.0).",
+                    },
+                    "window_days": {
+                        "type": "integer",
+                        "description": "Rolling window in days (default 7).",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["reach", "quality", "efficiency", "correctness"],
+                        "description": "Category for metric_target (default 'correctness').",
+                    },
                     "kind": {
                         "type": "string",
                         "enum": ["test_run", "commit", "ci_run", "note"],

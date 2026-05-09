@@ -1,9 +1,13 @@
 """Tests for the session_goal DAL helpers.
 
-A session goal is a crm_task with the `session_goal` tag. Workspace-scoped
-goals carry only the `session_goal` tag; agent-scoped goals also carry
-`agent:<agent_id>`. The structured payload (success criteria, evidence,
-completion note) lives in `session_goal_meta` (JSONB).
+A session goal is a crm_task with the `session_goal` tag. Every goal is
+agent-scoped (carries `agent:<agent_id>`); workspace-only goals are gone
+in the unified v2 model. The structured payload — objective, success
+criteria, metric_targets seeded from the manifest, typed evidence, and
+completion note — all lives in the `session_goal_meta` JSONB column.
+
+Goal tasks also carry the `thread` tag so the thread pool / forward
+planner pick them up automatically.
 """
 
 from __future__ import annotations
@@ -394,3 +398,263 @@ class TestUpdateSessionGoalMeta:
         params = mock_cur.execute.call_args[0][1]
         # Must be JSON-serialised.
         assert any("success_criteria" in str(p) for p in params)
+
+
+# ─── v2 unified model: metric_targets, in-place edits, get_or_create ────
+
+
+class TestCreateSessionGoalV2:
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    def test_create_stamps_thread_tag_automatically(self, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_session_goal
+
+        create_session_goal(
+            tenant_id="default",
+            objective="x",
+            success_criteria=["one"],
+            agent_id="main",
+        )
+        insert_call = next(
+            c for c in mock_cur.execute.call_args_list if "INSERT" in c[0][0].upper()
+        )
+        flat = []
+        for p in insert_call[0][1]:
+            if isinstance(p, list):
+                flat.extend(p)
+            else:
+                flat.append(p)
+        assert "thread" in flat, "v2 goals must carry the `thread` tag for the thread pool"
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    def test_create_persists_metric_targets_in_meta(self, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_session_goal
+
+        targets = [
+            {
+                "id": "passes-its-job",
+                "category": "quality",
+                "metric": "benchmark_pass_rate",
+                "target": ">=0.85",
+                "weight": 5.0,
+                "window_days": 7,
+                "extras": {},
+            }
+        ]
+        create_session_goal(
+            tenant_id="default",
+            objective="x",
+            success_criteria=["one"],
+            agent_id="main",
+            metric_targets=targets,
+        )
+        insert_call = next(
+            c for c in mock_cur.execute.call_args_list if "INSERT" in c[0][0].upper()
+        )
+        json_payload = next(
+            p for p in insert_call[0][1] if isinstance(p, str) and "metric_targets" in p
+        )
+        assert "passes-its-job" in json_payload
+        assert "benchmark_pass_rate" in json_payload
+
+
+class TestGetOrCreateAgentGoal:
+    @patch("robothor.crm.dal.get_active_session_goal")
+    @patch("robothor.crm.dal.create_session_goal")
+    def test_returns_existing_when_present(self, mock_create, mock_get):
+        mock_get.return_value = _goal_row(
+            task_id="existing-1", tags=["session_goal", "agent:main", "thread"]
+        )
+
+        from robothor.crm.dal import get_or_create_agent_goal
+
+        manifest = {
+            "id": "main",
+            "goals": {
+                "quality": [
+                    {"id": "passes-its-job", "metric": "benchmark_pass_rate", "target": ">=0.85"}
+                ]
+            },
+        }
+        result = get_or_create_agent_goal(tenant_id="default", agent_id="main", manifest=manifest)
+        assert result["id"] == "existing-1"
+        mock_create.assert_not_called()
+
+    @patch("robothor.crm.dal.get_active_session_goal")
+    @patch("robothor.crm.dal.create_session_goal")
+    def test_creates_seeded_from_manifest_when_missing(self, mock_create, mock_get):
+        # First call returns None (no existing); second returns the new row.
+        mock_get.side_effect = [
+            None,
+            _goal_row(task_id="new-1", tags=["session_goal", "agent:main", "thread"]),
+        ]
+        mock_create.return_value = "new-1"
+
+        from robothor.crm.dal import get_or_create_agent_goal
+
+        manifest = {
+            "id": "main",
+            "goals": {
+                "quality": [
+                    {
+                        "id": "passes-its-job",
+                        "metric": "benchmark_pass_rate",
+                        "target": ">=0.85",
+                        "weight": 5.0,
+                    }
+                ],
+                "efficiency": [
+                    {"id": "low-error", "metric": "error_rate", "target": "<0.02", "weight": 1.0}
+                ],
+            },
+        }
+        result = get_or_create_agent_goal(tenant_id="default", agent_id="main", manifest=manifest)
+        assert result["id"] == "new-1"
+        mock_create.assert_called_once()
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["agent_id"] == "main"
+        # metric_targets must come through to create_session_goal.
+        targets = kwargs["metric_targets"]
+        ids = {t["id"] for t in targets}
+        assert {"passes-its-job", "low-error"} <= ids
+
+
+class TestInPlaceGoalEdits:
+    @patch("robothor.crm.dal.get_connection")
+    def test_update_goal_objective_rewrites_objective_column_and_meta(self, mock_get_conn):
+        existing = _goal_row(
+            task_id="t1",
+            tags=["session_goal", "agent:main", "thread"],
+            meta={
+                "objective": "old objective",
+                "success_criteria": ["c1"],
+                "metric_targets": [],
+                "evidence": [],
+                "completion_note": "",
+            },
+        )
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=existing)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import update_goal_objective
+
+        ok = update_goal_objective(task_id="t1", objective="NEW objective", tenant_id="default")
+        assert ok is True
+        # An UPDATE must touch BOTH the objective column AND session_goal_meta.
+        all_sql = " | ".join(c[0][0] for c in mock_cur.execute.call_args_list)
+        assert "objective" in all_sql
+        # The new objective string must be in the params.
+        params = []
+        for c in mock_cur.execute.call_args_list:
+            params.extend(list(c[0][1]) if len(c[0]) > 1 else [])
+        assert any("NEW objective" in str(p) for p in params)
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_update_goal_criteria_replaces_list(self, mock_get_conn):
+        existing = _goal_row(
+            task_id="t1",
+            tags=["session_goal", "agent:main", "thread"],
+            meta={
+                "objective": "x",
+                "success_criteria": ["old"],
+                "metric_targets": [],
+                "evidence": [],
+                "completion_note": "",
+            },
+        )
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=existing)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import update_goal_criteria
+
+        ok = update_goal_criteria(
+            task_id="t1",
+            success_criteria=["new-1", "new-2"],
+            tenant_id="default",
+        )
+        assert ok is True
+        params = []
+        for c in mock_cur.execute.call_args_list:
+            params.extend(list(c[0][1]) if len(c[0]) > 1 else [])
+        payload = next(p for p in params if isinstance(p, str) and "success_criteria" in p)
+        assert "new-1" in payload and "new-2" in payload
+        assert "old" not in payload
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_add_metric_target_appends_to_list(self, mock_get_conn):
+        existing = _goal_row(
+            task_id="t1",
+            tags=["session_goal", "agent:main", "thread"],
+            meta={
+                "objective": "x",
+                "success_criteria": [],
+                "metric_targets": [
+                    {
+                        "id": "passes-its-job",
+                        "metric": "benchmark_pass_rate",
+                        "target": ">=0.85",
+                        "weight": 5.0,
+                    }
+                ],
+                "evidence": [],
+                "completion_note": "",
+            },
+        )
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=existing)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import add_goal_metric_target
+
+        new_target = {
+            "id": "low-error",
+            "category": "efficiency",
+            "metric": "error_rate",
+            "target": "<0.02",
+            "weight": 1.0,
+            "window_days": 7,
+        }
+        ok = add_goal_metric_target(task_id="t1", metric_target=new_target, tenant_id="default")
+        assert ok is True
+        params = []
+        for c in mock_cur.execute.call_args_list:
+            params.extend(list(c[0][1]) if len(c[0]) > 1 else [])
+        payload = next(p for p in params if isinstance(p, str) and "metric_targets" in p)
+        assert "passes-its-job" in payload  # existing preserved
+        assert "low-error" in payload  # new appended
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_remove_metric_target_drops_by_id(self, mock_get_conn):
+        existing = _goal_row(
+            task_id="t1",
+            tags=["session_goal", "agent:main", "thread"],
+            meta={
+                "objective": "x",
+                "success_criteria": [],
+                "metric_targets": [
+                    {"id": "passes-its-job", "metric": "benchmark_pass_rate", "target": ">=0.85"},
+                    {"id": "low-error", "metric": "error_rate", "target": "<0.02"},
+                ],
+                "evidence": [],
+                "completion_note": "",
+            },
+        )
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=existing)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import remove_goal_metric_target
+
+        ok = remove_goal_metric_target(task_id="t1", target_id="low-error", tenant_id="default")
+        assert ok is True
+        params = []
+        for c in mock_cur.execute.call_args_list:
+            params.extend(list(c[0][1]) if len(c[0]) > 1 else [])
+        payload = next(p for p in params if isinstance(p, str) and "metric_targets" in p)
+        assert "passes-its-job" in payload
+        assert "low-error" not in payload

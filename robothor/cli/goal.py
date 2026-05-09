@@ -12,11 +12,15 @@ from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.session_goal import (
+    add_criterion,
     add_evidence,
     complete_goal,
     create_active_goal,
+    edit_objective,
     get_active_goal,
     regenerate_goal_md_cache,
+    remove_metric_target,
+    set_metric_target,
     summarize_goal,
 )
 
@@ -113,5 +117,59 @@ def cmd_goal(args: Any) -> int:
         _print_goal(goal, json_output=getattr(args, "json_output", False))
         return 0
 
-    print("Missing goal subcommand. Use: set, status, evidence, complete.")
+    if command == "edit-objective":
+        try:
+            goal = edit_objective(tenant_id=tenant_id, agent_id=agent_id, objective=args.objective)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        regenerate_goal_md_cache(tenant_id=tenant_id, agent_id=agent_id)
+        _print_goal(goal, json_output=getattr(args, "json_output", False))
+        return 0
+
+    if command == "add-criterion":
+        try:
+            goal = add_criterion(tenant_id=tenant_id, agent_id=agent_id, text=args.text)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        regenerate_goal_md_cache(tenant_id=tenant_id, agent_id=agent_id)
+        _print_goal(goal, json_output=getattr(args, "json_output", False))
+        return 0
+
+    if command == "set-target":
+        try:
+            goal = set_metric_target(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                metric=args.metric,
+                target=args.target,
+                weight=getattr(args, "weight", 1.0),
+                window_days=getattr(args, "window_days", 7),
+                category=getattr(args, "category", "correctness"),
+                target_id=getattr(args, "target_id", None),
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        regenerate_goal_md_cache(tenant_id=tenant_id, agent_id=agent_id)
+        _print_goal(goal, json_output=getattr(args, "json_output", False))
+        return 0
+
+    if command == "remove-target":
+        try:
+            goal = remove_metric_target(
+                tenant_id=tenant_id, agent_id=agent_id, target_id=args.target_id
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        regenerate_goal_md_cache(tenant_id=tenant_id, agent_id=agent_id)
+        _print_goal(goal, json_output=getattr(args, "json_output", False))
+        return 0
+
+    print(
+        "Missing goal subcommand. Use: set, status, evidence, complete, "
+        "edit-objective, add-criterion, set-target, remove-target."
+    )
     return 1

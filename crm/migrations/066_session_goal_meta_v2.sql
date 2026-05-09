@@ -1,0 +1,42 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 066_session_goal_meta_v2.sql
+--
+-- Extends the unified session_goal model so each agent has exactly one
+-- persistent, editable goal task that carries the operator's objective,
+-- the manifest-seeded metric targets, typed evidence, and completion
+-- guard — all in one row. The session_goal_meta JSONB shape grows to:
+--
+--   {
+--     "objective":         "<operator-set>",
+--     "success_criteria":  ["…", "…"],
+--     "metric_targets":    [
+--       {"id": "passes-its-job", "category": "quality",
+--        "metric": "benchmark_pass_rate", "target": ">=0.85",
+--        "weight": 5.0, "window_days": 7, "extras": {…}},
+--       …
+--     ],
+--     "evidence":          [{"kind": "test_run|commit|ci_run|note",
+--                            "summary": "…", "reference": "…",
+--                            "recorded_at": "…", "valid": true|false}],
+--     "completion_note":   "<text>",
+--     "alignment_target":  ">=0.7"
+--   }
+--
+-- No DB column changes — the JSONB column added in migration 065 already
+-- holds an arbitrary blob. This migration only adds an index that makes
+-- the per-agent lookup fast (we already have idx_crm_tasks_session_goal
+-- from 065 covering the session_goal tag; this adds an index purpose-built
+-- for finding a goal by agent_id quickly).
+--
+-- The seeding script (scripts/seed_agent_goals.py) populates the
+-- metric_targets sub-field for every real agent on first run.
+--
+-- Rollback:
+--   DROP INDEX idx_crm_tasks_session_goal_agent;
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- An expression index on the (agent:%) tag pattern would require a function;
+-- the simpler approach is to rely on the existing GIN tags index plus the
+-- 065-added partial index for `session_goal`. This migration is a no-op for
+-- DDL but documents the v2 JSONB shape for the schema audit.
+SELECT 1;

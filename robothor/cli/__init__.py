@@ -131,6 +131,43 @@ def main(argv: list[str] | None = None) -> int:
         "--json", dest="json_output", action="store_true", help="Output JSON"
     )
 
+    goal_edit_obj = goal_sub.add_parser(
+        "edit-objective", help="Replace the goal's objective in place"
+    )
+    goal_edit_obj.add_argument("objective", help="New objective text")
+    goal_edit_obj.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_add_crit = goal_sub.add_parser(
+        "add-criterion", help="Append a success criterion to the goal"
+    )
+    goal_add_crit.add_argument("text", help="Criterion text")
+    goal_add_crit.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_set_target = goal_sub.add_parser(
+        "set-target",
+        help="Add or replace a metric target on the goal",
+    )
+    goal_set_target.add_argument("metric", help="Metric name (e.g. benchmark_pass_rate)")
+    goal_set_target.add_argument("target", help='Target comparator e.g. ">=0.85" or "<0.05"')
+    goal_set_target.add_argument("--weight", type=float, default=1.0)
+    goal_set_target.add_argument("--window-days", type=int, default=7)
+    goal_set_target.add_argument(
+        "--category",
+        default="correctness",
+        choices=["reach", "quality", "efficiency", "correctness"],
+    )
+    goal_set_target.add_argument(
+        "--id",
+        dest="target_id",
+        default=None,
+        help="Stable id for this target (defaults to metric)",
+    )
+    goal_set_target.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_remove_target = goal_sub.add_parser("remove-target", help="Remove a metric target by id")
+    goal_remove_target.add_argument("target_id", help="Target id (typically the metric name)")
+    goal_remove_target.add_argument("--json", dest="json_output", action="store_true")
+
     # status
     subparsers.add_parser("status", help="Show system status")
 

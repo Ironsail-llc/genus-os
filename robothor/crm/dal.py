@@ -1520,16 +1520,27 @@ def create_session_goal(
     success_criteria: list[str],
     agent_id: str = "",
     created_by_agent: str = "operator",
+    metric_targets: list[dict[str, Any]] | None = None,
+    alignment_target: str = ">=0.7",
 ) -> str | None:
-    """Create a session-goal crm_task. Returns task UUID."""
-    tags = [SESSION_GOAL_TAG]
+    """Create a session-goal crm_task. Returns task UUID.
+
+    The unified v2 model stores manifest-seeded ``metric_targets`` plus
+    typed evidence in ``session_goal_meta`` JSONB. Tasks are tagged
+    ``[session_goal, agent:<agent_id>, thread]`` so the thread pool +
+    forward planner pick them up automatically.
+    """
+    tags = [SESSION_GOAL_TAG, "thread"]
     if agent_id:
         tags.append(_agent_scope_tag(agent_id))
     title = (objective or "").strip()[:100] or "Session goal"
     initial_meta = {
+        "objective": (objective or "").strip(),
         "success_criteria": list(success_criteria or []),
+        "metric_targets": list(metric_targets or []),
         "evidence": [],
         "completion_note": "",
+        "alignment_target": alignment_target,
     }
     task_id = str(uuid.uuid4())
     sla_deadline = _compute_sla_deadline("high")
@@ -1743,6 +1754,176 @@ def complete_session_goal(
             conn.rollback()
             logger.error("Failed to complete session goal %s: %s", task_id, e)
             return False
+
+
+# ─── v2 unified model: manifest-seeded goals + in-place edits ──────
+
+
+def get_or_create_agent_goal(
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    agent_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the agent's persistent goal task, seeding from manifest if missing.
+
+    Idempotent: if a goal task already exists for ``(tenant_id, agent_id)``,
+    returns it. Otherwise creates one with ``metric_targets`` derived from
+    the manifest's ``goals:`` block, plus a placeholder objective the
+    operator can edit. Returns the row dict or None on error.
+    """
+    if not agent_id:
+        raise ValueError("agent_id required for unified per-agent goal")
+    existing = get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    if existing:
+        return existing
+
+    # Late import to avoid circular dependency at module-load time.
+    from robothor.engine.goals import parse_goals_from_manifest
+
+    specs = parse_goals_from_manifest(manifest or {})
+    metric_targets = [
+        {
+            "id": s.id,
+            "category": s.category,
+            "metric": s.metric,
+            "target": s.target,
+            "weight": s.weight,
+            "window_days": s.window_days,
+            "extras": dict(s.extras),
+        }
+        for s in specs
+    ]
+    objective = f"(seeded from manifest — operator: edit with `robothor goal --agent {agent_id} edit-objective`)"
+    success_criteria = [
+        f"Meet target on '{s.id}' ({s.metric} {s.target}) over {s.window_days}d window."
+        for s in specs
+    ] or ["Operator: define what 'doing the job' means for this agent."]
+
+    task_id = create_session_goal(
+        tenant_id=tenant_id,
+        objective=objective,
+        success_criteria=success_criteria,
+        agent_id=agent_id,
+        metric_targets=metric_targets,
+    )
+    if not task_id:
+        return None
+    return get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+
+
+def _load_goal_meta(task_id: str, tenant_id: str) -> tuple[dict[str, Any], str | None] | None:
+    """Internal helper: load (meta, objective_column) for an agent goal task."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """SELECT objective, session_goal_meta FROM crm_tasks
+               WHERE id = %s AND deleted_at IS NULL
+                 AND tenant_id = %s AND %s = ANY(tags)""",
+            (task_id, tenant_id, SESSION_GOAL_TAG),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        meta = dict(row.get("session_goal_meta") or {})
+        return meta, row.get("objective")
+
+
+def update_goal_objective(
+    task_id: str,
+    objective: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Edit the goal's objective in place — both the column and the meta blob.
+
+    Persists the new text to the canonical ``objective`` column on
+    ``crm_tasks`` (so the thread pool / planner see it) AND to the
+    ``session_goal_meta.objective`` field (so the goal payload stays
+    self-consistent).
+    """
+    loaded = _load_goal_meta(task_id, tenant_id)
+    if loaded is None:
+        return False
+    meta, _ = loaded
+    meta["objective"] = (objective or "").strip()
+    new_title = meta["objective"][:100] or "Session goal"
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET objective = %s,
+                       title = %s,
+                       session_goal_meta = %s::jsonb,
+                       updated_at = NOW()
+                   WHERE id = %s AND deleted_at IS NULL
+                     AND tenant_id = %s AND %s = ANY(tags)""",
+                (
+                    meta["objective"],
+                    new_title,
+                    json.dumps(meta),
+                    task_id,
+                    tenant_id,
+                    SESSION_GOAL_TAG,
+                ),
+            )
+            ok: bool = cur.rowcount > 0
+            conn.commit()
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to update goal objective on %s: %s", task_id, e)
+            return False
+
+
+def update_goal_criteria(
+    task_id: str,
+    success_criteria: list[str],
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Replace the success_criteria list in place."""
+    loaded = _load_goal_meta(task_id, tenant_id)
+    if loaded is None:
+        return False
+    meta, _ = loaded
+    meta["success_criteria"] = [str(c).strip() for c in (success_criteria or []) if str(c).strip()]
+    return update_session_goal_meta(task_id=task_id, meta=meta, tenant_id=tenant_id)
+
+
+def add_goal_metric_target(
+    task_id: str,
+    metric_target: dict[str, Any],
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Append (or replace by id) a metric target on the goal."""
+    loaded = _load_goal_meta(task_id, tenant_id)
+    if loaded is None:
+        return False
+    meta, _ = loaded
+    targets = list(meta.get("metric_targets") or [])
+    new_id = str(metric_target.get("id") or "").strip()
+    if not new_id:
+        raise ValueError("metric_target requires an `id`")
+    # Replace existing entry with the same id, else append.
+    targets = [t for t in targets if str(t.get("id")) != new_id]
+    targets.append(dict(metric_target))
+    meta["metric_targets"] = targets
+    return update_session_goal_meta(task_id=task_id, meta=meta, tenant_id=tenant_id)
+
+
+def remove_goal_metric_target(
+    task_id: str,
+    target_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Remove a metric target by id."""
+    loaded = _load_goal_meta(task_id, tenant_id)
+    if loaded is None:
+        return False
+    meta, _ = loaded
+    targets = [t for t in (meta.get("metric_targets") or []) if str(t.get("id")) != target_id]
+    meta["metric_targets"] = targets
+    return update_session_goal_meta(task_id=task_id, meta=meta, tenant_id=tenant_id)
 
 
 def resurface_due_followups(tenant_id: str = DEFAULT_TENANT) -> list[str]:
