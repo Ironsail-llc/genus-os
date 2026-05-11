@@ -12,20 +12,34 @@ import { useAgents } from "@/hooks/use-agents";
 import { Users, Inbox, Brain, Activity } from "lucide-react";
 import type { HealthResponse } from "@/lib/api/types";
 
-function getGreeting(): string {
+function computeGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
   return "Good evening";
 }
 
+function formatToday(): string {
+  return new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 export function DefaultDashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [greeting, setGreeting] = useState<string>("");
+  const [todayLabel, setTodayLabel] = useState<string>("");
   const { pushView } = useVisualState();
   const { tasks } = useTasks({ live: false });
   const { summary: agentSummary } = useAgents();
 
   useEffect(() => {
+    setGreeting(computeGreeting());
+    setTodayLabel(formatToday());
+
     fetchHealth()
       .then(setHealth)
       .catch(() => setHealth(null));
@@ -102,15 +116,10 @@ export function DefaultDashboard() {
       {/* Greeting */}
       <div>
         <h2 className="text-xl font-semibold" data-testid="greeting">
-          {getGreeting()}
+          {greeting || " "}
         </h2>
         <span className="text-xs text-muted-foreground">
-          {new Date().toLocaleDateString("en-US", {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-          })}
+          {todayLabel || " "}
         </span>
       </div>
 
