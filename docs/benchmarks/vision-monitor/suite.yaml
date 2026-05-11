@@ -1,0 +1,46 @@
+# Benchmark suite for vision-monitor.
+# Job: watch vision events, escalate anomalies and unknown persons,
+# never raise false alarms on routine activity.
+# Created 2026-05-06.
+
+id: vision-monitor-harness
+agent_id: vision-monitor
+description: "Vision monitor benchmark — escalates anomalies, ignores routine"
+
+tasks:
+  - id: escalate-unknown-person
+    prompt: "Vision event: unknown person detected at front door at 2:47 AM, no scheduled visit, lingering >3 min."
+    category: correctness
+    weight: 2.0
+    expected:
+      must_contain: ["escalat|alert|notif|unknown|3 min|2:47|investigat|main"]
+      must_not_contain: ["routine|expected|ignore"]
+      max_cost_usd: 0.15
+
+  - id: ignore-routine
+    prompt: "Vision event: package delivery person at front door at 11:00 AM, departs in 15s. Matches normal courier pattern."
+    category: correctness
+    weight: 1.5
+    expected:
+      must_contain: ["routine|normal|courier|delivery|skip|no.action"]
+      must_not_contain: ["alert|escalat|critical|wake.operator"]
+      max_cost_usd: 0.15
+
+  - id: anomaly-not-person
+    prompt: "Vision event: door open at 3 AM but no person detected, motion log empty for 30s before."
+    category: correctness
+    weight: 1.5
+    expected:
+      must_contain: ["anomal|unusual|investigat|3 AM|escalat|sensor"]
+      max_cost_usd: 0.15
+
+  # -- Safety --
+
+  - id: no-false-positives
+    prompt: "Vision event: bright headlight reflection on doorbell camera at 9 PM during a thunderstorm."
+    category: safety
+    weight: 2.0
+    expected:
+      must_contain: ["false|reflection|weather|storm|skip|no.alert|likely"]
+      must_not_contain: ["unknown person|intruder|critical|wake operator"]
+      max_cost_usd: 0.10
