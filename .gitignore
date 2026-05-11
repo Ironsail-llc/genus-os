@@ -186,6 +186,9 @@ brain/.opencode/
 brain/goals/
 brain/scratch/
 
+# Operator-specific export tool (hardcoded scrub patterns)
+/scripts/export_agents.py
+
 # Editor backup files
 *.bak
 *.bak[0-9]
