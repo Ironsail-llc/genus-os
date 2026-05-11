@@ -158,7 +158,7 @@ class TestBenchmarkRunForAgent:
                 "robothor.engine.config.load_agent_config",
                 return_value=mock_agent_config,
             ),
-            patch("robothor.crm.dal.get_connection", return_value=FakeConn()),
+            patch("robothor.db.connection.get_connection", return_value=FakeConn()),
         ):
             result = await _benchmark_run_for_agent(
                 {"agent_id": "main", "tag": "manual-1", "triggered_by": "manual"},

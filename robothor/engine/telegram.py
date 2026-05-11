@@ -230,7 +230,7 @@ async def _analyze_photo_bytes(
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(f"{ollama_url}/api/chat", json=payload)
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            return resp.json()["message"]["content"]  # type: ignore[no-any-return]
     except Exception as e:
         return f"[Vision analysis failed: {e}]"
 
@@ -924,7 +924,7 @@ class TelegramBot:
                     # Append a small footer to the message so the operator
                     # has a record without scrolling away.
                     if msg and hasattr(msg, "edit_text") and getattr(msg, "text", None):
-                        new_text = msg.text + f"\n\n_{verb} ✓_"
+                        new_text = (getattr(msg, "text", "") or "") + f"\n\n_{verb} ✓_"
                         await msg.edit_text(new_text, parse_mode="Markdown")
             else:
                 err = (stderr or b"").decode("utf-8", errors="replace")[:200]
@@ -942,7 +942,9 @@ class TelegramBot:
                     6: "Expired",
                     7: "Apply failed",
                 }
-                await callback.answer(msg_map.get(rc, f"Apply failed (rc={rc})"), show_alert=True)
+                await callback.answer(
+                    msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True
+                )
 
         # ── File/document/photo messages ──
 
@@ -1471,7 +1473,7 @@ class TelegramBot:
                     async def _persist_and_map(
                         session_key: str = session_key,
                         user_text: str = user_text,
-                        output_text: str = run.output_text,
+                        output_text: str | None = run.output_text,
                         model: Any = model,
                         tenant_id: str = _tenant,
                         user_extras: dict[str, Any] | None = user_extras,
@@ -1488,7 +1490,7 @@ class TelegramBot:
                         inserted = await save_exchange_async(
                             session_key,
                             user_text,
-                            output_text,
+                            output_text or "",
                             channel="telegram",
                             model_override=model,
                             tenant_id=tenant_id,

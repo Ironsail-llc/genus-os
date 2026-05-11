@@ -24,7 +24,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
 from robothor.crm.models import (
     company_to_dict,
     conversation_to_dict,
@@ -42,7 +42,7 @@ from robothor.crm.validation import (
     scrub_null_string,
     validate_person_input,
 )
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection as get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -1003,9 +1003,9 @@ def create_task(
     objective: str | None = None,
     next_action: str | None = None,
     next_action_agent: str | None = None,
-    blockers: list[dict] | None = None,
+    blockers: list[dict[str, Any]] | None = None,
     question_for_operator: str | None = None,
-    autonomy_budget: dict | None = None,
+    autonomy_budget: dict[str, Any] | None = None,
     follow_up_at: str | datetime | None = None,
     tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:

@@ -77,7 +77,7 @@ def cmd_goal(args: Any) -> int:
         return 0
 
     if command == "status":
-        goal = get_active_goal(tenant_id=tenant_id, agent_id=agent_id)
+        goal = get_active_goal(tenant_id=tenant_id, agent_id=agent_id)  # type: ignore[assignment]
         if goal is None:
             if getattr(args, "json_output", False):
                 print(json.dumps({"status": "none"}))

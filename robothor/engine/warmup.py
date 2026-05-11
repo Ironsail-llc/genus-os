@@ -327,7 +327,7 @@ def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
         )
         if not rows:
             return "--- OPEN TASKS ---\nNothing open."
-        grouped: dict[str, list[dict]] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for t in rows:
             key = t.get("assigned_to_agent") or "unassigned"
             grouped.setdefault(key, []).append(t)

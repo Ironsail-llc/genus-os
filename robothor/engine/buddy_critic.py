@@ -516,7 +516,7 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
             inner = inner.removeprefix("json\n")
             raw = inner.strip()
     try:
-        return json.loads(raw)
+        return json.loads(raw)  # type: ignore[no-any-return]
     except json.JSONDecodeError:
         pass
     # Look for the first {...} span
@@ -524,7 +524,7 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
     end = raw.rfind("}")
     if start != -1 and end > start:
         try:
-            return json.loads(raw[start : end + 1])
+            return json.loads(raw[start : end + 1])  # type: ignore[no-any-return]
         except json.JSONDecodeError:
             return None
     return None

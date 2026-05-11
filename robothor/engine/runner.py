@@ -608,7 +608,7 @@ class AgentRunner:
                         agent_config, self.config.workspace, self.config.tenant_id
                     )
 
-            warmup_future = loop.run_in_executor(None, _build_cron_warmup)
+            warmup_future = loop.run_in_executor(None, _build_cron_warmup)  # type: ignore[arg-type]
         elif warmup_kind == "interactive":
             from robothor.engine.warmup import (
                 build_interactive_preamble,
@@ -679,7 +679,7 @@ class AgentRunner:
         # exactly which warmup section (history, memory_blocks, context_files,
         # peers, breadcrumbs, preferences, agent_hooks) stalled — crucial for
         # diagnosing fleet-wide warmup stalls (FIX-WARMUP-STALL task).
-        _warmup_phase_steps: list[tuple[str, int, dict]] = [
+        _warmup_phase_steps: list[tuple[str, int, dict[str, Any]]] = [
             (
                 "system_prompt_build",
                 t_sys_prompt_ms,

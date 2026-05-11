@@ -399,7 +399,7 @@ async def _resolve_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                     "id": task_id,
                     "acceptance_failed": accept_result["failures"],
                     "message": (
-                        f"Acceptance block failed ({len(accept_result['failures'])} of "
+                        f"Acceptance block failed ({len(accept_result['failures'])} of "  # type: ignore[arg-type]
                         f"{accept_result['ran']} commands). Task not resolved. Fix the "
                         "underlying issue or update the accept block if the criteria are wrong."
                     ),

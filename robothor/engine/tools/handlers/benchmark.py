@@ -20,7 +20,7 @@ import re
 import statistics
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -531,7 +531,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     experiment_id_arg = (args.get("experiment_id") or "").strip() or None
     suite_path_arg = (args.get("config_file") or "").strip() or None
     try:
-        from robothor.crm.dal import get_connection
+        from robothor.db.connection import get_connection
 
         with get_connection() as conn:
             cur = conn.cursor()
@@ -827,15 +827,18 @@ async def _benchmark_run_for_agent(args: dict[str, Any], ctx: ToolContext) -> di
     suite_id = suite["id"]
     relative_path = f"docs/benchmarks/{agent_id}/suite.yaml"
 
-    return await _benchmark_run(
-        {
-            "agent_id": agent_id,
-            "suite_id": suite_id,
-            "tag": tag,
-            "tasks": args.get("tasks"),
-            "triggered_by": args.get("triggered_by"),
-            "experiment_id": args.get("experiment_id"),
-            "config_file": relative_path,
-        },
-        ctx,
+    return cast(
+        "dict[str, Any]",
+        await _benchmark_run(
+            {
+                "agent_id": agent_id,
+                "suite_id": suite_id,
+                "tag": tag,
+                "tasks": args.get("tasks"),
+                "triggered_by": args.get("triggered_by"),
+                "experiment_id": args.get("experiment_id"),
+                "config_file": relative_path,
+            },
+            ctx,
+        ),
     )

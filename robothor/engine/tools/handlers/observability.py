@@ -129,7 +129,9 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
     daemon_start_ts = os.environ.get("ROBOTHOR_DAEMON_START_TS")
     started_at = run.get("started_at")
     started_iso = (
-        started_at.isoformat() if hasattr(started_at, "isoformat") else str(started_at or "")
+        started_at.isoformat()  # type: ignore[union-attr]
+        if hasattr(started_at, "isoformat")
+        else str(started_at or "")
     )
     category, _ = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
 

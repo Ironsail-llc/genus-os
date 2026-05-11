@@ -204,7 +204,7 @@ def create_health_app(
                     ORDER BY agent_id, stat_date
                     """
                 )
-                trend: dict[str, list] = {}
+                trend: dict[str, list[dict[str, Any]]] = {}
                 for agent_id, stat_date, score in cur.fetchall():
                     trend.setdefault(agent_id, []).append({"date": str(stat_date), "score": score})
             return {
@@ -287,7 +287,7 @@ def create_health_app(
                 exclude_resolved=False,
             )
 
-            def classify(task: dict) -> str | None:
+            def classify(task: dict[str, Any]) -> str | None:
                 tags = task.get("tags") or []
                 status = (task.get("status") or "").upper()
                 # Legacy pre-rebuild tasks (no buddy-baseline marker) are tagged
@@ -306,7 +306,7 @@ def create_health_app(
                     return "in_progress"
                 return "open"
 
-            buckets: dict[str, list] = {
+            buckets: dict[str, list[dict[str, Any]]] = {
                 "open": [],
                 "in_progress": [],
                 "verifying": [],
