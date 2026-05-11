@@ -65,6 +65,10 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# Local Docker compose overrides (per-machine)
+docker-compose.override.yml
+docker-compose.override.yaml
+
 # IDE
 .vscode/
 .idea/
@@ -87,6 +91,16 @@ htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+coverage-bridge.json
+_check_cov.py
+_cov_report.py
+_run_cov.sh
+
+# SonarQube scanner workspace
+.scannerwork/
+
+# Local test virtualenv
+.venv-test/
 
 # Type checking
 .mypy_cache/
