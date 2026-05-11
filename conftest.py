@@ -34,7 +34,11 @@ try:
         redis_client,
         redis_url,
     )
-except ImportError:
+except Exception:
+    # ImportError when fixtures aren't on sys.path (bridge tests have their own rootdir).
+    # OSError when an unrelated installed `tests` package shadows ours and pulls in torch
+    # whose DLL fails to load on this host. In both cases the integration fixtures are
+    # genuinely unavailable, which is the same outcome.
     pass
 
 
