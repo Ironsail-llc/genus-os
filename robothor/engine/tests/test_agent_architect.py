@@ -62,7 +62,7 @@ class TestManifestConfiguration:
         """Manifest parses into a valid AgentConfig without errors."""
         config = _load_architect_config()
         assert config.id == "agent-architect"
-        assert config.model_primary == "openrouter/anthropic/claude-opus-4.6"
+        assert config.model_primary == "openrouter/anthropic/claude-opus-4.7"
 
     def test_manifest_tools_registered(self):
         """Engine-native tools in tools_allowed exist in the ToolRegistry.
@@ -186,10 +186,10 @@ class TestSystemIntegration:
 class TestModelRegistry:
     """Verify new models are registered with correct pricing."""
 
-    def test_opus_4_6_registered(self):
+    def test_opus_4_7_registered(self):
         from robothor.engine.model_registry import get_model_limits
 
-        limits = get_model_limits("openrouter/anthropic/claude-opus-4.6")
+        limits = get_model_limits("openrouter/anthropic/claude-opus-4.7")
         assert limits.max_input_tokens == 1_000_000
         assert limits.supports_thinking is True
         assert limits.input_cost_per_token == 0.000_005  # $5/M

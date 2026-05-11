@@ -103,8 +103,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_002,  # $2/M
         ttft_hint_ms=3000,
     ),
-    # Claude Opus 4.6 via OpenRouter — flagship reasoning model
-    "openrouter/anthropic/claude-opus-4.6": ModelLimits(
+    # Claude Opus 4.7 via OpenRouter — released 2026-04-16
+    "openrouter/anthropic/claude-opus-4.7": ModelLimits(
         max_input_tokens=1_000_000,
         max_output_tokens=128_000,
         default_output_tokens=16_384,

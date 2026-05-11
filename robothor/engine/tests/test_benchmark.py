@@ -322,6 +322,43 @@ def _make_mock_run(
     return run
 
 
+@pytest.fixture(autouse=True)
+def _isolate_benchmark_results_db(monkeypatch):
+    """Stop _benchmark_run from polluting the real benchmark_results table.
+
+    Added 2026-05-06: the new write-through to the canonical DB table is
+    fired by every _benchmark_run call. In unit tests we don't want those
+    writes hitting the dev DB. Patch get_connection to a no-op fake.
+    """
+
+    class _FakeCursor:
+        def execute(self, *a, **kw):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCursor()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    import robothor.crm.dal as _dal
+
+    monkeypatch.setattr(_dal, "get_connection", lambda: _FakeConn())
+
+
 class TestBenchmarkRun:
     @pytest.mark.asyncio
     async def test_run_basic(self):

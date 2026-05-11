@@ -1186,6 +1186,40 @@ def create_health_app(
             logger.exception("Failed to get v2 stats")
             return {"error": "Internal server error"}
 
+    @app.post("/api/agents/{agent_id}/trigger")
+    async def trigger_agent(agent_id: str) -> dict[str, Any]:
+        """Manually trigger an agent run with TriggerType.MANUAL.
+
+        Added 2026-05-06 for the benchmark-runner verification flow — there
+        was no in-engine "fire now" mechanism for agents (only for workflows).
+        Reuses the daemon's runner so sub-agent spawning works.
+        """
+        if not runner:
+            return {"error": "Runner not available"}
+        from robothor.engine.config import load_agent_config
+        from robothor.engine.models import TriggerType
+
+        agent_config = load_agent_config(agent_id, config.manifest_dir)
+        if not agent_config:
+            return {"error": f"Agent not found: {agent_id}"}
+
+        import asyncio
+
+        async def _go() -> None:
+            try:
+                await runner.execute(
+                    agent_id=agent_id,
+                    message=f"Manual trigger via /api/agents/{agent_id}/trigger at {datetime.now(UTC).isoformat()}",
+                    trigger_type=TriggerType.MANUAL,
+                    trigger_detail="api-manual-trigger",
+                    agent_config=agent_config,
+                )
+            except Exception:
+                logger.exception("Manual trigger of %s failed", agent_id)
+
+        asyncio.create_task(_go())
+        return {"status": "started", "agent_id": agent_id}
+
     @app.post("/api/workflows/{workflow_id}/execute")
     async def execute_workflow(workflow_id: str) -> dict[str, Any]:
         """Manually trigger a workflow execution."""

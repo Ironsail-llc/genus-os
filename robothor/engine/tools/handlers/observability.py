@@ -453,3 +453,109 @@ async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "threshold": outcome.threshold,
         "message": outcome.message,
     }
+
+
+@_handler("get_agent_performance_summary")
+async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Per-agent grade-card from the most recent benchmark_results row.
+
+    Source of truth for the morning briefing "Agent Performance" section,
+    the Telegram /goals command, and the daily summary script. One row
+    per agent with: latest pass_rate, last failing case IDs, run timestamp,
+    and trend (vs the same agent's prior run).
+
+    Args (all optional):
+      agent_id  — filter to a single agent
+      since_hours — exclude rows older than this (default: 48)
+    """
+    from robothor.db.connection import get_connection
+
+    agent_id = (args.get("agent_id") or "").strip() or None
+    since_hours = int(args.get("since_hours", 48))
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            # Latest row per agent within the window. DISTINCT ON does the heavy lifting.
+            params: list[Any] = [ctx.tenant_id, since_hours]
+            extra_clause = ""
+            if agent_id:
+                extra_clause = " AND agent_id = %s"
+                params.append(agent_id)
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (agent_id)
+                  agent_id, suite_id, run_at, total_cases, passed, failed,
+                  pass_rate, category_scores, failures, triggered_by, cost_usd
+                FROM benchmark_results
+                WHERE tenant_id = %s
+                  AND run_at >= NOW() - (%s || ' hours')::interval
+                  {extra_clause}
+                ORDER BY agent_id, run_at DESC
+                """,
+                params,
+            )
+            latest_rows = cur.fetchall()
+            colnames = [c.name for c in cur.description] if cur.description else []
+
+            agents: list[dict[str, Any]] = []
+            for row in latest_rows:
+                latest = dict(zip(colnames, row, strict=False))
+                # Find the prior row for trend.
+                cur.execute(
+                    """
+                    SELECT pass_rate
+                    FROM benchmark_results
+                    WHERE tenant_id = %s
+                      AND agent_id = %s
+                      AND run_at < %s
+                    ORDER BY run_at DESC
+                    LIMIT 1
+                    """,
+                    (ctx.tenant_id, latest["agent_id"], latest["run_at"]),
+                )
+                prior_row = cur.fetchone()
+                prior = float(prior_row[0]) if prior_row else None
+
+                pass_rate = float(latest["pass_rate"])
+                delta = round(pass_rate - prior, 4) if prior is not None else None
+                trend = (
+                    "improving"
+                    if delta is not None and delta > 0.02
+                    else "declining"
+                    if delta is not None and delta < -0.02
+                    else "flat"
+                )
+
+                # `failures` is JSONB; psycopg2 returns dict/list directly.
+                failures = latest.get("failures") or []
+                if isinstance(failures, str):
+                    import json as _json
+
+                    failures = _json.loads(failures)
+                failing_ids = [f.get("case_id") for f in failures if f.get("case_id")]
+
+                agents.append(
+                    {
+                        "agent_id": latest["agent_id"],
+                        "suite_id": latest["suite_id"],
+                        "run_at": latest["run_at"].isoformat()
+                        if hasattr(latest["run_at"], "isoformat")
+                        else str(latest["run_at"]),
+                        "total_cases": int(latest["total_cases"]),
+                        "passed": int(latest["passed"]),
+                        "failed": int(latest["failed"]),
+                        "pass_rate": round(pass_rate, 3),
+                        "prior_pass_rate": round(prior, 3) if prior is not None else None,
+                        "delta": delta,
+                        "trend": trend,
+                        "failing_case_ids": failing_ids,
+                        "category_scores": latest.get("category_scores") or {},
+                        "triggered_by": latest.get("triggered_by"),
+                        "cost_usd": float(latest["cost_usd"]) if latest.get("cost_usd") else None,
+                    }
+                )
+
+            agents.sort(key=lambda a: a["pass_rate"])  # worst first
+            return {"agents": agents, "count": len(agents)}
+
+    return await asyncio.to_thread(_query)
