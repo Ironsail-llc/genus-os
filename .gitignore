@@ -154,3 +154,38 @@ brain/.aider.chat.history.md
 robothor.db
 test-results/
 scripts/seed_dev_team_identities.py
+
+# Delphi tenant (instance configuration, not platform)
+/crm/migrations/053_delphi_*.sql
+/crm/migrations/054_delphi_*.sql
+/crm/migrations/056_delphi_*.sql
+/crm/migrations/057_delphi_*.sql
+/crm/migrations/058_delphi_*.sql
+/crm/migrations/059_delphi_*.sql
+/crm/migrations/060_delphi_*.sql
+/crm/migrations/061_delphi_*.sql
+/crm/migrations/063_delphi_*.sql
+/crm/migrations/064_delphi_*.sql
+/scripts/delphi_*.py
+/scripts/delphi-*.sh
+/scripts/provision_delphi_tenant.py
+/infra/systemd/delphi-*.service
+/infra/systemd/delphi-*.timer
+/infra/systemd/robothor-delphi-engine.*
+/delphi.db
+
+# Instance binaries / runtime
+/yolov8n.pt
+/valhalla_vitality_pipeline.html
+/workspace/
+
+# brain/.opencode (instance editor state)
+brain/.opencode/
+
+# Operator-specific working dirs (instance)
+brain/goals/
+brain/scratch/
+
+# Editor backup files
+*.bak
+*.bak[0-9]
