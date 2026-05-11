@@ -8,6 +8,7 @@ and last run per agent.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -1193,7 +1194,7 @@ async def serve_health(
     app = create_health_app(config, runner=runner, workflow_engine=workflow_engine)
     uvi_config = uvicorn.Config(
         app,
-        host="127.0.0.1",
+        host=os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1"),
         port=config.port,
         log_level="warning",
     )
