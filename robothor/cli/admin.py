@@ -41,13 +41,13 @@ def _find_migration_sql() -> str | None:
     # Bundled in wheel via force-include
     bundled = Path(__file__).parent.parent / "migrations" / "001_init.sql"
     if bundled.exists():
-        return bundled.read_text()
+        return bundled.read_text(encoding="utf-8")
 
     # Development: look in infra/migrations relative to repo root
     repo_root = Path(__file__).parent.parent.parent
     dev_path = repo_root / "infra" / "migrations" / "001_init.sql"
     if dev_path.exists():
-        return dev_path.read_text()
+        return dev_path.read_text(encoding="utf-8")
 
     return None
 
@@ -281,11 +281,19 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"               UNREACHABLE — {e}")
 
     # Engine
-    print("  Engine:      port 18800")
+    try:
+        from robothor.config import get_config as _gc
+
+        _engine_url = _gc().engine_url
+        _engine_port = _gc().engine_port
+    except Exception:
+        _engine_url = "http://127.0.0.1:18800"
+        _engine_port = 18800
+    print(f"  Engine:      port {_engine_port}")
     try:
         import httpx as _httpx
 
-        resp = _httpx.get("http://127.0.0.1:18800/health", timeout=3)
+        resp = _httpx.get(f"{_engine_url}/health", timeout=3)
         resp.raise_for_status()
         data = resp.json()
         agent_count = len(data.get("agents", {}))
@@ -380,7 +388,13 @@ def cmd_tui(args: argparse.Namespace) -> int:
 
         from robothor.tui.app import RobothorApp
 
-        url = getattr(args, "url", "http://127.0.0.1:18800")
+        try:
+            from robothor.config import get_config as _gc
+
+            _default_engine_url = _gc().engine_url
+        except Exception:
+            _default_engine_url = "http://127.0.0.1:18800"
+        url = getattr(args, "url", _default_engine_url)
         session = getattr(args, "session", None)
         app = RobothorApp(engine_url=url, session_key=session)
         app.run()

@@ -194,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # tui
     tui_parser = subparsers.add_parser("tui", help="Launch the terminal chat interface")
-    tui_parser.add_argument("--url", default="http://127.0.0.1:18800", help="Engine URL")
+    try:
+        from robothor.config import get_config as _gc
+
+        _tui_default_url = _gc().engine_url
+    except Exception:
+        _tui_default_url = "http://127.0.0.1:18800"
+    tui_parser.add_argument("--url", default=_tui_default_url, help="Engine URL")
     tui_parser.add_argument(
         "--session", default=None, help="Session key (auto-generated if omitted)"
     )

@@ -706,6 +706,34 @@ python scripts/validate_agents.py               # Agent manifest validation
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, PR process, and architecture details.
 
+### Git Conventions
+
+We follow **[Git Flow](https://nvie.com/posts/a-successful-git-branching-model/)** for branches and **[Conventional Commits](https://www.conventionalcommits.org/)** for commit messages.
+
+**Branch naming** — branch from `main`, name by type:
+
+| Prefix | When to use | Example |
+|---|---|---|
+| `feature/<topic>` | New capability or non-trivial enhancement | `feature/containerize-app-services` |
+| `fix/<topic>` | Bug fix | `fix/audit-logger-pool-leak` |
+| `chore/<topic>` | Tooling, deps, refactor with no behavior change | `chore/bump-pnpm-9` |
+| `docs/<topic>` | Documentation-only change | `docs/clarify-deployment` |
+| `release/<version>` | Release prep (version bumps, changelog) | `release/0.2.0` |
+| `hotfix/<topic>` | Urgent fix off `main` for a production issue | `hotfix/cve-2026-xxxx` |
+
+**Commit format** — `<type>(<scope>): <subject>` (subject in imperative mood, no trailing period, ≤72 chars):
+
+```
+feat(infra): containerize engine, bridge, orchestrator, and dashboard
+fix(app): declare workspace packages for pnpm 9 compatibility
+docs(readme): add git conventions section
+chore(deps): bump aiogram to 3.27
+```
+
+Allowed types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`, `build`, `ci`, `style`, `revert`. Add a body for non-trivial changes — explain *why* and what tradeoffs were made; the diff already shows the *what*. Breaking changes get `!` after the type/scope (`feat(api)!: …`) and a `BREAKING CHANGE:` footer.
+
+PRs are **squash-merged** into `main`, so the PR title becomes the final commit on `main` — title it as a conventional commit.
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for the full plan — from AI brain to AI operating system.

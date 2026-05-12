@@ -127,7 +127,13 @@ def cmd_costs(args: argparse.Namespace) -> int:
     import urllib.request
 
     hours = getattr(args, "hours", 24)
-    url = f"http://127.0.0.1:18800/costs?hours={hours}"
+    try:
+        from robothor.config import get_config
+
+        engine_url = get_config().engine_url
+    except Exception:
+        engine_url = "http://127.0.0.1:18800"
+    url = f"{engine_url}/costs?hours={hours}"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json_mod.loads(resp.read())

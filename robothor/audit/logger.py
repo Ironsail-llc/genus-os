@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -88,6 +89,7 @@ def log_event(
     Returns {"id": int, "timestamp": str} on success, None on failure.
     Failures are logged but never raise — audit must not break callers.
     """
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -114,11 +116,16 @@ def log_event(
         )
         row = cur.fetchone()
         conn.commit()
-        _release_connection(conn)
         return {"id": row[0], "timestamp": row[1].isoformat()}
     except Exception as e:
         logger.warning("Audit log_event failed: %s", e)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.rollback()
         return None
+    finally:
+        if conn is not None:
+            _release_connection(conn)
 
 
 def log_crm_mutation(
@@ -162,6 +169,7 @@ def query_log(
     user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Query audit log with filters."""
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -200,7 +208,6 @@ def query_log(
 
         cur.execute(query, params)
         rows = cur.fetchall()
-        _release_connection(conn)
 
         return [
             {
@@ -221,11 +228,18 @@ def query_log(
         ]
     except Exception as e:
         logger.warning("Audit query_log failed: %s", e)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.rollback()
         return []
+    finally:
+        if conn is not None:
+            _release_connection(conn)
 
 
 def stats() -> dict[str, Any]:
     """Get audit log statistics."""
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -244,7 +258,6 @@ def stats() -> dict[str, Any]:
             GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 20
         """)
         by_type = cur.fetchall()
-        _release_connection(conn)
 
         return {
             "total_events": row[0],
@@ -255,7 +268,13 @@ def stats() -> dict[str, Any]:
         }
     except Exception as e:
         logger.warning("Audit stats failed: %s", e)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.rollback()
         return {"total_events": 0, "error": str(e)}
+    finally:
+        if conn is not None:
+            _release_connection(conn)
 
 
 def log_telemetry(
@@ -270,6 +289,7 @@ def log_telemetry(
 
     Returns True on success.
     """
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -281,11 +301,16 @@ def log_telemetry(
             (service, metric, value, unit, Json(details) if details else None),
         )
         conn.commit()
-        _release_connection(conn)
         return True
     except Exception as e:
         logger.warning("Telemetry write failed: %s", e)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.rollback()
         return False
+    finally:
+        if conn is not None:
+            _release_connection(conn)
 
 
 def query_telemetry(
@@ -295,6 +320,7 @@ def query_telemetry(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Query telemetry data points."""
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -319,7 +345,6 @@ def query_telemetry(
 
         cur.execute(query, params)
         rows = cur.fetchall()
-        _release_connection(conn)
 
         return [
             {
@@ -335,4 +360,10 @@ def query_telemetry(
         ]
     except Exception as e:
         logger.warning("Telemetry query failed: %s", e)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.rollback()
         return []
+    finally:
+        if conn is not None:
+            _release_connection(conn)

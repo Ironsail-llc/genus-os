@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ServiceHealth } from "./service-health";
 import { fetchHealth } from "@/lib/api/health";
 import { fetchPeople } from "@/lib/api/people";
@@ -12,11 +12,35 @@ import { useAgents } from "@/hooks/use-agents";
 import { Users, Inbox, Brain, Activity } from "lucide-react";
 import type { HealthResponse } from "@/lib/api/types";
 
-function getGreeting(): string {
+function computeGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
   return "Good evening";
+}
+
+function formatToday(): string {
+  return new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+// `useSyncExternalStore` with constant snapshots is the React-19-blessed way
+// to render different output on server vs client without a hydration mismatch
+// and without a setState-in-useEffect that trips react-hooks linting and
+// pollutes test runs. The server snapshot is `false`, the client snapshot is
+// `true`, and the subscribe fn is a no-op (the value never changes after
+// mount).
+const subscribe = () => () => {};
+function useIsClient(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false,
+  );
 }
 
 export function DefaultDashboard() {
@@ -24,6 +48,11 @@ export function DefaultDashboard() {
   const { pushView } = useVisualState();
   const { tasks } = useTasks({ live: false });
   const { summary: agentSummary } = useAgents();
+  const isClient = useIsClient();
+
+  // Render only on the client; server emits empty strings so SSR/CSR match.
+  const greeting = isClient ? computeGreeting() : "";
+  const todayLabel = isClient ? formatToday() : "";
 
   useEffect(() => {
     fetchHealth()
@@ -102,15 +131,10 @@ export function DefaultDashboard() {
       {/* Greeting */}
       <div>
         <h2 className="text-xl font-semibold" data-testid="greeting">
-          {getGreeting()}
+          {greeting || " "}
         </h2>
         <span className="text-xs text-muted-foreground">
-          {new Date().toLocaleDateString("en-US", {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-          })}
+          {todayLabel || " "}
         </span>
       </div>
 
