@@ -318,7 +318,9 @@ async def homepage(request: Request) -> HTMLResponse:
 
     # Vision mode
     vision_mode = "unknown"
-    _vision_health = f"{_cfg.vision_url}/health" if _cfg is not None else "http://127.0.0.1:8600/health"
+    _vision_health = (
+        f"{_cfg.vision_url}/health" if _cfg is not None else "http://127.0.0.1:8600/health"
+    )
     try:
         import httpx
 

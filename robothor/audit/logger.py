@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -119,10 +120,8 @@ def log_event(
     except Exception as e:
         logger.warning("Audit log_event failed: %s", e)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         return None
     finally:
         if conn is not None:
@@ -230,10 +229,8 @@ def query_log(
     except Exception as e:
         logger.warning("Audit query_log failed: %s", e)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         return []
     finally:
         if conn is not None:
@@ -272,10 +269,8 @@ def stats() -> dict[str, Any]:
     except Exception as e:
         logger.warning("Audit stats failed: %s", e)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         return {"total_events": 0, "error": str(e)}
     finally:
         if conn is not None:
@@ -310,10 +305,8 @@ def log_telemetry(
     except Exception as e:
         logger.warning("Telemetry write failed: %s", e)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         return False
     finally:
         if conn is not None:
@@ -368,10 +361,8 @@ def query_telemetry(
     except Exception as e:
         logger.warning("Telemetry query failed: %s", e)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         return []
     finally:
         if conn is not None:

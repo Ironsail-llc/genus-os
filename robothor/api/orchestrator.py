@@ -36,6 +36,7 @@ from robothor.rag.profiles import RAG_PROFILES
 
 # ─── Configuration ────────────────────────────────────────────────────
 
+
 def _default_vision_url() -> str:
     try:
         from robothor.config import get_config
