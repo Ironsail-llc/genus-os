@@ -285,6 +285,68 @@ class TestPromptCachingOptimization:
         sys_msg = kwargs["messages"][0]
         assert isinstance(sys_msg["content"], str)
 
+
+class TestOpenRouterAnthropicProviderPin:
+    """OpenRouter Anthropic models pin to the Anthropic-direct backend.
+
+    Without this, OpenRouter load-balances across Google Vertex / Amazon
+    Bedrock, both of which reject assistant prefill and ephemeral
+    cache_control content blocks. allow_fallbacks=False ensures an
+    Anthropic outage cleanly falls through to the engine's own
+    model_fallbacks chain (MiMo, DeepSeek, etc.).
+    """
+
+    def test_openrouter_anthropic_pinned_to_anthropic(self):
+        from robothor.engine.runner import AgentRunner
+
+        kwargs = AgentRunner._build_llm_kwargs(
+            "openrouter/anthropic/claude-sonnet-4.6",
+            [{"role": "user", "content": "x"}],
+            [],
+            100,
+            0.3,
+        )
+        assert kwargs["extra_body"] == {
+            "provider": {"order": ["Anthropic"], "allow_fallbacks": False}
+        }
+
+    def test_openrouter_anthropic_opus_also_pinned(self):
+        from robothor.engine.runner import AgentRunner
+
+        kwargs = AgentRunner._build_llm_kwargs(
+            "openrouter/anthropic/claude-opus-4.7",
+            [{"role": "user", "content": "x"}],
+            [],
+            100,
+            0.3,
+        )
+        assert kwargs["extra_body"]["provider"]["order"] == ["Anthropic"]
+
+    def test_openrouter_non_anthropic_no_provider_pin(self):
+        from robothor.engine.runner import AgentRunner
+
+        kwargs = AgentRunner._build_llm_kwargs(
+            "openrouter/xiaomi/mimo-v2.5-pro",
+            [{"role": "user", "content": "x"}],
+            [],
+            100,
+            0.3,
+        )
+        assert "extra_body" not in kwargs
+
+    def test_direct_anthropic_no_provider_pin(self):
+        """Direct Anthropic API (no OpenRouter) must not get the provider pin."""
+        from robothor.engine.runner import AgentRunner
+
+        kwargs = AgentRunner._build_llm_kwargs(
+            "anthropic/claude-sonnet-4-6",
+            [{"role": "user", "content": "x"}],
+            [],
+            100,
+            0.3,
+        )
+        assert "extra_body" not in kwargs
+
     def test_cache_control_does_not_mutate_original(self):
         from robothor.engine.runner import AgentRunner
 

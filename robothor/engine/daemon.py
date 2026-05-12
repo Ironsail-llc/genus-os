@@ -18,6 +18,7 @@ import os
 import socket
 import sys
 import time
+from datetime import UTC
 from typing import Any
 
 from robothor.engine.config import EngineConfig
@@ -54,36 +55,145 @@ def _sd_notify(state: str) -> None:
         pass
 
 
-def _cleanup_stale_runs() -> int:
-    """Mark stale 'running' agent_runs as 'timeout'.
+# Set on daemon startup so the reaper can distinguish runs killed by a daemon
+# restart from runs where the runner process itself crashed. ISO8601 string.
+_DAEMON_START_TS: str | None = None
 
-    Called on startup and periodically by the watchdog.
+
+def _set_daemon_start_ts() -> None:
+    """Record the daemon's start time in-process and in env for reaper use."""
+    global _DAEMON_START_TS
+    from datetime import datetime
+
+    ts = datetime.now(UTC).isoformat()
+    _DAEMON_START_TS = ts
+    os.environ["ROBOTHOR_DAEMON_START_TS"] = ts
+
+
+def classify_reap_reason(
+    run_id: str,
+    started_at_iso: str,
+    daemon_start_ts: str | None,
+) -> tuple[str, str]:
+    """Classify why a run was reaped. Returns (category, error_message).
+
+    Categories:
+        no_steps         — no agent_run_steps rows (likely crash during setup)
+        post_llm_crash   — LLM was called; runner died after
+        post_tool_crash  — last step was a tool_call / tool_result
+        post_error_crash — last step was an 'error' step
+        daemon_restart   — run started before current daemon boot
+    """
+    # daemon_restart wins if we know the daemon booted after this run started
+    if daemon_start_ts and started_at_iso and started_at_iso < daemon_start_ts:
+        return (
+            "daemon_restart",
+            f"Reaped by watchdog: likely cancelled by daemon restart at {daemon_start_ts}",
+        )
+
+    try:
+        from robothor.engine.tracking import list_steps
+
+        steps = list_steps(run_id)
+    except Exception as e:
+        logger.debug("classify_reap_reason: list_steps failed for %s: %s", run_id, e)
+        steps = []
+
+    if not steps:
+        return (
+            "no_steps",
+            "Reaped by watchdog: no steps recorded (likely runner crash during setup)",
+        )
+
+    last = steps[-1]
+    last_type = str(last.get("step_type") or "").lower()
+    last_tool = last.get("tool_name")
+    last_err = (last.get("error_message") or "").strip()
+
+    if last_type == "error":
+        msg = (
+            f"Reaped by watchdog: runner crashed after error step (last_error={last_err[:160]})"
+            if last_err
+            else "Reaped by watchdog: runner crashed after error step"
+        )
+        return ("post_error_crash", msg)
+
+    if last_type in ("tool_call", "tool_result"):
+        return (
+            "post_tool_crash",
+            f"Reaped by watchdog: runner crashed after tool {last_tool or 'unknown'} "
+            f"(last step_type={last_type})",
+        )
+
+    if last_type in ("llm_call", "llm_response"):
+        return (
+            "post_llm_crash",
+            f"Reaped by watchdog: runner crashed after {last_type} (total steps={len(steps)})",
+        )
+
+    # Generic fallback — keep the category specific to what we saw
+    return (
+        "post_llm_crash"
+        if any(s.get("step_type") in ("llm_call", "llm_response") for s in steps)
+        else "no_steps",
+        f"Reaped by watchdog: runner crashed after {last_type or 'unknown'} "
+        f"(total steps={len(steps)})",
+    )
+
+
+def _cleanup_stale_runs() -> int:
+    """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
+
+    Called on startup and periodically by the watchdog. Instead of applying a
+    single hardcoded error_message to every reaped row, this now inspects the
+    run's step history to produce a truthful diagnosis (see classify_reap_reason).
+
     Returns the number of runs cleaned up.
     """
     try:
         from robothor.db.connection import get_connection
 
+        daemon_start_ts = _DAEMON_START_TS or os.environ.get("ROBOTHOR_DAEMON_START_TS")
+
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "UPDATE agent_runs SET status='timeout', "
-                "completed_at=NOW(), "
-                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
-                "error_message='Reaped by watchdog: stuck in initialization (no LLM call reached)' "
-                "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes' "
-                "RETURNING id, agent_id"
+                "SELECT id, agent_id, started_at "
+                "FROM agent_runs "
+                "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes'"
             )
-            rows = cur.fetchall()
-            conn.commit()
-            if rows:
-                for row in rows:
-                    logger.warning("Cleaned up stale run %s (agent: %s)", row[0], row[1])
-                # Release dedup locks for cleaned-up agents
-                from robothor.engine.dedup import release_sync
+            stale = cur.fetchall()
+            if not stale:
+                return 0
 
-                for row in rows:
-                    release_sync(row[1])
-            return len(rows)
+            for run_id, agent_id, started_at in stale:
+                started_iso = started_at.isoformat() if started_at is not None else ""
+                category, message = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
+                cur.execute(
+                    "UPDATE agent_runs SET status='timeout', "
+                    "completed_at=NOW(), "
+                    "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
+                    "error_message=%s, "
+                    "reap_category=%s "
+                    "WHERE id=%s AND status='running'",
+                    (message, category, run_id),
+                )
+                logger.warning(
+                    "Cleaned up stale run %s (agent=%s, category=%s)",
+                    run_id,
+                    agent_id,
+                    category,
+                )
+
+            conn.commit()
+
+            # Release dedup locks for cleaned-up agents
+            from robothor.engine.dedup import release_sync
+
+            for row in stale:
+                release_sync(row[1])
+
+            return len(stale)
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
         return 0
@@ -175,6 +285,10 @@ async def main() -> None:
     root.setLevel(logging.INFO)
 
     logger.info("Starting Genus OS Agent Engine...")
+
+    # Record daemon boot time before reaping so runs started before this boot
+    # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
+    _set_daemon_start_ts()
 
     # Clean up stale runs from previous crash/restart
     cleaned = await asyncio.to_thread(_cleanup_stale_runs)
@@ -519,6 +633,47 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
             except Exception as e:
                 logger.warning("Watchdog: zombie reaper failed: %s", e)
+
+        # Failure-mode detectors — read-only, alerts only, never kills runs.
+        # Disabled via ROBOTHOR_DETECTORS_ENABLED=0.
+        # Runaway burn: every 4 ticks = 2 minutes
+        if tick_count % 4 == 0:
+            try:
+                from robothor.engine.detectors import runaway_burn_detector
+
+                fired = await runaway_burn_detector()
+                if fired:
+                    logger.info("Detectors: %d runaway-burn alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: runaway_burn check failed: %s", e)
+
+        # Repeat errors + tool degradation: every 10 ticks = 5 minutes
+        if tick_count % 10 == 0:
+            try:
+                from robothor.engine.detectors import (
+                    repeat_error_detector,
+                    tool_degradation_detector,
+                )
+
+                fired = await repeat_error_detector(tenant_id=config.tenant_id)
+                if fired:
+                    logger.info("Detectors: %d repeat-error alerts fired", fired)
+                fired = await tool_degradation_detector()
+                if fired:
+                    logger.info("Detectors: %d tool-degradation alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: pattern checks failed: %s", e)
+
+        # Zombie runner: every 20 ticks = 10 minutes
+        if tick_count % 20 == 0:
+            try:
+                from robothor.engine.detectors import zombie_runner_detector
+
+                fired = await zombie_runner_detector()
+                if fired:
+                    logger.info("Detectors: %d zombie-runner alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: zombie_runner check failed: %s", e)
 
         # Daily chat session TTL cleanup (every 2880 ticks = 24h)
         if tick_count % 2880 == 0:

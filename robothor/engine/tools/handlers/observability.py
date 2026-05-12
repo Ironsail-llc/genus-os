@@ -94,6 +94,71 @@ async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     }
 
 
+@_handler("classify_run_failure")
+async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Return ground-truth classification of a run's failure.
+
+    Investigators (main, failure-analyzer, improvement-analyst) should call
+    this instead of parsing agent_runs.error_message, because the reaper's
+    error_message is a label, not a diagnosis. This tool inspects the
+    underlying step history and the daemon's boot timestamp to produce a
+    structured diagnosis.
+    """
+    import os
+
+    from robothor.engine.tracking import get_run, list_steps
+
+    run_id = args.get("run_id")
+    if not run_id:
+        return {"error": "run_id is required"}
+
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        return {"error": f"run not found: {run_id}"}
+
+    steps = await asyncio.to_thread(list_steps, run_id)
+
+    llm_steps = [s for s in steps if s.get("step_type") in ("llm_call", "llm_response")]
+    llm_was_called = len(llm_steps) > 0
+    last_step = steps[-1] if steps else None
+
+    # Derive category the same way the reaper does (reuse classify_reap_reason
+    # so the tool and the reaper can never disagree).
+    from robothor.engine.daemon import classify_reap_reason
+
+    daemon_start_ts = os.environ.get("ROBOTHOR_DAEMON_START_TS")
+    started_at = run.get("started_at")
+    started_iso = (
+        started_at.isoformat()  # type: ignore[union-attr]
+        if hasattr(started_at, "isoformat")
+        else str(started_at or "")
+    )
+    category, _ = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
+
+    tokens_used = int(run.get("input_tokens") or 0) + int(run.get("output_tokens") or 0)
+    started_before_daemon = bool(daemon_start_ts and started_iso and started_iso < daemon_start_ts)
+
+    return {
+        "run_id": str(run_id),
+        "agent_id": run.get("agent_id"),
+        "status": run.get("status"),
+        "category": category,
+        "raw_error_message": run.get("error_message"),
+        "last_step_type": str(last_step.get("step_type")) if last_step else None,
+        "last_step_tool": (last_step or {}).get("tool_name"),
+        "last_step_error": (last_step or {}).get("error_message"),
+        "llm_was_called": llm_was_called,
+        "total_llm_calls": len(llm_steps),
+        "total_steps": len(steps),
+        "model_used": run.get("model_used"),
+        "tokens_used": tokens_used,
+        "started_at": started_iso or None,
+        "completed_at": str(run["completed_at"]) if run.get("completed_at") else None,
+        "daemon_started_at": daemon_start_ts,
+        "daemon_restart_in_window": started_before_daemon,
+    }
+
+
 @_handler("list_agent_schedules")
 async def _list_agent_schedules(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import list_schedules
@@ -207,6 +272,169 @@ async def _buddy_verify_pass(args: dict[str, Any], ctx: ToolContext) -> dict[str
     return await asyncio.to_thread(run_verification_pass, tenant_id=ctx.tenant_id)
 
 
+@_handler("get_fleet_achievement_score")
+async def _get_fleet_achievement_score(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Aggregate fleet quality signal for the heartbeat.
+
+    Three numbers — today's fleet average achievement_score, the prior-week
+    average, and the buddy-grader 14-day hold rate. Pure read-only SQL
+    against tables Buddy already populates daily.
+
+    Designed to give the operator one trustworthy line in the heartbeat
+    instead of the per-agent self-rated outcome_assessment, which is
+    >95% "successful" across the board and carries no signal.
+    """
+    from robothor.db.connection import get_connection
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            # Today's fleet average — agents with a goals contract only.
+            cur.execute(
+                """
+                SELECT AVG(achievement_score)::float, COUNT(*)
+                FROM agent_buddy_stats
+                WHERE stat_date = CURRENT_DATE AND achievement_score IS NOT NULL
+                """
+            )
+            today_avg, today_n = cur.fetchone()
+
+            # Prior-week average (last 7 days, excluding today).
+            cur.execute(
+                """
+                SELECT AVG(achievement_score)::float
+                FROM agent_buddy_stats
+                WHERE stat_date BETWEEN CURRENT_DATE - INTERVAL '7 days'
+                                    AND CURRENT_DATE - INTERVAL '1 day'
+                  AND achievement_score IS NOT NULL
+                """
+            )
+            (prior_week_avg,) = cur.fetchone()
+
+            # Hold rate — verified_resolved fixes that held vs failed
+            # over the last 14 days. Buddy-grader records the outcome
+            # via tags `held_7d=true` / `held_7d=false` on the same task
+            # (see robothor/engine/health.py:530 for the canonical source).
+            cur.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN 'held_7d=true' = ANY(tags) THEN 1 ELSE 0 END)::int,
+                    SUM(CASE WHEN 'held_7d=true' = ANY(tags)
+                              OR 'held_7d=false' = ANY(tags) THEN 1 ELSE 0 END)::int
+                FROM crm_tasks
+                WHERE 'verified_resolved' = ANY(tags)
+                  AND created_at > NOW() - INTERVAL '14 days'
+                """
+            )
+            held_true, held_total = cur.fetchone()
+
+            hold_rate = (
+                round(100.0 * held_true / held_total, 1)
+                if held_total and held_true is not None
+                else None
+            )
+            return {
+                "today_score": round(today_avg, 1) if today_avg is not None else None,
+                "today_agents_scored": today_n or 0,
+                "prior_week_score": round(prior_week_avg, 1)
+                if prior_week_avg is not None
+                else None,
+                "delta_vs_prior_week": (
+                    round(today_avg - prior_week_avg, 1)
+                    if today_avg is not None and prior_week_avg is not None
+                    else None
+                ),
+                "hold_rate_14d_pct": hold_rate,
+                "hold_samples_14d": held_total or 0,
+            }
+
+    return await asyncio.to_thread(_query)
+
+
+@_handler("list_agent_reviews")
+async def _list_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """List recent Buddy reviews for an agent.
+
+    Used by agent-architect (and any caller) to read evidence-grounded
+    critiques before planning a fix or dispatching work. Returns rating,
+    feedback summary, and action_items — full review fetched via
+    `get_agent_review(review_id)`.
+    """
+    from robothor.db.connection import get_connection
+
+    agent_id = args.get("agent_id")
+    limit = int(args.get("limit", 20))
+    since_hours = int(args.get("since_hours", 168))  # default 7 days
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            params: list[Any] = [ctx.tenant_id, since_hours]
+            agent_clause = ""
+            if agent_id:
+                agent_clause = "AND agent_id = %s"
+                params.append(agent_id)
+            params.append(limit)
+            cur.execute(
+                f"""
+                SELECT id, agent_id, run_id, reviewer, reviewer_type, rating,
+                       LEFT(feedback, 280) AS feedback_excerpt,
+                       array_length(action_items, 1) AS action_items_count,
+                       created_at
+                FROM agent_reviews
+                WHERE tenant_id = %s
+                  AND created_at > NOW() - (INTERVAL '1 hour' * %s)
+                  {agent_clause}
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, r, strict=False)) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("created_at"):
+                    r["created_at"] = str(r["created_at"])
+                if r.get("run_id"):
+                    r["run_id"] = str(r["run_id"])
+                if r.get("id"):
+                    r["id"] = str(r["id"])
+            return {"reviews": rows, "count": len(rows)}
+
+    return await asyncio.to_thread(_query)
+
+
+@_handler("get_agent_review")
+async def _get_agent_review(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Fetch one full Buddy review by id, including full feedback + action items."""
+    from robothor.db.connection import get_connection
+
+    review_id = args["review_id"]
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, agent_id, run_id, reviewer, reviewer_type, rating,
+                       categories, feedback, action_items, created_at
+                FROM agent_reviews
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (ctx.tenant_id, review_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": f"Review {review_id} not found"}
+            cols = [d.name for d in cur.description]
+            r = dict(zip(cols, row, strict=False))
+            if r.get("created_at"):
+                r["created_at"] = str(r["created_at"])
+            if r.get("run_id"):
+                r["run_id"] = str(r["run_id"])
+            r["id"] = str(r["id"])
+            return r
+
+    return await asyncio.to_thread(_query)
+
+
 @_handler("buddy_audit")
 async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Weekly hold-rate audit. Pauses Buddy if fixes aren't sticking.
@@ -227,3 +455,109 @@ async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "threshold": outcome.threshold,
         "message": outcome.message,
     }
+
+
+@_handler("get_agent_performance_summary")
+async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Per-agent grade-card from the most recent benchmark_results row.
+
+    Source of truth for the morning briefing "Agent Performance" section,
+    the Telegram /goals command, and the daily summary script. One row
+    per agent with: latest pass_rate, last failing case IDs, run timestamp,
+    and trend (vs the same agent's prior run).
+
+    Args (all optional):
+      agent_id  — filter to a single agent
+      since_hours — exclude rows older than this (default: 48)
+    """
+    from robothor.db.connection import get_connection
+
+    agent_id = (args.get("agent_id") or "").strip() or None
+    since_hours = int(args.get("since_hours", 48))
+
+    def _query() -> dict[str, Any]:
+        with get_connection() as conn, conn.cursor() as cur:
+            # Latest row per agent within the window. DISTINCT ON does the heavy lifting.
+            params: list[Any] = [ctx.tenant_id, since_hours]
+            extra_clause = ""
+            if agent_id:
+                extra_clause = " AND agent_id = %s"
+                params.append(agent_id)
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (agent_id)
+                  agent_id, suite_id, run_at, total_cases, passed, failed,
+                  pass_rate, category_scores, failures, triggered_by, cost_usd
+                FROM benchmark_results
+                WHERE tenant_id = %s
+                  AND run_at >= NOW() - (%s || ' hours')::interval
+                  {extra_clause}
+                ORDER BY agent_id, run_at DESC
+                """,
+                params,
+            )
+            latest_rows = cur.fetchall()
+            colnames = [c.name for c in cur.description] if cur.description else []
+
+            agents: list[dict[str, Any]] = []
+            for row in latest_rows:
+                latest = dict(zip(colnames, row, strict=False))
+                # Find the prior row for trend.
+                cur.execute(
+                    """
+                    SELECT pass_rate
+                    FROM benchmark_results
+                    WHERE tenant_id = %s
+                      AND agent_id = %s
+                      AND run_at < %s
+                    ORDER BY run_at DESC
+                    LIMIT 1
+                    """,
+                    (ctx.tenant_id, latest["agent_id"], latest["run_at"]),
+                )
+                prior_row = cur.fetchone()
+                prior = float(prior_row[0]) if prior_row else None
+
+                pass_rate = float(latest["pass_rate"])
+                delta = round(pass_rate - prior, 4) if prior is not None else None
+                trend = (
+                    "improving"
+                    if delta is not None and delta > 0.02
+                    else "declining"
+                    if delta is not None and delta < -0.02
+                    else "flat"
+                )
+
+                # `failures` is JSONB; psycopg2 returns dict/list directly.
+                failures = latest.get("failures") or []
+                if isinstance(failures, str):
+                    import json as _json
+
+                    failures = _json.loads(failures)
+                failing_ids = [f.get("case_id") for f in failures if f.get("case_id")]
+
+                agents.append(
+                    {
+                        "agent_id": latest["agent_id"],
+                        "suite_id": latest["suite_id"],
+                        "run_at": latest["run_at"].isoformat()
+                        if hasattr(latest["run_at"], "isoformat")
+                        else str(latest["run_at"]),
+                        "total_cases": int(latest["total_cases"]),
+                        "passed": int(latest["passed"]),
+                        "failed": int(latest["failed"]),
+                        "pass_rate": round(pass_rate, 3),
+                        "prior_pass_rate": round(prior, 3) if prior is not None else None,
+                        "delta": delta,
+                        "trend": trend,
+                        "failing_case_ids": failing_ids,
+                        "category_scores": latest.get("category_scores") or {},
+                        "triggered_by": latest.get("triggered_by"),
+                        "cost_usd": float(latest["cost_usd"]) if latest.get("cost_usd") else None,
+                    }
+                )
+
+            agents.sort(key=lambda a: a["pass_rate"])  # worst first
+            return {"agents": agents, "count": len(agents)}
+
+    return await asyncio.to_thread(_query)

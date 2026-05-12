@@ -95,3 +95,83 @@ class TestMultiplePolicies:
         result = engine.check_pre_execution("exec", {"command": "rm -rf /"})
         assert not result.allowed
         assert result.guardrail_name == "no_destructive_writes"
+
+
+class TestNoRecentChangelogReversal:
+    """Guardrail that blocks manifest edits touching a field changed within 14 days."""
+
+    def _manifest(self, *, max_iterations: int, recent_days_ago: int = 3) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        entry_date = (datetime.now(UTC) - timedelta(days=recent_days_ago)).date().isoformat()
+        return (
+            "id: demo\n"
+            f"max_iterations: {max_iterations}\n"
+            "description: demo\n"
+            "changelog:\n"
+            f'  - date: "{entry_date}"\n'
+            '    change: "Raised max_iterations to 100 — needed for benchmark passes"\n'
+            '  - date: "2026-01-01"\n'
+            '    change: "Initial version"\n'
+        )
+
+    def _write_manifest(self, tmp_path, contents: str) -> str:
+        manifest = tmp_path / "docs" / "agents" / "demo.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(contents)
+        return str(manifest)
+
+    def test_blocks_reedit_of_recently_touched_field(self, tmp_path):
+        path = self._write_manifest(tmp_path, self._manifest(max_iterations=100))
+        new_contents = self._manifest(max_iterations=20)
+        engine = GuardrailEngine(
+            enabled_policies=["no_recent_changelog_reversal"],
+            workspace=str(tmp_path),
+        )
+        result = engine.check_pre_execution("write_file", {"path": path, "content": new_contents})
+        assert not result.allowed
+        assert result.guardrail_name == "no_recent_changelog_reversal"
+        assert "max_iterations" in result.reason
+
+    def test_allows_field_not_in_recent_changelog(self, tmp_path):
+        existing = self._manifest(max_iterations=100)
+        # Change a different field that wasn't mentioned in the recent entry.
+        new_contents = existing.replace("description: demo", "description: updated")
+        path = self._write_manifest(tmp_path, existing)
+        engine = GuardrailEngine(
+            enabled_policies=["no_recent_changelog_reversal"],
+            workspace=str(tmp_path),
+        )
+        result = engine.check_pre_execution("write_file", {"path": path, "content": new_contents})
+        assert result.allowed
+
+    def test_allows_when_recent_entry_is_over_14_days_old(self, tmp_path):
+        contents = self._manifest(max_iterations=100, recent_days_ago=30)
+        path = self._write_manifest(tmp_path, contents)
+        new_contents = self._manifest(max_iterations=20, recent_days_ago=30)
+        engine = GuardrailEngine(
+            enabled_policies=["no_recent_changelog_reversal"],
+            workspace=str(tmp_path),
+        )
+        result = engine.check_pre_execution("write_file", {"path": path, "content": new_contents})
+        assert result.allowed
+
+    def test_ignores_non_manifest_paths(self, tmp_path):
+        md = tmp_path / "brain" / "agents" / "DEMO.md"
+        md.parent.mkdir(parents=True)
+        md.write_text("# demo")
+        engine = GuardrailEngine(
+            enabled_policies=["no_recent_changelog_reversal"],
+            workspace=str(tmp_path),
+        )
+        result = engine.check_pre_execution("write_file", {"path": str(md), "content": "# new"})
+        assert result.allowed
+
+    def test_ignores_non_write_tools(self, tmp_path):
+        path = self._write_manifest(tmp_path, self._manifest(max_iterations=100))
+        engine = GuardrailEngine(
+            enabled_policies=["no_recent_changelog_reversal"],
+            workspace=str(tmp_path),
+        )
+        result = engine.check_pre_execution("read_file", {"path": path})
+        assert result.allowed

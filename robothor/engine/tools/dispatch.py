@@ -65,6 +65,7 @@ def _collect_handlers() -> dict[str, Any]:
         filesystem,
         git,
         github_api,
+        goal,
         gws,
         identity,
         jira,
@@ -98,6 +99,7 @@ def _collect_handlers() -> dict[str, Any]:
         desktop,
         experiment,
         benchmark,
+        goal,
         git,
         gws,
         vault,
@@ -226,7 +228,17 @@ async def _execute_tool(
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
 
-    result = cast("dict[str, Any]", await handler(args, ctx))
+    # Wrap handler invocation: an unhandled exception here used to propagate
+    # out of the runner, leaving agent_runs rows in 'running' state until the
+    # 30-min reaper fired. Returning a structured error lets the LLM decide
+    # whether to retry, skip, or surface to the operator.
+    try:
+        result = cast("dict[str, Any]", await handler(args, ctx))
+    except Exception as e:
+        logger.exception("Tool %s raised unhandled exception", name)
+        err_msg = f"{type(e).__name__}: {e}"
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
+        return {"error": err_msg, "tool_crashed": True}
     if isinstance(result, dict) and "error" in result:
         _audit_tool_call(
             name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]

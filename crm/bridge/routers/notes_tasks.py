@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import re
 from datetime import UTC
-from typing import TYPE_CHECKING
 
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse
+
+# Keep these at runtime, NOT under TYPE_CHECKING — FastAPI must see the
+# Pydantic models at runtime to bind them as request bodies. If moved into
+# a TYPE_CHECKING block, FastAPI treats the body parameter as a query
+# parameter and every POST/PATCH returns 422. (Caught by CI 2026-05-11.)
+from models import (  # noqa: TC002
+    ApproveTaskRequest,
+    CreateNoteRequest,
+    CreateTaskRequest,
+    RejectTaskRequest,
+    UpdateTaskRequest,
+)
 
 from robothor.crm.dal import (
     approve_task,
@@ -29,15 +40,6 @@ from robothor.crm.dal import (
     update_task,
 )
 from robothor.events.bus import publish
-
-if TYPE_CHECKING:
-    from models import (
-        ApproveTaskRequest,
-        CreateNoteRequest,
-        CreateTaskRequest,
-        RejectTaskRequest,
-        UpdateTaskRequest,
-    )
 
 router = APIRouter(prefix="/api", tags=["notes", "tasks"])
 

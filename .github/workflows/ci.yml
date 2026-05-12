@@ -28,9 +28,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+      - run: pip install --upgrade pip
       - run: pip install pip-audit
       - run: pip install -e ".[api]"
-      - run: pip-audit
+      # CVE-2026-3219 is a pip self-CVE with no fix released; ignore until
+      # upstream ships a patched version. CVE-2026-6357 is resolved by the
+      # pip upgrade above.
+      - run: pip-audit --ignore-vuln CVE-2026-3219
 
   lint:
     runs-on: ubuntu-latest

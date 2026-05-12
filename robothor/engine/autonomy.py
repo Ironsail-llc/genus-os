@@ -109,7 +109,7 @@ def classify_action(
     categories = b.get("categories") or {}
     cat = categories.get(action_type)
     if cat in ("auto", "ask", "refuse"):
-        return cat  # type: ignore[return-value]
+        return cat  # type: ignore[no-any-return]
 
     reversible = bool(meta.get("reversible", False))
     cost = float(meta.get("estimated_cost_usd") or 0.0)

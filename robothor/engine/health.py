@@ -205,7 +205,7 @@ def create_health_app(
                     ORDER BY agent_id, stat_date
                     """
                 )
-                trend: dict[str, list] = {}
+                trend: dict[str, list[dict[str, Any]]] = {}
                 for agent_id, stat_date, score in cur.fetchall():
                     trend.setdefault(agent_id, []).append({"date": str(stat_date), "score": score})
             return {
@@ -288,7 +288,7 @@ def create_health_app(
                 exclude_resolved=False,
             )
 
-            def classify(task: dict) -> str | None:
+            def classify(task: dict[str, Any]) -> str | None:
                 tags = task.get("tags") or []
                 status = (task.get("status") or "").upper()
                 # Legacy pre-rebuild tasks (no buddy-baseline marker) are tagged
@@ -307,7 +307,7 @@ def create_health_app(
                     return "in_progress"
                 return "open"
 
-            buckets: dict[str, list] = {
+            buckets: dict[str, list[dict[str, Any]]] = {
                 "open": [],
                 "in_progress": [],
                 "verifying": [],
@@ -746,6 +746,73 @@ def create_health_app(
                 {"status": "error", "error": "Internal server error"}, status_code=500
             )
 
+    @app.get("/health/timeouts/last-24h")
+    async def timeouts_last_24h() -> dict[str, Any]:
+        """Per-category breakdown of timeout runs in the last 24h.
+
+        The `reap_category` column (migration 038) gives the true cause of
+        each reap event rather than the reaper's generic error_message.
+        Helm dashboard reads this to render a meaningful breakdown.
+
+        Returned shape::
+
+            {
+                "categories": [
+                    {"category": "post_tool_crash", "count": 4,
+                     "example_agents": ["buddy", "main"]},
+                    ...
+                ],
+                "total": 12,
+                "uncategorized": 3,   # timeouts without reap_category set
+                "window_hours": 24,
+            }
+        """
+        from robothor.db.connection import get_connection
+
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT
+                        reap_category,
+                        COUNT(*) AS cnt,
+                        array_agg(DISTINCT agent_id) AS agents
+                    FROM agent_runs
+                    WHERE status = 'timeout'
+                      AND started_at > NOW() - INTERVAL '24 hours'
+                    GROUP BY reap_category
+                    ORDER BY cnt DESC
+                    """
+                )
+                rows = cur.fetchall()
+        except Exception as e:
+            logger.exception("timeouts_last_24h query failed")
+            return {"error": f"query failed: {e}"}
+
+        categories: list[dict[str, Any]] = []
+        uncategorized = 0
+        total = 0
+        for cat, cnt, agents in rows:
+            total += int(cnt or 0)
+            if cat is None:
+                uncategorized = int(cnt or 0)
+                continue
+            categories.append(
+                {
+                    "category": cat,
+                    "count": int(cnt or 0),
+                    "example_agents": sorted(agents or [])[:5],
+                }
+            )
+
+        return {
+            "categories": categories,
+            "total": total,
+            "uncategorized": uncategorized,
+            "window_hours": 24,
+        }
+
     @app.on_event("startup")
     async def _mark_startup_complete() -> None:
         """Mark startup as complete once FastAPI is serving."""
@@ -1119,6 +1186,40 @@ def create_health_app(
         except Exception:
             logger.exception("Failed to get v2 stats")
             return {"error": "Internal server error"}
+
+    @app.post("/api/agents/{agent_id}/trigger")
+    async def trigger_agent(agent_id: str) -> dict[str, Any]:
+        """Manually trigger an agent run with TriggerType.MANUAL.
+
+        Added 2026-05-06 for the benchmark-runner verification flow — there
+        was no in-engine "fire now" mechanism for agents (only for workflows).
+        Reuses the daemon's runner so sub-agent spawning works.
+        """
+        if not runner:
+            return {"error": "Runner not available"}
+        from robothor.engine.config import load_agent_config
+        from robothor.engine.models import TriggerType
+
+        agent_config = load_agent_config(agent_id, config.manifest_dir)
+        if not agent_config:
+            return {"error": f"Agent not found: {agent_id}"}
+
+        import asyncio
+
+        async def _go() -> None:
+            try:
+                await runner.execute(
+                    agent_id=agent_id,
+                    message=f"Manual trigger via /api/agents/{agent_id}/trigger at {datetime.now(UTC).isoformat()}",
+                    trigger_type=TriggerType.MANUAL,
+                    trigger_detail="api-manual-trigger",
+                    agent_config=agent_config,
+                )
+            except Exception:
+                logger.exception("Manual trigger of %s failed", agent_id)
+
+        asyncio.create_task(_go())
+        return {"status": "started", "agent_id": agent_id}
 
     @app.post("/api/workflows/{workflow_id}/execute")
     async def execute_workflow(workflow_id: str) -> dict[str, Any]:

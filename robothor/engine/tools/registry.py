@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.constants import SPAWN_TOOLS, TODO_TOOLS
+from robothor.engine.tools.constants import GOAL_TOOLS, SPAWN_TOOLS, TODO_TOOLS
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.schemas import get_engine_schemas
 
@@ -143,6 +143,7 @@ class ToolRegistry:
     def _get_filtered_names(self, config: AgentConfig) -> list[str]:
         if config.tools_allowed:
             names = [n for n in config.tools_allowed if n in self._schemas]
+            names.extend(n for n in GOAL_TOOLS if n in self._schemas and n not in names)
         else:
             names = list(self._schemas.keys())
 

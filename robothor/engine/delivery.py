@@ -158,14 +158,17 @@ def _looks_like_mid_thought(text: str) -> bool:
     """Heuristic: the model's final turn was narration about what it
     was *about to do*, not a summary of what it did.
 
-    Any of these signals on its own is enough (previously required BOTH):
+    Signals:
     - Ends with a colon, ellipsis, or dash (classic "and then..." tail).
     - Starts with a mid-action tell ("Good —", "Now let me", "I'll").
     - Starts with a conversational back-reference that only makes sense
       mid-stream ("The verification flags are...", "These issues...").
 
-    Tightening the net here: false positives become reframed diagnostics,
-    which is still better for the operator than shipping a fragment.
+    Substantial output (>300 chars) with a clean ending is real content
+    even if it happens to start with a narration leader — heartbeat
+    digests routinely lead with one CoT sentence before the structured
+    body. Only flag short OR mid-ending text. ``_strip_cot_prefix`` is
+    the primary defense for the leak; this is the safety net.
     """
     stripped = text.strip()
     if not stripped:
@@ -174,16 +177,105 @@ def _looks_like_mid_thought(text: str) -> bool:
     ends_mid = tail.endswith((":", "…", "...", "—"))
     lower = stripped.lower()
     leads_mid = any(lower.startswith(p) for p in _MID_THOUGHT_LEADERS)
+    if len(stripped) > 300 and not ends_mid:
+        return False
     return ends_mid or leads_mid
 
 
-def _beat_incomplete(run: AgentRun) -> bool:
+# Additional CoT prefix leaders observed in production heartbeat output —
+# beyond the _MID_THOUGHT_LEADERS set, the model also opens with these
+# patterns despite explicit prompt instructions not to narrate.
+_COT_PREFIX_LEADERS: tuple[str, ...] = (
+    "now i have",
+    "i have all",
+    "i have everything",
+    "now i'm",
+    "now composing",
+    "fleet delta is",
+)
+
+# Tail markers that indicate a real structured digest follows — used by
+# _strip_cot_prefix to confirm the post-prefix content is the actual
+# operator-facing report and not a second prose paragraph.
+_STRUCTURED_TAIL_PREFIXES: tuple[str, ...] = (
+    "⚡",
+    "🎯",
+    "🤝",
+    "📊",
+    "✅",
+    "⚠️",
+    "🔵",
+    "🟢",
+    "🔴",
+    "##",
+    "#",
+    "- ",
+    "· ",
+    "* ",
+    "**",
+)
+
+
+def _strip_cot_prefix(text: str) -> str:
+    """Strip a leading chain-of-thought paragraph if a structured digest
+    follows.
+
+    MiMo V2.5 Pro reliably emits one short narration sentence before the
+    actual heartbeat digest ("Now let me compose the digest.\\n\\n⚡ SAT
+    ...") despite ``brain/HEARTBEAT.md`` forbidding it. That prefix
+    trips the mid-thought heuristic and gets the entire digest reframed
+    as ``⚠️ Beat ended incomplete``. This function pulls the narration
+    off so the operator sees the digest the model actually produced.
+
+    Conservative — only strips when ALL of these hold:
+    - There is a ``\\n\\n`` paragraph break.
+    - The head is ≤200 chars (a real prefix, not a body paragraph).
+    - The head ends with ``.``, ``:``, or ``…`` (sentence-final).
+    - The head's lowercased start matches a known narration leader
+      (reuses ``_MID_THOUGHT_LEADERS`` plus ``_COT_PREFIX_LEADERS``).
+    - The tail starts with a structured marker (emoji, header, bullet)
+      indicating the actual digest follows.
+
+    A genuine fragment like ``"Now let me check the inbox—"`` (no
+    structured tail) is left alone so the existing reframe path still
+    catches it.
+    """
+    if not text:
+        return text
+    parts = text.split("\n\n", 1)
+    if len(parts) != 2:
+        return text
+    head, tail = parts[0], parts[1]
+    head_stripped = head.strip()
+    if not head_stripped or len(head_stripped) > 200:
+        return text
+    if not head_stripped.endswith((".", ":", "…")):
+        return text
+    lower = head_stripped.lower()
+    looks_like_narration = any(
+        lower.startswith(p) for p in (*_MID_THOUGHT_LEADERS, *_COT_PREFIX_LEADERS)
+    )
+    if not looks_like_narration:
+        return text
+    tail_stripped = tail.lstrip()
+    if not tail_stripped.startswith(_STRUCTURED_TAIL_PREFIXES):
+        return text
+    return tail_stripped
+
+
+def _beat_incomplete(run: AgentRun, text: str | None = None) -> bool:
     """Return True when the run ended in a degenerate state that shouldn't
     ship its raw output_text.
 
     Currently: hard-budget exhaustion, a trailing ``error`` step (hard
     timeout, stall, model failure), or mid-thought narration in
     output_text. These cases get re-framed by ``_reframe_beat_output``.
+
+    Pass ``text`` to override which body is checked for mid-thought
+    narration (delivery passes the CoT-stripped body so the heuristic
+    sees the real digest, not the model's narration prefix). The
+    budget-exhausted and error-step checks are run-state, not text-
+    state, and always apply.
     """
     if getattr(run, "budget_exhausted", False):
         return True
@@ -194,7 +286,13 @@ def _beat_incomplete(run: AgentRun) -> bool:
         st_val = getattr(st, "value", st)
         if str(st_val) == "error":
             return True
-    return bool(run.output_text and _looks_like_mid_thought(run.output_text))
+    check_text = text if text is not None else run.output_text
+    return bool(check_text and _looks_like_mid_thought(check_text))
+
+
+def _beat_incomplete_text(run: AgentRun, text: str) -> bool:
+    """Convenience wrapper used by ``deliver()`` after CoT-prefix stripping."""
+    return _beat_incomplete(run, text=text)
 
 
 def _reframe_beat_output(run: AgentRun) -> str:
@@ -313,12 +411,25 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
             await _persist_delivery_status(run)
             return True
 
+    # Strip leading chain-of-thought narration before any incomplete-check.
+    # The model leaks one short narration sentence ("Now let me compose
+    # the digest.") in front of the actual digest in ~70% of heartbeats;
+    # without stripping, that prefix tripped _looks_like_mid_thought and
+    # the entire digest was replaced with "⚠️ Beat ended incomplete".
+    # The raw output_text in agent_runs is left untouched for debugging;
+    # only the delivered body is rewritten.
+    raw_text = run.output_text or ""
+    if _is_heartbeat_run(run):
+        delivered_source = _strip_cot_prefix(raw_text)
+    else:
+        delivered_source = raw_text
+
     # Re-frame heartbeat output when the beat ended incomplete — otherwise
     # the operator gets a fragment of mid-chain-of-thought ("Now let me
     # send it using the GWS tools:") and has no idea what actually
     # happened. The raw output_text stays in agent_runs; only the
     # delivered body is swapped.
-    if _is_heartbeat_run(run) and _beat_incomplete(run):
+    if _is_heartbeat_run(run) and _beat_incomplete_text(run, delivered_source):
         reframed = _reframe_beat_output(run)
         logger.info(
             "Heartbeat reframed for %s: budget=%s last_step_err=%s",
@@ -333,7 +444,7 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         )
         text = reframed
     else:
-        text = run.output_text.strip()
+        text = delivered_source.strip()
 
     # Suppress trivial heartbeat output — short filler like "All quiet" or "Nothing new"
     if _is_heartbeat_run(run) and _is_trivial_output(text):

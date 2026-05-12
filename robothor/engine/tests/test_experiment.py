@@ -100,13 +100,18 @@ class TestExperimentCreate:
             patch("robothor.memory.blocks.read_block", side_effect=read_fn),
             patch("robothor.memory.blocks.write_block", side_effect=write_fn),
         ):
+            # 2026-05-06: experiments default to mode=benchmark per operator
+            # directive; metric-mode requires operator_override. We exercise the
+            # benchmark path here to keep the test aligned with the new contract.
             result = await _experiment_create(
                 {
                     "experiment_id": "test-exp",
                     "metric_name": "test metric",
-                    "metric_command": "echo 42",
                     "direction": "maximize",
                     "search_space": "test files",
+                    "mode": "benchmark",
+                    "benchmark_agent_id": "email-classifier",
+                    "benchmark_suite_id": "email-classifier-harness",
                 },
                 CTX,
             )
@@ -150,6 +155,8 @@ class TestExperimentCreate:
                     "experiment_id": "bad-dir",
                     "metric_command": "echo 1",
                     "direction": "sideways",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )
@@ -170,6 +177,8 @@ class TestExperimentCreate:
                     "experiment_id": "big-iter",
                     "metric_command": "echo 1",
                     "direction": "maximize",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                     "max_iterations": 9999,
                 },
                 CTX,
@@ -842,6 +851,8 @@ class TestExperimentFileLocking:
                     "metric_command": "echo 1",
                     "direction": "maximize",
                     "search_space": "brain/agents/X.md, docs/agents/x.yaml",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )
@@ -876,6 +887,8 @@ class TestExperimentFileLocking:
                     "metric_command": "echo 1",
                     "direction": "maximize",
                     "search_space": "brain/agents/X.md",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )
@@ -910,6 +923,8 @@ class TestExperimentFileLocking:
                     "metric_command": "echo 1",
                     "direction": "maximize",
                     "search_space": "brain/agents/X.md",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )
@@ -1069,6 +1084,8 @@ class TestLockStaleness:
                     "metric_command": "echo 1",
                     "direction": "maximize",
                     "search_space": "brain/agents/X.md",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )
@@ -1113,6 +1130,8 @@ class TestLockStaleness:
                     "metric_command": "echo 1",
                     "direction": "maximize",
                     "search_space": "brain/agents/X.md",
+                    "mode": "metric",
+                    "operator_override": "test-suite-legacy",
                 },
                 CTX,
             )

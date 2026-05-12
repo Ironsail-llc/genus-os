@@ -84,6 +84,24 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 # rather than the real content the agent was supposed to broadcast.
 ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
+# Init timeout: max seconds for agent setup before first LLM call.
+# Agents that hang during warmup, adapter loading, or tool registration
+# are killed immediately.  Prevents the "stuck in initialization"
+# failure mode where runs sit for 30+ minutes with 0 tokens consumed.
+INIT_TIMEOUT_SECONDS = 60
+
+# Fleet-wide runaway-token thresholds. Applied to the cumulative
+# session.run.input_tokens + session.run.output_tokens across the run.
+#   - Crossing ALERT fires a one-time Telegram warning so the operator can
+#     decide whether to intervene.
+#   - Reaching HARD_CAP stops the loop cleanly with budget_exhausted=True.
+# These are fleet-wide constants (not per-agent configurable) so a
+# misconfigured manifest can never disable the protection. A main run at
+# Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
+# breaker; this guard would have stopped it at 5M.
+RUNAWAY_TOKEN_ALERT = 500_000
+RUNAWAY_TOKEN_HARD_CAP = 5_000_000
+
 
 class _StallWatchdog:
     """Kills a run if no activity occurs for stall_timeout seconds.
@@ -100,15 +118,50 @@ class _StallWatchdog:
     async HTTP libraries (litellm/httpx).
     """
 
-    def __init__(self, stall_timeout: int, hard_timeout: int) -> None:
+    # Touch descriptions that indicate the model has actually started
+    # producing work. Setup/warmup signals don't count — those happen
+    # before any LLM round-trip.
+    _OUTPUT_TOUCH_PREFIXES: tuple[str, ...] = (
+        "llm_response",
+        "stream_text",
+        "stream_tool",
+        "tool:",
+    )
+
+    def __init__(
+        self,
+        stall_timeout: int,
+        hard_timeout: int,
+        early_stall_timeout: int = 0,
+        tick_seconds: float = 30.0,
+    ) -> None:
         self._stall_timeout = stall_timeout
         self._hard_timeout = hard_timeout
+        # Background-loop tick interval. Default 30s — tests use a
+        # smaller value (e.g. 0.1) to avoid waiting for real wall-clock
+        # in the early-stall test suite.
+        self._tick_seconds = tick_seconds
+        # Pre-output stall window. Trips when this many seconds have
+        # passed AND no real progress signal has been seen. Fires even
+        # while the post-progress _stall_timeout is still being reset
+        # by warmup touches. 0 = disabled.
+        self._early_stall_timeout = early_stall_timeout
         self._last_activity = time.monotonic()
         self._last_activity_desc: str = "run_start"
         self._task: asyncio.Task[None] | None = None
         self._cancelled = False
         self._abort_event = asyncio.Event()
         self._abort_reason: str = ""
+        # Set True on the first touch() that names an output-bearing
+        # event (LLM response, stream chunk, tool completion). Setup
+        # touches like init_begin / warmup_complete / session_started
+        # do not flip this — they are explicitly excluded so the early-
+        # stall guard can fire while warmup keeps refreshing the
+        # last-activity timestamp.
+        self._saw_output_signal = False
+        # Set on start() so callers can compute "time since run began" even
+        # when the watchdog itself didn't trip (e.g. external cancellation).
+        self._start_time: float = time.monotonic()
 
     def touch(self, description: str = "") -> None:
         """Record activity — resets the stall timer.
@@ -116,10 +169,17 @@ class _StallWatchdog:
         Pass ``description`` to name the progress signal (e.g.
         ``"llm_response:sonnet-4.6"`` or ``"tool:list_tasks"``) so the
         stall abort reason can point at the last thing that worked.
+
+        Touches whose description matches an output-prefix
+        (`llm_response`, `stream_text`, `stream_tool`, `tool:`) also
+        flip the watchdog's "model started talking" flag, which clears
+        the early-stall guard. Setup/warmup touches do not flip it.
         """
         self._last_activity = time.monotonic()
         if description:
             self._last_activity_desc = description
+            if not self._saw_output_signal and description.startswith(self._OUTPUT_TOUCH_PREFIXES):
+                self._saw_output_signal = True
 
     @property
     def last_activity_desc(self) -> str:
@@ -127,7 +187,7 @@ class _StallWatchdog:
 
     def start(self, monitored_task: asyncio.Task[Any]) -> None:
         """Start the watchdog background loop."""
-        if self._stall_timeout <= 0 and self._hard_timeout <= 0:
+        if self._stall_timeout <= 0 and self._hard_timeout <= 0 and self._early_stall_timeout <= 0:
             return
         self._start_time = time.monotonic()
         self._task = asyncio.create_task(self._watch(monitored_task))
@@ -135,7 +195,7 @@ class _StallWatchdog:
     async def _watch(self, monitored_task: asyncio.Task[Any]) -> None:
         try:
             while not monitored_task.done():
-                await asyncio.sleep(30)
+                await asyncio.sleep(self._tick_seconds)
                 if monitored_task.done():
                     break
                 now = time.monotonic()
@@ -154,6 +214,34 @@ class _StallWatchdog:
                     self._abort_reason = (
                         f"Circuit-breaker hard timeout ({self._hard_timeout}s) "
                         f"after {elapsed:.0f}s; last activity: {self._last_activity_desc}"
+                    )
+                    self._cancelled = True
+                    self._abort_event.set()
+                    monitored_task.cancel()
+                    return
+
+                # Early-stall detection — fires before any output has been
+                # produced. Specifically targets the "warmup completes →
+                # silence" wedge pattern that the post-progress stall can't
+                # see (warmup touches keep resetting `idle`). Safe alongside
+                # the save-gate: with no output, nothing can poison the next
+                # heartbeat session.
+                if (
+                    self._early_stall_timeout > 0
+                    and not self._saw_output_signal
+                    and elapsed > self._early_stall_timeout
+                ):
+                    logger.warning(
+                        "Stall watchdog: early stall (%ds) — no LLM output after %.0fs; "
+                        "last_activity=%s",
+                        self._early_stall_timeout,
+                        elapsed,
+                        self._last_activity_desc,
+                    )
+                    self._abort_reason = (
+                        f"Early stall: no LLM output after {elapsed:.0f}s "
+                        f"(threshold {self._early_stall_timeout}s); "
+                        f"last activity: {self._last_activity_desc}"
                     )
                     self._cancelled = True
                     self._abort_event.set()
@@ -197,6 +285,60 @@ class _StallWatchdog:
     @property
     def was_stall_timeout(self) -> bool:
         return self._cancelled
+
+    @property
+    def elapsed_seconds(self) -> float:
+        """Seconds since start() was called (0 if never started)."""
+        return max(0.0, time.monotonic() - self._start_time)
+
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since the last touch() call."""
+        return max(0.0, time.monotonic() - self._last_activity)
+
+
+def _build_cancel_diagnostic(watchdog: _StallWatchdog, agent_id: str) -> str:
+    """Capture asyncio context at the moment of an external cancellation.
+
+    Used to investigate the noon-storm symptom (multiple agents die at
+    `12:00:00.05–12:00:00.12` with `Run cancelled externally; last
+    activity: session_started`). Without context, the post-mortem is a
+    guess; with it, we can see whether something else is calling
+    `.cancel()` on the run task and what it is.
+
+    Returns a multi-line diagnostic string suitable for
+    ``agent_runs.error_traceback``.
+    """
+    lines: list[str] = []
+    try:
+        lines.append(f"agent_id={agent_id}")
+        lines.append(f"elapsed_since_start={watchdog.elapsed_seconds:.2f}s")
+        lines.append(f"idle_since_last_touch={watchdog.idle_seconds:.2f}s")
+        lines.append(f"last_activity={watchdog.last_activity_desc}")
+        try:
+            current = asyncio.current_task()
+            current_name = current.get_name() if current else "<no-current-task>"
+        except RuntimeError:
+            current_name = "<no-running-loop>"
+        lines.append(f"current_task={current_name}")
+        try:
+            alive = list(asyncio.all_tasks())
+        except RuntimeError:
+            alive = []
+        lines.append(f"alive_tasks_count={len(alive)}")
+        # Truncate to 20 task names — past that the dump is noise. Sort
+        # by name for stable output across runs.
+        names = sorted({t.get_name() for t in alive})[:20]
+        lines.extend(f"  task: {n}" for n in names)
+        # Walltime + pid help correlate with external events (cron,
+        # systemd, daemon restart) that show up at the same instant.
+        from datetime import UTC, datetime
+
+        lines.append(f"walltime_utc={datetime.now(UTC).isoformat()}")
+        lines.append(f"pid={os.getpid()}")
+    except Exception as e:  # diagnostic must never raise
+        lines.append(f"diagnostic_error={e!r}")
+    return "\n".join(lines)
 
 
 if TYPE_CHECKING:
@@ -411,6 +553,25 @@ class AgentRunner:
         loop = asyncio.get_running_loop()
         t_setup_start = time.monotonic()
 
+        # Create stall watchdog EARLY so it covers the setup phase too.
+        # Previously the watchdog was only started after setup completed,
+        # meaning a hang during warmup/adapter loading went undetected.
+        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
+        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
+        watchdog = _StallWatchdog(
+            stall_timeout=stall_timeout,
+            hard_timeout=agent_config.timeout_seconds,
+            early_stall_timeout=early_stall_timeout,
+        )
+        self._active_watchdog = watchdog  # expose for touch() from tool handlers
+
+        # Start watchdog immediately to cover setup phase
+        _init_task = asyncio.current_task()
+        if _init_task:
+            watchdog.start(_init_task)
+        watchdog.touch("init_begin")
+
         # Determine what warmup is needed (before launching parallel tasks)
         warmup_kind: str | None = None  # "cron", "interactive", or None
         if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
@@ -441,13 +602,13 @@ class AgentRunner:
         if warmup_kind == "cron":
             from robothor.engine.warmup import build_warmth_preamble, set_warmup_kind
 
-            def _build_cron_warmup() -> str | None:
+            def _build_cron_warmup() -> tuple[str, dict[str, float]] | None:
                 with set_warmup_kind("cron"):
                     return build_warmth_preamble(
                         agent_config, self.config.workspace, self.config.tenant_id
                     )
 
-            warmup_future = loop.run_in_executor(None, _build_cron_warmup)
+            warmup_future = loop.run_in_executor(None, _build_cron_warmup)  # type: ignore[arg-type]
         elif warmup_kind == "interactive":
             from robothor.engine.warmup import (
                 build_interactive_preamble,
@@ -479,17 +640,85 @@ class AgentRunner:
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)
 
         # Await both concurrently
+        import uuid as _uuid  # noqa: PLC0415
+
+        t_sys_prompt_start = time.monotonic()
         system_prompt_parts = await sys_prompt_future  # SystemPromptParts
+        t_sys_prompt_ms = int((time.monotonic() - t_sys_prompt_start) * 1000)
+        watchdog.touch("system_prompt_built")
         system_prompt = system_prompt_parts.full_text()  # str for mode wrapping
+        # Session-goal injection moved into the warmup pipeline (build_warmth_preamble
+        # / build_interactive_preamble). Owner-only scoping is enforced there so
+        # workers don't see other agents' goals, and the warmup_section:session_goal
+        # step shows up in agent_run_steps for telemetry.
+
+        t_warmup_start = time.monotonic()
         warmup_preamble: str | None = None
+        _warmup_section_timings: dict[str, float] = {}
         if warmup_future is not None:
             try:
-                warmup_preamble = await warmup_future
+                _warmup_result = await warmup_future
+                # build_warmth_preamble returns (preamble, section_timings) for
+                # cron warmup; build_interactive_preamble still returns str.
+                if isinstance(_warmup_result, tuple):
+                    warmup_preamble, _warmup_section_timings = _warmup_result
+                else:
+                    warmup_preamble = _warmup_result
             except Exception as e:
                 logger.debug("Warmup preamble failed for %s: %s", _sanitize(agent_id), _sanitize(e))
+        t_warmup_ms = int((time.monotonic() - t_warmup_start) * 1000)
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
+        watchdog.touch("warmup_complete")
+
+        # ── Warmup phase instrumentation ──────────────────────────────────────
+        # Record setup milestones as warmup_phase steps so stalls are visible
+        # in agent_run_steps instead of only in watchdog touch logs.
+        # Per-section timings from build_warmth_preamble let us pinpoint
+        # exactly which warmup section (history, memory_blocks, context_files,
+        # peers, breadcrumbs, preferences, agent_hooks) stalled — crucial for
+        # diagnosing fleet-wide warmup stalls (FIX-WARMUP-STALL task).
+        _warmup_phase_steps: list[tuple[str, int, dict[str, Any]]] = [
+            (
+                "system_prompt_build",
+                t_sys_prompt_ms,
+                {"cached": "hit" if _prompt_cache.get(agent_config.id) else "miss"},
+            ),
+            (
+                "warmup_preamble_build",
+                t_warmup_ms,
+                {
+                    "kind": warmup_kind or "none",
+                    "chars": len(warmup_preamble) if warmup_preamble else 0,
+                },
+            ),
+        ]
+        # Inject per-section timings as individual warmup_phase steps so we
+        # can pinpoint stalls at section granularity, not just total warmup ms.
+        for _sec_name, _sec_elapsed in _warmup_section_timings.items():
+            _warmup_phase_steps.append(
+                (
+                    f"warmup_section:{_sec_name}",
+                    int(_sec_elapsed * 1000),
+                    {"section": _sec_name, "slow": _sec_elapsed > 0.5},
+                )
+            )
+        for _wp_name, _wp_ms, _wp_meta in _warmup_phase_steps:
+            try:
+                _wp_step = RunStep(
+                    id=str(_uuid.uuid4()),
+                    run_id=session.run.id,
+                    step_number=0,  # pre-iteration; grader ignores step_number for warmup_phase
+                    step_type=StepType.WARMUP_PHASE,
+                    tool_name=_wp_name,
+                    tool_input={},
+                    tool_output=_wp_meta,
+                    duration_ms=_wp_ms,
+                )
+                session.run.steps.append(_wp_step)
+            except Exception as _wp_err:
+                logger.debug("warmup_phase step record failed (%s): %s", _wp_name, _wp_err)
 
         # ── Cross-run journal resume ──────────────────────────────────────────
         # If the agent has resume_on_start=true and a journal_file configured,
@@ -523,6 +752,7 @@ class AgentRunner:
                     _sanitize(e),
                 )
 
+        watchdog.touch("setup_phase_complete")
         t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
         logger.info(
             "SETUP %dms agent=%s trigger=%s warmup=%s cached_prompt=%s",
@@ -550,6 +780,7 @@ class AgentRunner:
                 await self.registry.register_adapter_tools(adapters)
         except Exception as e:
             logger.warning("Adapter loading failed (non-fatal): %s", _sanitize(e))
+        watchdog.touch("adapters_loaded")
 
         # Get filtered tools for this agent
         if readonly_mode:
@@ -570,6 +801,25 @@ class AgentRunner:
             tool_schemas = self.registry.build_for_agent(agent_config)
             tool_names = self.registry.get_tool_names(agent_config)
 
+        watchdog.touch("tools_built")
+        try:
+            _wp_step = RunStep(
+                id=str(_uuid.uuid4()),
+                run_id=session.run.id,
+                step_number=0,
+                step_type=StepType.WARMUP_PHASE,
+                tool_name="tools_built",
+                tool_input={},
+                tool_output={
+                    "total_setup_ms": int((time.monotonic() - t_setup_start) * 1000),
+                    "tool_count": len(tool_names) if tool_names else 0,
+                },
+                duration_ms=int((time.monotonic() - t_setup_start) * 1000),
+            )
+            session.run.steps.append(_wp_step)
+        except Exception as _wp_err:
+            logger.debug("warmup_phase step record failed (tools_built): %s", _wp_err)
+
         # Execution mode: prepend enforcement preamble (full tools already loaded above)
         if execution_mode and not readonly_mode:
             system_prompt = EXECUTION_MODE_PREAMBLE + system_prompt
@@ -582,6 +832,8 @@ class AgentRunner:
             delivery_mode=agent_config.delivery_mode.value,
             conversation_history=conversation_history,
         )
+
+        watchdog.touch("session_started")
 
         # Auto-derive token budget for TRACKING ONLY (not enforced as a hard limit)
         from robothor.engine.model_registry import compute_token_budget
@@ -596,16 +848,11 @@ class AgentRunner:
             else:
                 session.run.token_budget = spawn_context.remaining_token_budget
 
-        # Stall watchdog is the primary protection — kills on inactivity, not
+        # Watchdog was created and started before setup phase (see above).
+        # Stall timeout is the primary protection — kills on inactivity, not
         # elapsed wall-clock time.  Hard timeout only needed as fallback when
         # the watchdog is explicitly disabled (stall_timeout_seconds: 0).
         # This lets agents run for hours on complex tasks without being killed.
-        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
-        watchdog = _StallWatchdog(
-            stall_timeout=stall_timeout, hard_timeout=agent_config.timeout_seconds
-        )
-        self._active_watchdog = watchdog  # expose for touch() calls from tool handlers
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
             async with asyncio.timeout(hard_timeout):
@@ -651,12 +898,12 @@ class AgentRunner:
                 models = [m for m in models if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
 
                 if not models:
-                    return self._finish_run(
-                        session.fail("No models configured"),
-                        agent_config=agent_config,
-                        session=session,
-                        spawn_context=spawn_context,
+                    # Fallback to default model instead of hard failure
+                    logger.warning(
+                        "No models configured for %s; falling back to deepseek-v4-pro",
+                        _sanitize(agent_id),
                     )
+                    models = ["openrouter/deepseek/deepseek-v4-pro"]
 
                 # ── [ROUTER] Classify difficulty → adjust config ──
                 route = self._apply_routing(agent_config, message, len(tool_names))
@@ -729,10 +976,7 @@ class AgentRunner:
                         )
                         sandbox = None
 
-                # Start stall watchdog — monitors current task for inactivity
-                current_task = asyncio.current_task()
-                if current_task:
-                    watchdog.start(current_task)
+                # Watchdog already started before setup phase (see above).
 
                 try:
                     await self._run_loop(
@@ -804,8 +1048,12 @@ class AgentRunner:
             )
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
+            # Diagnostic dump for the noon-storm investigation. Captures
+            # who else is alive at cancel time, the watchdog's last touch,
+            # and elapsed-since-start. Lands in agent_runs.error_traceback.
+            diag = _build_cancel_diagnostic(watchdog, agent_id)
             return self._finish_run(
-                session.timeout(reason=reason),
+                session.timeout(reason=reason, traceback=diag),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1162,6 +1410,7 @@ class AgentRunner:
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
+        _runaway_alerted = False  # one-shot latch for 500K alert
 
         while True:
             # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
@@ -1173,8 +1422,61 @@ class AgentRunner:
                 session.record_error(self._active_watchdog.abort_reason)
                 return
 
+            # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──
+            _used_tokens = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
+            if _used_tokens >= RUNAWAY_TOKEN_HARD_CAP:
+                reason = f"runaway_token_cap_hit ({_used_tokens}/{RUNAWAY_TOKEN_HARD_CAP})"
+                logger.error(
+                    "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
+                    agent_config.id,
+                    session.run_id,
+                    _used_tokens,
+                )
+                # Fire-and-forget alert — don't block the stop path.
+                try:
+                    from robothor.engine.alerts import alert as _alert
+
+                    asyncio.create_task(
+                        _alert(
+                            "critical",
+                            f"Runaway-token hard cap: {agent_config.id}",
+                            f"run_id={session.run_id} tokens={_used_tokens:,} "
+                            f"model={session.run.model_used}",
+                        )
+                    )
+                except Exception:
+                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
+                session.run.budget_exhausted = True
+                session.record_error(reason)
+                return
+            if not _runaway_alerted and _used_tokens >= RUNAWAY_TOKEN_ALERT:
+                _runaway_alerted = True
+                logger.warning(
+                    "Runaway-token alert: agent=%s run=%s tokens=%d",
+                    agent_config.id,
+                    session.run_id,
+                    _used_tokens,
+                )
+                try:
+                    from robothor.engine.alerts import alert as _alert
+
+                    asyncio.create_task(
+                        _alert(
+                            "warning",
+                            f"Runaway-token alert: {agent_config.id}",
+                            f"run_id={session.run_id} tokens={_used_tokens:,} "
+                            f"(hard cap at {RUNAWAY_TOKEN_HARD_CAP:,}) "
+                            f"model={session.run.model_used}",
+                        )
+                    )
+                except Exception:
+                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
+
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
-            if _iteration >= _safety_cap:
+            # safety_cap=0 is the manifest sentinel for "no cap" (main.yaml sets
+            # this for heartbeat + worker per operator directive 2026-04-20). The
+            # check only fires when the cap is positive.
+            if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(
                     session,
                     models,
@@ -1573,6 +1875,19 @@ class AgentRunner:
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
                 _tool_timeout = getattr(agent_config, "tool_timeout_seconds", 120)
+                # Benchmark and experiment tools legitimately run 5+ sub-agents;
+                # raise their timeout floor to 600s regardless of agent-level setting.
+                _LONG_RUNNING_TOOLS = frozenset(  # noqa: N806 — module-internal constant kept here for locality
+                    {
+                        "benchmark_run",
+                        "experiment_measure",
+                        "benchmark_compare",
+                        "spawn_agent",
+                        "spawn_agents",
+                    }
+                )
+                if tool_name in _LONG_RUNNING_TOOLS:
+                    _tool_timeout = max(_tool_timeout, 600)
                 if trace:
                     with trace.span("tool_call", tool=tool_name) as _span:
                         result = await self.registry.execute(
@@ -1757,6 +2072,8 @@ class AgentRunner:
                         from robothor.engine.models import ErrorType
 
                         escalation.record_error(error_type or ErrorType.UNKNOWN)
+                        # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
+                        escalation.record_error_kind(tool_name, error_msg)
                     else:
                         escalation.record_success()
 
@@ -1862,6 +2179,9 @@ class AgentRunner:
                 error_lines = "\n".join(
                     f"- {name}: {msg}" for name, msg, _etype in iteration_errors
                 )
+                # Inject STOP RETRYING hints for error types repeated >= 2 times
+                stop_hints = escalation.get_repeated_error_hints(threshold=2) if escalation else []
+                stop_hints_text = ("\n\n" + "\n".join(stop_hints)) if stop_hints else ""
                 session.messages.append(
                     {
                         "role": ENGINE_CONTEXT_ROLE,
@@ -1872,6 +2192,7 @@ class AgentRunner:
                             "2. Is there an alternative approach or different tool?\n"
                             "3. Should you skip this step and continue?\n"
                             "Do NOT retry the exact same call with the same arguments."
+                            f"{stop_hints_text}"
                         ),
                     }
                 )
@@ -2654,6 +2975,27 @@ class AgentRunner:
         return cleaned if dropped else messages
 
     @staticmethod
+    def _guard_trailing_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop a trailing assistant message before an LLM call.
+
+        OpenRouter-proxied Anthropic (via Azure/Google) rejects requests whose
+        final message is an assistant turn with:
+            "This model does not support assistant message prefill.
+             The conversation must end with a user message."
+
+        A trailing assistant normally indicates an orphaned turn — e.g. a prior
+        run's response that was carried into history without its follow-up, or
+        a checkpoint restored after a user turn was lost. Drop it so the LLM
+        call can proceed.
+        """
+        if messages and messages[-1].get("role") == "assistant":
+            logger.warning(
+                "Dropping trailing assistant message before LLM call (prefill-rejection guard)"
+            )
+            return messages[:-1]
+        return messages
+
+    @staticmethod
     def _build_llm_kwargs(
         model: str,
         messages: list[dict[str, Any]],
@@ -2713,6 +3055,10 @@ class AgentRunner:
         # cause "unexpected tool_use_id" API errors.
         messages = AgentRunner._validate_tool_pairs(messages)
 
+        # Defense in depth: drop a trailing assistant message, which OpenRouter-
+        # proxied Anthropic rejects with "model does not support prefill".
+        messages = AgentRunner._guard_trailing_assistant(messages)
+
         kwargs: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
@@ -2724,6 +3070,21 @@ class AgentRunner:
                 else LLM_REQUEST_TIMEOUT
             ),
         }
+        # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
+        # backend. OpenRouter's default load-balancing also fans out to Google
+        # Vertex and Amazon Bedrock, both of which reject assistant-prefill
+        # ("This model does not support assistant message prefill") and
+        # ephemeral-cache_control content blocks. Anthropic-direct supports
+        # both. allow_fallbacks=False means an Anthropic outage falls through
+        # to our existing model_fallbacks chain (MiMo, DeepSeek, etc.) rather
+        # than silently routing to a less-compatible backend.
+        if model.startswith("openrouter/anthropic/"):
+            kwargs["extra_body"] = {
+                "provider": {
+                    "order": ["Anthropic"],
+                    "allow_fallbacks": False,
+                }
+            }
         if stream:
             kwargs["stream"] = True
         if tools:

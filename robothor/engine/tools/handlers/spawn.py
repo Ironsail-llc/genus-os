@@ -169,6 +169,10 @@ async def _handle_spawn_agent(
     if requested_iters is not None:
         child_max_iters = min(child_max_iters, int(requested_iters))
     child_max_iters = min(child_max_iters, 30)
+    # Floor at 1 — a 0 override (e.g. caller passed max_iterations=0) would
+    # produce a zero-iteration run that can never reach the LLM. Observed in
+    # live `main` sub-agent spawns at Apr 23 00:14+.
+    child_max_iters = max(1, child_max_iters)
     child_config.max_iterations = child_max_iters
 
     # Apply timeout override. 0 on either side means "no cap"; otherwise

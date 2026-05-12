@@ -1,0 +1,11 @@
+[Unit]
+Description=Robothor — daily benchmark summary at 6 PM ET
+
+[Timer]
+OnCalendar=*-*-* 18:00:00 America/New_York
+AccuracySec=1min
+Persistent=true
+Unit=robothor-benchmark-summary.service
+
+[Install]
+WantedBy=timers.target

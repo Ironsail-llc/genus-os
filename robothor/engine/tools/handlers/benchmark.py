@@ -20,7 +20,7 @@ import re
 import statistics
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -391,14 +391,41 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         child_config.max_iterations = min(child_config.max_iterations, 15)
         child_config.max_cost_usd = task_max_cost
 
+        # Sandbox side-effecting tools during benchmark runs.
+        # Prevents benchmark test data (e.g. carol@example.com) from
+        # polluting the live calendar, CRM, and email systems.
+        # Agents can still READ data but cannot WRITE to external systems.
+        # Safety tests (must_refuse) still work because the agent sees the
+        # tool is denied and must refuse the task prompt.
+        child_config.tools_denied = [
+            "gws_calendar_create",
+            "gws_calendar_delete",
+            "gws_gmail_send",
+            "gws_gmail_reply",
+            "log_interaction",
+            "create_person",
+            "create_message",
+            "create_note",
+            "make_call",
+        ]
+
+        # Per-task wall-clock cap. Without this, a hung sub-agent (provider
+        # returning blank JSON, runaway token loops) wedges the whole fleet
+        # benchmark for hours. Added 2026-05-06 after curiosity-engine
+        # consumed 692K tokens on a single case before alerting.
+        per_task_timeout_seconds = 240
+
         try:
-            run = await runner.execute(
-                agent_id=agent_id,
-                message=task["prompt"],
-                trigger_type=TriggerType.SUB_AGENT,
-                trigger_detail=f"benchmark:{suite_id}:{task['id']}",
-                agent_config=child_config,
-            )
+            import asyncio as _asyncio
+
+            async with _asyncio.timeout(per_task_timeout_seconds):
+                run = await runner.execute(
+                    agent_id=agent_id,
+                    message=task["prompt"],
+                    trigger_type=TriggerType.SUB_AGENT,
+                    trigger_detail=f"benchmark:{suite_id}:{task['id']}",
+                    agent_config=child_config,
+                )
 
             output = run.output_text or ""
             run_meta = {
@@ -483,6 +510,62 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )
+
+    # Write-through to benchmark_results table — canonical store for the
+    # benchmark_pass_rate goal metric and for visibility surfaces.
+    # Pass threshold: a task counts as "passed" when its score >= 0.7.
+    pass_threshold = 0.7
+    passed = sum(1 for r in scored if r.get("score", 0) >= pass_threshold)
+    failed = len(scored) - passed
+    failures_brief = [
+        {
+            "case_id": r.get("task_id"),
+            "category": r.get("category"),
+            "score": r.get("score"),
+            "output_preview": r.get("output_preview", ""),
+        }
+        for r in scored
+        if r.get("score", 0) < pass_threshold
+    ]
+    triggered_by_arg = (args.get("triggered_by") or "").strip() or "manual"
+    experiment_id_arg = (args.get("experiment_id") or "").strip() or None
+    suite_path_arg = (args.get("config_file") or "").strip() or None
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO benchmark_results
+                  (agent_id, suite_id, suite_path, total_cases, passed, failed,
+                   pass_rate, category_scores, failures, triggered_by,
+                   experiment_id, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                """,
+                (
+                    agent_id,
+                    suite_id,
+                    suite_path_arg,
+                    len(scored),
+                    passed,
+                    failed,
+                    float(round(aggregate, 4)),
+                    json.dumps(category_scores),
+                    json.dumps(failures_brief, default=str),
+                    triggered_by_arg,
+                    experiment_id_arg,
+                    float(round(total_cost, 4)),
+                ),
+            )
+            conn.commit()
+    except Exception as exc:
+        logger.warning(
+            "benchmark_run: failed to write benchmark_results row for %s/%s: %s",
+            agent_id,
+            suite_id,
+            exc,
+        )
 
     return {
         "success": True,
@@ -587,3 +670,175 @@ async def _benchmark_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str
         "cost_a": run_a.get("total_cost_usd", 0),
         "cost_b": run_b.get("total_cost_usd", 0),
     }
+
+
+# ---------------------------------------------------------------------------
+# High-level helpers: load suite from disk + run in one shot.
+# These are the canonical entry points for the daily cron and the
+# Auto Researcher before/after gate. See plan 2026-05-06.
+# ---------------------------------------------------------------------------
+
+
+def _suite_yaml_path(agent_id: str, workspace: str) -> Path:
+    return _resolve_path(f"docs/benchmarks/{agent_id}/suite.yaml", workspace)
+
+
+async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str, Any]:
+    """Load docs/benchmarks/<agent_id>/suite.yaml and save it as a memory block.
+
+    Idempotent — overwrites the existing block. Returns the loaded suite dict
+    on success, or an error dict.
+    """
+    path = _suite_yaml_path(agent_id, workspace)
+    if not path.exists():
+        return {"error": f"No benchmark suite at {path}"}
+    try:
+        suite_data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        return {"error": f"Invalid YAML in {path}: {exc}"}
+
+    suite_id = suite_data.get("id") or f"{agent_id}-default"
+    suite_data["id"] = suite_id
+    suite_data["agent_id"] = agent_id
+
+    tasks = suite_data.get("tasks", [])
+    if not tasks:
+        return {"error": f"Suite at {path} has no tasks"}
+    if len(tasks) > _MAX_TASKS_PER_SUITE:
+        return {"error": f"Suite at {path} exceeds {_MAX_TASKS_PER_SUITE} tasks"}
+    for task in tasks:
+        err = _validate_task(task)
+        if err:
+            return {"error": f"{path}: {err}"}
+        expected = task.get("expected", {})
+        task_max = expected.get("max_cost_usd", _DEFAULT_TASK_MAX_COST)
+        expected["max_cost_usd"] = min(float(task_max), _MAX_COST_PER_TASK_USD)
+        task["expected"] = expected
+        task.setdefault("weight", 1.0)
+        task.setdefault("category", "correctness")
+
+    suite_max = min(
+        float(suite_data.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)),
+        _MAX_COST_PER_SUITE_USD,
+    )
+    suite_data["max_cost_usd"] = suite_max
+    suite_data["created_at"] = suite_data.get("created_at", datetime.now(UTC).isoformat())
+
+    _save_block(_suite_block(agent_id, suite_id), suite_data)
+    return suite_data
+
+
+@_handler("benchmark_run_fleet")
+async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Run on-disk benchmark suites for every agent that has one.
+
+    Iterates ``docs/benchmarks/*/suite.yaml`` and runs each suite, writing
+    one ``benchmark_results`` row per agent. This is the canonical entry
+    point for the daily cron — a single call covers the whole fleet.
+
+    Args:
+      tag (optional)         — defaults to ``"cron-<YYYY-MM-DD>"``
+      triggered_by (optional) — defaults to ``"cron"``
+      skip (optional)        — list of agent IDs to skip
+      only (optional)        — list of agent IDs to limit to (else all)
+    """
+    tag = args.get("tag") or f"cron-{datetime.now(UTC).date().isoformat()}"
+    triggered_by = args.get("triggered_by") or "cron"
+    skip = set(args.get("skip") or [])
+    only = set(args.get("only") or [])
+
+    bench_root = _resolve_path("docs/benchmarks", ctx.workspace)
+    if not bench_root.exists():
+        return {"error": f"No benchmarks directory at {bench_root}"}
+
+    agents: list[str] = []
+    for child in sorted(bench_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if not (child / "suite.yaml").exists():
+            continue
+        agent_id = child.name
+        if agent_id in skip:
+            continue
+        if only and agent_id not in only:
+            continue
+        agents.append(agent_id)
+
+    summary: list[dict[str, Any]] = []
+    for agent_id in agents:
+        try:
+            result = await _benchmark_run_for_agent(
+                {
+                    "agent_id": agent_id,
+                    "tag": tag,
+                    "triggered_by": triggered_by,
+                },
+                ctx,
+            )
+            if result.get("error"):
+                summary.append({"agent_id": agent_id, "error": result["error"]})
+            else:
+                summary.append(
+                    {
+                        "agent_id": agent_id,
+                        "aggregate_score": result.get("aggregate_score"),
+                        "tasks_run": result.get("tasks_run"),
+                        "total_cost_usd": result.get("total_cost_usd"),
+                    }
+                )
+        except Exception as exc:
+            logger.warning("benchmark_run_fleet: %s failed: %s", agent_id, exc)
+            summary.append({"agent_id": agent_id, "error": str(exc)})
+
+    return {
+        "success": True,
+        "tag": tag,
+        "triggered_by": triggered_by,
+        "agents_attempted": len(agents),
+        "results": summary,
+    }
+
+
+@_handler("benchmark_run_for_agent")
+async def _benchmark_run_for_agent(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Run the on-disk benchmark suite for an agent in one call.
+
+    Loads docs/benchmarks/<agent_id>/suite.yaml, refreshes the memory block,
+    runs the suite, and writes a row into benchmark_results.
+
+    Args:
+      agent_id (required)
+      tag (required) — unique label for this run, e.g. "cron-2026-05-06" or
+        "auto-researcher:before:exp-id"
+      triggered_by (optional) — 'cron' | 'manual' | 'auto-researcher:before' |
+        'auto-researcher:after'. Defaults to 'manual'.
+      experiment_id (optional) — link to docs/experiments/<id>.yaml
+      tasks (optional) — list of task IDs to run a subset
+    """
+    agent_id = args.get("agent_id", "").strip()
+    tag = args.get("tag", "").strip()
+    if not agent_id or not tag:
+        return {"error": "agent_id and tag are required"}
+
+    suite = await auto_define_suite_from_disk(agent_id, ctx.workspace)
+    if isinstance(suite, dict) and suite.get("error"):
+        return suite
+
+    suite_id = suite["id"]
+    relative_path = f"docs/benchmarks/{agent_id}/suite.yaml"
+
+    return cast(
+        "dict[str, Any]",
+        await _benchmark_run(
+            {
+                "agent_id": agent_id,
+                "suite_id": suite_id,
+                "tag": tag,
+                "tasks": args.get("tasks"),
+                "triggered_by": args.get("triggered_by"),
+                "experiment_id": args.get("experiment_id"),
+                "config_file": relative_path,
+            },
+            ctx,
+        ),
+    )

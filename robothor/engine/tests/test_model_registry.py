@@ -45,6 +45,16 @@ class TestGetModelLimits:
         limits = get_model_limits("ollama_chat/qwen3.5:122b")
         assert limits == _FALLBACK
 
+    def test_gpt_5_5_pro_removed(self):
+        """GPT-5.5 Pro was retired 2026-04-25 (cost) — registry must return fallback."""
+        limits = get_model_limits("openrouter/openai/gpt-5.5-pro")
+        assert limits == _FALLBACK
+
+    def test_opus_4_6_removed(self):
+        """Opus 4.6 was superseded by 4.7 — registry must return fallback."""
+        limits = get_model_limits("openrouter/anthropic/claude-opus-4.6")
+        assert limits == _FALLBACK
+
     def test_unknown_model_returns_fallback(self):
         limits = get_model_limits("unknown/model-xyz")
         assert limits == _FALLBACK

@@ -228,6 +228,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             safety_cap=int(raw_heartbeat.get("safety_cap", 50)),
             timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 0)),
             stall_timeout_seconds=int(raw_heartbeat.get("stall_timeout_seconds", 0)),
+            early_stall_timeout_seconds=int(raw_heartbeat.get("early_stall_timeout_seconds", 0)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
             delivery_to=hb_delivery.get("to", "")
@@ -263,6 +264,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             safety_cap=int(raw_worker.get("safety_cap", 80)),
             timeout_seconds=int(raw_worker.get("timeout_seconds", 0)),
             stall_timeout_seconds=int(raw_worker.get("stall_timeout_seconds", 0)),
+            early_stall_timeout_seconds=int(raw_worker.get("early_stall_timeout_seconds", 0)),
             delivery_mode=w_delivery_mode,
             delivery_channel=w_delivery.get("channel", ""),
             delivery_to=w_delivery.get("to", "")
@@ -307,6 +309,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         timeout_seconds=schedule.get("timeout_seconds", 0),
         max_iterations=schedule.get("max_iterations", 20),
         stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 0)),
+        early_stall_timeout_seconds=int(schedule.get("early_stall_timeout_seconds", 0)),
         # ── Cross-run persistent journal ──
         journal_file=schedule.get("journal_file", ""),
         journal_checkpoint_interval=int(schedule.get("journal_checkpoint_interval", 5)),
@@ -391,6 +394,26 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         config.timeout_seconds = max(config.timeout_seconds, 86400)  # 24h
         config.max_iterations = max(config.max_iterations, 100)
         config.checkpoint_enabled = True
+
+    # Clamp out-of-range numerics to valid values rather than just warning.
+    # max_iterations=0 is the manifest sentinel for "no check-in interval"
+    # (the run loop guards with `_checkin_interval > 0` before nudging); only
+    # truly negative values get coerced. Sub-agent spawns that need a floor of
+    # 1 apply their own clamp at the spawn site, not here.
+    if config.max_iterations < 0:
+        logger.info(
+            "Clamping negative max_iterations %d → 0 for agent=%s",
+            config.max_iterations,
+            config.id,
+        )
+        config.max_iterations = 0
+    elif config.max_iterations > 10000:
+        logger.info(
+            "Clamping max_iterations %d → 10000 for agent=%s",
+            config.max_iterations,
+            config.id,
+        )
+        config.max_iterations = 10000
 
     return config
 

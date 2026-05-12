@@ -1,7 +1,7 @@
 id: devops-report-pipeline
 name: Dev Team Operations Report Pipeline
-description: Weekly — collect JIRA/GitHub data deterministically, then analyze and deliver report
-version: "2026-04-09"
+description: Weekly — collect JIRA/GitHub data, analyze, render, email stakeholders, post Telegram summary.
+version: "2026-04-22"
 
 triggers:
   - type: cron
@@ -16,7 +16,13 @@ steps:
     type: tool
     tool_name: exec
     tool_args:
-      command: "cd ~/robothor && venv/bin/python scripts/devops_collect_jira.py"
+      # Project list is instance config; inlined here (workflow YAML is instance
+      # territory) so scripts/ stays platform-clean. Mirror of jira.active_projects
+      # in brain/memory/devops-config.json — keep in sync when adding projects.
+      command: >-
+        cd ~/robothor &&
+        DEVOPS_JIRA_PROJECTS='VV,RD,I1,IM,IEC,CRI,OO,PRAC'
+        venv/bin/python scripts/devops_collect_jira.py
       timeout: 60
     on_failure: abort
 
@@ -24,24 +30,56 @@ steps:
     type: tool
     tool_name: exec
     tool_args:
-      command: "cd ~/robothor && venv/bin/python scripts/devops_collect_github.py"
+      # Mirror of github.active_repos in brain/memory/devops-config.json.
+      command: >-
+        cd ~/robothor &&
+        DEVOPS_GITHUB_REPOS='ironsail-llc/impetus-one,ironsail-llc/impetusrx,ironsail-llc/ec-valhalla-mso,ironsail-llc/united-pharmacy-api,ironsail-llc/genus-os,ironsail-llc/ec-valhalla-vitality-storefront'
+        venv/bin/python scripts/devops_collect_github.py
       timeout: 120
     on_failure: abort
 
   - id: analyze
     type: agent
-    agent_id: devops-manager
+    agent_id: devops-analyst
     message: >
-      Weekly report run. Data has been pre-collected for you:
-      - JIRA data: /tmp/devops_jira_data.json
-      - GitHub data: /tmp/devops_github_data.json
+      Weekly analysis run. Pre-collected data is waiting for you:
+        - JIRA: /tmp/devops_jira_data.json
+        - GitHub: /tmp/devops_github_data.json
 
-      Execute the full report pipeline:
-      1. Read both data files with read_file
-      2. Resolve team identities via resolve_identities to cross-reference JIRA assignees with GitHub authors
-      3. Build the report_data structure and call render_devops_report
-      4. Read devops_report_recipients memory block and email the HTML report to EACH stakeholder via gws_gmail_send with content_type html
-      5. Write the full report data to devops_latest_report memory block
-      6. Append a dated summary to devops_report_history memory block
-      7. Your final response is the Telegram summary — keep it concise and actionable
+      Follow your instruction file end-to-end. Write the structured report to
+      /tmp/devops_report.json AND to the devops_latest_report memory block.
+      Do NOT call jira_* or github_* tools — those are blocked for a reason.
+      Your output_text should be a short status line; downstream agents handle
+      email and Telegram delivery.
+    on_failure: abort
+
+  - id: render-html
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/devops_render_report.py"
+      timeout: 30
+    on_failure: abort
+
+  - id: dispatch-emails
+    # Deterministic fan-out: reads recipients from devops_report_recipients
+    # memory block, looks up each person's email via crm_people, sends the
+    # pre-rendered HTML via gws CLI. No LLM — just a loop.
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/devops_send_emails.py"
+      timeout: 120
+    on_failure: skip   # Email is secondary; Telegram is the primary channel.
+
+  - id: post-telegram
+    # Deterministic send: reads /tmp/devops_report.json, formats the plain-text
+    # report, posts to Philip's chat via Telegram Bot API. No LLM needed for a
+    # formatter. Env (ROBOTHOR_TELEGRAM_BOT_TOKEN + ROBOTHOR_TELEGRAM_CHAT_ID)
+    # is inherited from the daemon process.
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/devops_send_telegram.py"
+      timeout: 30
     on_failure: abort

@@ -54,7 +54,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_002_56,  # $2.56/M
         ttft_hint_ms=4000,  # Variable via OpenRouter
     ),
-    # MiMo-V2-Pro via OpenRouter
+    # MiMo-V2-Pro via OpenRouter (superseded by V2.5 — kept for fallback reference)
     "openrouter/xiaomi/mimo-v2-pro": ModelLimits(
         max_input_tokens=1_000_000,
         max_output_tokens=65_536,
@@ -62,6 +62,28 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_001,  # $1/M
         output_cost_per_token=0.000_003,  # $3/M
         ttft_hint_ms=3000,
+    ),
+    # MiMo-V2.5-Pro via OpenRouter — current fleet fallback
+    "openrouter/xiaomi/mimo-v2.5-pro": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_001,  # $1/M
+        output_cost_per_token=0.000_003,  # $3/M
+        cache_read_cost_per_token=0.000_000_2,  # $0.20/M
+        ttft_hint_ms=3000,
+    ),
+    # DeepSeek V4 Pro via OpenRouter — main's primary (2026-04-24)
+    # 1.6T MoE / 49B active, 1M ctx, native tool use. Direct provider only
+    # (data policy must allow it; io-net is rate-limited on shared pool).
+    "openrouter/deepseek/deepseek-v4-pro": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=384_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_001_74,  # $1.74/M
+        output_cost_per_token=0.000_003_48,  # $3.48/M
+        cache_read_cost_per_token=0.000_000_145,  # $0.145/M
+        ttft_hint_ms=1500,  # DeepSeek-direct p50 ~145ms
     ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
@@ -81,8 +103,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_002,  # $2/M
         ttft_hint_ms=3000,
     ),
-    # Claude Opus 4.6 via OpenRouter — flagship reasoning model
-    "openrouter/anthropic/claude-opus-4.6": ModelLimits(
+    # Claude Opus 4.7 via OpenRouter — released 2026-04-16
+    "openrouter/anthropic/claude-opus-4.7": ModelLimits(
         max_input_tokens=1_000_000,
         max_output_tokens=128_000,
         default_output_tokens=16_384,

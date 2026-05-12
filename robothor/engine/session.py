@@ -285,16 +285,22 @@ class AgentSession:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
 
-    def timeout(self, reason: str | None = None) -> AgentRun:
+    def timeout(self, reason: str | None = None, traceback: str | None = None) -> AgentRun:
         """Mark the run as timed out.
 
         Pass ``reason`` to record a specific cause (e.g. the stall
         watchdog's abort reason with last-activity context). When
         omitted, falls back to a generic message.
+
+        Pass ``traceback`` to record diagnostic context (e.g. the
+        cancel-source dump from runner's external-cancel branch). It
+        lands in agent_runs.error_traceback for post-mortem queries.
         """
         self.run.status = RunStatus.TIMEOUT
         self.run.completed_at = datetime.now(UTC)
         self.run.error_message = reason or "Agent execution timed out"
+        if traceback is not None:
+            self.run.error_traceback = traceback
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run

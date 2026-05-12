@@ -59,6 +59,54 @@ heartbeat:
 
 
 @pytest.fixture
+def reporter_heartbeat_manifest(tmp_path):
+    """Manifest mirroring delphi-main: parent delivery=none, heartbeat=announce.
+
+    This pattern lets a normally-silent reporter agent emit a periodic
+    digest without changing how interactive sessions deliver. Verifies
+    the override path correctly flips delivery_mode + uses
+    task_authorship_agent for CRM attribution.
+    """
+    manifest_dir = tmp_path / "docs" / "agents"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "reporter.yaml").write_text(
+        """id: reporter
+name: Reporter
+model:
+  primary: anthropic/claude-sonnet-4.6
+schedule:
+  cron: ""
+  timezone: America/New_York
+  session_target: persistent
+delivery:
+  mode: none
+  channel: telegram
+  to: "${REPORTER_CHAT_ID}"
+tools_allowed: [exec, search_memory, memory_block_read, list_tasks, create_task]
+instruction_file: brain/REPORTER_MAIN.md
+heartbeat:
+  cron: "0 9,14,20 * * *"
+  timezone: America/New_York
+  instruction_file: brain/REPORTER_HEARTBEAT.md
+  session_target: persistent
+  max_iterations: 12
+  cost_budget_usd: 0.40
+  persistent_history_limit: 1
+  delivery:
+    mode: announce
+    channel: telegram
+    to: "${REPORTER_CHAT_ID}"
+  memory_blocks: [reporter-state, reporter-perf-log]
+  heartbeat_tools_allowed:
+    [exec, search_memory, memory_block_read, list_tasks, list_my_tasks,
+     create_task, update_task, send_notification, todo_write]
+  task_authorship_agent: reporter-scout
+"""
+    )
+    return manifest_dir
+
+
+@pytest.fixture
 def no_heartbeat_manifest(tmp_path):
     """Write a manifest without heartbeat — plain cron agent."""
     manifest_dir = tmp_path / "docs" / "agents"
@@ -109,6 +157,36 @@ class TestHeartbeatJobRegistration:
         assert "main:heartbeat" in job_ids
         # main has no cron_expr so no regular cron job
         assert "main" not in job_ids
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_reporter_heartbeat_job_created(self, reporter_heartbeat_manifest):
+        """Reporter manifest (mode: none parent + heartbeat) registers heartbeat job.
+
+        Mirrors the delphi-main pattern: parent agent is interactive-only
+        (mode: none, no cron), heartbeat block adds a scheduled scout beat.
+        """
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(
+            manifest_dir=reporter_heartbeat_manifest,
+            workspace=reporter_heartbeat_manifest.parent.parent,
+        )
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        with patch.object(scheduler.scheduler, "start"):
+            import asyncio
+
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+                with pytest.raises(asyncio.CancelledError):
+                    await scheduler.start()
+
+        job_ids = [j.id for j in scheduler.scheduler.get_jobs()]
+        assert "reporter:heartbeat" in job_ids
+        # Parent has no cron_expr, so no regular cron job
+        assert "reporter" not in job_ids
 
     @pytest.mark.usefixtures("_mock_tracking")
     @pytest.mark.asyncio
@@ -210,6 +288,53 @@ class TestRunHeartbeat:
         assert override.tools_allowed == ["exec", "read_file", "list_tasks"]
         # token_budget is auto-derived at runtime, not from heartbeat config
         assert override.token_budget == 0
+
+    def test_heartbeat_flips_silent_parent_to_announce(self):
+        """Reporter pattern: parent delivery=NONE, heartbeat delivery=ANNOUNCE.
+
+        delphi-main is normally silent (interactive-only, mode=none). The
+        scout heartbeat needs to actively announce to Telegram. Verifies
+        the override sets delivery_mode + task_author_override correctly.
+        """
+        from robothor.engine.scheduler import _build_heartbeat_config
+
+        parent = AgentConfig(
+            id="reporter",
+            name="Reporter",
+            model_primary="anthropic/claude-sonnet-4.6",
+            tools_allowed=["exec", "search_memory"],
+            instruction_file="brain/REPORTER_MAIN.md",
+            delivery_mode=DeliveryMode.NONE,
+            delivery_channel="telegram",
+            delivery_to="${REPORTER_CHAT_ID}",
+            heartbeat=HeartbeatConfig(
+                cron_expr="0 9,14,20 * * *",
+                instruction_file="brain/REPORTER_HEARTBEAT.md",
+                session_target="persistent",
+                max_iterations=12,
+                cost_budget_usd=0.40,
+                persistent_history_limit=1,
+                delivery_mode=DeliveryMode.ANNOUNCE,
+                delivery_channel="telegram",
+                delivery_to="${REPORTER_CHAT_ID}",
+                tools_allowed=["exec", "search_memory", "create_task"],
+                task_authorship_agent="reporter-scout",
+            ),
+        )
+
+        override = _build_heartbeat_config(parent)
+
+        assert override.delivery_mode == DeliveryMode.ANNOUNCE
+        assert override.delivery_to == "${REPORTER_CHAT_ID}"
+        assert override.instruction_file == "brain/REPORTER_HEARTBEAT.md"
+        assert override.tools_allowed == ["exec", "search_memory", "create_task"]
+        # Hard budget kicks in when heartbeat sets its own cost cap
+        assert override.max_cost_usd == 0.40
+        assert override.hard_budget is True
+        # Scout filings attributed to scout identity, not parent
+        assert override.task_author_override == "reporter-scout"
+        # Model still inherits from parent
+        assert override.model_primary == "anthropic/claude-sonnet-4.6"
 
     @pytest.mark.asyncio
     async def test_heartbeat_dedup_key_isolation(self, tmp_path):
@@ -351,6 +476,60 @@ class TestReconcileSchedules:
         stale_job.remove.assert_called_once()
         legit_job.remove.assert_not_called()
         assert "supervisor" in pruned
+
+    def test_reconcile_keeps_worker_jobs(self, tmp_path):
+        """Worker jobs (`{agent_id}:worker`) are part of active_ids and not pruned.
+
+        Regression test: prior to this fix, reconcile_schedules() forgot to
+        include worker IDs, so the watchdog pruned `main:worker` 5 minutes
+        after every engine start, breaking the drain cycle.
+        """
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        manifest_dir = tmp_path / "docs" / "agents"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "main.yaml").write_text(
+            """id: main
+name: Main
+model:
+  primary: anthropic/claude-sonnet-4.6
+schedule:
+  cron: ""
+  timezone: America/New_York
+delivery:
+  mode: none
+tools_allowed: [read_file]
+instruction_file: brain/SOUL.md
+heartbeat:
+  cron: "0 * * * *"
+  instruction_file: brain/HEARTBEAT.md
+worker:
+  cron: "0 7-22/2 * * *"
+  instruction_file: brain/WORKER.md
+  delivery:
+    mode: announce
+    channel: telegram
+    to: "99999999"
+"""
+        )
+
+        config = EngineConfig(manifest_dir=manifest_dir, workspace=tmp_path)
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        worker_job = MagicMock()
+        worker_job.id = "main:worker"
+        scheduler.scheduler = MagicMock()
+        scheduler.scheduler.get_jobs.return_value = [worker_job]
+
+        mock_delete = MagicMock(return_value=[])
+        with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
+            scheduler.reconcile_schedules()
+
+        active_ids = mock_delete.call_args[0][0]
+        assert "main:worker" in active_ids, "worker IDs must be in active_ids set"
+        worker_job.remove.assert_not_called()
 
     def test_reconcile_skips_workflow_jobs(self, no_heartbeat_manifest):
         """workflow:* prefixed jobs are never removed by reconciliation."""

@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _now_iso() -> str:
+    """UTC ISO timestamp for log correlation."""
+    return datetime.now(UTC).isoformat()
+
+
 def _is_heartbeat_trigger(trigger_detail: str | None) -> bool:
     """True when this run was triggered by a heartbeat cron."""
     return bool(trigger_detail and trigger_detail.startswith("heartbeat:"))
@@ -398,7 +403,14 @@ class CronScheduler:
         Handles: dedup → circuit breaker → safety timeout → execute/deliver → track.
         """
         if not await try_acquire(dedup_key):
-            logger.info("Cron skipped: %s already running", dedup_key)
+            # Bumped to warning to make hour-boundary contention visible.
+            # The noon-storm investigation (2026-05) needs to know when a
+            # new fire arrives while the previous run is still active.
+            logger.warning(
+                "Cron skipped: %s already running (new fire at %s)",
+                dedup_key,
+                _now_iso(),
+            )
             return
 
         try:
@@ -855,6 +867,8 @@ class CronScheduler:
                 active_ids.add(agent_config.id)
             if agent_config.heartbeat and agent_config.heartbeat.cron_expr:
                 active_ids.add(f"{agent_config.id}:heartbeat")
+            if agent_config.worker and agent_config.worker.cron_expr:
+                active_ids.add(f"{agent_config.id}:worker")
 
         # Prune stale DB rows
         pruned: list[str] = []
@@ -965,6 +979,7 @@ def _build_worker_config(agent_config: AgentConfig) -> AgentConfig:
         warmup_context_files=warmup_context_files,
         warmup_peer_agents=warmup_peer_agents,
         stall_timeout_seconds=w.stall_timeout_seconds,
+        early_stall_timeout_seconds=w.early_stall_timeout_seconds,
         persistent_history_limit=w.persistent_history_limit,
         error_feedback=agent_config.error_feedback,
         max_cost_usd=max_cost_usd,
@@ -1035,6 +1050,7 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         warmup_context_files=warmup_context_files,
         warmup_peer_agents=warmup_peer_agents,
         stall_timeout_seconds=hb.stall_timeout_seconds,
+        early_stall_timeout_seconds=hb.early_stall_timeout_seconds,
         persistent_history_limit=hb.persistent_history_limit,
         error_feedback=agent_config.error_feedback,
         max_cost_usd=max_cost_usd,
