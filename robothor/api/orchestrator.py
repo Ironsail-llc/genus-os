@@ -36,7 +36,16 @@ from robothor.rag.profiles import RAG_PROFILES
 
 # ─── Configuration ────────────────────────────────────────────────────
 
-VISION_SERVICE_URL = os.environ.get("VISION_SERVICE_URL", "http://localhost:8600")
+def _default_vision_url() -> str:
+    try:
+        from robothor.config import get_config
+
+        return get_config().vision_url
+    except Exception:
+        return "http://127.0.0.1:8600"
+
+
+VISION_SERVICE_URL = os.environ.get("VISION_SERVICE_URL") or _default_vision_url()
 
 # ─── FastAPI App ──────────────────────────────────────────────────────
 

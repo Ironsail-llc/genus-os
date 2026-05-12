@@ -59,92 +59,110 @@ class ServiceDef:
     stale_night_mins: int = 60
 
 
-# Service definitions matching the JS status dashboard
-SERVICE_DEFS: list[ServiceDef] = [
-    ServiceDef(
-        id="agent-engine",
-        name="Agent Engine",
-        icon="\U0001f9e0",
-        check="http",
-        url="http://localhost:18800/health",
-    ),
-    ServiceDef(
-        id="rag-orchestrator",
-        name="RAG Orchestrator",
-        icon="\U0001f50d",
-        check="http",
-        url="http://localhost:9099/health",
-    ),
-    ServiceDef(
-        id="ollama",
-        name="Ollama",
-        icon="\U0001f999",
-        check="http",
-        url="http://localhost:11434/api/tags",
-    ),
-    ServiceDef(id="voice-server", name="Voice Server", icon="\U0001f4de", check="port", port=8765),
-    ServiceDef(
-        id="bridge-service",
-        name="Bridge Service",
-        icon="\U0001f517",
-        check="http",
-        url="http://localhost:9100/health",
-    ),
-    ServiceDef(
-        id="cloudflare-tunnel",
-        name="Cloudflare Tunnel",
-        icon="\U0001f310",
-        check="systemd",
-        unit="cloudflared",
-    ),
-    ServiceDef(
-        id="calendar-sync",
-        name="Calendar Sync",
-        icon="\U0001f4c5",
-        check="freshness",
-        file=str(MEMORY_DIR / "calendar-log.json"),
-        json_field="lastCheckedAt",
-        stale_day_mins=15,
-        stale_night_mins=60,
-    ),
-    ServiceDef(
-        id="email-sync",
-        name="Email Sync",
-        icon="\U0001f4e7",
-        check="freshness",
-        file=str(MEMORY_DIR / "email-log.json"),
-        json_field="lastCheckedAt",
-        stale_day_mins=15,
-        stale_night_mins=60,
-    ),
-    ServiceDef(
-        id="triage-worker",
-        name="Triage Worker",
-        icon="\u2699\ufe0f",
-        check="freshness",
-        file=str(MEMORY_DIR / "worker-handoff.json"),
-        json_field="lastRunAt",
-        stale_day_mins=20,
-        stale_night_mins=60,
-    ),
-    ServiceDef(
-        id="supervisor-heartbeat",
-        name="Supervisor Heartbeat",
-        icon="\U0001f493",
-        check="freshness",
-        file=str(MEMORY_DIR / "worker-handoff.json"),
-        json_field="lastRunAt",
-        stale_day_mins=25,
-        stale_night_mins=90,
-    ),
-    ServiceDef(
-        id="mediamtx-webcam",
-        name="Vision",
-        icon="\U0001f441\ufe0f",
-        check="rtsp",
-        url="rtsp://localhost:8554/webcam",
-    ),
-]
+def _get_service_defs() -> list[ServiceDef]:
+    """Build service definitions from config (lazy — avoids import-time config read)."""
+    try:
+        from robothor.config import get_config
+
+        cfg = get_config()
+        engine_url = cfg.engine_url
+        orchestrator_url = cfg.orchestrator_url
+        bridge_url = cfg.bridge_url
+        ollama_url = cfg.ollama.base_url
+        voice_port = cfg.voice_port
+    except Exception:
+        engine_url = "http://127.0.0.1:18800"
+        orchestrator_url = "http://127.0.0.1:9099"
+        bridge_url = "http://127.0.0.1:9100"
+        ollama_url = "http://127.0.0.1:11434"
+        voice_port = 8765
+    return [
+        ServiceDef(
+            id="agent-engine",
+            name="Agent Engine",
+            icon="\U0001f9e0",
+            check="http",
+            url=f"{engine_url}/health",
+        ),
+        ServiceDef(
+            id="rag-orchestrator",
+            name="RAG Orchestrator",
+            icon="\U0001f50d",
+            check="http",
+            url=f"{orchestrator_url}/health",
+        ),
+        ServiceDef(
+            id="ollama",
+            name="Ollama",
+            icon="\U0001f999",
+            check="http",
+            url=f"{ollama_url}/api/tags",
+        ),
+        ServiceDef(
+            id="voice-server", name="Voice Server", icon="\U0001f4de", check="port", port=voice_port
+        ),
+        ServiceDef(
+            id="bridge-service",
+            name="Bridge Service",
+            icon="\U0001f517",
+            check="http",
+            url=f"{bridge_url}/health",
+        ),
+        ServiceDef(
+            id="cloudflare-tunnel",
+            name="Cloudflare Tunnel",
+            icon="\U0001f310",
+            check="systemd",
+            unit="cloudflared",
+        ),
+        ServiceDef(
+            id="calendar-sync",
+            name="Calendar Sync",
+            icon="\U0001f4c5",
+            check="freshness",
+            file=str(MEMORY_DIR / "calendar-log.json"),
+            json_field="lastCheckedAt",
+            stale_day_mins=15,
+            stale_night_mins=60,
+        ),
+        ServiceDef(
+            id="email-sync",
+            name="Email Sync",
+            icon="\U0001f4e7",
+            check="freshness",
+            file=str(MEMORY_DIR / "email-log.json"),
+            json_field="lastCheckedAt",
+            stale_day_mins=15,
+            stale_night_mins=60,
+        ),
+        ServiceDef(
+            id="triage-worker",
+            name="Triage Worker",
+            icon="\u2699\ufe0f",
+            check="freshness",
+            file=str(MEMORY_DIR / "worker-handoff.json"),
+            json_field="lastRunAt",
+            stale_day_mins=20,
+            stale_night_mins=60,
+        ),
+        ServiceDef(
+            id="supervisor-heartbeat",
+            name="Supervisor Heartbeat",
+            icon="\U0001f493",
+            check="freshness",
+            file=str(MEMORY_DIR / "worker-handoff.json"),
+            json_field="lastRunAt",
+            stale_day_mins=25,
+            stale_night_mins=90,
+        ),
+        ServiceDef(
+            id="mediamtx-webcam",
+            name="Vision",
+            icon="\U0001f441\ufe0f",
+            check="rtsp",
+            url="rtsp://localhost:8554/webcam",
+        ),
+    ]
 
 
 async def _check_http(url: str, timeout: float = 5.0) -> tuple[str, int | None]:
@@ -295,7 +313,7 @@ async def check_service(svc: ServiceDef) -> ServiceStatus:
 
 async def check_all_services() -> list[ServiceStatus]:
     """Run all service health checks concurrently."""
-    return await asyncio.gather(*(check_service(s) for s in SERVICE_DEFS))
+    return await asyncio.gather(*(check_service(s) for s in _get_service_defs()))
 
 
 def get_overall_status(services: list[ServiceStatus]) -> tuple[str, str]:

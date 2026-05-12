@@ -250,14 +250,32 @@ async def homepage(request: Request) -> HTMLResponse:
     stats = get_stats()
     uptime = get_uptime()
 
-    # Service health strip
-    service_defs = [
-        {"name": "Engine", "url": "http://localhost:18800/health"},
-        {"name": "Voice", "url": "http://localhost:8765/"},
-        {"name": "Memory", "url": "http://localhost:9099/health"},
-        {"name": "Bridge", "url": "http://localhost:9100/health"},
-        {"name": "Helm", "url": "http://localhost:3004/"},
-    ]
+    # Service health strip — resolve URLs from config with fallback
+    try:
+        from robothor.config import get_config
+
+        _cfg = get_config()
+        _engine_health_url = f"{_cfg.engine_url}/health"
+    except Exception:
+        _cfg = None
+        _engine_health_url = "http://127.0.0.1:18800/health"
+
+    if _cfg is not None:
+        service_defs = [
+            {"name": "Engine", "url": _engine_health_url},
+            {"name": "Voice", "url": f"{_cfg.voice_url}/"},
+            {"name": "Memory", "url": f"{_cfg.orchestrator_url}/health"},
+            {"name": "Bridge", "url": f"{_cfg.bridge_url}/health"},
+            {"name": "Helm", "url": f"http://127.0.0.1:{_cfg.helm_port}/"},
+        ]
+    else:
+        service_defs = [
+            {"name": "Engine", "url": "http://127.0.0.1:18800/health"},
+            {"name": "Voice", "url": "http://127.0.0.1:8765/"},
+            {"name": "Memory", "url": "http://127.0.0.1:9099/health"},
+            {"name": "Bridge", "url": "http://127.0.0.1:9100/health"},
+            {"name": "Helm", "url": "http://127.0.0.1:3004/"},
+        ]
     service_results = []
     for svc in service_defs:
         try:
@@ -291,7 +309,7 @@ async def homepage(request: Request) -> HTMLResponse:
         import httpx
 
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get("http://localhost:18800/health")
+            resp = await client.get(_engine_health_url)
             if resp.status_code == 200:
                 engine_data = resp.json()
                 agents = engine_data.get("agents", {})
@@ -300,11 +318,12 @@ async def homepage(request: Request) -> HTMLResponse:
 
     # Vision mode
     vision_mode = "unknown"
+    _vision_health = f"{_cfg.vision_url}/health" if _cfg is not None else "http://127.0.0.1:8600/health"
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get("http://localhost:8600/health")
+            resp = await client.get(_vision_health)
             if resp.status_code == 200:
                 vision_mode = resp.json().get("mode", "unknown")
     except Exception:

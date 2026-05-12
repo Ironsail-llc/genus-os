@@ -141,25 +141,32 @@ class Config:
     # Desktop / Computer Use
     desktop_display: str = ":99"
 
+    def _svc(self, port: int) -> str:
+        return f"http://127.0.0.1:{port}"
+
+    @property
+    def engine_url(self) -> str:
+        return self._svc(self.engine_port)
+
     @property
     def bridge_url(self) -> str:
-        return f"http://127.0.0.1:{self.bridge_port}"
+        return self._svc(self.bridge_port)
 
     @property
     def orchestrator_url(self) -> str:
-        return f"http://127.0.0.1:{self.orchestrator_port}"
+        return self._svc(self.orchestrator_port)
 
     @property
     def vision_url(self) -> str:
-        return f"http://127.0.0.1:{self.vision_port}"
+        return self._svc(self.vision_port)
 
     @property
     def voice_url(self) -> str:
-        return f"http://127.0.0.1:{self.voice_port}"
+        return self._svc(self.voice_port)
 
     @property
     def searxng_url(self) -> str:
-        return f"http://127.0.0.1:{self.searxng_port}"
+        return self._svc(self.searxng_port)
 
 
 # Singleton

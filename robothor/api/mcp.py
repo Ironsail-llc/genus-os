@@ -41,8 +41,26 @@ import httpx
 
 # ─── Service URL Resolution ──────────────────────────────────────────
 
-BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://localhost:9100")
-VISION_URL = os.environ.get("VISION_SERVICE_URL", "http://localhost:8600")
+def _default_bridge_url() -> str:
+    try:
+        from robothor.config import get_config
+
+        return get_config().bridge_url
+    except Exception:
+        return "http://127.0.0.1:9100"
+
+
+def _default_vision_url() -> str:
+    try:
+        from robothor.config import get_config
+
+        return get_config().vision_url
+    except Exception:
+        return "http://127.0.0.1:8600"
+
+
+BRIDGE_URL = os.environ.get("BRIDGE_URL") or _default_bridge_url()
+VISION_URL = os.environ.get("VISION_SERVICE_URL") or _default_vision_url()
 
 
 def _svc_url(service: str, path: str = "") -> str:
