@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ServiceHealth } from "./service-health";
 import { fetchHealth } from "@/lib/api/health";
 import { fetchPeople } from "@/lib/api/people";
@@ -28,18 +28,33 @@ function formatToday(): string {
   });
 }
 
+// `useSyncExternalStore` with constant snapshots is the React-19-blessed way
+// to render different output on server vs client without a hydration mismatch
+// and without a setState-in-useEffect that trips react-hooks linting and
+// pollutes test runs. The server snapshot is `false`, the client snapshot is
+// `true`, and the subscribe fn is a no-op (the value never changes after
+// mount).
+const subscribe = () => () => {};
+function useIsClient(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false,
+  );
+}
+
 export function DefaultDashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [greeting, setGreeting] = useState<string>("");
-  const [todayLabel, setTodayLabel] = useState<string>("");
   const { pushView } = useVisualState();
   const { tasks } = useTasks({ live: false });
   const { summary: agentSummary } = useAgents();
+  const isClient = useIsClient();
+
+  // Render only on the client; server emits empty strings so SSR/CSR match.
+  const greeting = isClient ? computeGreeting() : "";
+  const todayLabel = isClient ? formatToday() : "";
 
   useEffect(() => {
-    setGreeting(computeGreeting());
-    setTodayLabel(formatToday());
-
     fetchHealth()
       .then(setHealth)
       .catch(() => setHealth(null));
