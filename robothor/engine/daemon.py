@@ -528,7 +528,8 @@ async def main() -> None:
 
     await scheduler.stop()
     await hooks.stop()
-    await bot.stop()
+    if bot is not None:
+        await bot.stop()
 
     # Cancel remaining tasks
     for task in pending:
