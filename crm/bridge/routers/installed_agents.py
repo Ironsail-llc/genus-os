@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/installed-agents", tags=["installed-agents"])
 
 _WORKSPACE = os.environ.get("ROBOTHOR_WORKSPACE", str(Path("~/robothor").expanduser()))
-MANIFEST_DIR = Path(os.getenv("AGENT_MANIFEST_DIR", str(Path(_WORKSPACE) / "docs" / "agents")))
+MANIFEST_DIR = Path(
+    os.getenv("AGENT_MANIFEST_DIR")
+    or os.getenv("ROBOTHOR_MANIFEST_DIR")
+    or str(Path(_WORKSPACE) / "docs" / "agents")
+)
 
 
 class InstallRequest(BaseModel):
