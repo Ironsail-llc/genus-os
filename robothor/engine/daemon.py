@@ -294,7 +294,12 @@ async def main() -> None:
     wf_count = workflow_engine.load_workflows(config.workflow_dir)
     logger.info("Loaded %d workflows", wf_count)
 
-    bot = TelegramBot(config, runner)
+    bot = TelegramBot(config, runner) if config.bot_token else None
+    if bot is None:
+        logger.warning(
+            "ROBOTHOR_TELEGRAM_BOT_TOKEN is empty — Telegram delivery disabled. "
+            "Engine API, scheduler, and hooks will still run."
+        )
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
 
@@ -330,7 +335,6 @@ async def main() -> None:
 
     # Start all subsystems concurrently
     tasks = [
-        asyncio.create_task(bot.start_polling(), name="telegram"),
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
         asyncio.create_task(
@@ -341,6 +345,8 @@ async def main() -> None:
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
     ]
+    if bot is not None:
+        tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
 
     logger.info("All subsystems started")
     _sd_notify("READY=1")
