@@ -32,7 +32,12 @@ dependencies = [
     "numpy~=1.26",
     "requests~=2.31",
     "pyyaml~=6.0",
-    "litellm~=1.50",
+    # Floor pins the patched LiteLLM SQL-injection advisory
+    # (GHSA-vh4m-vp44-3rgq, fixed in 1.61.17). Ceiling avoids 1.83.10, which
+    # hard-pins aiohttp==3.13.3 and conflicts with the >=3.13.4 floor we need
+    # for the aiohttp CVE patch (GHSA-9548-qrrj-x5pj). Revisit when LiteLLM
+    # relaxes its aiohttp pin in a later release.
+    "litellm>=1.61.17,<1.83.10",
     "aiohttp>=3.13.4",
     "aiogram~=3.10",
     "apscheduler~=3.10",
