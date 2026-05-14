@@ -1,0 +1,36 @@
+name: PR Title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            chore
+            refactor
+            test
+            perf
+            build
+            ci
+            style
+            revert
+          requireScope: false
+          subjectPattern: ^.{1,72}$
+          subjectPatternError: |
+            PR subject must be 1-72 chars. Example titles:
+              feat(engine): add token budget enforcement
+              fix(crm): handle null tenant_id in resolver
+              chore(deps): bump aiogram to 3.27
