@@ -58,6 +58,16 @@ These come from production experience running the first Genus OS instance:
 - **Cloudflare tunnel for port-bearing services** — sensitive services use Cloudflare Access (email OTP). Public services have no auth.
 - **Heartbeat, not polling** — use the main agent's heartbeat for decision-only updates, not per-agent delivery.
 
+## Releases & Deployment
+
+- **`main` is the only release branch.** Squash-merge only — the PR title becomes the commit on `main`, so it must parse as a Conventional Commit. The `PR Title` check enforces this; merge button stays disabled otherwise.
+- **No release on merge?** The `Release Preview` sticky PR comment tells you in advance whether your PR will trigger a release. `chore:` / `docs:` (non-README) / `style:` / `test:` / `ci:` / `build:` do **not** bump versions. Change the type to `feat:` / `fix:` / `perf:` if a deploy is expected.
+- **Production:** semantic-release on `main` produces a `vX.Y.Z` tag, GitHub Release, CHANGELOG bump, and updates `helm/genus-os/values-production.yaml`. ArgoCD syncs `ironsail-production-genus-os`.
+- **Staging is label-driven, single slot.** Add the `deploy-staging` label to a PR → builds image `pr-N-sha-<short>`, commits the bump to `helm/genus-os/values-staging.yaml` on `main` (with `[skip ci]`), syncs `ironsail-staging-genus-os`. Removing the label or merging the PR resets staging to the latest `vX.Y.Z`. If another PR currently holds staging, the deploy is refused with a comment — unlabel the other PR first.
+- **`git log helm/genus-os/values-staging.yaml`** is the staging deploy ledger. **`git tag --list 'v*'`** on `main` is the production release ledger.
+- **Image tags:** GHCR, no `:latest`. Production pins exact `vX.Y.Z`; staging pins `pr-N-sha-<short>`.
+- **Full conventions:** [`aws-infrastucture/docs/app-release-and-deploy.md`](https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/app-release-and-deploy.md). New-app onboarding: `setup-app-ci` skill in the infra repo.
+
 ## Quick Reference
 
 - **Platform vs instance boundary**: `docs/PLATFORM_INSTANCE.md`
