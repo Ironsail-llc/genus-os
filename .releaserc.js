@@ -58,7 +58,10 @@ plugins.push(
 module.exports = {
   branches: [
     { name: 'main', channel: 'release' },
-    { name: 'staging', channel: 'stg', prerelease: 'stg' },
+    // staging is deployed via the build-and-push job in deploy-release.yml
+    // without running semantic-release: image is tagged sha-<short> + :staging
+    // and helm/genus-os/values-staging.yaml is bumped directly. No prerelease
+    // tags, no GH releases, no CHANGELOG churn on staging.
   ],
   plugins,
 };
