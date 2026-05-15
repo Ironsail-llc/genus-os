@@ -1,0 +1,246 @@
+name: Release & Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'helm/**'
+      - 'CHANGELOG.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+
+# One release pipeline at a time; one staging-build per labeled PR at a time.
+concurrency:
+  group: release-and-build-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # semantic-release tags + CHANGELOG commit
+  packages: write       # GHCR push
+  issues: write
+  pull-requests: write  # sticky comment with image tag
+
+jobs:
+  release:
+    name: Semantic Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run semantic-release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          set +e
+          npx semantic-release
+          exit_code=$?
+          set -e
+
+          if [ $exit_code -ne 0 ]; then
+            echo "semantic-release failed with exit code $exit_code"
+            exit $exit_code
+          fi
+
+          if version=$(git describe --tags --exact-match HEAD 2>/dev/null); then
+            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=${version#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build & Push (${{ matrix.image.name }})
+    needs: [release]
+    if: |
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && needs.release.outputs.new_release_published == 'true') ||
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
+      )
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: python, dockerfile: Dockerfile.python }
+          - { name: app,    dockerfile: Dockerfile.app    }
+    outputs:
+      python_tag: ${{ steps.export.outputs.python_tag }}
+      app_tag: ${{ steps.export.outputs.app_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For labeled PRs, check out the PR HEAD (not the merge commit) so
+          # the SHA we tag matches what the contributor pushed.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve SemVer tags from release output
+        id: semver
+        env:
+          PUBLISHED: ${{ needs.release.outputs.new_release_published }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          if [ "$PUBLISHED" = "true" ] && [ -n "$VERSION" ]; then
+            echo "raw_version=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "raw_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=v${{ steps.semver.outputs.raw_version }},enable=${{ steps.semver.outputs.raw_version != '' }}
+            type=match,pattern=v(\d+\.\d+),group=1,value=v${{ steps.semver.outputs.raw_version }},enable=${{ steps.semver.outputs.raw_version != '' }}
+            type=match,pattern=v(\d+),group=1,value=v${{ steps.semver.outputs.raw_version }},enable=${{ steps.semver.outputs.raw_version != '' }}
+            type=raw,value=pr-${{ github.event.pull_request.number }}-sha-{{sha}},enable=${{ github.event_name == 'pull_request' }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./${{ matrix.image.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=${{ matrix.image.name }}
+            type=registry,ref=ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}:buildcache
+          cache-to: |
+            type=gha,scope=${{ matrix.image.name }},mode=max
+            type=registry,ref=ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}:buildcache,mode=max
+
+      - name: Resolve primary tag
+        id: primary
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # First tag in metadata-action output is the canonical/primary one.
+          PRIMARY=$(printf '%s\n' "$META_TAGS" | head -n1)
+          echo "ref=$PRIMARY" >> "$GITHUB_OUTPUT"
+          echo "tag=${PRIMARY##*:}" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy — block on CRITICAL (non-blocking initially)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ steps.primary.outputs.ref }}
+          format: table
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Trivy — SARIF report
+        if: always()
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ steps.primary.outputs.ref }}
+          format: sarif
+          output: trivy-${{ matrix.image.name }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
+          path: trivy-${{ matrix.image.name }}.sarif
+          retention-days: 30
+
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.primary.outputs.ref }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.image.name }}.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
+          path: sbom-${{ matrix.image.name }}.spdx.json
+          retention-days: 90
+
+      - name: Export primary tag
+        id: export
+        run: |
+          if [ "${{ matrix.image.name }}" = "python" ]; then
+            echo "python_tag=${{ steps.primary.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_tag=${{ steps.primary.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  comment-pr:
+    name: Sticky PR comment
+    needs: [build]
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging') && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: build-and-push
+          message: |
+            ### 🐳 Images built for staging
+
+            | Image | Tag |
+            |---|---|
+            | `ghcr.io/ironsail-llc/genus-os/python` | `pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}` |
+            | `ghcr.io/ironsail-llc/genus-os/app` | `pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}` |
+
+            Deploy job is wired in Phase 4 once `helm/genus-os/` lands.
+            For now the images are available in GHCR and tagged for this PR's HEAD.
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Phase 4 will add three more jobs here:
+  #   - deploy-production  (push:main → commit values-production.yaml bump
+  #                         via @semantic-release/exec → argocd sync)
+  #   - deploy-staging     (labeled PR → commit values-staging.yaml bump
+  #                         with collision check → argocd sync)
+  #   - staging-reset      (unlabeled/closed PR → reset values-staging.yaml
+  #                         to latest vX.Y.Z → argocd sync)
+  # All three use Tailscale + CI_USER_PRIVATE_KEY + ARGOCD_TOKEN.
+  # ─────────────────────────────────────────────────────────────────────────
