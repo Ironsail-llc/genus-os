@@ -1,0 +1,74 @@
+name: Release Preview
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'main'
+    steps:
+      - name: Compute release impact
+        id: impact
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Mirrors .releaserc.js releaseRules. Update both files together.
+          TYPE=$(printf '%s' "$PR_TITLE" | sed -nE 's/^([a-z]+)(\([^)]+\))?!?:.*/\1/p')
+          IS_BREAKING="no"
+          if printf '%s' "$PR_TITLE" | grep -qE '^[a-z]+(\([^)]+\))?!:'; then
+            IS_BREAKING="yes"
+          fi
+          if printf '%s' "$PR_BODY" | grep -qE '^BREAKING CHANGE:'; then
+            IS_BREAKING="yes"
+          fi
+
+          BUMP="none"
+          if [ "$IS_BREAKING" = "yes" ]; then
+            BUMP="major"
+          else
+            case "$TYPE" in
+              feat) BUMP="minor" ;;
+              fix|perf|refactor|style) BUMP="patch" ;;
+              docs)
+                if printf '%s' "$PR_TITLE" | grep -qE '^docs\(README\):'; then
+                  BUMP="patch"
+                fi
+                ;;
+            esac
+          fi
+
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+
+      - name: Compose comment body
+        id: comment
+        env:
+          BUMP: ${{ steps.impact.outputs.bump }}
+          TYPE: ${{ steps.impact.outputs.type }}
+        run: |
+          {
+            echo 'body<<EOF'
+            if [ "$BUMP" = "none" ]; then
+              echo "ℹ️ **No release on merge.** Title type \`$TYPE\` does not trigger semantic-release."
+              echo ""
+              echo "If a deploy is expected, change the PR title type to \`feat:\` (minor) or \`fix:\` (patch). See [release conventions](https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/app-release-and-deploy.md)."
+            else
+              echo "✅ **Will trigger release on merge.** Expected bump: **$BUMP** (from \`$TYPE\`)."
+              echo ""
+              echo "Production image will be built and \`helm/genus-os/values-production.yaml\` updated. To deploy to staging first, add the \`deploy-staging\` label."
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post sticky comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: release-preview
+          message: ${{ steps.comment.outputs.body }}
