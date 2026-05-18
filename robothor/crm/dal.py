@@ -2329,6 +2329,45 @@ def reject_task(
             return False
 
 
+def append_task_history(
+    task_id: str,
+    from_status: str | None,
+    to_status: str,
+    changed_by: str | None = None,
+    reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Append a single audit row to ``crm_task_history`` with its own transaction.
+
+    Public wrapper around the module-internal ``_record_transition`` helper.
+    Callers that already hold a cursor inside a transaction (``approve_task``,
+    ``set_question``, etc.) keep using ``_record_transition`` directly so all
+    their writes commit atomically. Callers that need a one-shot history row
+    after another successful operation (e.g. Phase-3 todo promotion) use this
+    public helper to get its own connection + commit. Never raises — returns
+    False on failure so observability/audit paths can't break the lifecycle.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _record_transition(
+                cur=cur,
+                task_id=task_id,
+                from_status=from_status,
+                to_status=to_status,
+                changed_by=changed_by,
+                reason=reason,
+                metadata=metadata,
+                tenant_id=tenant_id,
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.warning("append_task_history failed for %s: %s", task_id, e)
+        return False
+
+
 def get_task_history(
     task_id: str, limit: int = 50, tenant_id: str = DEFAULT_TENANT
 ) -> list[dict[str, Any]]:
