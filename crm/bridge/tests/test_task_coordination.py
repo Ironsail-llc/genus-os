@@ -72,6 +72,33 @@ async def test_create_task_missing_title(test_client):
 
 
 @pytest.mark.asyncio
+async def test_create_task_validation_error_returns_422_and_skips_publish(test_client):
+    """A malformed autonomy_budget (Phase-1 contract) must return 422 and NOT
+    fire a task.created event.
+
+    Regression: before the fix, the endpoint bound `task_id = create_task(...)`
+    and then `if task_id:` — but a `{"error": ...}` dict is truthy, so the
+    publish branch ran with `task_id={"error": ...}`, corrupting the event bus
+    and returning HTTP 200 with a bogus body.
+    """
+    err_dict = {"error": "reversible_cap_usd must be non-negative (got -1)"}
+    with patch("routers.notes_tasks.create_task", return_value=err_dict):
+        with patch("routers.notes_tasks.publish") as mock_pub:
+            with patch("routers.notes_tasks.send_notification") as mock_notify:
+                r = await test_client.post(
+                    "/api/tasks",
+                    json={
+                        "title": "Bad budget",
+                        "autonomyBudget": {"reversible_cap_usd": -1},
+                    },
+                )
+    assert r.status_code == 422
+    assert r.json() == err_dict
+    mock_pub.assert_not_called()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_task(test_client):
     """PATCH /api/tasks/{id} updates task fields."""
     with patch("routers.notes_tasks.update_task", return_value=True):
