@@ -18,6 +18,12 @@ interface Task {
   slaDeadlineAt?: string;
   parentTaskId?: string;
   requiresHuman?: boolean;
+  // Phase 4 — planner-set fields surfaced for the operator.
+  objective?: string;
+  nextAction?: string;
+  nextActionAgent?: string;
+  questionForOperator?: string;
+  escalationCount?: number;
 }
 
 interface TaskBoardProps {
@@ -25,6 +31,7 @@ interface TaskBoardProps {
   onApprove?: (taskId: string, resolution: string) => void;
   onReject?: (taskId: string, reason: string) => void;
   onResolve?: (taskId: string, resolution: string) => void;
+  onAnswer?: (taskId: string, answer: string, advanceTo?: string) => void;
 }
 
 const statusColumns = ["TODO", "IN_PROGRESS", "REVIEW", "DONE"] as const;
@@ -58,10 +65,36 @@ function isSlaOverdue(slaDeadlineAt?: string): boolean {
   return new Date(slaDeadlineAt) < new Date();
 }
 
-export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardProps) {
+export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
   const [resolutionText, setResolutionText] = useState("");
+  const [answerText, setAnswerText] = useState<Record<string, string>>({});
+  const [overrideOpen, setOverrideOpen] = useState<Record<string, boolean>>({});
+
+  const handleAnswer = async (taskId: string, advanceTo?: string) => {
+    const text = (answerText[taskId] || "").trim();
+    if (!text) return;
+    setActionPending(taskId);
+    try {
+      if (onAnswer) {
+        onAnswer(taskId, text, advanceTo);
+      } else {
+        await fetch(`/api/tasks/${taskId}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer: text, advanceTo, channel: "helm" }),
+        });
+      }
+      setAnswerText((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    } finally {
+      setActionPending(null);
+    }
+  };
 
   const handleApprove = async (taskId: string) => {
     setActionPending(taskId);
@@ -154,6 +187,22 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                       {task.body}
                     </p>
                   )}
+                  {/* Planner subsection — Phase 4 surface of objective/next_action/question. */}
+                  {task.objective && status !== "DONE" && (
+                    <p className="text-xs italic text-muted-foreground mt-1.5 truncate" data-testid="task-objective">
+                      Objective: {task.objective}
+                    </p>
+                  )}
+                  {task.nextAction && status !== "DONE" && (
+                    <p className="text-xs text-muted-foreground mt-1" data-testid="task-next-action">
+                      Next: {task.nextAction}
+                      {task.nextActionAgent && (
+                        <Badge variant="outline" className="ml-1 text-[10px] px-1 py-0">
+                          @{task.nextActionAgent}
+                        </Badge>
+                      )}
+                    </p>
+                  )}
                   {task.assignedToAgent && (
                     <p className="text-xs text-muted-foreground mt-1">
                       {task.assignedToAgent}
@@ -173,7 +222,51 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                       ))}
                     </div>
                   )}
-                  {status === "REVIEW" && (
+                  {/* Question + Answer UI — primary path on REVIEW when the planner asked something. */}
+                  {status === "REVIEW" && task.questionForOperator && (
+                    <div
+                      className="mt-2 rounded border border-amber-500/30 bg-amber-500/[0.05] p-2"
+                      data-testid="question-block"
+                    >
+                      <p className="text-xs font-medium text-amber-300/90 mb-1">Question</p>
+                      <p className="text-xs text-amber-100/90 mb-2" data-testid="question-text">
+                        {task.questionForOperator}
+                      </p>
+                      <textarea
+                        className="w-full h-16 text-xs rounded bg-background/40 border border-border/40 p-1.5"
+                        placeholder="Type your answer…"
+                        value={answerText[task.id] || ""}
+                        onChange={(e) =>
+                          setAnswerText((prev) => ({ ...prev, [task.id]: e.target.value }))
+                        }
+                        data-testid="answer-input"
+                      />
+                      <div className="flex gap-1.5 mt-1.5">
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs px-3 bg-amber-600 hover:bg-amber-700"
+                          disabled={actionPending === task.id || !(answerText[task.id] || "").trim()}
+                          onClick={() => handleAnswer(task.id, "IN_PROGRESS")}
+                          data-testid="answer-button"
+                        >
+                          Answer
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs px-2"
+                          onClick={() =>
+                            setOverrideOpen((prev) => ({ ...prev, [task.id]: !prev[task.id] }))
+                          }
+                          data-testid="override-toggle"
+                        >
+                          {overrideOpen[task.id] ? "Hide override" : "Override (approve/reject)"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {/* Approve/Reject — default for REVIEW without a question; hidden behind toggle when a question is present. */}
+                  {status === "REVIEW" && (!task.questionForOperator || overrideOpen[task.id]) && (
                     <div className="flex gap-1.5 mt-2" data-testid="review-actions">
                       <Button
                         size="sm"

@@ -21,6 +21,13 @@ export interface Task {
   startedAt?: string;
   updatedAt?: string;
   createdAt?: string;
+  // Phase 4 — planner-set fields surfaced for the operator.
+  objective?: string;
+  nextAction?: string;
+  nextActionAgent?: string;
+  questionForOperator?: string;
+  questionResolvedAt?: string;
+  questionResolvedBy?: string;
 }
 
 interface UseTasksOptions {
@@ -232,5 +239,48 @@ export function useTasks(options: UseTasksOptions = {}) {
     [tasks]
   );
 
-  return { tasks, isLoading, refetch: fetchTasks, updateTaskStatus, approveTask, rejectTask, resolveTask };
+  // Phase 4 — answer a planner-set question_for_operator. Clears the
+  // question, resets escalation_count, optionally advances status.
+  const answerQuestion = useCallback(
+    async (taskId: string, answer: string, advanceTo?: Task["status"]) => {
+      const previousTasks = tasks;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                questionForOperator: undefined,
+                requiresHuman: false,
+                escalationCount: 0,
+                status: advanceTo ?? t.status,
+              }
+            : t
+        )
+      );
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer, advanceTo, channel: "helm" }),
+        });
+        if (!res.ok) {
+          setTasks(previousTasks);
+        }
+      } catch {
+        setTasks(previousTasks);
+      }
+    },
+    [tasks]
+  );
+
+  return {
+    tasks,
+    isLoading,
+    refetch: fetchTasks,
+    updateTaskStatus,
+    approveTask,
+    rejectTask,
+    resolveTask,
+    answerQuestion,
+  };
 }

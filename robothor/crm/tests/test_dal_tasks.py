@@ -679,3 +679,148 @@ class TestRejectTaskResetsEscalation:
         assert update_calls, "expected an UPDATE crm_tasks call"
         joined = " ".join(c[0][0] for c in update_calls)
         assert "escalation_count = 0" in joined
+
+
+class TestAnswerQuestion:
+    """Phase 4 — operator answers a planner-set question via Helm.
+
+    Why: today the operator can only approve/reject a task in REVIEW. When the
+    planner sets `question_for_operator`, the operator needs a way to provide
+    a structured answer that:
+      - clears `question_for_operator` + `requires_human`
+      - resets `escalation_count`
+      - sets `question_resolved_at` / `question_resolved_by`
+      - records a `kind=answer` history row with the text + channel
+      - optionally advances the task status (`advance_to`)
+    `approve_task` and `reject_task` are blunter instruments; an answer is
+    semantically distinct (no resolution required, no subtask spawning).
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_answer_clears_question_and_requires_human(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={
+                "status": "REVIEW",
+                "assigned_to_agent": "email-responder",
+                "escalation_count": 2,
+            },
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        ok = answer_question(
+            task_id="task-789",
+            answer="Drop the vendor",
+            by="helm-user",
+        )
+
+        assert ok is True
+        update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
+        assert update_calls
+        joined = " ".join(c[0][0] for c in update_calls)
+        assert "question_for_operator = NULL" in joined
+        assert "requires_human = FALSE" in joined
+        assert "question_resolved_at = NOW()" in joined
+        assert "question_resolved_by" in joined
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_answer_resets_escalation_count(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={
+                "status": "REVIEW",
+                "assigned_to_agent": "email-responder",
+                "escalation_count": 3,
+            },
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        ok = answer_question(task_id="task-789", answer="Yes", by="helm-user")
+
+        assert ok is True
+        joined = " ".join(
+            c[0][0] for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]
+        )
+        assert "escalation_count = 0" in joined
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_answer_records_history_kind_answer(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={
+                "status": "REVIEW",
+                "assigned_to_agent": "responder",
+                "escalation_count": 1,
+            },
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        answer_question(
+            task_id="task-789",
+            answer="Yes, drop them",
+            by="helm-user",
+            channel="helm",
+        )
+
+        history_calls = [
+            c for c in mock_cur.execute.call_args_list if "crm_task_history" in c[0][0]
+        ]
+        assert history_calls, "expected a history row to be written"
+        # _record_transition serializes metadata to JSON in the params; we
+        # check the JSON-encoded string for the kind discriminator.
+        params_joined = " ".join(str(c[0][1]) for c in history_calls)
+        assert '"kind": "answer"' in params_joined
+        assert "helm" in params_joined  # channel propagated
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_answer_with_advance_to_transitions_status(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={
+                "status": "REVIEW",
+                "assigned_to_agent": "responder",
+                "escalation_count": 1,
+            },
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        answer_question(
+            task_id="task-789",
+            answer="Proceed",
+            by="helm-user",
+            advance_to="IN_PROGRESS",
+        )
+
+        joined = " ".join(
+            c[0][0] for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]
+        )
+        assert "status = " in joined  # status update happened
+        # And the new status string was in the params
+        update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
+        params_joined = " ".join(str(c[0][1]) for c in update_calls)
+        assert "IN_PROGRESS" in params_joined
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_answer_returns_false_when_task_missing(self, mock_get_conn):
+        mock_conn, _ = _make_mock_conn(fetchone_return=None)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        assert answer_question(task_id="missing", answer="x", by="helm-user") is False
