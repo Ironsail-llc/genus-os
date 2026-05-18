@@ -269,17 +269,42 @@ class TestDryRun:
 
 
 class TestPlannerHookFlag:
-    def test_planner_disabled_by_default(self):
-        """Without ROBOTHOR_PLANNER_ENABLED=1, plan_all_stalled is a no-op."""
+    """Phase 2 flip: planner runs by default. ROBOTHOR_PLANNER_ENABLED=0 opts out.
+
+    Why: the planner was originally guarded off-by-default to avoid surprises
+    during initial rollout. Phase 2 makes it on-by-default because the canonical
+    multi-day workflow (quote → PO) requires it. The env var is still respected
+    as a kill switch for operators who want it off.
+    """
+
+    def test_planner_runs_by_default_when_env_unset(self):
+        """With ROBOTHOR_PLANNER_ENABLED unset, plan_all_stalled fetches candidates."""
         from robothor.engine.thread_planner import plan_all_stalled
 
         os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
-        with patch("robothor.engine.thread_planner._load_planner_candidates") as m:
+        with patch(
+            "robothor.engine.thread_planner._load_planner_candidates",
+            return_value=[],
+        ) as m:
             result = plan_all_stalled(tenant_id="default")
-            m.assert_not_called()
+            m.assert_called_once()
             assert result == []
 
+    def test_planner_skipped_when_env_zero(self):
+        """ROBOTHOR_PLANNER_ENABLED=0 is the explicit opt-out path."""
+        from robothor.engine.thread_planner import plan_all_stalled
+
+        os.environ["ROBOTHOR_PLANNER_ENABLED"] = "0"
+        try:
+            with patch("robothor.engine.thread_planner._load_planner_candidates") as m:
+                result = plan_all_stalled(tenant_id="default")
+                m.assert_not_called()
+                assert result == []
+        finally:
+            os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+
     def test_planner_enabled_when_flag_set(self):
+        """ROBOTHOR_PLANNER_ENABLED=1 is still respected (no change from old behavior)."""
         from robothor.engine.thread_planner import plan_all_stalled
 
         os.environ["ROBOTHOR_PLANNER_ENABLED"] = "1"
@@ -292,3 +317,98 @@ class TestPlannerHookFlag:
                 m.assert_called_once()
         finally:
             os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+
+
+class TestPlannerObservability:
+    """Phase 2 adds structured logs + Prometheus counters to the planner.
+
+    Why: today the planner runs silently. When it makes a bad call, there's
+    no way to count `ask`s vs `execute`s, no way to time a beat, and no
+    structured event for the dashboards. Phase 2 instruments it.
+
+    All instrumentation is wrapped in suppress(Exception) so observability
+    cannot break the lifecycle.
+    """
+
+    def test_apply_plan_increments_action_metric(self):
+        from robothor.engine.thread_planner import PlanResult, apply_plan
+
+        plan = PlanResult(
+            task_id="t1",
+            action="execute",
+            next_action="chase vendor",
+            next_action_agent="email-responder",
+            question_for_operator=None,
+            rationale="48h since last reply",
+        )
+        with (
+            patch("robothor.crm.dal.set_next_action", return_value=True),
+            patch("robothor.engine.metrics.PLANNER_ACTIONS_TOTAL") as metric,
+        ):
+            apply_plan(plan, tenant_id="default")
+            metric.labels.assert_called_with(action="execute", tenant="default")
+            metric.labels.return_value.inc.assert_called_once()
+
+    def test_apply_plan_increments_ask_metric(self):
+        from robothor.engine.thread_planner import PlanResult, apply_plan
+
+        plan = PlanResult(
+            task_id="t1",
+            action="ask",
+            next_action=None,
+            next_action_agent=None,
+            question_for_operator="Drop vendor?",
+            rationale="3 unanswered chases",
+        )
+        with (
+            patch("robothor.crm.dal.set_question", return_value=True),
+            patch("robothor.engine.metrics.PLANNER_ACTIONS_TOTAL") as metric,
+        ):
+            apply_plan(plan, tenant_id="default")
+            metric.labels.assert_called_with(action="ask", tenant="default")
+
+    def test_metric_failure_does_not_break_apply_plan(self):
+        """Observability outages must not break planner application."""
+        from robothor.engine.thread_planner import PlanResult, apply_plan
+
+        plan = PlanResult(
+            task_id="t1",
+            action="execute",
+            next_action="do",
+            next_action_agent="x",
+            question_for_operator=None,
+            rationale="r",
+        )
+        with (
+            patch("robothor.crm.dal.set_next_action", return_value=True) as sna,
+            patch(
+                "robothor.engine.metrics.PLANNER_ACTIONS_TOTAL",
+                side_effect=RuntimeError("metric backend down"),
+            ),
+        ):
+            # Should not raise — instrumentation is best-effort.
+            apply_plan(plan, tenant_id="default")
+            sna.assert_called_once()
+
+    def test_plan_all_stalled_logs_run_complete(self, caplog):
+        """The planner emits a structured `planner.run_complete` log line per beat."""
+        import logging
+
+        from robothor.engine.thread_planner import plan_all_stalled
+
+        os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+        caplog.set_level(logging.INFO, logger="robothor.engine.thread_planner")
+        with patch(
+            "robothor.engine.thread_planner._load_planner_candidates",
+            return_value=[],
+        ):
+            plan_all_stalled(tenant_id="default")
+
+        run_complete = [
+            r for r in caplog.records if getattr(r, "event", "") == "planner.run_complete"
+        ]
+        assert run_complete, "expected a planner.run_complete log record"
+        record = run_complete[0]
+        assert getattr(record, "tenant_id", None) == "default"
+        assert hasattr(record, "candidates_count")
+        assert hasattr(record, "elapsed_ms")

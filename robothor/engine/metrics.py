@@ -82,3 +82,18 @@ ADAPTER_FAILURES = Counter(
     "Adapter connection failures",
     ["adapter_name"],
 )
+
+# ── Thread Planner ──────────────────────────────────────────────────────
+
+PLANNER_ACTIONS_TOTAL = Counter(
+    "robothor_planner_actions_total",
+    "Forward-planner actions taken per beat",
+    ["action", "tenant"],  # action: execute | ask | wait | close
+)
+
+PLANNER_RUN_DURATION = Histogram(
+    "robothor_planner_run_duration_seconds",
+    "Wall-clock time per plan_all_stalled invocation",
+    ["tenant"],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+)

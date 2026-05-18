@@ -17,9 +17,12 @@ agent execution).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
+import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -260,6 +263,14 @@ def _sender_name(body: str) -> str:
 # ─── Apply (DB writes) ────────────────────────────────────────────────
 
 
+def _record_action_metric(action: str, tenant_id: str) -> None:
+    """Best-effort Prometheus increment. Observability must never break the lifecycle."""
+    with contextlib.suppress(Exception):
+        from robothor.engine.metrics import PLANNER_ACTIONS_TOTAL
+
+        PLANNER_ACTIONS_TOTAL.labels(action=action, tenant=tenant_id).inc()
+
+
 def apply_plan(
     plan: PlanResult,
     tenant_id: str = DEFAULT_TENANT,
@@ -283,6 +294,8 @@ def apply_plan(
         return True
     # Lazy import so tests can patch robothor.crm.dal.*
     from robothor.crm import dal
+
+    _record_action_metric(plan.action, tenant_id)
 
     if plan.action == "execute":
         if not plan.next_action:
@@ -418,14 +431,19 @@ def plan_all_stalled(
 ) -> list[PlanResult]:
     """Run the planner across all stalled threads and apply the results.
 
-    Gated by ROBOTHOR_PLANNER_ENABLED=1 — off (default) → no-op, returns [].
+    Default-on as of Phase 2: env var ``ROBOTHOR_PLANNER_ENABLED=0`` opts out.
     Set ``dry_run=True`` to see what the planner would do without writing
     anything to the DB. Never raises; swallows errors so the warmup hook
     stays safe.
+
+    Emits a structured ``planner.run_complete`` INFO log line per beat with
+    candidates_count, action counts, and elapsed_ms. Per-plan
+    ``planner.action.refused`` WARNING lines when verdict="refuse".
     """
-    if not dry_run and os.environ.get("ROBOTHOR_PLANNER_ENABLED") != "1":
+    if not dry_run and os.environ.get("ROBOTHOR_PLANNER_ENABLED", "1") == "0":
         return []
 
+    start = time.monotonic()
     try:
         candidates = _load_planner_candidates(tenant_id, max_threads)
     except Exception as e:
@@ -460,4 +478,26 @@ def plan_all_stalled(
             plans.append(plan)
         except Exception as e:
             logger.debug("plan_thread failed for %s: %s", row.get("id"), e)
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    action_counts = dict(Counter(p.action for p in plans))
+    logger.info(
+        "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d",
+        tenant_id,
+        len(candidates),
+        action_counts,
+        elapsed_ms,
+        extra={
+            "event": "planner.run_complete",
+            "tenant_id": tenant_id,
+            "candidates_count": len(candidates),
+            "actions": action_counts,
+            "elapsed_ms": elapsed_ms,
+            "dry_run": dry_run,
+        },
+    )
+    with contextlib.suppress(Exception):
+        from robothor.engine.metrics import PLANNER_RUN_DURATION
+
+        PLANNER_RUN_DURATION.labels(tenant=tenant_id).observe(elapsed_ms / 1000.0)
     return plans
