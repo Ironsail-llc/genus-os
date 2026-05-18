@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.engine.codex_provider import acompletion as codex_acompletion
+from robothor.engine.codex_provider import is_codex_model
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -3157,7 +3159,10 @@ class AgentRunner:
                 continue
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                result = await litellm.acompletion(**kwargs)
+                if is_codex_model(model):
+                    result = await codex_acompletion(**kwargs)
+                else:
+                    result = await litellm.acompletion(**kwargs)
                 return result
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
@@ -3207,6 +3212,22 @@ class AgentRunner:
                 kwargs = self._build_llm_kwargs(
                     model, messages, tools, input_est, temperature, stream=True
                 )
+                if is_codex_model(model):
+                    result = await codex_acompletion(**kwargs)
+                    content = str(result.choices[0].message.content or "")
+                    if on_content and content:
+                        await on_content(content)
+                    await _emit({"type": "text_delta", "delta": content, "accumulated": content})
+                    await _emit(
+                        {
+                            "type": "usage",
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                        }
+                    )
+                    await _emit({"type": "message_stop"})
+                    return result
+
                 stream_start = time.monotonic()
                 stream = await litellm.acompletion(**kwargs)
 
