@@ -27,10 +27,21 @@
 --   question_resolved_by   — TEXT, the agent_id of the answerer
 --                            (typically "helm-user").
 --
+-- Semantics change — escalation_count:
+--   Phase 1 of this work also redefines `crm_tasks.escalation_count`.
+--   It used to be a lifetime count of every set_question() escalation.
+--   It is now "consecutive escalations since the last operator
+--   answer" — approve_task / reject_task reset it to 0. Downstream
+--   dashboards and queries that historically summed or trended this
+--   column should re-read it as current stall depth, not lifetime
+--   tally. The migration records this intent via COMMENT ON COLUMN
+--   below so future readers don't have to reverse-engineer it.
+--
 -- Rollback:
 --   ALTER TABLE crm_task_history DROP CONSTRAINT IF EXISTS crm_task_history_metadata_kind_check;
 --   ALTER TABLE crm_tasks DROP COLUMN IF EXISTS question_resolved_at;
 --   ALTER TABLE crm_tasks DROP COLUMN IF EXISTS question_resolved_by;
+--   COMMENT ON COLUMN crm_tasks.escalation_count IS NULL;
 -- ─────────────────────────────────────────────────────────────────────────────
 
 ALTER TABLE crm_tasks
@@ -41,6 +52,15 @@ ALTER TABLE crm_tasks
 -- at the canonical reference instead of having to grep the codebase.
 COMMENT ON COLUMN crm_task_history.metadata IS
     'JSONB event payload. May include a "kind" discriminator drawn from the enum in docs/TASK_HISTORY_KIND.md.';
+
+-- Document the semantics change on escalation_count. Pre-PR it was a
+-- lifetime tally of set_question() calls. As of Phase 1, approve_task /
+-- reject_task reset it to 0 — so any dashboard that historically read it
+-- as "how many times has this task ever been escalated?" needs to re-read
+-- it as "what's the current stall depth?". The COMMENT keeps the
+-- redefinition visible to any future schema reader without grepping.
+COMMENT ON COLUMN crm_tasks.escalation_count IS
+    'Count of consecutive set_question() escalations since the last operator answer. Reset to 0 by approve_task / reject_task — this is current stall depth, not lifetime tally.';
 
 -- CHECK constraint on future rows: when `metadata->>'kind'` is present, it
 -- must be one of the documented values. NOT VALID skips existing rows on
