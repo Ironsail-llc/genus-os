@@ -44,8 +44,18 @@ class CheckpointManager:
         messages: list[dict[str, Any]],
         scratchpad: dict[str, Any] | None = None,
         plan: dict[str, Any] | None = None,
+        todo_list: dict[str, Any] | None = None,
     ) -> bool:
-        """Persist a checkpoint to the database. Best-effort — never raises."""
+        """Persist a checkpoint to the database. Best-effort — never raises.
+
+        Phase 5: ``todo_list`` is embedded under ``scratchpad["_todo_list"]``
+        so resume can rebuild the in-conversation checklist. No schema bump —
+        the scratchpad column is already JSONB and Scratchpad.from_dict
+        tolerates unknown keys.
+        """
+        if todo_list is not None:
+            scratchpad = dict(scratchpad or {})
+            scratchpad["_todo_list"] = todo_list
         try:
             from robothor.db.connection import get_connection
 
