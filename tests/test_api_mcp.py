@@ -139,3 +139,25 @@ class TestHandleToolCall:
         result = await handle_tool_call("enroll_face", {})
         assert "error" in result
         assert "required" in result["error"].lower() or "Name" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_create_task_propagates_validation_error(self, monkeypatch):
+        """The MCP create_task handler must propagate `create_task`'s error
+        dict (Phase-1 contract) instead of wrapping it as a success response.
+
+        Latent today — the MCP handler doesn't pass autonomy_budget — but
+        we pin the guard so the next contributor who wires the param can't
+        regress into the bridge POST bug (truthy error dict slipping past
+        `if task_id:` and surfacing as `{"id": {"error": ...}, "title": ...}`).
+        Mirrors the regression test for the bridge endpoint.
+        """
+        err = {"error": "reversible_cap_usd must be non-negative (got -1)"}
+
+        def fake_create_task(**kwargs):
+            return err
+
+        monkeypatch.setattr("robothor.crm.dal.create_task", fake_create_task)
+
+        result = await handle_tool_call("create_task", {"title": "Bad budget"})
+        assert result == err
+        assert "id" not in result
