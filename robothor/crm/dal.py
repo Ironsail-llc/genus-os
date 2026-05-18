@@ -1008,14 +1008,23 @@ def create_task(
     autonomy_budget: dict[str, Any] | None = None,
     follow_up_at: str | datetime | None = None,
     tenant_id: str = DEFAULT_TENANT,
-) -> str | None:
-    """Create a task. Returns task UUID.
+) -> str | dict[str, Any] | None:
+    """Create a task. Returns task UUID, or ``{"error": reason}`` on validation failure.
 
     ``follow_up_at`` (optional): when set in the future, the task is treated as
     snoozed — filtered out of the thread pool and drain queue. When the time
     passes, ``resurface_due_followups()`` clears the field and the task flows
     back into normal queues.
+
+    ``autonomy_budget`` (optional): must validate against ``autonomy.validate_budget``.
+    Malformed budgets return an error dict instead of silently degrading the planner.
     """
+    if autonomy_budget is not None:
+        from robothor.engine.autonomy import validate_budget
+
+        ok, reason = validate_budget(autonomy_budget)
+        if not ok:
+            return {"error": reason}
     task_id = str(uuid.uuid4())
     sla_deadline = _compute_sla_deadline(priority)
     started = datetime.now(UTC) if status == "IN_PROGRESS" else None
@@ -1262,6 +1271,11 @@ def update_task(
         sets.append("blockers = %s::jsonb")
         vals.append(json.dumps(fields["blockers"]))
     if "autonomy_budget" in fields and fields["autonomy_budget"] is not None:
+        from robothor.engine.autonomy import validate_budget
+
+        ok, reason = validate_budget(fields["autonomy_budget"])
+        if not ok:
+            return {"error": reason}
         sets.append("autonomy_budget = %s::jsonb")
         vals.append(json.dumps(fields["autonomy_budget"]))
     if not sets:
@@ -2191,9 +2205,14 @@ def approve_task(
             if not resolution:
                 return {"error": "Resolution is required for approval"}
 
+            # escalation_count is the stall-depth counter set_question increments.
+            # An operator approval is an answer to whatever the planner asked, so we
+            # reset to 0 — future escalations on this thread should count from zero,
+            # not inflate the lifetime tally.
             cur.execute(
                 """UPDATE crm_tasks
-                   SET status = 'DONE', resolved_at = NOW(), resolution = %s, updated_at = NOW()
+                   SET status = 'DONE', resolved_at = NOW(), resolution = %s,
+                       escalation_count = 0, updated_at = NOW()
                    WHERE id = %s AND tenant_id = %s""",
                 (resolution, task_id, tenant_id),
             )
@@ -2249,9 +2268,12 @@ def reject_task(
             if not reason:
                 return {"error": "Reason is required for rejection"}
 
+            # Rejection with change_requests is the operator answering — reset the
+            # stall-depth counter for the same reason as approve_task. The
+            # change_requests subtasks start their own escalation tallies from zero.
             cur.execute(
                 """UPDATE crm_tasks
-                   SET status = 'IN_PROGRESS', updated_at = NOW()
+                   SET status = 'IN_PROGRESS', escalation_count = 0, updated_at = NOW()
                    WHERE id = %s AND tenant_id = %s""",
                 (task_id, tenant_id),
             )

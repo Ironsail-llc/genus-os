@@ -525,3 +525,157 @@ class TestResurfaceDueFollowups:
         for call in mock_record.call_args_list:
             assert call.kwargs["changed_by"] == "system:follow_up"
             assert "resurfaced from follow_up_at=" in call.kwargs["reason"]
+
+
+class TestAutonomyBudgetValidation:
+    """The DAL must reject malformed autonomy_budget shapes before writing JSONB.
+
+    Why: today the column accepts any dict — typos in `categories` or stray
+    top-level keys would silently degrade the planner. With Phase 1 we route
+    every write through `autonomy.validate_budget()` and return the standard
+    `{"error": reason}` dict that other DAL functions already use.
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_create_task_rejects_invalid_autonomy_budget(self, mock_get_conn):
+        mock_conn, _ = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_task
+
+        result = create_task(
+            title="Bad budget",
+            autonomy_budget={"reversible_cap_usd": -1},
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "reversible_cap_usd" in result["error"]
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_create_task_rejects_unknown_category_verdict(self, mock_get_conn):
+        mock_conn, _ = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_task
+
+        result = create_task(
+            title="Bad verdict",
+            autonomy_budget={"categories": {"vendor_data_ask": "maybe"}},
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    def test_create_task_accepts_empty_autonomy_budget(self, _audit, mock_get_conn):
+        """Legacy path: tasks without an explicit budget pass an empty dict; must stay valid."""
+        mock_conn, _ = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_task
+
+        task_id = create_task(title="No budget set")
+
+        # Returns a UUID string, not the error dict
+        assert isinstance(task_id, str)
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_update_task_rejects_invalid_autonomy_budget(self, mock_get_conn):
+        mock_conn, _ = _make_mock_conn(fetchone_return={"status": "IN_PROGRESS"})
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import update_task
+
+        result = update_task(
+            task_id="task-999",
+            autonomy_budget={"categories": "not a dict"},
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "categories" in result["error"]
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_update_task_rejects_extra_budget_keys(self, mock_get_conn):
+        mock_conn, _ = _make_mock_conn(fetchone_return={"status": "IN_PROGRESS"})
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import update_task
+
+        result = update_task(
+            task_id="task-999",
+            autonomy_budget={"reversible_cap_usd": 500, "spend_cap": 1000},
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "spend_cap" in result["error"]
+
+
+class TestApproveTaskResetsEscalation:
+    """An operator approval is a legitimate answer to whatever question the planner asked.
+
+    Why: today `escalation_count` only ever grows (set_question bumps it,
+    nothing decrements). A thread that gets re-escalated after a clean approval
+    will mis-report as "stuck at escalation 3" forever. Phase 1 resets the
+    counter to 0 on the REVIEW→DONE transition so the metric reflects the
+    *current* stall depth, not the lifetime tally.
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_approve_task_resets_escalation_count(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={"status": "REVIEW", "assigned_to_agent": "email-responder"},
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import approve_task
+
+        ok = approve_task(
+            task_id="task-321",
+            resolution="Looks good",
+            reviewer="helm-user",
+        )
+
+        assert ok is True
+        update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
+        assert update_calls, "expected an UPDATE crm_tasks call"
+        joined = " ".join(c[0][0] for c in update_calls)
+        assert "escalation_count = 0" in joined
+
+
+class TestRejectTaskResetsEscalation:
+    """A rejection with change_requests is also an operator answer — same reset semantics.
+
+    Why: same reason as approve. The operator engaging at all clears the
+    backlog; future escalations should count from zero.
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_reject_task_resets_escalation_count(self, _notify, _audit, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={"status": "REVIEW", "assigned_to_agent": "email-responder"},
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import reject_task
+
+        ok = reject_task(
+            task_id="task-654",
+            reason="Try a different vendor",
+            reviewer="helm-user",
+        )
+
+        assert ok is True
+        update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
+        assert update_calls, "expected an UPDATE crm_tasks call"
+        joined = " ".join(c[0][0] for c in update_calls)
+        assert "escalation_count = 0" in joined

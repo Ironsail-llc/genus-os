@@ -776,7 +776,7 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
                 )
                 return None
 
-    task_id = create_task(
+    result = create_task(
         title=finding.task_title(),
         body=finding.task_body(),
         assigned_to_agent="auto-agent",
@@ -785,6 +785,14 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
         created_by_agent="buddy",
         tenant_id=tenant_id,
     )
+    # Phase-1 contract: create_task returns the UUID on success or
+    # ``{"error": reason}`` on validation failure. We pass no autonomy_budget
+    # here, so the dict return is unreachable in practice — but the type
+    # system needs the narrowing.
+    if isinstance(result, dict):
+        logger.warning("create_task validation rejected finding task: %s", result.get("error"))
+        return None
+    task_id = result
     _journal(
         "finding_opened",
         {
