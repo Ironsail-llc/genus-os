@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,6 +36,16 @@ def test_codex_model_detection_and_mapping() -> None:
     assert not is_codex_model("openai/gpt-5.5")
     assert not is_codex_model("openrouter/openai/gpt-5.5")
     assert codex_model_name("codex/gpt-5.5") == "gpt-5.5"
+
+
+def test_workspace_defaults_to_home_robothor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_WORKSPACE", raising=False)
+    assert codex_provider._workspace() == Path.home() / "robothor"
+
+
+def test_workspace_honors_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    assert codex_provider._workspace() == tmp_path
 
 
 def test_codex_env_removes_usage_based_openai_api_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,6 +155,55 @@ async def test_runner_uses_codex_for_tool_turns(
     assert result is codex_response
     codex_call.assert_awaited_once()
     litellm_call.assert_not_called()
+
+
+def _hung_proc() -> MagicMock:
+    """Build a fake subprocess whose communicate() never resolves."""
+    proc = MagicMock()
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+    proc.returncode = -9
+
+    async def _never_returns(*_args: object, **_kwargs: object) -> tuple[bytes, bytes]:
+        await asyncio.sleep(10)
+        return b"", b""
+
+    proc.communicate = _never_returns
+    return proc
+
+
+@pytest.mark.asyncio
+async def test_run_codex_exec_kills_subprocess_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc = _hung_proc()
+    monkeypatch.setattr(codex_provider, "_codex_binary", lambda: "/usr/bin/codex")
+    monkeypatch.setattr(
+        codex_provider.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
+    )
+
+    with pytest.raises(CodexProviderError, match="timed out"):
+        await codex_provider._run_codex_exec(model="codex/gpt-5.5", prompt="hi", timeout=0.01)
+
+    proc.kill.assert_called_once()
+    proc.wait.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_login_status_kills_subprocess_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc = _hung_proc()
+    monkeypatch.setattr(codex_provider, "_codex_binary", lambda: "/usr/bin/codex")
+    monkeypatch.setattr(
+        codex_provider.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
+    )
+
+    with pytest.raises(CodexProviderError, match="timed out"):
+        await codex_provider.login_status(timeout=0.01)
+
+    proc.kill.assert_called_once()
+    proc.wait.assert_awaited_once()
 
 
 @pytest.mark.asyncio

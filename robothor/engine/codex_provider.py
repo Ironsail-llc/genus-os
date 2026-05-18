@@ -40,7 +40,8 @@ def _codex_binary() -> str:
 
 
 def _workspace() -> Path:
-    return Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.cwd())).expanduser()
+    default = Path.home() / "robothor"
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", default)).expanduser()
 
 
 def _codex_home() -> str | None:
@@ -201,7 +202,12 @@ async def login_status(timeout: float = 15) -> str:
         stderr=asyncio.subprocess.PIPE,
         env=_codex_env(),
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise CodexProviderError(f"codex login status timed out after {timeout}s") from None
     output = (stdout + stderr).decode(errors="replace").strip()
     if proc.returncode != 0:
         raise CodexProviderError(output or "codex login status failed")
@@ -254,10 +260,15 @@ async def _run_codex_exec(
             stderr=asyncio.subprocess.PIPE,
             env=_codex_env(),
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(prompt.encode()),
-            timeout=timeout,
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(prompt.encode()),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise CodexProviderError(f"codex exec timed out after {timeout}s") from None
         if proc.returncode != 0:
             detail = (stderr or stdout).decode(errors="replace").strip()
             raise CodexProviderError(detail or f"codex exec failed with exit {proc.returncode}")
