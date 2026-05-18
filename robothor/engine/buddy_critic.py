@@ -785,13 +785,17 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
         created_by_agent="buddy",
         tenant_id=tenant_id,
     )
-    # Phase-1 contract: create_task returns the UUID on success or
-    # ``{"error": reason}`` on validation failure. We pass no autonomy_budget
-    # here, so the dict return is unreachable in practice — but the type
-    # system needs the narrowing.
-    if isinstance(result, dict):
-        logger.warning("create_task validation rejected finding task: %s", result.get("error"))
-        return None
+    # Phase-1 contract: create_task can return ``{"error": reason}`` when the
+    # autonomy_budget validator rejects the input. This call passes no
+    # autonomy_budget, so the dict branch is unreachable — the assert is a
+    # type-narrowing aid for mypy and a loud invariant: if a future edit
+    # wires a budget here and triggers the validator, we crash visibly
+    # instead of silently returning None and burying the bug. (Bridge POST
+    # and MCP create_task handle the dict properly; this call site does not
+    # need to.)
+    assert isinstance(result, str), (
+        f"buddy_critic.open_task_for_finding: create_task returned non-str ({type(result).__name__}) — was autonomy_budget added without updating the guard?"
+    )
     task_id = result
     _journal(
         "finding_opened",
