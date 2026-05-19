@@ -422,3 +422,59 @@ class TestPlannerObservability:
         assert getattr(record, "tenant_id", None) == "default"
         assert hasattr(record, "candidates_count")
         assert hasattr(record, "elapsed_ms")
+
+    def test_apply_plan_emits_planner_action_refused_warning(self, caplog):
+        """When the autonomy classifier refuses, ``apply_plan`` MUST emit a
+        ``planner.action.refused`` WARNING carrying ``task_id``, ``rationale``,
+        and ``action_type``. This is the documented signal that dashboards
+        alert on; the table in docs/PLANNER_OBSERVABILITY.md promises it.
+        """
+        import logging
+
+        from robothor.engine.thread_planner import PlanResult, apply_plan
+
+        plan = PlanResult(
+            task_id="t-refuse",
+            action="ask",
+            next_action=None,
+            next_action_agent=None,
+            question_for_operator="autonomy budget refused chase — what next?",
+            rationale="autonomy_refuse",
+            action_type="vendor_data_ask",
+        )
+        caplog.set_level(logging.WARNING, logger="robothor.engine.thread_planner")
+        with patch("robothor.crm.dal.set_question", return_value=True):
+            apply_plan(plan, tenant_id="default")
+
+        refused = [r for r in caplog.records if getattr(r, "event", "") == "planner.action.refused"]
+        assert refused, "expected a planner.action.refused log record"
+        rec = refused[0]
+        assert rec.levelno == logging.WARNING
+        assert getattr(rec, "task_id", None) == "t-refuse"
+        assert getattr(rec, "rationale", None) == "autonomy_refuse"
+        assert getattr(rec, "action_type", None) == "vendor_data_ask"
+
+    def test_apply_plan_does_not_emit_refusal_for_other_rationales(self, caplog):
+        """The refusal warning fires *only* on ``rationale='autonomy_refuse'``.
+        Other ask-path rationales (objective veto, no_pattern_matched) are
+        normal escalations, not classifier refusals — they shouldn't pollute
+        the refusal signal.
+        """
+        import logging
+
+        from robothor.engine.thread_planner import PlanResult, apply_plan
+
+        plan = PlanResult(
+            task_id="t-veto",
+            action="ask",
+            next_action=None,
+            next_action_agent=None,
+            question_for_operator="Drop vendor?",
+            rationale="objective_veto_meeting_repeated",
+        )
+        caplog.set_level(logging.WARNING, logger="robothor.engine.thread_planner")
+        with patch("robothor.crm.dal.set_question", return_value=True):
+            apply_plan(plan, tenant_id="default")
+
+        refused = [r for r in caplog.records if getattr(r, "event", "") == "planner.action.refused"]
+        assert refused == [], "objective_veto must not emit planner.action.refused"

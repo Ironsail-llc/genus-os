@@ -50,6 +50,10 @@ class PlanResult:
     next_action_agent: str | None
     question_for_operator: str | None
     rationale: str
+    # The action_type passed to classify_action, preserved so apply_plan
+    # can emit it on planner.action.refused. None on branches that didn't
+    # consult the autonomy classifier (objective veto, no_pattern, wait).
+    action_type: str | None = None
 
 
 # ─── Body parsing helpers ──────────────────────────────────────────────
@@ -235,6 +239,7 @@ def plan_thread(
                     f"{thread.title}: autonomy budget refused chase — what next?"
                 ),
                 rationale="autonomy_refuse",
+                action_type=action_type,
             )
 
     # No recognized pattern — surface a concrete question asking what to do.
@@ -271,6 +276,28 @@ def _record_action_metric(action: str, tenant_id: str) -> None:
         PLANNER_ACTIONS_TOTAL.labels(action=action, tenant=tenant_id).inc()
 
 
+def _log_refusal(plan: PlanResult) -> None:
+    """Emit ``planner.action.refused`` WARNING when the autonomy classifier
+    refuses the only path forward. The planner converts the verdict to ``ask``
+    so the operator is unblocked, but the structured event is the signal
+    dashboards key off — a steady drumbeat means the budget is too strict.
+    Wrapped in suppress for the same reason as the metric emit.
+    """
+    with contextlib.suppress(Exception):
+        logger.warning(
+            "planner.action.refused task=%s action_type=%s rationale=%s",
+            plan.task_id,
+            plan.action_type,
+            plan.rationale,
+            extra={
+                "event": "planner.action.refused",
+                "task_id": plan.task_id,
+                "rationale": plan.rationale,
+                "action_type": plan.action_type,
+            },
+        )
+
+
 def apply_plan(
     plan: PlanResult,
     tenant_id: str = DEFAULT_TENANT,
@@ -296,6 +323,8 @@ def apply_plan(
     from robothor.crm import dal
 
     _record_action_metric(plan.action, tenant_id)
+    if plan.rationale == "autonomy_refuse":
+        _log_refusal(plan)
 
     if plan.action == "execute":
         if not plan.next_action:
