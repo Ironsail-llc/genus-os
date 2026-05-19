@@ -15,10 +15,10 @@ payload — log aggregators that parse JSON pick up the structured fields.
 |---|---|---|---|---|
 | `planner.run_complete` | INFO | `plan_all_stalled` end | `tenant_id`, `candidates_count`, `actions` (dict of action → count), `elapsed_ms`, `dry_run` | One per beat. Roll up to a time series for "is the planner running?" and "what is it deciding?" |
 | `planner.action.refused` | WARNING | `apply_plan` when `verdict == "refuse"` | `task_id`, `rationale`, `action_type` | Refusals are the leading indicator that an autonomy budget is too strict or an objective veto is firing unexpectedly. |
-| `todo_promotion.created` | INFO | `todo_promotion.promote_todo_to_subtask` (Phase 3) | `parent_task_id`, `subtask_id`, `content_hash`, `agent_id`, `run_id` | Track how often unfinished todos turn into real subtasks. |
-| `todo_promotion.skipped` | DEBUG | `todo_promotion.should_promote` returns False | `parent_task_id`, `reason` | Diagnose cycle-guard / manifest-opt-out / env-disabled / cap-exceeded skips. |
-| `question.answered` | INFO | `dal.answer_question` (Phase 4) | `task_id`, `by`, `escalation_count_was`, `advance_to` | Pair with `planner.action.refused` rate to measure operator-feedback loop closure. |
-| `checkpoint.resume.todo` | INFO if items > 0 else DEBUG | `runner.execute` resume path (Phase 5) | `run_id`, `items_count` | Confirm TodoList survives checkpoint round-trips after the Phase-5 fix. |
+
+Subsequent task-system phases extend this table with their own events
+(`todo_promotion.*`, `question.answered`, `checkpoint.resume.todo`) — see
+those PRs for the exact field shape.
 
 ## Prometheus metrics
 
@@ -29,8 +29,6 @@ registered in `health.py`.
 |---|---|---|---|
 | `robothor_planner_actions_total` | Counter | `action` (execute/ask/wait/close), `tenant` | Increment per `apply_plan` call. Use `rate()` to graph planner velocity. |
 | `robothor_planner_run_duration_seconds` | Histogram | `tenant` | Wall-clock per beat. Alert if p95 > 5s — usually a sign the candidate query is missing an index. |
-| `robothor_todo_promotions_total` | Counter | `agent`, `outcome` (Phase 3) | `outcome` ∈ {created, idempotent, skipped}. Alert on a steep climb in `skipped{reason="cycle_guard"}`. |
-| `robothor_task_questions_answered_total` | Counter | `tenant`, `advance_to` (Phase 4) | Should track 1:1 with `planner.action.refused` over the long run. |
 
 ## Useful queries
 
