@@ -37,7 +37,14 @@ from robothor.engine.autonomy import validate_budget
 
 
 def _scan(tenant_id: str | None) -> list[dict[str, Any]]:
-    """Return a list of {task_id, title, reason, budget} for every violator."""
+    """Return a list of {task_id, title, reason, budget} for every violator.
+
+    Non-dict autonomy_budget values are themselves a violation — the column
+    is JSONB and the validator's contract is "object with these keys."
+    A legacy row carrying a string, list, or scalar would previously have
+    been silently coerced to ``{}`` and passed; now it surfaces with
+    ``reason="not a dict: <typename>"``.
+    """
     where = "WHERE autonomy_budget IS NOT NULL AND autonomy_budget <> '{}'::jsonb AND deleted_at IS NULL"
     params: list[Any] = []
     if tenant_id:
@@ -54,7 +61,18 @@ def _scan(tenant_id: str | None) -> list[dict[str, Any]]:
         violators: list[dict[str, Any]] = []
         for row in cur.fetchall():
             task_id, title, tid, budget = row[0], row[1], row[2], row[3]
-            ok, reason = validate_budget(budget if isinstance(budget, dict) else {})
+            if not isinstance(budget, dict):
+                violators.append(
+                    {
+                        "task_id": str(task_id),
+                        "title": title,
+                        "tenant_id": tid,
+                        "reason": f"not a dict: {type(budget).__name__}",
+                        "budget": budget,
+                    }
+                )
+                continue
+            ok, reason = validate_budget(budget)
             if not ok:
                 violators.append(
                     {
@@ -89,7 +107,7 @@ def main() -> int:
         return 1 if violators else 0
 
     if not violators:
-        scope = args.tenant or "all tenants"
+        scope = f"tenant {args.tenant!r}" if args.tenant else "all tenants"
         print(f"Clean — no autonomy_budget violations in {scope}.")
         return 0
 
