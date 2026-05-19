@@ -13,12 +13,8 @@ payload — log aggregators that parse JSON pick up the structured fields.
 
 | Event | Level | Where | Fields | Why |
 |---|---|---|---|---|
-| `planner.run_complete` | INFO | `plan_all_stalled` end | `tenant_id`, `candidates_count`, `actions` (dict of action → count), `elapsed_ms`, `dry_run` | One per beat. Roll up to a time series for "is the planner running?" and "what is it deciding?" |
+| `planner.run_complete` | INFO | `plan_all_stalled` end (always — including candidate-load failure) | `tenant_id`, `candidates_count`, `actions` (dict of action → count), `elapsed_ms`, `dry_run`, optional `error` | One per beat. Roll up to a time series for "is the planner running?" and "what is it deciding?". On candidate-load failure, `candidates_count=0`, `actions={}`, `error=repr(exc)` — distinguish DB outage from "no work this beat". |
 | `planner.action.refused` | WARNING | `apply_plan` when `verdict == "refuse"` | `task_id`, `rationale`, `action_type` | Refusals are the leading indicator that an autonomy budget is too strict or an objective veto is firing unexpectedly. |
-
-Subsequent task-system phases extend this table with their own events
-(`todo_promotion.*`, `question.answered`, `checkpoint.resume.todo`) — see
-those PRs for the exact field shape.
 
 ## Prometheus metrics
 
@@ -27,8 +23,8 @@ registered in `health.py`.
 
 | Metric | Type | Labels | Notes |
 |---|---|---|---|
-| `robothor_planner_actions_total` | Counter | `action` (execute/ask/wait/close), `tenant` | Increment per `apply_plan` call. Use `rate()` to graph planner velocity. |
-| `robothor_planner_run_duration_seconds` | Histogram | `tenant` | Wall-clock per beat. Alert if p95 > 5s — usually a sign the candidate query is missing an index. |
+| `robothor_planner_actions_total` | Counter | `action` (execute/ask/wait/close), `tenant` | Incremented at action **dispatch** in `apply_plan`, before the DAL write. An `execute` plan missing `next_action`, or a `dal.set_next_action` returning `False`, still bumps the counter — so this is "attempted decisions per beat," not "successful writes." Pair with `task.created` / `task.updated` events if you need write-success rates. Use `rate()` to graph planner velocity. |
+| `robothor_planner_run_duration_seconds` | Histogram | `tenant` | Wall-clock per beat, observed in the `finally` block — even on candidate-load failure. Alert if p95 > 5s — usually a sign the candidate query is missing an index. |
 
 ## Useful queries
 

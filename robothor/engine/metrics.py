@@ -87,7 +87,13 @@ ADAPTER_FAILURES = Counter(
 
 PLANNER_ACTIONS_TOTAL = Counter(
     "robothor_planner_actions_total",
-    "Forward-planner actions taken per beat",
+    # Incremented at action dispatch in apply_plan, before the DAL write.
+    # An execute with missing next_action, or set_next_action returning
+    # False, still increments — so the counter measures attempted decisions
+    # ("the planner chose this action this beat"), NOT successful writes.
+    # Dashboards keying off this for write-success rates need to also pull
+    # task.created / task.updated events.
+    "Forward-planner actions attempted per beat (dispatch attempts, not successful writes)",
     ["action", "tenant"],  # action: execute | ask | wait | close
 )
 
