@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from robothor.engine.thread_pool import Thread
 
@@ -368,7 +368,17 @@ class TestPlannerObservability:
             metric.labels.assert_called_with(action="ask", tenant="default")
 
     def test_metric_failure_does_not_break_apply_plan(self):
-        """Observability outages must not break planner application."""
+        """Observability outages must not break planner application.
+
+        The production call path is ``PLANNER_ACTIONS_TOTAL.labels(...).inc()``,
+        so the failure mode we have to pin is `.labels()` raising — that is
+        what a Prometheus-client outage actually looks like. Patching the
+        module-level symbol with ``side_effect=RuntimeError(...)`` would only
+        fire on a direct call of ``PLANNER_ACTIONS_TOTAL(...)`` and the
+        ``.labels()`` chain would silently route through a child MagicMock,
+        making the test pass even if ``contextlib.suppress(Exception)`` were
+        removed from ``_record_action_metric``.
+        """
         from robothor.engine.thread_planner import PlanResult, apply_plan
 
         plan = PlanResult(
@@ -379,16 +389,16 @@ class TestPlannerObservability:
             question_for_operator=None,
             rationale="r",
         )
+        mock_metric = MagicMock()
+        mock_metric.labels.side_effect = RuntimeError("metric backend down")
         with (
             patch("robothor.crm.dal.set_next_action", return_value=True) as sna,
-            patch(
-                "robothor.engine.metrics.PLANNER_ACTIONS_TOTAL",
-                side_effect=RuntimeError("metric backend down"),
-            ),
+            patch("robothor.engine.metrics.PLANNER_ACTIONS_TOTAL", mock_metric),
         ):
             # Should not raise — instrumentation is best-effort.
             apply_plan(plan, tenant_id="default")
             sna.assert_called_once()
+            mock_metric.labels.assert_called_once_with(action="execute", tenant="default")
 
     def test_plan_all_stalled_logs_run_complete(self, caplog):
         """The planner emits a structured `planner.run_complete` log line per beat."""
