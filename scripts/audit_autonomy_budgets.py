@@ -5,10 +5,18 @@ Read-only diagnostic. Connects to the configured PostgreSQL, walks every task
 with a non-empty `autonomy_budget`, runs `robothor.engine.autonomy.validate_budget`
 on each, and prints the violators.
 
-Use this before promoting migration 067's CHECK constraint from `NOT VALID` to
-validated. If the report is empty, run::
+The validator is enforced at write time in `robothor.crm.dal` (not as a DB
+constraint), so the failure mode this catches is: a legacy row whose budget
+was written before Phase 1 will now be rejected the next time it is updated
+via `create_task` / `update_task` / the bridge POST. Run this before flipping
+the planner default on (Phase 2) and any time you tighten the validator —
+a clean report means the planner won't start surfacing
+``{"error": ...}`` responses against pre-existing data.
 
-    ALTER TABLE crm_task_history VALIDATE CONSTRAINT crm_task_history_metadata_kind_check;
+Not related to migration 067's ``crm_task_history.metadata->>'kind'`` CHECK
+constraint — that one is on a *different* column, and a separate audit
+(scan `metadata->>'kind'` against the enum in docs/TASK_HISTORY_KIND.md)
+gates promoting it from NOT VALID to validated.
 
 Run::
 
