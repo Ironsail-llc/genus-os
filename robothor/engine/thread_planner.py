@@ -465,68 +465,83 @@ def plan_all_stalled(
     anything to the DB. Never raises; swallows errors so the warmup hook
     stays safe.
 
-    Emits a structured ``planner.run_complete`` INFO log line per beat with
-    candidates_count, action counts, and elapsed_ms. Per-plan
-    ``planner.action.refused`` WARNING lines when verdict="refuse".
+    Every beat — including beats where ``_load_planner_candidates`` raises —
+    emits one ``planner.run_complete`` INFO log and observes
+    ``PLANNER_RUN_DURATION``. On candidate-load failure the event carries
+    ``candidates_count=0``, ``actions={}``, and ``error=repr(exception)`` so
+    Grafana can distinguish a DB outage from a quiet planner. The env=0
+    opt-out path is the only branch that skips the emit (per the doc's
+    "Disabling" section). Per-plan ``planner.action.refused`` WARNING lines
+    fire when verdict="refuse".
     """
     if not dry_run and os.environ.get("ROBOTHOR_PLANNER_ENABLED", "1") == "0":
         return []
 
     start = time.monotonic()
-    try:
-        candidates = _load_planner_candidates(tenant_id, max_threads)
-    except Exception as e:
-        logger.debug("plan_all_stalled load failed: %s", e)
-        return []
-
-    defaults = load_tenant_defaults(tenant_id)
+    candidates: list[dict[str, Any]] = []
     plans: list[PlanResult] = []
-    for row in candidates:
-        try:
-            thread = _row_to_thread(row)
-            history = _load_history(thread.id, tenant_id)
-            objective = row.get("objective") or row.get("title") or ""
-            autonomy = row.get("autonomy_budget") or {}
-            if isinstance(autonomy, dict) and autonomy:
-                merged = dict(defaults)
-                merged.update(autonomy)
-                autonomy = merged
-            else:
-                autonomy = defaults
-            plan = plan_thread(
-                thread=thread,
-                body=row.get("body") or "",
-                history=history,
-                autonomy=autonomy,
-                objective=objective,
-                question_for_operator=row.get("question_for_operator"),
-                next_action=row.get("next_action"),
-                last_planned_at=row.get("last_planned_at"),
-            )
-            apply_plan(plan, tenant_id=tenant_id, dry_run=dry_run)
-            plans.append(plan)
-        except Exception as e:
-            logger.debug("plan_thread failed for %s: %s", row.get("id"), e)
+    load_error: str | None = None
 
-    elapsed_ms = int((time.monotonic() - start) * 1000)
-    action_counts = dict(Counter(p.action for p in plans))
-    logger.info(
-        "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d",
-        tenant_id,
-        len(candidates),
-        action_counts,
-        elapsed_ms,
-        extra={
+    try:
+        try:
+            candidates = _load_planner_candidates(tenant_id, max_threads)
+        except Exception as e:
+            logger.debug("plan_all_stalled load failed: %s", e)
+            load_error = repr(e)
+            return plans
+
+        defaults = load_tenant_defaults(tenant_id)
+        for row in candidates:
+            try:
+                thread = _row_to_thread(row)
+                history = _load_history(thread.id, tenant_id)
+                objective = row.get("objective") or row.get("title") or ""
+                autonomy = row.get("autonomy_budget") or {}
+                if isinstance(autonomy, dict) and autonomy:
+                    merged = dict(defaults)
+                    merged.update(autonomy)
+                    autonomy = merged
+                else:
+                    autonomy = defaults
+                plan = plan_thread(
+                    thread=thread,
+                    body=row.get("body") or "",
+                    history=history,
+                    autonomy=autonomy,
+                    objective=objective,
+                    question_for_operator=row.get("question_for_operator"),
+                    next_action=row.get("next_action"),
+                    last_planned_at=row.get("last_planned_at"),
+                )
+                apply_plan(plan, tenant_id=tenant_id, dry_run=dry_run)
+                plans.append(plan)
+            except Exception as e:
+                logger.debug("plan_thread failed for %s: %s", row.get("id"), e)
+
+        return plans
+    finally:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        action_counts = dict(Counter(p.action for p in plans))
+        extra: dict[str, Any] = {
             "event": "planner.run_complete",
             "tenant_id": tenant_id,
             "candidates_count": len(candidates),
             "actions": action_counts,
             "elapsed_ms": elapsed_ms,
             "dry_run": dry_run,
-        },
-    )
-    with contextlib.suppress(Exception):
-        from robothor.engine.metrics import PLANNER_RUN_DURATION
+        }
+        if load_error is not None:
+            extra["error"] = load_error
+        logger.info(
+            "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d error=%s",
+            tenant_id,
+            len(candidates),
+            action_counts,
+            elapsed_ms,
+            load_error,
+            extra=extra,
+        )
+        with contextlib.suppress(Exception):
+            from robothor.engine.metrics import PLANNER_RUN_DURATION
 
-        PLANNER_RUN_DURATION.labels(tenant=tenant_id).observe(elapsed_ms / 1000.0)
-    return plans
+            PLANNER_RUN_DURATION.labels(tenant=tenant_id).observe(elapsed_ms / 1000.0)

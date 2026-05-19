@@ -454,6 +454,54 @@ class TestPlannerObservability:
         assert getattr(rec, "rationale", None) == "autonomy_refuse"
         assert getattr(rec, "action_type", None) == "vendor_data_ask"
 
+    def test_plan_all_stalled_emits_run_complete_on_candidate_load_failure(self, caplog):
+        """A DB outage that prevents loading candidates must still emit one
+        ``planner.run_complete`` event with ``candidates_count=0``,
+        ``actions={}``, and ``error=repr(exception)``. Without this, Grafana
+        cannot distinguish "planner running but no work" from "planner
+        crashed during candidate load" — both look like silence.
+        """
+        import logging
+
+        from robothor.engine.thread_planner import plan_all_stalled
+
+        os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+        caplog.set_level(logging.INFO, logger="robothor.engine.thread_planner")
+        with patch(
+            "robothor.engine.thread_planner._load_planner_candidates",
+            side_effect=RuntimeError("connection refused"),
+        ):
+            result = plan_all_stalled(tenant_id="default")
+
+        assert result == []
+        run_complete = [
+            r for r in caplog.records if getattr(r, "event", "") == "planner.run_complete"
+        ]
+        assert run_complete, "expected planner.run_complete even on candidate-load failure"
+        rec = run_complete[0]
+        assert getattr(rec, "candidates_count", None) == 0
+        assert getattr(rec, "actions", None) == {}
+        assert "connection refused" in (getattr(rec, "error", "") or "")
+
+    def test_plan_all_stalled_observes_duration_on_candidate_load_failure(self):
+        """``PLANNER_RUN_DURATION`` must observe on every beat — a DB outage
+        is still a beat that should appear on the timing histogram, otherwise
+        the planner looks "disabled" instead of "broken".
+        """
+        from robothor.engine.thread_planner import plan_all_stalled
+
+        os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+        with (
+            patch(
+                "robothor.engine.thread_planner._load_planner_candidates",
+                side_effect=RuntimeError("connection refused"),
+            ),
+            patch("robothor.engine.metrics.PLANNER_RUN_DURATION") as duration,
+        ):
+            plan_all_stalled(tenant_id="default")
+            duration.labels.assert_called_with(tenant="default")
+            duration.labels.return_value.observe.assert_called_once()
+
     def test_apply_plan_does_not_emit_refusal_for_other_rationales(self, caplog):
         """The refusal warning fires *only* on ``rationale='autonomy_refuse'``.
         Other ask-path rationales (objective veto, no_pattern_matched) are
