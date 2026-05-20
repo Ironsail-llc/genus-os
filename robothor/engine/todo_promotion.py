@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from typing import Any
+from typing import Any, NamedTuple
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.crm import dal
@@ -35,16 +35,33 @@ from robothor.crm import dal
 logger = logging.getLogger(__name__)
 
 # Cap per run — bounds the blast radius if an agent writes a 20-item list.
+# Counts only *newly created* subtasks (idempotent hits don't consume it),
+# so a parent with more than the cap of unfinished items keeps making
+# forward progress on subsequent runs instead of stalling on the first batch.
 MAX_PROMOTIONS_PER_RUN = 5
 
-# Body line that carries the idempotency key. The 16-char prefix is
-# unambiguous in practice and keeps task bodies readable.
-_HASH_BODY_PREFIX = "todo_hash:"
+# Dedup-key name embedded in the subtask body as ``"todo_hash: <hash>"`` via
+# ``dal.build_dedup_marker`` and searched for via ``dal.find_task_by_dedup_key``.
+# Both sides derive the literal from the same helper so they can't drift.
+_DEDUP_KEY_NAME = "todo_hash"
 
 # Tag that marks "this subtask was promoted from an unfinished todo
 # item." Doubles as the cycle-guard signal: parents carrying this tag
 # do not produce further promotions.
 PROMOTED_TAG = "promoted_todo"
+
+
+class PromotionOutcome(NamedTuple):
+    """Result of a single promotion attempt.
+
+    ``subtask_id`` is the created or pre-existing subtask id (``None`` on
+    skip/error). ``created`` is True only when a brand-new subtask was
+    inserted — idempotent hits return ``created=False`` so the per-run cap
+    counts real creations, not re-discoveries.
+    """
+
+    subtask_id: str | None
+    created: bool
 
 
 def compute_item_hash(parent_task_id: str, content: str) -> str:
@@ -69,7 +86,7 @@ def _find_existing(parent_task_id: str, content_hash: str, tenant_id: str) -> st
     """Return an existing subtask id if one already carries this hash, else None."""
     try:
         existing = dal.find_task_by_dedup_key(
-            key_name=_HASH_BODY_PREFIX.rstrip(":"),
+            key_name=_DEDUP_KEY_NAME,
             key_value=content_hash,
             include_recently_resolved=True,
             tenant_id=tenant_id,
@@ -88,29 +105,45 @@ def promote_todo_to_subtask(
     agent_id: str,
     run_id: str,
     tenant_id: str = DEFAULT_TENANT,
-) -> str | None:
-    """Create a subtask from an unfinished todo item. Returns the subtask id,
-    or the existing one for idempotent re-runs, or None on skip / error.
+) -> PromotionOutcome:
+    """Create a subtask from an unfinished todo item.
 
-    Skips when:
+    Returns a :class:`PromotionOutcome`. ``subtask_id`` is the new subtask
+    id, the pre-existing one on an idempotent re-run, or ``None`` on
+    skip/error; ``created`` is True only when a fresh subtask was inserted.
+
+    Skips (``PromotionOutcome(None, False)``) when:
+      - `parent` already carries the ``promoted_todo`` tag (cycle guard).
       - `item.status` is `completed` (nothing to promote).
-      - An existing subtask carrying the same hash already exists (idempotency).
+      - An existing subtask carrying the same hash already exists → returns
+        ``PromotionOutcome(existing_id, False)`` (idempotency).
       - `dal.create_task` returns a validation-error dict.
     """
+    # Cycle guard, re-checked here so the function is safe when called
+    # directly (not only via promote_unfinished_items).
+    if not should_promote(parent):
+        return PromotionOutcome(None, False)
+
     status = getattr(item, "status", "") or ""
     content = (getattr(item, "content", "") or "").strip()
     if not content:
-        return None
+        return PromotionOutcome(None, False)
     if status == "completed":
-        return None
+        return PromotionOutcome(None, False)
 
     parent_id = str(parent.get("id") or "")
     if not parent_id:
         logger.debug("promote_todo_to_subtask: parent has no id")
-        return None
+        return PromotionOutcome(None, False)
 
     content_hash = compute_item_hash(parent_id, content)
 
+    # Idempotency is a best-effort check-then-create: a concurrent run could
+    # also find nothing and create a duplicate. This matches every other
+    # dedup path in the codebase (threadId / conversationId / eventId via
+    # find_task_by_dedup_key) and is acceptable because a thread runs a
+    # single worker at a time, so concurrent promotion of the same parent is
+    # near-impossible in practice.
     existing_id = _find_existing(parent_id, content_hash, tenant_id)
     if existing_id:
         logger.debug(
@@ -119,13 +152,13 @@ def promote_todo_to_subtask(
             parent_id,
             existing_id,
         )
-        return existing_id
+        return PromotionOutcome(existing_id, False)
 
     title = content[:120]
     body = (
         f"Promoted from todo_write in run {run_id}\n"
         f"\n"
-        f"{_HASH_BODY_PREFIX} {content_hash}\n"
+        f"{dal.build_dedup_marker(_DEDUP_KEY_NAME, content_hash)}\n"
         f"\n"
         f"{content}"
     )
@@ -147,7 +180,7 @@ def promote_todo_to_subtask(
         )
     except Exception as e:
         logger.warning("todo_promotion.create_task failed: %s", e)
-        return None
+        return PromotionOutcome(None, False)
 
     # create_task returns the id string on success; a {"error": ...} dict on
     # validation failure (Phase-1 contract).
@@ -156,9 +189,9 @@ def promote_todo_to_subtask(
             "todo_promotion: create_task validation rejected promotion: %s",
             result.get("error"),
         )
-        return None
+        return PromotionOutcome(None, False)
     if not result:
-        return None
+        return PromotionOutcome(None, False)
 
     subtask_id = str(result)
 
@@ -195,7 +228,7 @@ def promote_todo_to_subtask(
             "run_id": run_id,
         },
     )
-    return subtask_id
+    return PromotionOutcome(subtask_id, True)
 
 
 def promote_unfinished_items(
@@ -213,9 +246,12 @@ def promote_unfinished_items(
       2. Manifest opt-out: needs both ``todo_list_enabled`` AND ``task_protocol``.
       3. Cycle guard: parent already carries the ``promoted_todo`` tag.
 
-    Then walks the items, skipping ``completed`` ones, capping at
-    ``MAX_PROMOTIONS_PER_RUN``. Per-item failures are logged and skipped —
-    one bad item never blocks the others.
+    Then walks the items, skipping ``completed`` ones, and stops after
+    ``MAX_PROMOTIONS_PER_RUN`` *new* subtasks are created. Idempotent hits
+    (items already promoted on a prior run) are still returned but do not
+    consume the cap, so a parent with more unfinished items than the cap
+    keeps making forward progress on subsequent runs. Per-item failures are
+    logged and skipped — one bad item never blocks the others.
     """
     if os.environ.get("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "0") != "1":
         logger.debug(
@@ -256,8 +292,9 @@ def promote_unfinished_items(
         return []
 
     created: list[str] = []
+    new_count = 0
     for item in items:
-        if len(created) >= MAX_PROMOTIONS_PER_RUN:
+        if new_count >= MAX_PROMOTIONS_PER_RUN:
             logger.debug(
                 "todo_promotion.skipped parent=%s reason=cap_exceeded",
                 parent.get("id"),
@@ -271,7 +308,7 @@ def promote_unfinished_items(
         if getattr(item, "status", "") == "completed":
             continue
         try:
-            subtask_id = promote_todo_to_subtask(
+            outcome = promote_todo_to_subtask(
                 parent=parent,
                 item=item,
                 agent_id=agent_id,
@@ -281,6 +318,8 @@ def promote_unfinished_items(
         except Exception as e:  # noqa: BLE001
             logger.warning("todo_promotion: per-item failure (continuing): %s", e)
             continue
-        if subtask_id:
-            created.append(subtask_id)
+        if outcome.subtask_id:
+            created.append(outcome.subtask_id)
+            if outcome.created:
+                new_count += 1
     return created

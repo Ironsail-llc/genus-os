@@ -929,6 +929,17 @@ def _check_subtask_completion(cur: Any, task_id: str) -> str | None:
     return None
 
 
+def build_dedup_marker(key_name: str, key_value: str) -> str:
+    """Canonical body marker for dedup lookups: ``"<key>: <value>"``.
+
+    Single source of truth shared by writers (which embed the marker in a
+    task body) and ``find_task_by_dedup_key`` (which searches for it via
+    ``LIKE``). Deriving both sides from this helper guarantees the embedded
+    marker and the search pattern can never drift apart.
+    """
+    return f"{key_name}: {key_value}"
+
+
 def find_task_by_dedup_key(
     key_name: str,
     key_value: str,
@@ -938,7 +949,8 @@ def find_task_by_dedup_key(
 ) -> dict[str, Any] | None:
     """Find a task containing a dedup key pattern in its body.
 
-    Searches for pattern '{key_name}: {key_value}' in task body.
+    Searches for the marker built by :func:`build_dedup_marker`
+    (``"{key_name}: {key_value}"``) in the task body.
     When include_recently_resolved=True (default), also matches tasks resolved
     within the last 72 hours to prevent recreation of resolved tasks.
     When assigned_to_agent is provided, only matches tasks assigned to that agent.
@@ -950,7 +962,7 @@ def find_task_by_dedup_key(
         else:
             resolved_clause = "resolved_at IS NULL"
         agent_clause = ""
-        params: list[Any] = [f"%{key_name}: {key_value}%"]
+        params: list[Any] = [f"%{build_dedup_marker(key_name, key_value)}%"]
         if assigned_to_agent:
             agent_clause = "AND assigned_to_agent = %s"
             params.append(assigned_to_agent)

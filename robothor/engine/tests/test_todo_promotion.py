@@ -17,7 +17,6 @@ idempotency, and a one-level tag-based cycle guard.
 from __future__ import annotations
 
 import hashlib
-import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -112,10 +111,13 @@ class TestPromoteTodoToSubtask:
 
     @patch("robothor.engine.todo_promotion.dal")
     def test_creates_subtask_with_hash_in_body(self, mock_dal):
+        from robothor.crm.dal import build_dedup_marker
         from robothor.engine.todo_promotion import promote_todo_to_subtask
 
         mock_dal.find_task_by_dedup_key.return_value = None
         mock_dal.create_task.return_value = "subtask-1"
+        # Body marker is built via dal.build_dedup_marker — keep it real.
+        mock_dal.build_dedup_marker.side_effect = build_dedup_marker
 
         promote_todo_to_subtask(
             parent=_make_parent(),
@@ -180,7 +182,8 @@ class TestPromoteTodoToSubtask:
             tenant_id="default",
         )
 
-        assert result == "existing-sub"
+        assert result.subtask_id == "existing-sub"
+        assert result.created is False
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
@@ -222,7 +225,7 @@ class TestPromoteTodoToSubtask:
             tenant_id="default",
         )
 
-        assert result is None
+        assert result.subtask_id is None
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
@@ -241,104 +244,143 @@ class TestPromoteTodoToSubtask:
             tenant_id="default",
         )
 
-        assert result is None
+        assert result.subtask_id is None
+
+    @patch("robothor.engine.todo_promotion.dal")
+    def test_per_item_promotion_respects_cycle_guard(self, mock_dal):
+        """Called directly on a `promoted_todo` parent, it self-skips — the
+        cycle guard isn't only enforced by the batch entry point."""
+        from robothor.engine.todo_promotion import promote_todo_to_subtask
+
+        result = promote_todo_to_subtask(
+            parent=_make_parent(tags=["thread", "promoted_todo"]),
+            item=_make_item("x"),
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
+
+        assert result.subtask_id is None
+        assert result.created is False
+        mock_dal.create_task.assert_not_called()
+
+    @patch("robothor.engine.todo_promotion.dal")
+    def test_body_marker_matches_dedup_search(self, mock_dal):
+        """The body marker must be exactly the substring find_task_by_dedup_key
+        searches for, or idempotency silently breaks. Both sides derive it from
+        dal.build_dedup_marker — assert the written body embeds that marker."""
+        from robothor.crm.dal import build_dedup_marker
+        from robothor.engine.todo_promotion import (
+            _DEDUP_KEY_NAME,
+            compute_item_hash,
+            promote_todo_to_subtask,
+        )
+
+        mock_dal.find_task_by_dedup_key.return_value = None
+        mock_dal.create_task.return_value = "subtask-x"
+        # The module builds the marker via dal.build_dedup_marker — keep the
+        # real implementation rather than a MagicMock so the body is realistic.
+        mock_dal.build_dedup_marker.side_effect = build_dedup_marker
+
+        promote_todo_to_subtask(
+            parent=_make_parent(task_id="parent-9"),
+            item=_make_item("Email April for the quote"),
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
+
+        content_hash = compute_item_hash("parent-9", "Email April for the quote")
+        expected_marker = build_dedup_marker(_DEDUP_KEY_NAME, content_hash)
+        body = mock_dal.create_task.call_args.kwargs["body"]
+        assert expected_marker in body
+        # _find_existing must search for that same key name.
+        assert mock_dal.find_task_by_dedup_key.call_args.kwargs["key_name"] == _DEDUP_KEY_NAME
 
 
 class TestPromoteAllForRun:
     """The runner-facing entry point: promote a batch of items with caps + guards."""
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_disabled_when_env_off(self, mock_dal):
+    def test_promote_disabled_when_env_off(self, mock_dal, monkeypatch):
         from robothor.engine.todo_promotion import promote_unfinished_items
 
         agent_config = MagicMock(todo_list_enabled=True, task_protocol=True)
         items = [_make_item("a"), _make_item("b")]
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "0"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=items,
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "0")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=items,
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         assert created == []
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_disabled_when_manifest_opt_out(self, mock_dal):
+    def test_promote_disabled_when_manifest_opt_out(self, mock_dal, monkeypatch):
         from robothor.engine.todo_promotion import promote_unfinished_items
 
         agent_config = MagicMock(todo_list_enabled=False, task_protocol=True)
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=[_make_item("x")],
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=[_make_item("x")],
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         assert created == []
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_disabled_when_task_protocol_false(self, mock_dal):
+    def test_promote_disabled_when_task_protocol_false(self, mock_dal, monkeypatch):
         from robothor.engine.todo_promotion import promote_unfinished_items
 
         agent_config = MagicMock(todo_list_enabled=True, task_protocol=False)
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=[_make_item("x")],
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=[_make_item("x")],
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         assert created == []
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_skipped_on_promoted_parent_cycle_guard(self, mock_dal):
+    def test_promote_skipped_on_promoted_parent_cycle_guard(self, mock_dal, monkeypatch):
         from robothor.engine.todo_promotion import promote_unfinished_items
 
         agent_config = MagicMock(todo_list_enabled=True, task_protocol=True)
         parent = _make_parent(tags=["thread", "promoted_todo"])
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=parent,
-                items=[_make_item("x")],
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=parent,
+            items=[_make_item("x")],
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         assert created == []
         mock_dal.create_task.assert_not_called()
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_strips_completed_items(self, mock_dal):
+    def test_promote_strips_completed_items(self, mock_dal, monkeypatch):
         from robothor.engine.todo_promotion import promote_unfinished_items
 
         mock_dal.find_task_by_dedup_key.return_value = None
@@ -351,25 +393,22 @@ class TestPromoteAllForRun:
             _make_item("b", status="in_progress"),
         ]
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=items,
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=items,
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         # Only the two non-completed items become subtasks
         assert len(created) == 2
         assert mock_dal.create_task.call_count == 2
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_caps_at_max_per_run(self, mock_dal):
+    def test_promote_caps_at_max_per_run(self, mock_dal, monkeypatch):
         """Don't spam a parent with 20 subtasks per run."""
         from robothor.engine.todo_promotion import MAX_PROMOTIONS_PER_RUN, promote_unfinished_items
 
@@ -380,24 +419,51 @@ class TestPromoteAllForRun:
         # Construct twice the cap of items.
         items = [_make_item(f"item-{i}") for i in range(MAX_PROMOTIONS_PER_RUN * 2)]
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=items,
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=items,
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         assert len(created) == MAX_PROMOTIONS_PER_RUN
         assert mock_dal.create_task.call_count == MAX_PROMOTIONS_PER_RUN
 
     @patch("robothor.engine.todo_promotion.dal")
-    def test_promote_continues_on_per_item_failure(self, mock_dal):
+    def test_promote_makes_progress_past_already_promoted(self, mock_dal, monkeypatch):
+        """Idempotent hits don't consume the per-run cap, so a fresh item beyond
+        a cap's worth of already-promoted items still gets created instead of
+        being stranded forever."""
+        from robothor.engine.todo_promotion import MAX_PROMOTIONS_PER_RUN, promote_unfinished_items
+
+        # First MAX items already have subtasks (idempotent hits); the next is new.
+        existing = [{"id": f"old-{i}", "status": "TODO"} for i in range(MAX_PROMOTIONS_PER_RUN)]
+        mock_dal.find_task_by_dedup_key.side_effect = existing + [None]
+        mock_dal.create_task.return_value = "sub-new"
+
+        agent_config = MagicMock(todo_list_enabled=True, task_protocol=True)
+        items = [_make_item(f"item-{i}") for i in range(MAX_PROMOTIONS_PER_RUN + 1)]
+
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=items,
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
+
+        # All MAX idempotent ids PLUS the one newly created — the cap didn't
+        # break early on the idempotent hits.
+        assert created == [f"old-{i}" for i in range(MAX_PROMOTIONS_PER_RUN)] + ["sub-new"]
+        assert mock_dal.create_task.call_count == 1
+
+    @patch("robothor.engine.todo_promotion.dal")
+    def test_promote_continues_on_per_item_failure(self, mock_dal, monkeypatch):
         """One bad subtask creation shouldn't block the others."""
         from robothor.engine.todo_promotion import promote_unfinished_items
 
@@ -409,18 +475,15 @@ class TestPromoteAllForRun:
 
         agent_config = MagicMock(todo_list_enabled=True, task_protocol=True)
 
-        os.environ["ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED"] = "1"
-        try:
-            created = promote_unfinished_items(
-                parent=_make_parent(),
-                items=[_make_item("a"), _make_item("b")],
-                agent_config=agent_config,
-                agent_id="worker",
-                run_id="run-1",
-                tenant_id="default",
-            )
-        finally:
-            os.environ.pop("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", None)
+        monkeypatch.setenv("ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED", "1")
+        created = promote_unfinished_items(
+            parent=_make_parent(),
+            items=[_make_item("a"), _make_item("b")],
+            agent_config=agent_config,
+            agent_id="worker",
+            run_id="run-1",
+            tenant_id="default",
+        )
 
         # Only the second item succeeded; the first returned error
         assert created == ["sub-b"]
