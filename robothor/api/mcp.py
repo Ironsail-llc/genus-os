@@ -1263,6 +1263,16 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             parent_task_id=arguments.get("parentTaskId"),
             requires_human=arguments.get("requiresHuman", False),
         )
+        # Phase-1 contract: create_task returns {"error": reason} on
+        # validation failure (e.g. malformed autonomy_budget). The dict is
+        # truthy, so a bare `if task_id:` would wrap it as a success
+        # response: {"id": {"error": ...}, "title": "..."}. The MCP tool
+        # doesn't pass autonomy_budget today, so this branch is currently
+        # unreachable — fix proactively so the next contributor who wires
+        # the param doesn't walk into the bridge POST bug we just fixed
+        # (mirror of crm/bridge/routers/notes_tasks.py).
+        if isinstance(task_id, dict) and "error" in task_id:
+            return task_id
         return (
             {"id": task_id, "title": arguments.get("title", "")}
             if task_id

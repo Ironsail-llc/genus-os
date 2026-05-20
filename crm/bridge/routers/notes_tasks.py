@@ -161,6 +161,13 @@ async def api_create_task(
         autonomy_budget=body.autonomyBudget,
         tenant_id=tenant_id,
     )
+    # Phase-1 contract: create_task returns {"error": reason} on validation
+    # failure (e.g. malformed autonomy_budget). The dict is truthy, so a bare
+    # `if task_id:` would publish a bogus task.created event with
+    # task_id={"error":...} and return HTTP 200 with a corrupted body.
+    # Mirror the PATCH handler's 422 guard before the success branch.
+    if isinstance(task_id, dict) and "error" in task_id:
+        return JSONResponse(task_id, status_code=422)
     if task_id:
         publish(
             "agent",

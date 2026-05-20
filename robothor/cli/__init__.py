@@ -354,6 +354,22 @@ def main(argv: list[str] | None = None) -> int:
     costs_parser = subparsers.add_parser("costs", help="Show cost breakdown")
     costs_parser.add_argument("--hours", type=int, default=24, help="Lookback hours")
 
+    # codex -- subscription-backed provider auth/status
+    codex_parser = subparsers.add_parser("codex", help="Manage Codex subscription provider")
+    codex_sub = codex_parser.add_subparsers(dest="codex_command")
+    codex_login = codex_sub.add_parser("login", help="Log in to Codex with ChatGPT")
+    codex_login.add_argument(
+        "--with-access-token",
+        action="store_true",
+        help="Read CODEX_ACCESS_TOKEN from stdin via codex login",
+    )
+    codex_sub.add_parser("status", help="Show Codex login status")
+    codex_sub.add_parser("doctor", help="Validate ChatGPT subscription auth for codex/* models")
+    codex_test = codex_sub.add_parser("test", help="Run a small codex/* provider call")
+    codex_test.add_argument("prompt", nargs="?", default="Reply with: codex provider ok")
+    codex_test.add_argument("--model", default="codex/gpt-5.5")
+    codex_test.add_argument("--timeout", type=int, default=120)
+
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
@@ -462,6 +478,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.engine import cmd_costs
 
         return cmd_costs(args)
+    if args.command == "codex":
+        from robothor.cli.codex import cmd_codex
+
+        return cmd_codex(args)
     if args.command == "engine":
         from robothor.cli.engine import cmd_engine
 
