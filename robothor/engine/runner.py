@@ -450,8 +450,8 @@ def _escalate_unfinished_todos(
         if not (parent.get("objective") or "").strip():
             update_kwargs["objective"] = parent.get("title") or ""
         dal.update_task(**update_kwargs)
-        # Refresh local view so promotion sees the new tag set + objective.
-        existing_tags = new_tags
+        # Refresh the local parent dict so the promotion step below sees the
+        # freshly added `thread` tag.
         parent["tags"] = new_tags
 
     # Phase 3 — promote unfinished items to real subtasks (best-effort).
