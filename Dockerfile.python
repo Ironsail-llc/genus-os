@@ -44,9 +44,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Lock files first — dep layer caches across source-only changes.
 COPY pyproject.toml uv.lock README.md ./
 
+# `uv sync --no-install-project` installs ONLY the extras' transitive deps,
+# not the project's `[project.dependencies]` block (the project itself is
+# what depends on them, and we skipped its install). Use `uv export` to
+# render the full pinned set, then install via `uv pip install -r`. This
+# gives us all deps without needing project source at this stage.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv "$VIRTUAL_ENV" \
-    && uv sync --frozen --no-install-project --extra api --extra federation
+    && uv export \
+        --frozen \
+        --no-emit-project \
+        --no-hashes \
+        --extra api --extra federation \
+        > /tmp/requirements.txt \
+    && uv pip install -r /tmp/requirements.txt
 
 # Bridge has its own requirements file. Install into the same venv.
 COPY crm/bridge/requirements.txt /tmp/bridge-requirements.txt
