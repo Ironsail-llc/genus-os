@@ -1,0 +1,5 @@
+# Layer 2 — image tag for the production environment.
+# Bumped by semantic-release via @semantic-release/exec → scripts/update-helm-values.sh.
+
+global:
+  imageTag: "v0.0.0"

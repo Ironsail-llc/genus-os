@@ -1,0 +1,86 @@
+{{- if .Values.dashboard.enabled -}}
+{{- $cv := .Values.dashboard -}}
+{{- $fullName := printf "%s-dashboard" (include "genus-os.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  {{- if not $cv.autoscaling.enabled }}
+  replicas: {{ $cv.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "dashboard") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "genus-os.labels" (dict "root" . "component" "dashboard") | nindent 8 }}
+        {{- with .Values.global.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ .Values.global.imageTag | sha256sum }}
+        {{- with .Values.global.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "dashboard") }}
+      {{- if $ns | trim }}
+      nodeSelector:
+        {{- $ns | nindent 8 }}
+      {{- end }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "dashboard") }}
+      {{- if $tols | trim }}
+      tolerations:
+        {{- $tols | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dashboard
+          image: {{ include "genus-os.image" (dict "root" . "component" "dashboard") }}
+          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" . "component" "dashboard") }}
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $cv.service.port }}
+              protocol: TCP
+          env:
+            - name: NEXT_PUBLIC_BRIDGE_URL
+              value: "http://{{ include "genus-os.fullname" . }}-bridge:{{ .Values.bridge.service.port }}"
+            - name: NEXT_PUBLIC_ORCHESTRATOR_URL
+              value: "http://{{ include "genus-os.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}"
+            - name: NEXT_PUBLIC_ENGINE_URL
+              value: "http://{{ include "genus-os.fullname" . }}-engine:{{ .Values.engine.service.port }}"
+            - name: PORT
+              value: {{ $cv.service.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            {{- range $k, $v := $cv.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- $liveness := include "genus-os.httpProbe" (dict "root" . "component" "dashboard" "probe" "liveness" "port" "http") }}
+          {{- if $liveness | trim }}
+          livenessProbe:
+            {{- $liveness | nindent 12 }}
+          {{- end }}
+          {{- $readiness := include "genus-os.httpProbe" (dict "root" . "component" "dashboard" "probe" "readiness" "port" "http") }}
+          {{- if $readiness | trim }}
+          readinessProbe:
+            {{- $readiness | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $cv.resources | nindent 12 }}
+{{- end }}

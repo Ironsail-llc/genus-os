@@ -1,0 +1,18 @@
+{{- if .Values.postgres.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "genus-os.fullname" . }}-postgres
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None  # headless — StatefulSet stable identity
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "genus-os.selectorLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+{{- end }}

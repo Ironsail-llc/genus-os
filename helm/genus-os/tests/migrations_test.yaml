@@ -1,0 +1,32 @@
+suite: migrations job
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: migrations Job carries Helm hook annotations
+    template: migrations/job.yaml
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: waits for postgres when postgres.enabled
+    template: migrations/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-postgres
+
+  - it: no init container when postgres disabled
+    template: migrations/job.yaml
+    set:
+      postgres.enabled: false
+      redisInCluster.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers

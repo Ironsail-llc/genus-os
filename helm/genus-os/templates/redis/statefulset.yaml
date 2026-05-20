@@ -1,0 +1,89 @@
+{{- if .Values.redisInCluster.enabled -}}
+{{- $fullName := printf "%s-redis" (include "genus-os.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "redis") | nindent 4 }}
+spec:
+  serviceName: {{ $fullName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "genus-os.labels" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 999
+        runAsNonRoot: true
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "redis") }}
+      {{- if $ns | trim }}
+      nodeSelector:
+        {{- $ns | nindent 8 }}
+      {{- end }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "redis") }}
+      {{- if $tols | trim }}
+      tolerations:
+        {{- $tols | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: "{{ .Values.redisInCluster.image.repository }}:{{ .Values.redisInCluster.image.tag }}"
+          imagePullPolicy: {{ .Values.redisInCluster.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - redis-server
+            - --maxmemory
+            - {{ .Values.redisInCluster.maxmemory | quote }}
+            - --maxmemory-policy
+            - {{ .Values.redisInCluster.maxmemoryPolicy }}
+            - --appendonly
+            - "yes"
+            - --dir
+            - /data
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.redisInCluster.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "genus-os.labels" (dict "root" . "component" "redis") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.redisInCluster.storage.accessModes | nindent 10 }}
+        {{- with .Values.redisInCluster.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redisInCluster.storage.size }}
+{{- end }}

@@ -1,0 +1,13 @@
+# Layer 2 — image tag for the staging environment only.
+# Everything else (ingress hosts, vault paths, replica counts, resource
+# limits) lives in the infra repo:
+#   aws-infrastucture/argocd/ironsail-staging-genus-os/values.yaml
+#
+# This file is mutated by CI:
+#   - On `deploy-staging` label: deployed-PR-N-sha-<short>
+#   - On PR close / unlabel: reset to latest released vX.Y.Z
+
+global:
+  imageTag: "sha-replace-me"
+  deployedFromPR: ""
+  deployedAt: ""

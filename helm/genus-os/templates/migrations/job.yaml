@@ -1,0 +1,64 @@
+{{- if .Values.migrations.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "genus-os.fullname" . }}-migrate-{{ .Values.global.imageTag | sha256sum | trunc 8 }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "migrations") }}
+      {{- if $ns | trim }}
+      nodeSelector:
+        {{- $ns | nindent 8 }}
+      {{- end }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "migrations") }}
+      {{- if $tols | trim }}
+      tolerations:
+        {{- $tols | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.postgres.enabled .Values.redisInCluster.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "genus-os.postgresHost" . }} -p {{ .Values.database.port }} -U {{ .Values.database.user }}; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "genus-os.image" (dict "root" . "component" "migrations") }}
+          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" . "component" "migrations") }}
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          command:
+            {{- toYaml .Values.migrations.command | nindent 12 }}
+          env:
+            {{- include "genus-os.commonEnv" . | nindent 12 }}
+          envFrom:
+            {{- include "genus-os.envFromSecret" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+{{- end }}

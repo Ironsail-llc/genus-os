@@ -1,0 +1,373 @@
+# Genus OS — default values.
+#
+# Three-layer override pattern (per aws-infrastucture CLAUDE.md):
+#   1. values.yaml                                — chart defaults (this file)
+#   2. helm/genus-os/values-<env>.yaml             — image tag, bumped by CI
+#   3. argocd/ironsail-<env>-genus-os/values.yaml  — env config (in infra repo)
+#
+# Anything that should be the same across all envs lives here. Anything
+# env-specific (ingress hosts, vault paths, replica counts, resource limits)
+# goes in layer 3 in the infra repo.
+
+global:
+  # Image tag applied to every component. Bumped by semantic-release (prod)
+  # or by the staging-deploy workflow (per-PR builds).
+  imageTag: "sha-replace-me"
+
+  # Image registry. Single GHCR org, two image names beneath it.
+  registry: ghcr.io/ironsail-llc/genus-os
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # Pod-level metadata applied to every workload.
+  podAnnotations: {}
+  podLabels: {}
+
+  # Default node placement. Genus OS pods land on the dedicated NodePool
+  # (Karpenter manifest in aws-infrastucture/argocd/karpenter/manifests/).
+  nodeSelector: {}
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: genus-os
+      effect: NoSchedule
+  affinity: {}
+
+  # Set on every container; per-service blocks may override.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false  # robothor writes scratch + logs to disk
+    capabilities:
+      drop: ["ALL"]
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Breadcrumbs written by the deploy workflow. Override at deploy-time.
+  deployedFromPR: ""
+  deployedAt: ""
+
+# ─── Database ────────────────────────────────────────────────────────────────
+# Connection settings for every Python service.
+database:
+  # When postgres.enabled, host defaults to the in-cluster service name.
+  # Override at layer 3 when pointing at RDS.
+  host: ""           # empty → computed from release name when postgres.enabled
+  port: 5432
+  name: robothor_memory
+  user: robothor
+  sslMode: prefer
+  # Password sourced from the external secret (see externalSecrets below).
+
+redis:
+  enabled: true
+  host: ""           # empty → computed from release name when enabled
+  port: 6379
+  # Optional password; sourced from external secret when set non-empty.
+
+# ─── External Secrets ────────────────────────────────────────────────────────
+# An ExternalSecret object references a SecretStore (managed at the cluster
+# level — same one the other ironsail apps use). The materialized Kubernetes
+# Secret is then mounted as env vars on each Deployment.
+externalSecrets:
+  enabled: true
+  refreshInterval: 1h
+  # SecretStore reference — overridden in layer 3 per env.
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  # Vault path containing all genus-os credentials.
+  # Override in layer 3 to `secret/data/genus-os/<env>`.
+  remoteRef: secret/data/genus-os/staging
+  # Mapping from Vault key → env var name. Used to assemble container env.
+  # Every Python service receives all of these; only what's referenced is used.
+  keys:
+    - vaultKey: db_password
+      envVar: ROBOTHOR_DB_PASSWORD
+    - vaultKey: redis_password
+      envVar: ROBOTHOR_REDIS_PASSWORD
+    - vaultKey: anthropic_api_key
+      envVar: ANTHROPIC_API_KEY
+    - vaultKey: openrouter_api_key
+      envVar: OPENROUTER_API_KEY
+    - vaultKey: openai_api_key
+      envVar: OPENAI_API_KEY
+    - vaultKey: gemini_api_key
+      envVar: GEMINI_API_KEY
+    - vaultKey: telegram_bot_token
+      envVar: ROBOTHOR_TELEGRAM_BOT_TOKEN
+    - vaultKey: jira_token
+      envVar: JIRA_TOKEN
+
+# ─── Engine (the agent runner) ───────────────────────────────────────────────
+engine:
+  enabled: true
+  replicaCount: 1   # single-writer for now; scale-out is a future concern
+  image:
+    repository: python
+    pullPolicy: ""
+  command: ["python", "-m", "robothor.engine.daemon"]
+  service:
+    port: 18800
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 5
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
+bridge:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: python
+  command: ["python", "bridge_service.py"]
+  workingDir: /app/crm/bridge
+  service:
+    port: 9100
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 5
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ─── Orchestrator (RAG/semantic-search HTTP API) ─────────────────────────────
+orchestrator:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: python
+  command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
+  service:
+    port: 9099
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 30
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ─── Dashboard (The Helm — Next.js 16) ───────────────────────────────────────
+dashboard:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: app
+  service:
+    port: 3000
+    annotations: {}
+  ingress:
+    # Default off — layer 3 (infra repo) flips this on and provides the host.
+    enabled: false
+    className: traefik-public
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /api/health
+      initialDelaySeconds: 20
+    readiness:
+      enabled: true
+      path: /api/health
+      initialDelaySeconds: 5
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# ─── NATS (federation transport) — disabled by default ───────────────────────
+nats:
+  enabled: false
+  image:
+    repository: nats
+    tag: "2.10-alpine"
+    pullPolicy: IfNotPresent
+  clientPort: 4222
+  leafPort: 7422
+  monitorPort: 8222
+  jetstream:
+    enabled: true
+    storage: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ─── In-cluster PostgreSQL (no Bitnami, no operator) ─────────────────────────
+# Plain StatefulSet + headless Service using the official pgvector image,
+# matching what infra/docker-compose.yml uses today. Disable for cloud env
+# and point database.host at RDS instead.
+postgres:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    tag: "pg16"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  storage:
+    size: 20Gi
+    storageClassName: ""   # cluster default
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  # Initial schema/extension setup happens via the migrations Job below.
+
+# ─── In-cluster Redis (no Bitnami) ───────────────────────────────────────────
+redisInCluster:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+  maxmemory: 2gb
+  maxmemoryPolicy: allkeys-lru
+  storage:
+    size: 5Gi
+    storageClassName: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+
+# ─── Migrations (run as Helm pre-install / pre-upgrade hook) ─────────────────
+migrations:
+  enabled: true
+  image:
+    repository: python
+  command: ["python", "-m", "robothor.cli", "migrate"]
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ─── Service accounts ────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations: {}
+  # If you need IRSA for AWS resource access, set this in layer 3:
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/genus-os-staging
+
+# ─── Network policy ──────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false   # opt-in per env; enable in production
+  # Cilium is the CNI; standard NetworkPolicies work.

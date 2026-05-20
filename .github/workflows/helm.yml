@@ -1,0 +1,129 @@
+name: Helm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'helm/**'
+      - '.github/workflows/helm.yml'
+  pull_request:
+    paths:
+      - 'helm/**'
+      - '.github/workflows/helm.yml'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  lint-and-test:
+    name: Lint, unit-test, kubeconform, kube-linter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
+
+      - name: helm lint
+        run: |
+          helm lint helm/genus-os \
+            --strict \
+            --values helm/genus-os/values.yaml
+
+      - name: helm lint (staging values)
+        run: |
+          helm lint helm/genus-os \
+            --strict \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-staging.yaml
+
+      - name: helm lint (production values)
+        run: |
+          helm lint helm/genus-os \
+            --strict \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml
+
+      - name: helm lint (local values)
+        run: |
+          helm lint helm/genus-os \
+            --strict \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-local.yaml
+
+      - name: helm unittest
+        run: |
+          helm unittest helm/genus-os \
+            --color \
+            --strict
+
+      - name: Render templates for downstream validators
+        run: |
+          mkdir -p _rendered
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-staging.yaml \
+            --set dashboard.ingress.host=genus-os.staging.ironsail.ai \
+            > _rendered/staging.yaml
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            --set dashboard.ingress.host=genus-os.ironsail.ai \
+            > _rendered/production.yaml
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-local.yaml \
+            > _rendered/local.yaml
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kc.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kc.tar.gz -C /usr/local/bin kubeconform
+
+      - name: kubeconform (k8s schema validation)
+        run: |
+          for f in _rendered/*.yaml; do
+            echo "→ $f"
+            # ExternalSecret CRD is provided via schema-location below.
+            kubeconform \
+              -strict \
+              -summary \
+              -verbose \
+              -kubernetes-version 1.31.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json' \
+              "$f"
+          done
+
+      - name: Install kube-linter
+        run: |
+          curl -sSL -o /tmp/kl.tar.gz \
+            https://github.com/stackrox/kube-linter/releases/download/v0.7.2/kube-linter-linux.tar.gz
+          tar -xzf /tmp/kl.tar.gz -C /usr/local/bin kube-linter
+
+      - name: kube-linter (best practices)
+        run: |
+          # Non-blocking initially — surfaces warnings but doesn't fail CI.
+          # Flip exit-code to 1 once the baseline is clean.
+          for f in _rendered/*.yaml; do
+            echo "→ $f"
+            kube-linter lint "$f" || true
+          done
+
+      - name: Upload rendered manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-manifests
+          path: _rendered/
+          retention-days: 14

@@ -1,0 +1,63 @@
+# Layer 2 — minikube / kind / Docker Desktop overrides.
+# - Pulls images by `:dev` tag (run `docker build … -t ghcr.io/…/python:dev …` first)
+# - Enables in-cluster Postgres + Redis with smaller volumes
+# - Drops the dedicated NodePool toleration so pods schedule anywhere
+# - Disables ExternalSecrets — secrets come from a hand-rolled K8s Secret
+
+global:
+  imageTag: "dev"
+  tolerations: []
+
+externalSecrets:
+  enabled: false   # provide ${RELEASE}-credentials Secret out-of-band
+
+postgres:
+  enabled: true
+  storage:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+redisInCluster:
+  enabled: true
+  storage:
+    size: 1Gi
+
+engine:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  podDisruptionBudget:
+    enabled: false
+
+bridge:
+  replicaCount: 1
+  podDisruptionBudget:
+    enabled: false
+
+orchestrator:
+  replicaCount: 1
+  podDisruptionBudget:
+    enabled: false
+
+dashboard:
+  replicaCount: 1
+  podDisruptionBudget:
+    enabled: false
+  ingress:
+    enabled: true
+    className: traefik-public
+    host: genus-os.localtest.me
+
+migrations:
+  enabled: true

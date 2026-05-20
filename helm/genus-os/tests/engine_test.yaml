@@ -1,0 +1,138 @@
+suite: engine workload
+templates:
+  - engine/workload.yaml
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: renders by default
+    asserts:
+      - hasDocuments:
+          count: 2  # Deployment + Service
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - isKind:
+          of: Service
+        documentIndex: 1
+
+  - it: image resolves from registry + global tag + repository
+    set:
+      global.imageTag: v1.2.3
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/ironsail-llc/genus-os/python:v1.2.3
+        documentIndex: 0
+
+  - it: per-component image repository overrides
+    set:
+      engine.image.repository: custom-python
+      global.imageTag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/ironsail-llc/genus-os/custom-python:v9.9.9
+        documentIndex: 0
+
+  - it: skips rendering when disabled
+    set:
+      engine.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: applies engine resources
+    set:
+      engine.resources.requests.cpu: 600m
+      engine.resources.limits.memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 600m
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 8Gi
+        documentIndex: 0
+
+  - it: liveness + readiness probes point at /health
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health
+        documentIndex: 0
+
+  - it: service port matches container port
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 18800
+        documentIndex: 1
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 18800
+        documentIndex: 0
+
+  - it: receives common DB env from values
+    set:
+      database.user: gos_user
+      database.name: gos_db
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_USER
+            value: gos_user
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_NAME
+            value: gos_db
+        documentIndex: 0
+
+  - it: uses in-cluster Postgres host when database.host is empty
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: gos-genus-os-postgres
+        documentIndex: 0
+
+  - it: uses explicit database.host when postgres disabled
+    set:
+      postgres.enabled: false
+      database.host: rds.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: rds.example.com
+        documentIndex: 0
+
+  - it: envFrom references credentials secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-credentials
+        documentIndex: 0
+
+  - it: tolerates the genus-os taint by default
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: workload
+            operator: Equal
+            value: genus-os
+            effect: NoSchedule
+        documentIndex: 0

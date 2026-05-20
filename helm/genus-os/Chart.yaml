@@ -1,0 +1,21 @@
+apiVersion: v2
+name: genus-os
+description: Genus OS — agent engine, bridge, orchestrator, the Helm dashboard, optional NATS, and toggleable in-cluster PostgreSQL + Redis.
+type: application
+# The chart version is bumped by semantic-release via @semantic-release/exec
+# on each main release; appVersion follows the same value.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
+home: https://github.com/Ironsail-llc/genus-os
+sources:
+  - https://github.com/Ironsail-llc/genus-os
+maintainers:
+  - name: Ironsail Platform
+    email: platform@ironsail.ai
+keywords:
+  - agent-engine
+  - genus-os
+  - ironsail
+annotations:
+  category: AIPlatform

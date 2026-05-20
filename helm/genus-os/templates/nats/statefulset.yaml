@@ -1,0 +1,76 @@
+{{- if .Values.nats.enabled -}}
+{{- $fullName := printf "%s-nats" (include "genus-os.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "nats") | nindent 4 }}
+spec:
+  serviceName: {{ $fullName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "nats") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "genus-os.labels" (dict "root" . "component" "nats") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "nats") }}
+      {{- if $ns | trim }}
+      nodeSelector:
+        {{- $ns | nindent 8 }}
+      {{- end }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "nats") }}
+      {{- if $tols | trim }}
+      tolerations:
+        {{- $tols | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nats
+          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          imagePullPolicy: {{ .Values.nats.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          args:
+            - -js
+            - --store_dir=/data
+            - --port={{ .Values.nats.clientPort }}
+            - --http_port={{ .Values.nats.monitorPort }}
+          ports:
+            - name: client
+              containerPort: {{ .Values.nats.clientPort }}
+            - name: leaf
+              containerPort: {{ .Values.nats.leafPort }}
+            - name: monitor
+              containerPort: {{ .Values.nats.monitorPort }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.nats.jetstream.storage }}
+{{- end }}

@@ -1,0 +1,183 @@
+{{/*
+Common helpers for the genus-os chart.
+
+Component templates pass their key as $.component (string), e.g. "engine".
+Most helpers resolve everything from that key + $.Values.<key>.* + $.Values.global.*.
+*/}}
+
+{{/* Chart name, sanitized to <=63 chars. */}}
+{{- define "genus-os.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Full release name. */}}
+{{- define "genus-os.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Per-component resource name: <fullname>-<component>. */}}
+{{- define "genus-os.componentName" -}}
+{{- printf "%s-%s" (include "genus-os.fullname" .root) .component | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Chart label. */}}
+{{- define "genus-os.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Common labels. Pass .root (the top dot) + .component (string). */}}
+{{- define "genus-os.labels" -}}
+helm.sh/chart: {{ include "genus-os.chart" .root }}
+app.kubernetes.io/name: {{ include "genus-os.name" .root }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .root.Release.Service }}
+app.kubernetes.io/component: {{ .component }}
+app.kubernetes.io/part-of: genus-os
+{{- end -}}
+
+{{/* Selector labels (subset of common labels — must be immutable). */}}
+{{- define "genus-os.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "genus-os.name" .root }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{/* ServiceAccount name. */}}
+{{- define "genus-os.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- include "genus-os.fullname" . -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Container image reference. Pass .root + .component + .imageKey (defaults
+to .component). Image repo is .Values.global.registry + "/" + repository.
+*/}}
+{{- define "genus-os.image" -}}
+{{- $component := .component -}}
+{{- $cv := index .root.Values $component -}}
+{{- $repo := default $component $cv.image.repository -}}
+{{- $registry := .root.Values.global.registry -}}
+{{- $tag := default .root.Values.global.imageTag $cv.image.tag -}}
+{{- printf "%s/%s:%s" $registry $repo $tag -}}
+{{- end -}}
+
+{{/* Image pull policy with fallback to global. */}}
+{{- define "genus-os.imagePullPolicy" -}}
+{{- $component := .component -}}
+{{- $cv := index .root.Values $component -}}
+{{- default .root.Values.global.imagePullPolicy $cv.image.pullPolicy -}}
+{{- end -}}
+
+{{/*
+Computed Postgres host. Empty database.host + postgres.enabled →
+in-cluster service name. Otherwise honor the explicit host.
+*/}}
+{{- define "genus-os.postgresHost" -}}
+{{- if and .Values.postgres.enabled (eq .Values.database.host "") -}}
+{{- printf "%s-postgres" (include "genus-os.fullname" .) -}}
+{{- else -}}
+{{- .Values.database.host -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Computed Redis host. */}}
+{{- define "genus-os.redisHost" -}}
+{{- if and .Values.redisInCluster.enabled (eq .Values.redis.host "") -}}
+{{- printf "%s-redis" (include "genus-os.fullname" .) -}}
+{{- else -}}
+{{- .Values.redis.host -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Shared environment variables for every Python service.
+Renders DB/Redis connection info plus deployment breadcrumbs.
+*/}}
+{{- define "genus-os.commonEnv" -}}
+- name: ROBOTHOR_DB_HOST
+  value: {{ include "genus-os.postgresHost" . | quote }}
+- name: ROBOTHOR_DB_PORT
+  value: {{ .Values.database.port | quote }}
+- name: ROBOTHOR_DB_NAME
+  value: {{ .Values.database.name | quote }}
+- name: ROBOTHOR_DB_USER
+  value: {{ .Values.database.user | quote }}
+- name: ROBOTHOR_DB_SSLMODE
+  value: {{ .Values.database.sslMode | quote }}
+- name: ROBOTHOR_REDIS_HOST
+  value: {{ include "genus-os.redisHost" . | quote }}
+- name: ROBOTHOR_REDIS_PORT
+  value: {{ .Values.redis.port | quote }}
+- name: GENUS_OS_DEPLOYED_FROM_PR
+  value: {{ .Values.global.deployedFromPR | quote }}
+- name: GENUS_OS_DEPLOYED_AT
+  value: {{ .Values.global.deployedAt | quote }}
+- name: GENUS_OS_IMAGE_TAG
+  value: {{ .Values.global.imageTag | quote }}
+{{- end -}}
+
+{{/*
+envFrom referencing the materialized ExternalSecret. Falls back to a
+plain Secret name if externalSecrets.enabled is false.
+*/}}
+{{- define "genus-os.envFromSecret" -}}
+- secretRef:
+    name: {{ include "genus-os.fullname" . }}-credentials
+{{- end -}}
+
+{{/* Merge globals + per-component nodeSelector. */}}
+{{- define "genus-os.nodeSelector" -}}
+{{- $component := .component -}}
+{{- $cv := index .root.Values $component -}}
+{{- $merged := merge (deepCopy ($cv.nodeSelector | default dict)) (.root.Values.global.nodeSelector | default dict) -}}
+{{- toYaml $merged -}}
+{{- end -}}
+
+{{/* Merge globals + per-component tolerations. */}}
+{{- define "genus-os.tolerations" -}}
+{{- $component := .component -}}
+{{- $cv := index .root.Values $component -}}
+{{- $cvTol := $cv.tolerations | default list -}}
+{{- $gTol := .root.Values.global.tolerations | default list -}}
+{{- $merged := concat $cvTol $gTol -}}
+{{- toYaml $merged -}}
+{{- end -}}
+
+{{/* Affinity with fallback to globals. */}}
+{{- define "genus-os.affinity" -}}
+{{- $component := .component -}}
+{{- $cv := index .root.Values $component -}}
+{{- $aff := $cv.affinity | default dict -}}
+{{- if not $aff -}}{{- $aff = .root.Values.global.affinity | default dict -}}{{- end -}}
+{{- toYaml $aff -}}
+{{- end -}}
+
+{{/* Probe rendering. Pass .root + .component + .probe (string: liveness|readiness) + .port. */}}
+{{- define "genus-os.httpProbe" -}}
+{{- $component := .component -}}
+{{- $probeName := .probe -}}
+{{- $cv := index .root.Values $component -}}
+{{- $cfg := index $cv.probes $probeName -}}
+{{- if $cfg.enabled }}
+httpGet:
+  path: {{ $cfg.path | quote }}
+  port: {{ .port }}
+initialDelaySeconds: {{ $cfg.initialDelaySeconds | default 0 }}
+periodSeconds: {{ $cfg.periodSeconds | default 10 }}
+timeoutSeconds: {{ $cfg.timeoutSeconds | default 1 }}
+failureThreshold: {{ $cfg.failureThreshold | default 3 }}
+{{- end -}}
+{{- end -}}

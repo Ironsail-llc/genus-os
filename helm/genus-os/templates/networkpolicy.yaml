@@ -1,0 +1,55 @@
+{{- if .Values.networkPolicy.enabled -}}
+# Default deny + explicit allow rules. Cilium honors standard NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-default-deny
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "shared") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: genus-os
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+---
+# Allow pod-to-pod traffic within the chart.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-allow-intra-chart
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "shared") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: genus-os
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: genus-os
+              app.kubernetes.io/instance: {{ .Release.Name }}
+---
+# Allow Traefik (public + private) to reach the dashboard and any
+# service with ingress.enabled. Namespace-selector style.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-allow-traefik
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "shared") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: genus-os
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+{{- end }}
