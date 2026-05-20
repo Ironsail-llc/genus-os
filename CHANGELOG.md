@@ -8,9 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Behavior change** — Forward thread planner (`thread_planner.py`) is now **on by default**. Previously gated by `ROBOTHOR_PLANNER_ENABLED=1`; from the task-system stabilization, the variable defaults to `"1"` and only `ROBOTHOR_PLANNER_ENABLED=0` disables it. Operators who want the old off-by-default behavior must set the env explicitly.
+- `crm_tasks.autonomy_budget` is now validated at write time via `robothor.engine.autonomy.validate_budget`. Malformed budgets (negative caps, unknown verdicts, extra top-level keys) cause `create_task` / `update_task` to return `{"error": reason}` instead of silently degrading the planner.
+- `approve_task` and `reject_task` now reset `crm_tasks.escalation_count` to 0 — operator engagement closes the escalation tally rather than letting it grow forever.
 - Rebranded project from "Robothor" to "Genus OS". Robothor remains the name of Philip's personal AI instance. Python package name (`robothor`), directory structure, env vars, and systemd services are unchanged.
 
 ### Added
+- `robothor.engine.autonomy.validate_budget(budget)` — pure validator for the JSONB `autonomy_budget` shape. Used by the CRM DAL.
+- `docs/TASK_HISTORY_KIND.md` — canonical enum of `crm_task_history.metadata.kind` values; backed by a `NOT VALID` CHECK constraint in migration 067 and a meta-test that fails CI on drift.
+- `crm/migrations/067_task_history_kind_schema.sql` — adds `question_resolved_at` / `question_resolved_by` columns on `crm_tasks` and the metadata-kind CHECK constraint on `crm_task_history`.
+- `scripts/audit_autonomy_budgets.py` — read-only diagnostic that flags pre-existing tasks whose `autonomy_budget` would fail the new validator. Run before promoting migration 067's constraint from `NOT VALID` to validated.
+- Prometheus metrics for the thread planner: `robothor_planner_actions_total{action,tenant}` and `robothor_planner_run_duration_seconds{tenant}`. See `docs/PLANNER_OBSERVABILITY.md`.
+- Structured log events `planner.run_complete` (INFO, per-beat) and `planner.action.refused` (WARNING, per refused plan). All instrumentation wrapped in `contextlib.suppress(Exception)` so observability never breaks the lifecycle.
 - Gateway unification — OpenClaw source as git subtree with `robothor gateway` CLI
 - Gateway manager package (`robothor/gateway/`) — build, process, config gen, migrate
 - YAML-first agent manifests (`docs/agents/`) with `validate_agents.py`

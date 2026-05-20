@@ -82,3 +82,24 @@ ADAPTER_FAILURES = Counter(
     "Adapter connection failures",
     ["adapter_name"],
 )
+
+# ── Thread Planner ──────────────────────────────────────────────────────
+
+PLANNER_ACTIONS_TOTAL = Counter(
+    "robothor_planner_actions_total",
+    # Incremented at action dispatch in apply_plan, before the DAL write.
+    # An execute with missing next_action, or set_next_action returning
+    # False, still increments — so the counter measures attempted decisions
+    # ("the planner chose this action this beat"), NOT successful writes.
+    # Dashboards keying off this for write-success rates need to also pull
+    # task.created / task.updated events.
+    "Forward-planner actions attempted per beat (dispatch attempts, not successful writes)",
+    ["action", "tenant"],  # action: execute | ask | wait | close
+)
+
+PLANNER_RUN_DURATION = Histogram(
+    "robothor_planner_run_duration_seconds",
+    "Wall-clock time per plan_all_stalled invocation",
+    ["tenant"],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+)
