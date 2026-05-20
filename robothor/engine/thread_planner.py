@@ -401,19 +401,22 @@ LIMIT %s
 
 
 def _load_planner_candidates(tenant_id: str, max_threads: int) -> list[dict[str, Any]]:
-    """Fetch threads that need re-planning. Safe to fail → returns []."""
+    """Fetch threads that need re-planning.
+
+    Propagates on DB failure rather than swallowing it. ``plan_all_stalled``
+    catches the exception, records ``error=repr(exc)`` on the
+    ``planner.run_complete`` event, and still returns cleanly. Returning ``[]``
+    here would make a real outage indistinguishable from "no work this beat" on
+    the dashboards — the exact ambiguity the run-complete event exists to break.
+    """
     from robothor.db.connection import get_connection
 
-    try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SET LOCAL statement_timeout = '3s'")
-            cur.execute(_CANDIDATE_SQL, (tenant_id, max_threads))
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
-    except Exception as e:
-        logger.debug("Planner candidate query failed: %s", e)
-        return []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '3s'")
+        cur.execute(_CANDIDATE_SQL, (tenant_id, max_threads))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 def _load_history(task_id: str, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -522,25 +525,30 @@ def plan_all_stalled(
     finally:
         elapsed_ms = int((time.monotonic() - start) * 1000)
         action_counts = dict(Counter(p.action for p in plans))
-        extra: dict[str, Any] = {
-            "event": "planner.run_complete",
-            "tenant_id": tenant_id,
-            "candidates_count": len(candidates),
-            "actions": action_counts,
-            "elapsed_ms": elapsed_ms,
-            "dry_run": dry_run,
-        }
-        if load_error is not None:
-            extra["error"] = load_error
-        logger.info(
-            "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d error=%s",
-            tenant_id,
-            len(candidates),
-            action_counts,
-            elapsed_ms,
-            load_error,
-            extra=extra,
-        )
+        # Observability is best-effort: a logging-handler fault must not turn a
+        # successful beat into a raised exception out of this finally (the
+        # function's contract is "never raises"). The duration metric gets its
+        # own suppress so a log failure doesn't also drop the timing sample.
+        with contextlib.suppress(Exception):
+            extra: dict[str, Any] = {
+                "event": "planner.run_complete",
+                "tenant_id": tenant_id,
+                "candidates_count": len(candidates),
+                "actions": action_counts,
+                "elapsed_ms": elapsed_ms,
+                "dry_run": dry_run,
+            }
+            if load_error is not None:
+                extra["error"] = load_error
+            logger.info(
+                "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d error=%s",
+                tenant_id,
+                len(candidates),
+                action_counts,
+                elapsed_ms,
+                load_error,
+                extra=extra,
+            )
         with contextlib.suppress(Exception):
             from robothor.engine.metrics import PLANNER_RUN_DURATION
 

@@ -526,3 +526,34 @@ class TestPlannerObservability:
 
         refused = [r for r in caplog.records if getattr(r, "event", "") == "planner.action.refused"]
         assert refused == [], "objective_veto must not emit planner.action.refused"
+
+    def test_real_db_outage_surfaces_error_on_run_complete(self, caplog):
+        """A real DB outage must surface as ``error=`` on ``planner.run_complete``.
+
+        Regression guard for the dead ``load_error`` path: patches the actual
+        ``get_connection`` (not ``_load_planner_candidates``) so the real helper
+        runs. If the helper swallows the exception and returns ``[]``, the beat
+        is indistinguishable from "no work" — which defeats the whole point of
+        the event. The helper must propagate; ``plan_all_stalled`` records the
+        error and still returns cleanly.
+        """
+        import logging
+
+        from robothor.engine.thread_planner import plan_all_stalled
+
+        os.environ.pop("ROBOTHOR_PLANNER_ENABLED", None)
+        caplog.set_level(logging.INFO, logger="robothor.engine.thread_planner")
+        with patch(
+            "robothor.db.connection.get_connection",
+            side_effect=RuntimeError("connection refused"),
+        ):
+            result = plan_all_stalled(tenant_id="default")
+
+        assert result == []
+        run_complete = [
+            r for r in caplog.records if getattr(r, "event", "") == "planner.run_complete"
+        ]
+        assert run_complete, "expected planner.run_complete on real DB outage"
+        rec = run_complete[0]
+        assert getattr(rec, "candidates_count", None) == 0
+        assert "connection refused" in (getattr(rec, "error", "") or "")
