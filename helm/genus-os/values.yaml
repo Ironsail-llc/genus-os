@@ -50,23 +50,43 @@ global:
   deployedFromPR: ""
   deployedAt: ""
 
-# ─── Database ────────────────────────────────────────────────────────────────
-# Connection settings for every Python service.
+# ─── Database connection (used by every Python service) ─────────────────────
+# The Python services read host/port/name/user from here; password comes from
+# the ExternalSecret as ROBOTHOR_DB_PASSWORD.
+#
+# When postgres.enabled (below) the chart deploys an in-cluster Postgres via
+# the groundhog2k/postgres subchart and `database.host` defaults to
+# `{release}-postgres`. For cloud envs, set postgres.enabled=false and fill in
+# database.host with the RDS / CloudNativePG endpoint.
 database:
-  # When postgres.enabled, host defaults to the in-cluster service name.
-  # Override at layer 3 when pointing at RDS.
-  host: ""           # empty → computed from release name when postgres.enabled
+  host: ""
   port: 5432
   name: robothor_memory
   user: robothor
   sslMode: prefer
-  # Password sourced from the external secret (see externalSecrets below).
 
+# Same shape for Redis — `redis.enabled` flips both the subchart deployment
+# (via Chart.yaml dependencies.condition) and the python services' use of
+# in-cluster Redis. Set `redis.enabled: false` + `redis.host: <elasticache>`
+# for cloud envs.
+#
+# Subchart docs: https://github.com/groundhog2k/helm-charts/tree/master/charts/redis
+# Anything under `redis.*` that isn't `enabled`/`host`/`port` is passed
+# through to the subchart. Our parent templates ignore subchart-only keys
+# (image, storage) and the subchart ignores our connection-config keys.
 redis:
   enabled: true
-  host: ""           # empty → computed from release name when enabled
+  host: ""
   port: 6379
-  # Optional password; sourced from external secret when set non-empty.
+  # ↓ subchart overrides ↓
+  image:
+    registry: docker.io
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  storage:
+    requestedSize: 5Gi
+    accessModes: [ReadWriteOnce]
 
 # ─── External Secrets ────────────────────────────────────────────────────────
 # An ExternalSecret object references a SecretStore (managed at the cluster
@@ -295,53 +315,44 @@ nats:
       cpu: 500m
       memory: 1Gi
 
-# ─── In-cluster PostgreSQL (no Bitnami, no operator) ─────────────────────────
-# Plain StatefulSet + headless Service using the official pgvector image,
-# matching what infra/docker-compose.yml uses today. Disable for cloud env
-# and point database.host at RDS instead.
+# ─── postgres subchart (groundhog2k/postgres) ────────────────────────────────
+# Local-dev / convenience-only deployment of in-cluster Postgres. For cloud
+# envs we expect RDS (or CloudNativePG when staging becomes long-lived) and
+# `postgres.enabled: false` in the env's layer-3 values file.
+#
+# The `enabled` key here is consumed by Chart.yaml's `dependencies.condition`
+# and by our internal database-host helper. Everything else under this block
+# is passed through to the subchart.
+#
+# Subchart docs: https://github.com/groundhog2k/helm-charts/tree/master/charts/postgres
 postgres:
   enabled: true
   image:
+    registry: docker.io
     repository: pgvector/pgvector
     tag: "pg16"
     pullPolicy: IfNotPresent
-  service:
-    port: 5432
   storage:
-    size: 20Gi
-    storageClassName: ""   # cluster default
+    requestedSize: 20Gi
     accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: 1000m
-      memory: 2Gi
-  # Initial schema/extension setup happens via the migrations Job below.
+  # The subchart creates the user database and grants access.
+  # Layer 3 (infra repo) overrides `existingSecret` to point at the ESO-
+  # materialized credentials secret; for local-dev, supply a literal value
+  # in values-local.yaml.
+  userDatabase:
+    name:
+      value: "robothor_memory"
+    user:
+      value: "robothor"
+    password:
+      # CHANGE-ME — overridden in layer 3 to:
+      #   existingSecret: "<release>-genus-os-credentials"
+      #   secretKey: ROBOTHOR_DB_PASSWORD
+      value: "robothor"
+  settings:
+    superuserPassword:
+      value: "postgres"   # local-dev only; non-local envs use existingSecret
 
-# ─── In-cluster Redis (no Bitnami) ───────────────────────────────────────────
-redisInCluster:
-  enabled: true
-  image:
-    repository: redis
-    tag: "7-alpine"
-    pullPolicy: IfNotPresent
-  service:
-    port: 6379
-  maxmemory: 2gb
-  maxmemoryPolicy: allkeys-lru
-  storage:
-    size: 5Gi
-    storageClassName: ""
-    accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 2Gi
 
 # ─── Migrations (run as Helm pre-install / pre-upgrade hook) ─────────────────
 migrations:

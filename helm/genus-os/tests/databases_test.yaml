@@ -1,50 +1,65 @@
-suite: in-cluster databases
+suite: subchart toggles
 release:
   name: gos
   namespace: genus
 tests:
-  - it: postgres StatefulSet renders by default
-    template: postgres/statefulset.yaml
+  - it: postgres-host helper points at the subchart Service name by default
+    template: engine/workload.yaml
     asserts:
-      - isKind:
-          of: StatefulSet
-      - equal:
-          path: spec.template.spec.containers[0].image
-          value: pgvector/pgvector:pg16
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: POSTGRES_USER
-            value: robothor
+            name: ROBOTHOR_DB_HOST
+            value: gos-postgres
+        documentIndex: 0
 
-  - it: postgres can be disabled
-    template: postgres/statefulset.yaml
+  - it: redis-host helper points at the subchart Service name by default
+    template: engine/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-redis
+        documentIndex: 0
+
+  - it: explicit database.host overrides subchart Service name
+    template: engine/workload.yaml
+    set:
+      postgres.enabled: false
+      database.host: my-rds.us-east-1.rds.amazonaws.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: my-rds.us-east-1.rds.amazonaws.com
+        documentIndex: 0
+
+  - it: explicit redis.host overrides subchart Service name
+    template: engine/workload.yaml
+    set:
+      redis.enabled: false
+      redis.host: my-redis.cache.amazonaws.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: my-redis.cache.amazonaws.com
+        documentIndex: 0
+
+  - it: migrations job pulls the postgres image from the configured registry/repo/tag
+    template: migrations/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: docker.io/pgvector/pgvector:pg16
+
+  - it: migrations job has no wait-for-postgres initContainer when postgres disabled
+    template: migrations/job.yaml
     set:
       postgres.enabled: false
     asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: redis StatefulSet renders by default
-    template: redis/statefulset.yaml
-    asserts:
-      - isKind:
-          of: StatefulSet
-      - equal:
-          path: spec.template.spec.containers[0].image
-          value: redis:7-alpine
-
-  - it: redis can be disabled
-    template: redis/statefulset.yaml
-    set:
-      redisInCluster.enabled: false
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: postgres headless service has no ClusterIP
-    template: postgres/service.yaml
-    asserts:
-      - equal:
-          path: spec.clusterIP
-          value: None
+      - notExists:
+          path: spec.template.spec.initContainers

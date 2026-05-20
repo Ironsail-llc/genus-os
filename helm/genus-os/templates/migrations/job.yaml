@@ -32,10 +32,10 @@ spec:
       tolerations:
         {{- $tols | nindent 8 }}
       {{- end }}
-      {{- if or .Values.postgres.enabled .Values.redisInCluster.enabled }}
+      {{- if .Values.postgres.enabled }}
       initContainers:
         - name: wait-for-postgres
-          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           command:
             - sh
             - -c

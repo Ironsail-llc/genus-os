@@ -82,21 +82,27 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 {{- end -}}
 
 {{/*
-Computed Postgres host. Empty database.host + postgres.enabled →
-in-cluster service name. Otherwise honor the explicit host.
+Postgres host resolution.
+
+When postgres.enabled and database.host is empty, point at the
+groundhog2k/postgres subchart's default Service name: `{release}-postgres`.
+Otherwise honor the explicit database.host (RDS, CloudNativePG, etc).
 */}}
 {{- define "genus-os.postgresHost" -}}
 {{- if and .Values.postgres.enabled (eq .Values.database.host "") -}}
-{{- printf "%s-postgres" (include "genus-os.fullname" .) -}}
+{{- printf "%s-postgres" .Release.Name -}}
 {{- else -}}
 {{- .Values.database.host -}}
 {{- end -}}
 {{- end -}}
 
-{{/* Computed Redis host. */}}
+{{/*
+Redis host resolution. Matches the groundhog2k/redis subchart Service:
+`{release}-redis` when redis.enabled and redis.host is empty.
+*/}}
 {{- define "genus-os.redisHost" -}}
-{{- if and .Values.redisInCluster.enabled (eq .Values.redis.host "") -}}
-{{- printf "%s-redis" (include "genus-os.fullname" .) -}}
+{{- if and .Values.redis.enabled (eq .Values.redis.host "") -}}
+{{- printf "%s-redis" .Release.Name -}}
 {{- else -}}
 {{- .Values.redis.host -}}
 {{- end -}}

@@ -30,6 +30,13 @@ jobs:
       - name: Install helm-unittest plugin
         run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
 
+      - name: helm dependency update
+        # Resolves groundhog2k/postgres + groundhog2k/redis subcharts. Required
+        # before `helm lint`/`template` will see the dependency Chart.yaml.
+        run: |
+          helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          helm dependency update helm/genus-os
+
       - name: helm lint
         run: |
           helm lint helm/genus-os \

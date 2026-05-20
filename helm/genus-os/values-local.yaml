@@ -14,7 +14,7 @@ externalSecrets:
 postgres:
   enabled: true
   storage:
-    size: 5Gi
+    requestedSize: 5Gi
   resources:
     requests:
       cpu: 100m
@@ -23,10 +23,10 @@ postgres:
       cpu: 500m
       memory: 1Gi
 
-redisInCluster:
+redis:
   enabled: true
   storage:
-    size: 1Gi
+    requestedSize: 1Gi
 
 engine:
   replicaCount: 1

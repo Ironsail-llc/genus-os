@@ -26,7 +26,6 @@ tests:
     template: migrations/job.yaml
     set:
       postgres.enabled: false
-      redisInCluster.enabled: false
     asserts:
       - notExists:
           path: spec.template.spec.initContainers

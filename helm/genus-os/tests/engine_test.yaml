@@ -102,7 +102,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_DB_HOST
-            value: gos-genus-os-postgres
+            value: gos-postgres
         documentIndex: 0
 
   - it: uses explicit database.host when postgres disabled

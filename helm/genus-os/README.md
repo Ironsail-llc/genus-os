@@ -1,6 +1,8 @@
 # genus-os Helm chart
 
-Deploys the in-cluster subset of Genus OS — agent engine, bridge, orchestrator, the Helm dashboard, optional NATS, and toggleable in-cluster Postgres + Redis. Out of scope: vision, voice, MediaMTX, desktop-use, Ollama (use OpenRouter / Anthropic / Gemini APIs instead).
+Deploys the in-cluster subset of Genus OS — agent engine, bridge, orchestrator, the Helm dashboard, optional NATS, and toggleable in-cluster Postgres + Redis (as Helm dependencies on `groundhog2k/postgres` and `groundhog2k/redis` — no Bitnami, no operator). Out of scope: vision, voice, MediaMTX, desktop-use, Ollama (use OpenRouter / Anthropic / Gemini APIs instead).
+
+For cloud envs, set `postgres.enabled: false` and `redis.enabled: false` in the layer-3 values file (infra repo) and point `database.host` / `redis.host` at the managed equivalents (RDS / ElastiCache / CloudNativePG).
 
 ## Files
 
@@ -23,20 +25,20 @@ engine.enabled: true
 bridge.enabled: true
 orchestrator.enabled: true
 dashboard.enabled: true
-nats.enabled: false          # federation — opt-in
-postgres.enabled: true       # in-cluster pgvector — disable to use RDS
-redisInCluster.enabled: true # in-cluster redis — disable to use ElastiCache
-migrations.enabled: true     # Helm pre-install/pre-upgrade hook
+nats.enabled: false           # federation — opt-in
+postgres.enabled: true        # groundhog2k/postgres subchart — disable to use RDS
+redis.enabled: true           # groundhog2k/redis subchart — disable to use ElastiCache
+migrations.enabled: true      # Helm pre-install/pre-upgrade hook
 externalSecrets.enabled: true # ExternalSecret refs to Vault
-networkPolicy.enabled: false # opt-in per env
+networkPolicy.enabled: false  # opt-in per env
 ```
-
-Disable `postgres` / `redisInCluster` and set `database.host` / `redis.host` to point at the managed equivalent.
 
 ## Local dev
 
 ```bash
-helm dependency update helm/genus-os    # no-op today, future-proof
+helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+helm dependency update helm/genus-os
+
 helm install gos helm/genus-os \
   --namespace genus --create-namespace \
   --values helm/genus-os/values.yaml \
