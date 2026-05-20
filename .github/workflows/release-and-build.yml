@@ -142,6 +142,7 @@ jobs:
         with:
           context: .
           file: ./${{ matrix.image.dockerfile }}
+          target: production
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
