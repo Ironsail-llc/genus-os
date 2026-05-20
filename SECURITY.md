@@ -40,6 +40,15 @@ Programmatic audit access is available via the Bridge API:
 - **Lifecycle hooks**: Blocking pre-tool-use hooks can prevent tool execution.
 - **Budget enforcement**: Soft token caps with tool schema stripping after exhaustion.
 
+## Acknowledged Advisories
+
+Advisories that surface in our scanners but for which we have a documented
+disposition (VEX-style). These are reviewed, not silently ignored.
+
+| Advisory | Package | Status | Rationale | Revisit when |
+|----------|---------|--------|-----------|--------------|
+| PYSEC-2025-183 / CVE-2025-45768 | pyjwt (all versions, incl. latest 2.12.1) | **Not Affected** | Disputed by the maintainer — the advisory concerns a caller choosing a weak key length, not a defect in the library, so no fixed version exists or is planned. CVSS 3.1 (low). pyjwt is a transitive dependency (`litellm`, `redis`); we never call it directly (`import jwt` / `jwt.encode` / `jwt.decode` appear nowhere in the codebase), so the vulnerable code path does not exist for us. Suppressed in the `pip-audit` step of `.github/workflows/ci.yml`. | A direct pyjwt usage is introduced, or a fixed pyjwt release ships. |
+
 ## Scope
 
 The following are in scope for security reports:

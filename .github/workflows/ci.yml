@@ -34,7 +34,12 @@ jobs:
       # CVE-2026-3219 is a pip self-CVE with no fix released; ignore until
       # upstream ships a patched version. CVE-2026-6357 is resolved by the
       # pip upgrade above.
-      - run: pip-audit --ignore-vuln CVE-2026-3219
+      # PYSEC-2025-183 (CVE-2025-45768): disputed-by-maintainer, CVSS 3.1
+      # pyjwt advisory about caller-chosen key length — no library fix exists
+      # (affects all versions incl. latest 2.12.1). pyjwt is transitive via
+      # litellm + redis; we never call it directly (no `import jwt`). Tracked
+      # as Not Affected in SECURITY.md. Revisit if we add direct pyjwt usage.
+      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183
 
   lint:
     runs-on: ubuntu-latest
