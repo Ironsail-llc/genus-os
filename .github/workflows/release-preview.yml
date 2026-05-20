@@ -68,7 +68,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Post sticky comment
-        uses: marocchino/sticky-pull-request-comment@v2
+        # Third-party action SHA-pinned + tag-commented.
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: release-preview
           message: ${{ steps.comment.outputs.body }}

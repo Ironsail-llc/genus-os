@@ -19,27 +19,29 @@ concurrency:
   group: release-and-build-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
+# Default: read-only. Each job opts into the writes it actually needs.
 permissions:
-  contents: write       # semantic-release tags + CHANGELOG commit
-  packages: write       # GHCR push
-  issues: write
-  pull-requests: write  # sticky comment with image tag
+  contents: read
 
 jobs:
   release:
     name: Semantic Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # tag + CHANGELOG.md commit
+      issues: write         # GitHub Releases issue/PR comment integration
+      pull-requests: write  # release notes referencing PRs
     outputs:
       new_release_published: ${{ steps.semantic.outputs.new_release_published }}
       new_release_version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -85,26 +87,26 @@ jobs:
         (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
       )
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # GHCR push
     strategy:
       fail-fast: false
       matrix:
         image:
           - { name: python, dockerfile: Dockerfile.python }
           - { name: app,    dockerfile: Dockerfile.app    }
-    outputs:
-      python_tag: ${{ steps.export.outputs.python_tag }}
-      app_tag: ${{ steps.export.outputs.app_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # For labeled PRs, check out the PR HEAD (not the merge commit) so
           # the SHA we tag matches what the contributor pushed.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -124,7 +126,7 @@ jobs:
 
       - name: docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}
           flavor: |
@@ -138,7 +140,7 @@ jobs:
 
       - name: Build & push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./${{ matrix.image.dockerfile }}
@@ -164,9 +166,12 @@ jobs:
           echo "ref=$PRIMARY" >> "$GITHUB_OUTPUT"
           echo "tag=${PRIMARY##*:}" >> "$GITHUB_OUTPUT"
 
+      # Trivy does double duty: CVE scan + SPDX SBOM generation. Avoids a
+      # second action (was anchore/sbom-action) that only ships floating v0
+      # tags. Third-party action SHA-pinned + tag-commented.
       - name: Trivy — block on CRITICAL (non-blocking initially)
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.primary.outputs.ref }}
           format: table
@@ -174,9 +179,9 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-      - name: Trivy — SARIF report
+      - name: Trivy — SARIF report (CRITICAL,HIGH)
         if: always()
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.primary.outputs.ref }}
           format: sarif
@@ -184,44 +189,44 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '0'
 
-      - name: Upload Trivy results
+      - name: Trivy — SPDX SBOM
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.primary.outputs.ref }}
+          format: spdx-json
+          output: sbom-${{ matrix.image.name }}.spdx.json
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
           path: trivy-${{ matrix.image.name }}.sarif
           retention-days: 30
 
-      - name: SBOM (SPDX)
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ steps.primary.outputs.ref }}
-          format: spdx-json
-          output-file: sbom-${{ matrix.image.name }}.spdx.json
-
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
           path: sbom-${{ matrix.image.name }}.spdx.json
           retention-days: 90
-
-      - name: Export primary tag
-        id: export
-        run: |
-          if [ "${{ matrix.image.name }}" = "python" ]; then
-            echo "python_tag=${{ steps.primary.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "app_tag=${{ steps.primary.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          fi
 
   comment-pr:
     name: Sticky PR comment
     needs: [build]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging') && needs.build.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: marocchino/sticky-pull-request-comment@v2
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      # Third-party action SHA-pinned + tag-commented.
+      - uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: build-and-push
           message: |
@@ -229,8 +234,8 @@ jobs:
 
             | Image | Tag |
             |---|---|
-            | `ghcr.io/ironsail-llc/genus-os/python` | `pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}` |
-            | `ghcr.io/ironsail-llc/genus-os/app` | `pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}` |
+            | `ghcr.io/ironsail-llc/genus-os/python` | `pr-${{ github.event.pull_request.number }}-sha-${{ steps.sha.outputs.short }}` |
+            | `ghcr.io/ironsail-llc/genus-os/app` | `pr-${{ github.event.pull_request.number }}-sha-${{ steps.sha.outputs.short }}` |
 
             Deploy job is wired in Phase 4 once `helm/genus-os/` lands.
             For now the images are available in GHCR and tagged for this PR's HEAD.
