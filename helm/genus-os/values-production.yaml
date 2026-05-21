@@ -1,5 +1,23 @@
-# Layer 2 — image tag for the production environment.
-# Bumped by semantic-release via @semantic-release/exec → scripts/update-helm-values.sh.
+# Layer 2 — production environment.
+# `global.imageTag` is bumped by semantic-release via @semantic-release/exec →
+# scripts/update-helm-values.sh on each release on main.
+#
+# Other env-specific config (ingress hosts, Vault paths, replicas, resource
+# limits, RDS / ElastiCache endpoints) lives in the infra repo:
+#   aws-infrastucture/argocd/ironsail-production-genus-os/values.yaml
 
 global:
   imageTag: "v0.0.0"
+
+# Production NEVER runs the in-cluster Postgres / Redis subcharts. Managed
+# services only (RDS, ElastiCache, CloudNativePG). `database.host` and
+# `redis.host` are supplied by layer 3 (infra repo).
+#
+# These overrides are deliberately here (not only in layer 3) so the chart
+# fails CLOSED: if layer 3 is missing, misapplied, or forgotten on a new
+# cluster, production will not silently start an ephemeral pgvector
+# StatefulSet with the default password.
+postgres:
+  enabled: false
+redis:
+  enabled: false
