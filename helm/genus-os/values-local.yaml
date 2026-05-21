@@ -2,14 +2,17 @@
 # - Pulls images by `:dev` tag (run `docker build … -t ghcr.io/…/python:dev …` first)
 # - Enables in-cluster Postgres + Redis with smaller volumes
 # - Drops the dedicated NodePool toleration so pods schedule anywhere
-# - Disables ExternalSecrets — secrets come from a hand-rolled K8s Secret
+# - Disables vault (VSO) — secrets come from a hand-rolled K8s Secret
 
 global:
   imageTag: "dev"
   tolerations: []
 
-externalSecrets:
-  enabled: false   # provide ${RELEASE}-credentials Secret out-of-band
+vault:
+  # Provide `<release>-genus-os-credentials` out-of-band before installing
+  # (e.g. `kubectl create secret generic gos-genus-os-credentials ...` for
+  # release `gos`). See helm/genus-os/README.md for the install snippet.
+  enabled: false
 
 postgres:
   enabled: true

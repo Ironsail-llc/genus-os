@@ -148,9 +148,10 @@ Renders DB/Redis connection info plus deployment breadcrumbs.
 envFrom referencing the credentials Secret (`{fullname}-credentials`).
 
 The Secret is sourced one of two ways:
-  - externalSecrets.enabled: true  → materialized by ESO from Vault
-  - externalSecrets.enabled: false → user-provided out-of-band
-                                    (e.g. local-dev `kubectl create secret`)
+  - vault.enabled: true  → materialized by VSO from Vault
+                            (VaultStaticSecret, see vaultstaticsecret.yaml)
+  - vault.enabled: false → user-provided out-of-band
+                            (e.g. local-dev `kubectl create secret`)
 
 Either way the referenced Secret name is the same. There is no soft
 fallback if the Secret is missing — pods will CreateContainerConfigError

@@ -10,22 +10,22 @@ tests:
   - it: values-production resolves postgres.enabled=false
     values:
       - ../values-production.yaml
-    template: externalsecret.yaml
+    template: vaultstaticsecret.yaml
     set:
       # Provide database.host so the chart resolves to something concrete
       # without depending on layer 3.
       database.host: rds.example.com
     asserts:
       - isKind:
-          of: ExternalSecret
+          of: VaultStaticSecret
 
   - it: values-staging resolves postgres.enabled=false + redis.enabled=false
     values:
       - ../values-staging.yaml
-    template: externalsecret.yaml
+    template: vaultstaticsecret.yaml
     asserts:
       - isKind:
-          of: ExternalSecret
+          of: VaultStaticSecret
 
   - it: engine workload under values-production uses external db host
     values:
@@ -60,9 +60,9 @@ tests:
   - it: values-local keeps postgres + redis enabled (in-cluster dev DBs)
     values:
       - ../values-local.yaml
-    template: externalsecret.yaml
+    template: vaultstaticsecret.yaml
     set:
-      externalSecrets.enabled: true  # re-enable just for this rendering check
+      vault.enabled: true  # re-enable just for this rendering check
     asserts:
       - isKind:
-          of: ExternalSecret
+          of: VaultStaticSecret

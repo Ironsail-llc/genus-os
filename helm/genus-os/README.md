@@ -28,8 +28,8 @@ dashboard.enabled: true
 nats.enabled: false           # federation — opt-in
 postgres.enabled: true        # groundhog2k/postgres subchart — disable to use RDS
 redis.enabled: true           # groundhog2k/redis subchart — disable to use ElastiCache
-migrations.enabled: true      # Helm pre-install/pre-upgrade hook
-externalSecrets.enabled: true # ExternalSecret refs to Vault
+migrations.enabled: true      # Migration Job + wait-for-migrations init
+vault.enabled: true           # VaultStaticSecret via Vault Secrets Operator
 networkPolicy.enabled: false  # opt-in per env
 ```
 
@@ -43,9 +43,9 @@ helm install gos helm/genus-os \
   --namespace genus --create-namespace \
   --values helm/genus-os/values.yaml \
   --values helm/genus-os/values-local.yaml \
-  --set externalSecrets.enabled=false
+  --set vault.enabled=false
 
-# Provide the credentials Secret out-of-band (values-local disables ESO):
+# Provide the credentials Secret out-of-band (values-local disables VSO):
 kubectl -n genus create secret generic gos-genus-os-credentials \
   --from-literal=ROBOTHOR_DB_PASSWORD=devpass \
   --from-literal=ANTHROPIC_API_KEY=sk-... \

@@ -51,8 +51,9 @@ global:
   deployedAt: ""
 
 # ─── Database connection (used by every Python service) ─────────────────────
-# The Python services read host/port/name/user from here; password comes from
-# the ExternalSecret as ROBOTHOR_DB_PASSWORD.
+# The Python services read host/port/name/user from here; password comes
+# from VSO-materialized `{fullname}-credentials` Secret as
+# `ROBOTHOR_DB_PASSWORD`.
 #
 # When postgres.enabled (below) the chart deploys an in-cluster Postgres via
 # the groundhog2k/postgres subchart and `database.host` defaults to
@@ -96,39 +97,32 @@ redis:
   podLabels:
     app.kubernetes.io/part-of: genus-os
 
-# ─── External Secrets ────────────────────────────────────────────────────────
-# An ExternalSecret object references a SecretStore (managed at the cluster
-# level — same one the other ironsail apps use). The materialized Kubernetes
-# Secret is then mounted as env vars on each Deployment.
-externalSecrets:
+# ─── Vault Secrets Operator (HashiCorp VSO) ─────────────────────────────────
+# A VaultStaticSecret object pulls keys from the configured Vault path and
+# materializes a K8s Secret with the same name. VSO mirrors keys 1:1, so
+# **store keys in Vault using the exact env var names the containers expect**
+# (ROBOTHOR_DB_PASSWORD, ANTHROPIC_API_KEY, etc.). No per-key mapping in the
+# chart — change the keys in Vault if you need a different env var.
+#
+# The expected keys today (any subset works; missing ones become empty env):
+#   ROBOTHOR_DB_PASSWORD, ROBOTHOR_REDIS_PASSWORD, ANTHROPIC_API_KEY,
+#   OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY,
+#   ROBOTHOR_TELEGRAM_BOT_TOKEN, JIRA_TOKEN
+#
+# Why VSO instead of ESO (external-secrets-operator):
+# the cluster runs `secrets.hashicorp.com/v1beta1` (VSO) — confirmed via
+# `kubectl get crd | grep vault`. ESO isn't installed.
+vault:
   enabled: true
-  refreshInterval: 1h
-  # SecretStore reference — overridden in layer 3 per env.
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  # Vault path containing all genus-os credentials.
-  # Override in layer 3 to `secret/data/genus-os/<env>`.
-  remoteRef: secret/data/genus-os/staging
-  # Mapping from Vault key → env var name. Used to assemble container env.
-  # Every Python service receives all of these; only what's referenced is used.
-  keys:
-    - vaultKey: db_password
-      envVar: ROBOTHOR_DB_PASSWORD
-    - vaultKey: redis_password
-      envVar: ROBOTHOR_REDIS_PASSWORD
-    - vaultKey: anthropic_api_key
-      envVar: ANTHROPIC_API_KEY
-    - vaultKey: openrouter_api_key
-      envVar: OPENROUTER_API_KEY
-    - vaultKey: openai_api_key
-      envVar: OPENAI_API_KEY
-    - vaultKey: gemini_api_key
-      envVar: GEMINI_API_KEY
-    - vaultKey: telegram_bot_token
-      envVar: ROBOTHOR_TELEGRAM_BOT_TOKEN
-    - vaultKey: jira_token
-      envVar: JIRA_TOKEN
+  type: kv-v2
+  # Cluster's KV mount — same value the other ironsail apps use.
+  mount: cluster-is
+  # Vault path under the mount. Override in layer 3 per env, e.g.
+  # `genus-os/production`.
+  path: genus-os/staging
+  refreshAfter: 1m
+  # VaultAuth reference. Defaults to the standard cluster auth.
+  authRef: vault-auth
 
 # ─── Engine (the agent runner) ───────────────────────────────────────────────
 engine:
