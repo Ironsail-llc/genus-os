@@ -145,8 +145,19 @@ Renders DB/Redis connection info plus deployment breadcrumbs.
 {{- end -}}
 
 {{/*
-envFrom referencing the materialized ExternalSecret. Falls back to a
-plain Secret name if externalSecrets.enabled is false.
+envFrom referencing the credentials Secret (`{fullname}-credentials`).
+
+The Secret is sourced one of two ways:
+  - externalSecrets.enabled: true  → materialized by ESO from Vault
+  - externalSecrets.enabled: false → user-provided out-of-band
+                                    (e.g. local-dev `kubectl create secret`)
+
+Either way the referenced Secret name is the same. There is no soft
+fallback if the Secret is missing — pods will CreateContainerConfigError
+until it exists. For app pods this is implicitly guarded by the
+wait-for-migrations initContainer (the migration Job's
+wait-for-credentials init container blocks until the Secret is present,
+and app pods only proceed once migrations complete).
 */}}
 {{- define "genus-os.envFromSecret" -}}
 - secretRef:

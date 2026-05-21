@@ -1,0 +1,87 @@
+suite: network policy scoping
+release:
+  name: gos
+  namespace: genus
+templates:
+  - networkpolicy.yaml
+tests:
+  - it: opt-in — renders nothing when networkPolicy.enabled=false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: default-deny + intra-chart render when enabled (no ingress)
+    set:
+      networkPolicy.enabled: true
+      dashboard.enabled: false
+      engine.ingress.enabled: false
+      bridge.ingress.enabled: false
+      orchestrator.ingress.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-default-deny
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-allow-intra-chart
+        documentIndex: 1
+
+  - it: allow-traefik-dashboard is scoped to dashboard pods + port 3000
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-allow-traefik-dashboard
+        documentIndex: 2
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: dashboard
+        documentIndex: 2
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 3000
+        documentIndex: 2
+
+  - it: traefikNamespace is configurable
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.traefikNamespace: ingress-system
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: ingress-system
+        documentIndex: 2
+
+  - it: per-component traefik allow only renders when service ingress enabled
+    set:
+      networkPolicy.enabled: true
+      engine.ingress.enabled: true
+      engine.ingress.host: engine.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-allow-traefik-engine
+        documentIndex: 3
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 18800
+        documentIndex: 3
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: engine
+        documentIndex: 3
+
+  - it: default-deny covers subchart pods via part-of label
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/part-of"]
+          value: genus-os
+        documentIndex: 0
+      # Subchart pods carry app.kubernetes.io/part-of=genus-os via podLabels
+      # in values.yaml; the assertion above is what makes them covered.

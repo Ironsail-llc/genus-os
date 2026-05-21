@@ -87,6 +87,14 @@ redis:
   storage:
     requestedSize: 5Gi
     accessModes: [ReadWriteOnce]
+  # Tag subchart pods with our part-of label so the NetworkPolicy's
+  # default-deny + intra-chart allow cover them. podLabels lands on the
+  # pod template (what NetworkPolicy.spec.podSelector matches);
+  # customLabels lands on the StatefulSet itself for audit clarity.
+  customLabels:
+    app.kubernetes.io/part-of: genus-os
+  podLabels:
+    app.kubernetes.io/part-of: genus-os
 
 # ─── External Secrets ────────────────────────────────────────────────────────
 # An ExternalSecret object references a SecretStore (managed at the cluster
@@ -347,6 +355,16 @@ postgres:
   storage:
     requestedSize: 20Gi
     accessModes: [ReadWriteOnce]
+  # Tag subchart pods with our part-of label so the NetworkPolicy's
+  # default-deny + intra-chart allow cover them. podLabels lands on the
+  # pod template (what NetworkPolicy.spec.podSelector matches);
+  # customLabels lands on the StatefulSet itself for audit clarity.
+  # `app.kubernetes.io/instance` is set by the subchart from .Release.Name
+  # — don't duplicate here.
+  customLabels:
+    app.kubernetes.io/part-of: genus-os
+  podLabels:
+    app.kubernetes.io/part-of: genus-os
   # The subchart creates the user database and grants access.
   # Layer 3 (infra repo) overrides `existingSecret` to point at the ESO-
   # materialized credentials secret; for local-dev, supply a literal value
@@ -394,3 +412,7 @@ serviceAccount:
 networkPolicy:
   enabled: false   # opt-in per env; enable in production
   # Cilium is the CNI; standard NetworkPolicies work.
+  # Namespace where the cluster's Traefik instances run (matches
+  # kubernetes.io/metadata.name on the namespace). Override per env if
+  # Traefik lives elsewhere.
+  traefikNamespace: traefik
