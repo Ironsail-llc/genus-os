@@ -12,7 +12,7 @@ tests:
           path: spec.replicas
           value: 2
 
-  - it: dashboard wires bridge + orchestrator URLs
+  - it: dashboard wires bridge URL and runtime identity env
     template: dashboard/deployment.yaml
     asserts:
       - contains:
@@ -23,8 +23,13 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: NEXT_PUBLIC_ORCHESTRATOR_URL
-            value: http://gos-genus-os-orchestrator:9099
+            name: NEXT_PUBLIC_OWNER_NAME
+            value: "there"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NEXT_PUBLIC_AI_NAME
+            value: "Robothor"
 
   - it: HPA renders when autoscaling enabled
     template: dashboard/hpa.yaml

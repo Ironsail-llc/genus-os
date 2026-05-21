@@ -275,7 +275,12 @@ dashboard:
     host: ""
     tls: {}
     annotations: {}
-  env: {}
+  # Runtime config exposed to the dashboard. NEXT_PUBLIC_* values are served
+  # to client components via next-runtime-env at request time, so per-env
+  # overrides take effect without rebuilding the image. Layer 3 can override.
+  env:
+    NEXT_PUBLIC_OWNER_NAME: "there"
+    NEXT_PUBLIC_AI_NAME: "Robothor"
   resources:
     requests:
       cpu: 100m

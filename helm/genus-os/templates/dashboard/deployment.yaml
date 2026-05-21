@@ -59,10 +59,6 @@ spec:
           env:
             - name: NEXT_PUBLIC_BRIDGE_URL
               value: "http://{{ include "genus-os.fullname" . }}-bridge:{{ .Values.bridge.service.port }}"
-            - name: NEXT_PUBLIC_ORCHESTRATOR_URL
-              value: "http://{{ include "genus-os.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}"
-            - name: NEXT_PUBLIC_ENGINE_URL
-              value: "http://{{ include "genus-os.fullname" . }}-engine:{{ .Values.engine.service.port }}"
             - name: PORT
               value: {{ $cv.service.port | quote }}
             - name: HOSTNAME
