@@ -13,6 +13,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.python
+      target: dev
     image: genusos/python:dev
     container_name: robothor-engine
     restart: always
@@ -98,6 +99,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.app
+      target: dev
     image: genusos/dashboard:dev
     container_name: robothor-dashboard
     restart: always
