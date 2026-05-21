@@ -56,10 +56,15 @@ tests:
           path: spec.template.spec.initContainers[0].image
           value: docker.io/pgvector/pgvector:pg16
 
-  - it: migrations job has no wait-for-postgres initContainer when postgres disabled
+  - it: migrations job drops wait-for-postgres init when postgres.enabled=false
     template: migrations/job.yaml
     set:
       postgres.enabled: false
+      database.host: rds.example.com
     asserts:
-      - notExists:
+      # wait-for-credentials still present; only wait-for-postgres should be gone.
+      - notContains:
           path: spec.template.spec.initContainers
+          content:
+            name: wait-for-postgres
+          any: true

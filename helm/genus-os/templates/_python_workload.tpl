@@ -47,6 +47,8 @@ spec:
         {{- with $cv.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
       serviceAccountName: {{ include "genus-os.serviceAccountName" $root }}
+      # wait-for-migrations initContainer needs the SA token to call kubectl.
+      automountServiceAccountToken: {{ $root.Values.migrations.enabled }}
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -67,6 +69,34 @@ spec:
       {{- if $aff | trim }}
       affinity:
         {{- $aff | nindent 8 }}
+      {{- end }}
+      {{- if $root.Values.migrations.enabled }}
+      # Block on the migration Job for this release. Pattern doc:
+      # https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
+      initContainers:
+        - name: wait-for-migrations
+          image: bitnami/kubectl:1.31
+          securityContext:
+            {{- toYaml $root.Values.global.securityContext | nindent 12 }}
+          env:
+            - name: JOB_NAME
+              value: {{ include "genus-os.migrationJobName" $root }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for migration Job $JOB_NAME..."
+              while true; do
+                if [ "$(kubectl get job "$JOB_NAME" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)" = "True" ]; then
+                  echo "Migration Job $JOB_NAME complete."
+                  exit 0
+                fi
+                if [ "$(kubectl get job "$JOB_NAME" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null)" = "True" ]; then
+                  echo "Migration Job $JOB_NAME failed; aborting pod start."
+                  exit 1
+                fi
+                sleep 3
+              done
       {{- end }}
       containers:
         - name: {{ $component }}

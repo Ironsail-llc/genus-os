@@ -82,6 +82,15 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 {{- end -}}
 
 {{/*
+Migration Job name. Includes a hash of imageTag so each release gets a
+fresh Job and the wait-for-migrations initContainer can reliably compute
+the same name. See aws-infrastucture/docs/helm-db-migrations.md.
+*/}}
+{{- define "genus-os.migrationJobName" -}}
+{{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (.Values.global.imageTag | sha256sum | trunc 8) -}}
+{{- end -}}
+
+{{/*
 Postgres host resolution.
 
 When postgres.enabled and database.host is empty, point at the

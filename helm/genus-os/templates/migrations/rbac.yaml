@@ -1,0 +1,40 @@
+{{- if .Values.migrations.enabled -}}
+{{- $sa := include "genus-os.serviceAccountName" . -}}
+# Scoped RBAC for the migration-watcher initContainer pattern. Grants the
+# app's ServiceAccount read access to exactly:
+#   - the one migration Job for this release (by resourceName)
+#   - the one credentials Secret (by resourceName)
+# Pattern doc: aws-infrastucture/docs/helm-db-migrations.md
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}-migration-watcher
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+    resourceNames:
+      - {{ include "genus-os.migrationJobName" . }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames:
+      - {{ include "genus-os.fullname" . }}-credentials
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}-migration-watcher
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sa }}-migration-watcher
+{{- end }}

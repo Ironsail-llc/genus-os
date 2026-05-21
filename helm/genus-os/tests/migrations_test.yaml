@@ -1,31 +1,152 @@
-suite: migrations job
+suite: migrations job + RBAC + wait-for-migrations init
 release:
   name: gos
   namespace: genus
 tests:
-  - it: migrations Job carries Helm hook annotations
+  # ─── Job is a normal resource (no helm hooks) ──────────────────────────────
+  - it: migration Job is not a helm hook
     template: migrations/job.yaml
     asserts:
       - isKind:
           of: Job
-      - equal:
+      - notExists:
           path: metadata.annotations["helm.sh/hook"]
-          value: pre-install,pre-upgrade
-      - equal:
+      - notExists:
+          path: metadata.annotations["helm.sh/hook-weight"]
+      - notExists:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation,hook-succeeded
 
-  - it: waits for postgres when postgres.enabled
+  - it: Job name is content-addressed on imageTag
+    template: migrations/job.yaml
+    set:
+      global.imageTag: v1.4.0
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: "^gos-genus-os-migrate-[a-f0-9]{8}$"
+
+  - it: Job has wait-for-credentials initContainer
     template: migrations/job.yaml
     asserts:
-      - equal:
-          path: spec.template.spec.initContainers[0].name
-          value: wait-for-postgres
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-credentials
+          any: true
 
-  - it: no init container when postgres disabled
+  - it: Job has wait-for-postgres initContainer when postgres.enabled
+    template: migrations/job.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-postgres
+          any: true
+
+  - it: Job drops wait-for-postgres when postgres.enabled=false (cloud env)
     template: migrations/job.yaml
     set:
       postgres.enabled: false
+      database.host: rds.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-credentials
+          any: true
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-postgres
+          any: true
+
+  - it: Job pod mounts SA token
+    template: migrations/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  # ─── RBAC is scoped via resourceNames ──────────────────────────────────────
+  - it: Role exists with scoped jobs+secrets verbs
+    template: migrations/rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: ["jobs"]
+            verbs: ["get", "list", "watch"]
+            resourceNames:
+              - gos-genus-os-migrate-908f5ee7
+
+  - it: RoleBinding targets the chart ServiceAccount
+    template: migrations/rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: subjects[0].name
+          value: gos-genus-os
+      - equal:
+          path: roleRef.name
+          value: gos-genus-os-migration-watcher
+
+  # ─── migrations.enabled: false disables EVERYTHING ─────────────────────────
+  - it: Job is not rendered when migrations disabled
+    template: migrations/job.yaml
+    set:
+      migrations.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: RBAC is not rendered when migrations disabled
+    template: migrations/rbac.yaml
+    set:
+      migrations.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ─── wait-for-migrations initContainer on app pods ─────────────────────────
+  - it: engine pod has wait-for-migrations initContainer
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-migrations
+          any: true
+
+  - it: engine pod mounts SA token when migrations.enabled
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: engine pod does NOT mount SA token when migrations disabled
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      migrations.enabled: false
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: engine pod has no wait-for-migrations initContainer when migrations disabled
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      migrations.enabled: false
     asserts:
       - notExists:
           path: spec.template.spec.initContainers

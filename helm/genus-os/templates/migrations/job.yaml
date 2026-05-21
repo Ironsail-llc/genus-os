@@ -1,14 +1,14 @@
 {{- if .Values.migrations.enabled -}}
+# Migration Job — runs as a NORMAL release resource (no helm hooks).
+# App pods block on this Job's `status.conditions[type=Complete]` via a
+# `wait-for-migrations` initContainer in _python_workload.tpl.
+# Pattern: https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "genus-os.fullname" . }}-migrate-{{ .Values.global.imageTag | sha256sum | trunc 8 }}
+  name: {{ include "genus-os.migrationJobName" . }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
-  annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
@@ -19,6 +19,8 @@ spec:
         {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      # wait-for-credentials initContainer needs kubectl access.
+      automountServiceAccountToken: true
       restartPolicy: Never
       securityContext:
         {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
@@ -32,8 +34,8 @@ spec:
       tolerations:
         {{- $tols | nindent 8 }}
       {{- end }}
-      {{- if .Values.postgres.enabled }}
       initContainers:
+        {{- if .Values.postgres.enabled }}
         - name: wait-for-postgres
           image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           command:
@@ -46,7 +48,23 @@ spec:
               done
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-      {{- end }}
+        {{- end }}
+        # envFrom on the migrate container will CreateContainerConfigError if
+        # this Secret doesn't exist yet — ESO may still be reconciling on
+        # first install.
+        - name: wait-for-credentials
+          image: bitnami/kubectl:1.31
+          command:
+            - sh
+            - -c
+            - |
+              SECRET={{ include "genus-os.fullname" . }}-credentials
+              until kubectl get secret "$SECRET" >/dev/null 2>&1; do
+                echo "Waiting for secret $SECRET..."
+                sleep 2
+              done
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
       containers:
         - name: migrate
           image: {{ include "genus-os.image" (dict "root" . "component" "migrations") }}
