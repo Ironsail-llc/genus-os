@@ -126,6 +126,13 @@ externalSecrets:
 engine:
   enabled: true
   replicaCount: 1   # single-writer for now; scale-out is a future concern
+  # Recreate, not RollingUpdate — the engine owns the APScheduler loop +
+  # cron heartbeats + Redis stream consumer offsets. A rolling update with
+  # maxSurge:1 would briefly run two daemons in parallel: every cron
+  # would fire twice, and stream consumers would race on offset commits.
+  # Override only if you've explicitly designed for active-active.
+  strategy:
+    type: Recreate
   image:
     repository: python
     pullPolicy: ""

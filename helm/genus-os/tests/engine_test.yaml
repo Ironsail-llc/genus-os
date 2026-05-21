@@ -136,3 +136,30 @@ tests:
             value: genus-os
             effect: NoSchedule
         documentIndex: 0
+
+  - it: uses Recreate strategy — engine is single-writer
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+        documentIndex: 0
+      - notExists:
+          path: spec.strategy.rollingUpdate
+        documentIndex: 0
+
+  - it: engine strategy is overridable (e.g. opt-in to RollingUpdate)
+    set:
+      engine.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 0
+          maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+        documentIndex: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+        documentIndex: 0

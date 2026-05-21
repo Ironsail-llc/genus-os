@@ -28,10 +28,14 @@ spec:
   replicas: {{ $cv.replicaCount }}
   revisionHistoryLimit: 5
   strategy:
+    {{- if $cv.strategy }}
+    {{- toYaml $cv.strategy | nindent 4 }}
+    {{- else }}
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+    {{- end }}
   selector:
     matchLabels:
       {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
