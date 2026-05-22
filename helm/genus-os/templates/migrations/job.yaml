@@ -22,6 +22,10 @@ spec:
       # wait-for-credentials initContainer needs kubectl access.
       automountServiceAccountToken: true
       restartPolicy: Never
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
       {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "migrations") }}

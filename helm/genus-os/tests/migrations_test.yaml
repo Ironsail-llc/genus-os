@@ -67,6 +67,24 @@ tests:
           path: spec.template.spec.automountServiceAccountToken
           value: true
 
+  - it: Job propagates global.imagePullSecrets (private GHCR image)
+    template: migrations/job.yaml
+    set:
+      global.imagePullSecrets:
+        - name: ghcr-pull-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.imagePullSecrets
+          content:
+            name: ghcr-pull-secret
+          any: true
+
+  - it: Job omits imagePullSecrets when global.imagePullSecrets is empty
+    template: migrations/job.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.imagePullSecrets
+
   # ─── RBAC is scoped via resourceNames ──────────────────────────────────────
   - it: Role exists with scoped jobs+secrets verbs
     template: migrations/rbac.yaml
