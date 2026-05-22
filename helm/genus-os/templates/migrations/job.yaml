@@ -53,9 +53,10 @@ spec:
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
         {{- end }}
-        # envFrom on the migrate container will CreateContainerConfigError if
-        # this Secret doesn't exist yet — ESO may still be reconciling on
-        # first install.
+        # envFrom on the migrate container will CreateContainerConfigError
+        # if this Secret doesn't exist yet — VSO may still be reconciling
+        # the VaultStaticSecret → K8s Secret materialization on first
+        # install. Block here until the Secret appears.
         - name: wait-for-credentials
           image: "{{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}"
           imagePullPolicy: {{ .Values.kubectl.image.pullPolicy }}

@@ -101,7 +101,8 @@ jobs:
         run: |
           for f in _rendered/*.yaml; do
             echo "→ $f"
-            # ExternalSecret CRD is provided via schema-location below.
+            # VaultStaticSecret CRD schema comes from Datree's catalog
+            # via the second -schema-location below.
             kubeconform \
               -strict \
               -summary \

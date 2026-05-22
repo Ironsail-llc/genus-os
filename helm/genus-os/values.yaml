@@ -360,9 +360,11 @@ postgres:
   podLabels:
     app.kubernetes.io/part-of: genus-os
   # The subchart creates the user database and grants access.
-  # Layer 3 (infra repo) overrides `existingSecret` to point at the ESO-
-  # materialized credentials secret; for local-dev, supply a literal value
-  # in values-local.yaml.
+  # In production we never run this subchart (postgres.enabled=false in
+  # values-production.yaml / values-staging.yaml); the fields below are for
+  # local-dev. Supply a real password via the literal values shown or use
+  # `kubectl create secret generic <release>-genus-os-credentials ...`
+  # before installing in local-dev.
   userDatabase:
     name:
       value: "robothor_memory"
@@ -379,12 +381,12 @@ postgres:
 
 
 # ─── Shared kubectl image (for wait-for-* init containers) ──────────────────
-# alpine/k8s is community-maintained, alpine-based, ships kubectl + helm.
+# Official Kubernetes-published image. Multi-arch (amd64/arm64/ppc64le/s390x).
 # Bitnami images are deliberately not used anywhere in this chart.
 kubectl:
   image:
-    repository: alpine/k8s
-    tag: "1.31.5"
+    repository: registry.k8s.io/kubectl
+    tag: "v1.31.0"
     pullPolicy: IfNotPresent
 
 # ─── Migrations Job ──────────────────────────────────────────────────────────
