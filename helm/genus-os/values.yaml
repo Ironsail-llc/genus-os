@@ -381,12 +381,21 @@ postgres:
 
 
 # ─── Shared kubectl image (for wait-for-* init containers) ──────────────────
-# Official Kubernetes-published image. Multi-arch (amd64/arm64/ppc64le/s390x).
+# alpine/k8s ships kubectl + a real shell (busybox). Required because the
+# init containers run `sh -c` poll loops, not a single kubectl invocation.
+#
+# `registry.k8s.io/kubectl` is the canonical official image but is
+# distroless — no /bin/sh — so it CrashLoopBackOffs the init containers
+# (`exec: "sh": executable file not found`). To migrate to it later, the
+# init containers would need to be rewritten as shell-less single
+# `kubectl wait` calls (and `kubectl wait --for=create` for the secret
+# wait, which doesn't exist on all kubectl versions).
+#
 # Bitnami images are deliberately not used anywhere in this chart.
 kubectl:
   image:
-    repository: registry.k8s.io/kubectl
-    tag: "v1.31.0"
+    repository: alpine/k8s
+    tag: "1.31.5"
     pullPolicy: IfNotPresent
 
 # ─── Migrations Job ──────────────────────────────────────────────────────────
