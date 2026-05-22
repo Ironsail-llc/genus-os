@@ -1,0 +1,435 @@
+# Genus OS — default values.
+#
+# Three-layer override pattern (per aws-infrastucture CLAUDE.md):
+#   1. values.yaml                                — chart defaults (this file)
+#   2. helm/genus-os/values-<env>.yaml             — image tag, bumped by CI
+#   3. argocd/ironsail-<env>-genus-os/values.yaml  — env config (in infra repo)
+#
+# Anything that should be the same across all envs lives here. Anything
+# env-specific (ingress hosts, vault paths, replica counts, resource limits)
+# goes in layer 3 in the infra repo.
+
+global:
+  # Image tag applied to every component. Bumped by semantic-release (prod)
+  # or by the staging-deploy workflow (per-PR builds).
+  imageTag: "sha-replace-me"
+
+  # Image registry. Single GHCR org, two image names beneath it.
+  registry: ghcr.io/ironsail-llc/genus-os
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # Pod-level metadata applied to every workload.
+  podAnnotations: {}
+  podLabels: {}
+
+  # Default node placement. Genus OS pods land on the dedicated NodePool
+  # (Karpenter manifest in aws-infrastucture/argocd/karpenter/manifests/).
+  nodeSelector: {}
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: genus-os
+      effect: NoSchedule
+  affinity: {}
+
+  # Set on every container; per-service blocks may override.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false  # robothor writes scratch + logs to disk
+    capabilities:
+      drop: ["ALL"]
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Breadcrumbs written by the deploy workflow. Override at deploy-time.
+  deployedFromPR: ""
+  deployedAt: ""
+
+# ─── Database connection (used by every Python service) ─────────────────────
+# The Python services read host/port/name/user from here; password comes
+# from VSO-materialized `{fullname}-credentials` Secret as
+# `ROBOTHOR_DB_PASSWORD`.
+#
+# When postgres.enabled (below) the chart deploys an in-cluster Postgres via
+# the groundhog2k/postgres subchart and `database.host` defaults to
+# `{release}-postgres`. For cloud envs, set postgres.enabled=false and fill in
+# database.host with the RDS / CloudNativePG endpoint.
+database:
+  host: ""
+  port: 5432
+  name: robothor_memory
+  user: robothor
+  sslMode: prefer
+
+# Same shape for Redis — `redis.enabled` flips both the subchart deployment
+# (via Chart.yaml dependencies.condition) and the python services' use of
+# in-cluster Redis. Set `redis.enabled: false` + `redis.host: <elasticache>`
+# for cloud envs.
+#
+# Subchart docs: https://github.com/groundhog2k/helm-charts/tree/master/charts/redis
+# Anything under `redis.*` that isn't `enabled`/`host`/`port` is passed
+# through to the subchart. Our parent templates ignore subchart-only keys
+# (image, storage) and the subchart ignores our connection-config keys.
+redis:
+  enabled: true
+  host: ""
+  port: 6379
+  # ↓ subchart overrides ↓
+  image:
+    registry: docker.io
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  storage:
+    requestedSize: 5Gi
+    accessModes: [ReadWriteOnce]
+  # Tag subchart pods with our part-of label so the NetworkPolicy's
+  # default-deny + intra-chart allow cover them. podLabels lands on the
+  # pod template (what NetworkPolicy.spec.podSelector matches);
+  # customLabels lands on the StatefulSet itself for audit clarity.
+  customLabels:
+    app.kubernetes.io/part-of: genus-os
+  podLabels:
+    app.kubernetes.io/part-of: genus-os
+
+# ─── Vault Secrets Operator (HashiCorp VSO) ─────────────────────────────────
+# A VaultStaticSecret object pulls keys from the configured Vault path and
+# materializes a K8s Secret with the same name. VSO mirrors keys 1:1, so
+# **store keys in Vault using the exact env var names the containers expect**
+# (ROBOTHOR_DB_PASSWORD, ANTHROPIC_API_KEY, etc.). No per-key mapping in the
+# chart — change the keys in Vault if you need a different env var.
+#
+# The expected keys today (any subset works; missing ones become empty env):
+#   ROBOTHOR_DB_PASSWORD, ROBOTHOR_REDIS_PASSWORD, ANTHROPIC_API_KEY,
+#   OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY,
+#   ROBOTHOR_TELEGRAM_BOT_TOKEN, JIRA_TOKEN
+#
+# Why VSO instead of ESO (external-secrets-operator):
+# the cluster runs `secrets.hashicorp.com/v1beta1` (VSO) — confirmed via
+# `kubectl get crd | grep vault`. ESO isn't installed.
+vault:
+  enabled: true
+  type: kv-v2
+  # Cluster's KV mount — same value the other ironsail apps use.
+  mount: cluster-is
+  # Vault path under the mount. Override in layer 3 per env, e.g.
+  # `genus-os/production`.
+  path: genus-os/staging
+  refreshAfter: 1m
+  # VaultAuth reference. Defaults to the standard cluster auth.
+  authRef: vault-auth
+
+# ─── Engine (the agent runner) ───────────────────────────────────────────────
+engine:
+  enabled: true
+  replicaCount: 1   # single-writer for now; scale-out is a future concern
+  # Recreate, not RollingUpdate — the engine owns the APScheduler loop +
+  # cron heartbeats + Redis stream consumer offsets. A rolling update with
+  # maxSurge:1 would briefly run two daemons in parallel: every cron
+  # would fire twice, and stream consumers would race on offset commits.
+  # Override only if you've explicitly designed for active-active.
+  strategy:
+    type: Recreate
+  image:
+    repository: python
+    pullPolicy: ""
+  command: ["python", "-m", "robothor.engine.daemon"]
+  service:
+    port: 18800
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 5
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
+bridge:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: python
+  command: ["python", "bridge_service.py"]
+  workingDir: /app/crm/bridge
+  service:
+    port: 9100
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 5
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ─── Orchestrator (RAG/semantic-search HTTP API) ─────────────────────────────
+orchestrator:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: python
+  command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
+  service:
+    port: 9099
+    annotations: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: {}
+    annotations: {}
+  env: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 30
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ─── Dashboard (The Helm — Next.js 16) ───────────────────────────────────────
+dashboard:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: app
+  service:
+    port: 3000
+    annotations: {}
+  ingress:
+    # Default off — layer 3 (infra repo) flips this on and provides the host.
+    enabled: false
+    className: traefik-public
+    host: ""
+    tls: {}
+    annotations: {}
+  # Runtime config exposed to the dashboard. NEXT_PUBLIC_* values are served
+  # to client components via next-runtime-env at request time, so per-env
+  # overrides take effect without rebuilding the image. Layer 3 can override.
+  env:
+    NEXT_PUBLIC_OWNER_NAME: "there"
+    NEXT_PUBLIC_AI_NAME: "Robothor"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  probes:
+    liveness:
+      enabled: true
+      path: /api/health
+      initialDelaySeconds: 20
+    readiness:
+      enabled: true
+      path: /api/health
+      initialDelaySeconds: 5
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# ─── NATS (federation transport) — disabled by default ───────────────────────
+nats:
+  enabled: false
+  image:
+    repository: nats
+    tag: "2.10-alpine"
+    pullPolicy: IfNotPresent
+  clientPort: 4222
+  leafPort: 7422
+  monitorPort: 8222
+  jetstream:
+    enabled: true
+    storage: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ─── postgres subchart (groundhog2k/postgres) ────────────────────────────────
+# Local-dev / convenience-only deployment of in-cluster Postgres. For cloud
+# envs we expect RDS (or CloudNativePG when staging becomes long-lived) and
+# `postgres.enabled: false` in the env's layer-3 values file.
+#
+# The `enabled` key here is consumed by Chart.yaml's `dependencies.condition`
+# and by our internal database-host helper. Everything else under this block
+# is passed through to the subchart.
+#
+# Subchart docs: https://github.com/groundhog2k/helm-charts/tree/master/charts/postgres
+postgres:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: pgvector/pgvector
+    tag: "pg16"
+    pullPolicy: IfNotPresent
+  storage:
+    requestedSize: 20Gi
+    accessModes: [ReadWriteOnce]
+  # Tag subchart pods with our part-of label so the NetworkPolicy's
+  # default-deny + intra-chart allow cover them. podLabels lands on the
+  # pod template (what NetworkPolicy.spec.podSelector matches);
+  # customLabels lands on the StatefulSet itself for audit clarity.
+  # `app.kubernetes.io/instance` is set by the subchart from .Release.Name
+  # — don't duplicate here.
+  customLabels:
+    app.kubernetes.io/part-of: genus-os
+  podLabels:
+    app.kubernetes.io/part-of: genus-os
+  # The subchart creates the user database and grants access.
+  # In production we never run this subchart (postgres.enabled=false in
+  # values-production.yaml / values-staging.yaml); the fields below are for
+  # local-dev. Supply a real password via the literal values shown or use
+  # `kubectl create secret generic <release>-genus-os-credentials ...`
+  # before installing in local-dev.
+  userDatabase:
+    name:
+      value: "robothor_memory"
+    user:
+      value: "robothor"
+    password:
+      # CHANGE-ME — overridden in layer 3 to:
+      #   existingSecret: "<release>-genus-os-credentials"
+      #   secretKey: ROBOTHOR_DB_PASSWORD
+      value: "robothor"
+  settings:
+    superuserPassword:
+      value: "postgres"   # local-dev only; non-local envs use existingSecret
+
+
+# ─── Shared kubectl image (for wait-for-* init containers) ──────────────────
+# alpine/k8s ships kubectl + a real shell (busybox). Required because the
+# init containers run `sh -c` poll loops, not a single kubectl invocation.
+#
+# `registry.k8s.io/kubectl` is the canonical official image but is
+# distroless — no /bin/sh — so it CrashLoopBackOffs the init containers
+# (`exec: "sh": executable file not found`). To migrate to it later, the
+# init containers would need to be rewritten as shell-less single
+# `kubectl wait` calls (and `kubectl wait --for=create` for the secret
+# wait, which doesn't exist on all kubectl versions).
+#
+# Bitnami images are deliberately not used anywhere in this chart.
+kubectl:
+  image:
+    repository: alpine/k8s
+    tag: "1.31.5"
+    pullPolicy: IfNotPresent
+
+# ─── Migrations Job ──────────────────────────────────────────────────────────
+# Runs as a normal release resource (not a helm hook). App pods block on
+# this Job's completion via the wait-for-migrations initContainer.
+# Full pattern: aws-infrastucture/docs/helm-db-migrations.md
+migrations:
+  enabled: true
+  image:
+    repository: python
+  command: ["python", "-m", "robothor.cli", "migrate"]
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ─── Service accounts ────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations: {}
+  # If you need IRSA for AWS resource access, set this in layer 3:
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/genus-os-staging
+
+# ─── Network policy ──────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false   # opt-in per env; enable in production
+  # Cilium is the CNI; standard NetworkPolicies work.
+  # Namespace where the cluster's Traefik instances run (matches
+  # kubernetes.io/metadata.name on the namespace). Override per env if
+  # Traefik lives elsewhere.
+  traefikNamespace: traefik

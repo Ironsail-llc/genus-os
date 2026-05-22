@@ -1,0 +1,79 @@
+suite: dashboard workload
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: dashboard deployment renders with HPA disabled
+    template: dashboard/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: dashboard wires bridge URL and runtime identity env
+    template: dashboard/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NEXT_PUBLIC_BRIDGE_URL
+            value: http://gos-genus-os-bridge:9100
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NEXT_PUBLIC_OWNER_NAME
+            value: "there"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NEXT_PUBLIC_AI_NAME
+            value: "Robothor"
+
+  - it: HPA renders when autoscaling enabled
+    template: dashboard/hpa.yaml
+    set:
+      dashboard.autoscaling.enabled: true
+      dashboard.autoscaling.minReplicas: 3
+      dashboard.autoscaling.maxReplicas: 12
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.minReplicas
+          value: 3
+      - equal:
+          path: spec.maxReplicas
+          value: 12
+
+  - it: HPA does not render when autoscaling disabled
+    template: dashboard/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ingress requires host when enabled
+    template: dashboard/ingress.yaml
+    set:
+      dashboard.ingress.enabled: true
+      dashboard.ingress.host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "dashboard.ingress.host is required when dashboard.ingress.enabled"
+
+  - it: ingress renders the configured host + className
+    template: dashboard/ingress.yaml
+    set:
+      dashboard.ingress.enabled: true
+      dashboard.ingress.host: genus-os.example.com
+      dashboard.ingress.className: traefik-public
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: traefik-public
+      - equal:
+          path: spec.rules[0].host
+          value: genus-os.example.com

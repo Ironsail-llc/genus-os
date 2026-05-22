@@ -1,0 +1,39 @@
+suite: per-component rollout strategies
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: bridge defaults to RollingUpdate maxSurge:1 maxUnavailable:0
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  - it: orchestrator defaults to RollingUpdate
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: bridge strategy can be overridden per-component
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      bridge.strategy:
+        type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - notExists:
+          path: spec.strategy.rollingUpdate

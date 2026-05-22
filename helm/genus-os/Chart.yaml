@@ -1,0 +1,38 @@
+apiVersion: v2
+name: genus-os
+description: Genus OS — agent engine, bridge, orchestrator, the Helm dashboard, optional NATS, and toggleable in-cluster PostgreSQL + Redis subcharts (groundhog2k).
+type: application
+# Chart version + appVersion bumped by semantic-release via @semantic-release/exec.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
+home: https://github.com/Ironsail-llc/genus-os
+sources:
+  - https://github.com/Ironsail-llc/genus-os
+maintainers:
+  - name: Ironsail Platform
+    email: platform@ironsail.ai
+keywords:
+  - agent-engine
+  - genus-os
+  - ironsail
+annotations:
+  category: AIPlatform
+
+# In-cluster Postgres + Redis come from upstream community charts.
+# Bitnami and operator-based options were deliberately rejected; these are
+# small, plain-StatefulSet implementations that match what
+# infra/docker-compose.yml provides today.
+#
+# For staging/prod we set postgres.enabled = redis.enabled = false and point
+# database.host / redis.host at managed alternatives (RDS, ElastiCache,
+# CloudNativePG, etc).
+dependencies:
+  - name: postgres
+    version: "1.6.3"
+    repository: "https://groundhog2k.github.io/helm-charts/"
+    condition: postgres.enabled
+  - name: redis
+    version: "2.3.3"
+    repository: "https://groundhog2k.github.io/helm-charts/"
+    condition: redis.enabled

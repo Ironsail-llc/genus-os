@@ -1,0 +1,70 @@
+suite: subchart toggles
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: postgres-host helper points at the subchart Service name by default
+    template: engine/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: gos-postgres
+        documentIndex: 0
+
+  - it: redis-host helper points at the subchart Service name by default
+    template: engine/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-redis
+        documentIndex: 0
+
+  - it: explicit database.host overrides subchart Service name
+    template: engine/workload.yaml
+    set:
+      postgres.enabled: false
+      database.host: my-rds.us-east-1.rds.amazonaws.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: my-rds.us-east-1.rds.amazonaws.com
+        documentIndex: 0
+
+  - it: explicit redis.host overrides subchart Service name
+    template: engine/workload.yaml
+    set:
+      redis.enabled: false
+      redis.host: my-redis.cache.amazonaws.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: my-redis.cache.amazonaws.com
+        documentIndex: 0
+
+  - it: migrations job pulls the postgres image from the configured registry/repo/tag
+    template: migrations/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: docker.io/pgvector/pgvector:pg16
+
+  - it: migrations job drops wait-for-postgres init when postgres.enabled=false
+    template: migrations/job.yaml
+    set:
+      postgres.enabled: false
+      database.host: rds.example.com
+    asserts:
+      # wait-for-credentials still present; only wait-for-postgres should be gone.
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: wait-for-postgres
+          any: true

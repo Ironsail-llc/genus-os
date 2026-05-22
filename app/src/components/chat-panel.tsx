@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { env } from "next-runtime-env";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -833,7 +834,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     "What happened today?",
   ];
 
-  const aiName = process.env.NEXT_PUBLIC_AI_NAME || "Robothor";
+  const aiName = env("NEXT_PUBLIC_AI_NAME") || "Robothor";
 
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">

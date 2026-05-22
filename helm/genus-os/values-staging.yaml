@@ -1,0 +1,20 @@
+# Layer 2 — staging environment.
+# Other env-specific config (ingress hosts, Vault paths, replicas, resource
+# limits, RDS / ElastiCache endpoints) lives in the infra repo:
+#   aws-infrastucture/argocd/ironsail-staging-genus-os/values.yaml
+#
+# This file is mutated by CI:
+#   - On `deploy-staging` label: imageTag → pr-N-sha-<short>
+#   - On PR close / unlabel:     imageTag → latest released vX.Y.Z
+
+global:
+  imageTag: "sha-replace-me"
+  deployedFromPR: ""
+  deployedAt: ""
+
+# Same fail-closed defaults as production. Staging uses managed Postgres /
+# Redis; the in-cluster subcharts are reserved for local dev (values-local).
+postgres:
+  enabled: false
+redis:
+  enabled: false

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { env } from "next-runtime-env";
 import { ExternalLink, Download, Trash2, RefreshCw, Package } from "lucide-react";
 
 interface InstalledAgent {
@@ -16,7 +17,7 @@ interface MarketplaceViewProps {
   visible: boolean;
 }
 
-const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || "http://localhost:18820";
+const BRIDGE_URL = env("NEXT_PUBLIC_BRIDGE_URL") || "http://localhost:18820";
 const PR_URL = "https://programmaticresources.com";
 
 export function MarketplaceView({ visible }: MarketplaceViewProps) {

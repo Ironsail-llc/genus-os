@@ -1,0 +1,29 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "genus-os.fullname" . }}-dashboard
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "dashboard") | nindent 4 }}
+  {{- with .Values.dashboard.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.dashboard.ingress.className }}
+  rules:
+    - host: {{ required "dashboard.ingress.host is required when dashboard.ingress.enabled" .Values.dashboard.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "genus-os.fullname" . }}-dashboard
+                port:
+                  number: {{ .Values.dashboard.service.port }}
+  {{- with .Values.dashboard.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
