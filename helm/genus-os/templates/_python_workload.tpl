@@ -79,7 +79,8 @@ spec:
       # https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
       initContainers:
         - name: wait-for-migrations
-          image: bitnami/kubectl:1.31
+          image: "{{ $root.Values.kubectl.image.repository }}:{{ $root.Values.kubectl.image.tag }}"
+          imagePullPolicy: {{ $root.Values.kubectl.image.pullPolicy }}
           securityContext:
             {{- toYaml $root.Values.global.securityContext | nindent 12 }}
           env:

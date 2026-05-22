@@ -53,7 +53,8 @@ spec:
         # this Secret doesn't exist yet — ESO may still be reconciling on
         # first install.
         - name: wait-for-credentials
-          image: bitnami/kubectl:1.31
+          image: "{{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}"
+          imagePullPolicy: {{ .Values.kubectl.image.pullPolicy }}
           command:
             - sh
             - -c

@@ -378,7 +378,19 @@ postgres:
       value: "postgres"   # local-dev only; non-local envs use existingSecret
 
 
-# ─── Migrations (run as Helm pre-install / pre-upgrade hook) ─────────────────
+# ─── Shared kubectl image (for wait-for-* init containers) ──────────────────
+# alpine/k8s is community-maintained, alpine-based, ships kubectl + helm.
+# Bitnami images are deliberately not used anywhere in this chart.
+kubectl:
+  image:
+    repository: alpine/k8s
+    tag: "1.31.5"
+    pullPolicy: IfNotPresent
+
+# ─── Migrations Job ──────────────────────────────────────────────────────────
+# Runs as a normal release resource (not a helm hook). App pods block on
+# this Job's completion via the wait-for-migrations initContainer.
+# Full pattern: aws-infrastucture/docs/helm-db-migrations.md
 migrations:
   enabled: true
   image:
