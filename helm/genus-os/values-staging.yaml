@@ -1,20 +1,63 @@
 # Layer 2 — staging environment.
-# Other env-specific config (ingress hosts, Vault paths, replicas, resource
-# limits, RDS / ElastiCache endpoints) lives in the infra repo:
-#   aws-infrastucture/argocd/ironsail-staging-genus-os/values.yaml
+# Org pattern: env-specific config (ingress, vault path, replicas, resources,
+# DB host) lives in this file in the APP REPO. Single ArgoCD source.
 #
-# This file is mutated by CI:
-#   - On `deploy-staging` label: imageTag → pr-N-sha-<short>
-#   - On PR close / unlabel:     imageTag → latest released vX.Y.Z
+# `global.imageTag` and breadcrumbs are mutated by the deploy-staging
+# workflow on PR labeling (`pr-N-sha-<short>`) and reset to the latest
+# released `vX.Y.Z` on PR close / unlabel.
 
 global:
   imageTag: "sha-replace-me"
   deployedFromPR: ""
   deployedAt: ""
 
-# Same fail-closed defaults as production. Staging uses managed Postgres /
-# Redis; the in-cluster subcharts are reserved for local dev (values-local).
+# Cloud env — never run the in-cluster subcharts. RDS supplies Postgres.
 postgres:
   enabled: false
 redis:
   enabled: false
+
+# Vault Secrets Operator wiring. Points at the populated `db` path which
+# contains ROBOTHOR_DB_{HOST,PORT,NAME,USER,PASSWORD}. VSO materializes a
+# K8s Secret named `{fullname}-credentials` (per the chart's
+# VaultStaticSecret); the chart's envFrom picks all five keys up.
+#
+# When app secrets (ANTHROPIC_API_KEY, etc.) are written to
+# `ironsail-staging/genus-os/secrets`, extend the chart with a second
+# VSS for that path and switch this back to it.
+vault:
+  enabled: true
+  mount: cluster-is
+  type: kv-v2
+  path: ironsail-staging/genus-os/db
+  refreshAfter: 1m
+  authRef: vault-auth
+
+# Dashboard ingress — internal-only for now (Cloudflare Access can be
+# layered later via traefik-public if/when an external surface is needed).
+dashboard:
+  enabled: true
+  replicaCount: 2
+  ingress:
+    enabled: true
+    className: traefik-private
+    host: genus-os.staging.internal.ironsail.ai
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - secretName: genus-os-staging-tls
+        hosts:
+          - genus-os.staging.internal.ironsail.ai
+
+# Engine is single-writer (Recreate). Keep 1 replica in staging too.
+engine:
+  enabled: true
+  replicaCount: 1
+
+bridge:
+  enabled: true
+  replicaCount: 2
+
+orchestrator:
+  enabled: true
+  replicaCount: 2

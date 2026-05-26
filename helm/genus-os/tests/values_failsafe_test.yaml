@@ -27,19 +27,20 @@ tests:
       - isKind:
           of: VaultStaticSecret
 
-  - it: engine workload under values-production uses external db host
+  - it: engine workload under values-production omits explicit DB env
+    # Under values-production (postgres.enabled=false) the chart no longer
+    # emits explicit ROBOTHOR_DB_* env vars — they come from the VSO
+    # envFrom Secret instead. This test ensures the gate works.
     values:
       - ../values-production.yaml
     template: engine/workload.yaml
     documentIndex: 0
-    set:
-      database.host: rds-prod.example.com
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_DB_HOST
-            value: rds-prod.example.com
+          any: true
 
   - it: engine workload under values-production does NOT default to gos-postgres
     values:
