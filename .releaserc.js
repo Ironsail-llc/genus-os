@@ -35,19 +35,20 @@ if (branch === 'main') {
   }]);
 }
 
-// Helm values bump is intentionally not wired yet — added in Phase 4 once
-// helm/genus-os/values*.yaml exist. When ready, insert before
-// @semantic-release/git:
-//   ['@semantic-release/exec', {
-//     prepareCmd: 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name}',
-//   }],
-
 plugins.push(
+  // Bump helm/genus-os/values-production.yaml's global.imageTag to the
+  // new vX.Y.Z on release. scripts/update-helm-values.sh handles the
+  // branch → file mapping (main → values-production.yaml).
+  ['@semantic-release/exec', {
+    prepareCmd: 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name}',
+  }],
+
   ['@semantic-release/git', {
     assets: [
       ...(branch === 'main' ? ['CHANGELOG.md'] : []),
       'package.json',
       'package-lock.json',
+      'helm/genus-os/values-production.yaml',
     ],
     message: 'chore(release): ${nextRelease.version} [skip ci]',
   }],

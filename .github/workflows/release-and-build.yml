@@ -11,7 +11,7 @@ on:
       - 'docs/**'
       - '**/*.md'
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    types: [opened, reopened, synchronize, labeled, unlabeled, closed]
   workflow_dispatch:
 
 # One release pipeline at a time; one staging-build per labeled PR at a time.
@@ -84,7 +84,10 @@ jobs:
       always() && (
         github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'push' && needs.release.outputs.new_release_published == 'true') ||
-        (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
+        (github.event_name == 'pull_request'
+          && github.event.action != 'closed'
+          && github.event.action != 'unlabeled'
+          && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
       )
     runs-on: ubuntu-latest
     permissions:
@@ -240,13 +243,252 @@ jobs:
             Deploy job is wired in Phase 4 once `helm/genus-os/` lands.
             For now the images are available in GHCR and tagged for this PR's HEAD.
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # Phase 4 will add three more jobs here:
-  #   - deploy-production  (push:main → commit values-production.yaml bump
-  #                         via @semantic-release/exec → argocd sync)
-  #   - deploy-staging     (labeled PR → commit values-staging.yaml bump
-  #                         with collision check → argocd sync)
-  #   - staging-reset      (unlabeled/closed PR → reset values-staging.yaml
-  #                         to latest vX.Y.Z → argocd sync)
-  # All three use Tailscale + CI_USER_PRIVATE_KEY + ARGOCD_TOKEN.
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────
+  # Production: semantic-release bumped values-production.yaml on this
+  # push; tail with an argocd sync.
+  # ───────────────────────────────────────────────────────────────────────
+  deploy-production:
+    name: Deploy to production
+    needs: [release, build]
+    if: |
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && needs.release.outputs.new_release_published == 'true'
+      && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Tailscale up (needed for private ArgoCD)
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:github-ci
+
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+      - name: Sync + wait for health
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          set -e
+          argocd app terminate-op ironsail-production-genus-os --grpc-web || true
+          argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+          argocd app wait ironsail-production-genus-os --grpc-web --health --timeout 900
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Staging: label-driven. The deploy-staging label on a PR triggers an
+  # image build (above) and then this job, which:
+  #   1. Refuses if another open PR already owns staging (collision check
+  #      via global.deployedFromPR in helm/genus-os/values-staging.yaml).
+  #   2. Commits an imageTag bump on main with `[skip ci]`.
+  #   3. Syncs the staging ArgoCD app.
+  #   4. Posts the live staging URL in a sticky PR comment.
+  #
+  # On `unlabeled` / `closed` events the staging-reset job (below) walks
+  # values-staging.yaml back to the latest released vX.Y.Z so staging
+  # always tracks "latest released" when no PR holds the slot.
+  # ───────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to staging
+    needs: [build]
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.action != 'closed'
+      && github.event.action != 'unlabeled'
+      && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
+      && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Collision check
+        id: collision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          THIS_PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Read the PR number currently occupying staging.
+          CUR=$(yq '.global.deployedFromPR // ""' helm/genus-os/values-staging.yaml)
+          if [ -z "$CUR" ] || [ "$CUR" = "null" ] || [ "$CUR" = "$THIS_PR" ]; then
+            echo "free=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Another PR — is it still open AND still labeled?
+          STATE=$(gh pr view "$CUR" --json state,labels -q '{state: .state, labels: [.labels[].name]}' 2>/dev/null || echo '{}')
+          OPEN=$(echo "$STATE" | jq -r '.state == "OPEN"')
+          LABELED=$(echo "$STATE" | jq -r '(.labels // []) | contains(["deploy-staging"])')
+          if [ "$OPEN" = "true" ] && [ "$LABELED" = "true" ]; then
+            echo "free=false" >> "$GITHUB_OUTPUT"
+            echo "holder=$CUR" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Holder no longer holds — claim the slot.
+          echo "free=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment + fail on collision
+        if: steps.collision.outputs.free != 'true'
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: deploy-staging
+          message: |
+            ❌ **Staging is occupied by #${{ steps.collision.outputs.holder }}.**
+
+            Unlabel `deploy-staging` on #${{ steps.collision.outputs.holder }} (or wait for it to merge), then re-label this PR to retry.
+      - name: Fail on collision
+        if: steps.collision.outputs.free != 'true'
+        run: exit 1
+
+      - name: Bump values-staging.yaml
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          SHORT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -e
+          SHA7="${SHORT_SHA:0:7}"
+          TAG="pr-${PR_NUM}-sha-${SHA7}"
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          yq -i ".global.imageTag = \"$TAG\" |
+                 .global.deployedFromPR = \"$PR_NUM\" |
+                 .global.deployedAt = \"$NOW\"" helm/genus-os/values-staging.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/genus-os/values-staging.yaml
+          if git diff --staged --quiet; then
+            echo "no change — already at $TAG"
+            exit 0
+          fi
+          git commit -m "chore(staging): deploy PR #${PR_NUM} (sha-${SHA7}) [skip ci]"
+          git push origin main
+
+      - name: Tailscale up
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:github-ci
+
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+      - name: Sync + wait for health
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          set -e
+          argocd app terminate-op ironsail-staging-genus-os --grpc-web || true
+          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2
+          argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900
+
+      - name: Sticky deploy-success comment
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: deploy-staging
+          message: |
+            ✅ **Deployed to staging.**
+
+            - Image: `ghcr.io/ironsail-llc/genus-os/python:pr-${{ github.event.pull_request.number }}-sha-${{ github.event.pull_request.head.sha }}`
+            - URL: <https://genus-os.staging.internal.ironsail.ai>
+
+            Release the slot by removing the `deploy-staging` label or merging this PR — staging will reset to the latest released `vX.Y.Z`.
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Staging reset: PR closed (merged or not) OR `deploy-staging` label
+  # removed — if this PR currently holds staging, walk values-staging.yaml
+  # back to the latest released vX.Y.Z and sync.
+  # ───────────────────────────────────────────────────────────────────────
+  staging-reset:
+    name: Reset staging to latest release
+    if: |
+      github.event_name == 'pull_request'
+      && ( github.event.action == 'closed'
+           || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-staging') )
+    runs-on: ubuntu-latest
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump values-staging.yaml to latest release
+        env:
+          THIS_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          CUR=$(yq '.global.deployedFromPR // ""' helm/genus-os/values-staging.yaml)
+          if [ "$CUR" != "$THIS_PR" ]; then
+            echo "Staging is held by PR=$CUR (not this one, $THIS_PR) — leaving alone."
+            exit 0
+          fi
+          # Latest semver tag (strip leading v if present).
+          LATEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            echo "No released vX.Y.Z yet — staging will sit on the previous tag until a release lands."
+            exit 0
+          fi
+          yq -i ".global.imageTag = \"$LATEST\" |
+                 .global.deployedFromPR = \"\" |
+                 .global.deployedAt = \"\"" helm/genus-os/values-staging.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/genus-os/values-staging.yaml
+          if git diff --staged --quiet; then
+            exit 0
+          fi
+          git commit -m "chore(staging): reset to ${LATEST} [skip ci]"
+          git push origin main
+
+      - name: Tailscale up
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:github-ci
+
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+      - name: Sync staging
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2 || true
+          argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900 || true
+
+      - name: Sticky released-the-slot comment
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: deploy-staging
+          message: |
+            🔁 **Staging released.** Reset to the latest released version.

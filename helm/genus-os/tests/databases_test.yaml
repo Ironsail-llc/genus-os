@@ -23,30 +23,43 @@ tests:
             value: gos-redis
         documentIndex: 0
 
-  - it: explicit database.host overrides subchart Service name
+  - it: ROBOTHOR_DB_* not in explicit env when postgres.enabled=false
+    # External RDS — chart drops the explicit env block so the VSO-
+    # materialized envFrom Secret can supply HOST/PORT/NAME/USER/PASSWORD
+    # without being shadowed (explicit `env:` wins over `envFrom:` in k8s).
     template: engine/workload.yaml
     set:
       postgres.enabled: false
-      database.host: my-rds.us-east-1.rds.amazonaws.com
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_DB_HOST
-            value: my-rds.us-east-1.rds.amazonaws.com
+          any: true
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_USER
+          any: true
         documentIndex: 0
 
-  - it: explicit redis.host overrides subchart Service name
+  - it: ROBOTHOR_REDIS_* not in explicit env when redis.enabled=false
     template: engine/workload.yaml
     set:
       redis.enabled: false
-      redis.host: my-redis.cache.amazonaws.com
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_REDIS_HOST
-            value: my-redis.cache.amazonaws.com
+          any: true
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PORT
+          any: true
         documentIndex: 0
 
   - it: migrations job pulls the postgres image from the configured registry/repo/tag

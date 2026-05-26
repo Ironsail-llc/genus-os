@@ -105,16 +105,20 @@ tests:
             value: gos-postgres
         documentIndex: 0
 
-  - it: uses explicit database.host when postgres disabled
+  - it: omits explicit ROBOTHOR_DB_HOST env when postgres disabled
+    # When external DB is used, the chart drops the explicit DB env block
+    # so the VSO-materialized credentials Secret (envFrom) supplies all
+    # ROBOTHOR_DB_* values without being shadowed. Explicit `env:` wins
+    # over `envFrom:` in k8s — so emitting it here would mask the Vault
+    # value silently.
     set:
       postgres.enabled: false
-      database.host: rds.example.com
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_DB_HOST
-            value: rds.example.com
+          any: true
         documentIndex: 0
 
   - it: envFrom references credentials secret

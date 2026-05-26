@@ -122,6 +122,20 @@ Shared environment variables for every Python service.
 Renders DB/Redis connection info plus deployment breadcrumbs.
 */}}
 {{- define "genus-os.commonEnv" -}}
+{{- /*
+DB host/port/name/user explicitly rendered ONLY when the in-cluster
+postgres subchart is enabled. In that mode the chart can compute the
+service name and `database.*` values are authoritative.
+
+When postgres.enabled is false (staging / production with external RDS),
+all `ROBOTHOR_DB_*` env vars come from the VSO-materialized credentials
+Secret via envFrom — including HOST, PORT, NAME, USER, PASSWORD. The
+Vault path under `ironsail-<env>/genus-os/db` is the source of truth.
+
+Explicit `env:` entries WIN over `envFrom:` in k8s, so rendering them
+here when the values are wrong would mask the Vault values silently.
+*/ -}}
+{{- if .Values.postgres.enabled }}
 - name: ROBOTHOR_DB_HOST
   value: {{ include "genus-os.postgresHost" . | quote }}
 - name: ROBOTHOR_DB_PORT
@@ -132,10 +146,13 @@ Renders DB/Redis connection info plus deployment breadcrumbs.
   value: {{ .Values.database.user | quote }}
 - name: ROBOTHOR_DB_SSLMODE
   value: {{ .Values.database.sslMode | quote }}
+{{- end }}
+{{- if .Values.redis.enabled }}
 - name: ROBOTHOR_REDIS_HOST
   value: {{ include "genus-os.redisHost" . | quote }}
 - name: ROBOTHOR_REDIS_PORT
   value: {{ .Values.redis.port | quote }}
+{{- end }}
 - name: GENUS_OS_DEPLOYED_FROM_PR
   value: {{ .Values.global.deployedFromPR | quote }}
 - name: GENUS_OS_DEPLOYED_AT
