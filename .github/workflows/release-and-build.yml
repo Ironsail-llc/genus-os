@@ -438,6 +438,7 @@ jobs:
           fetch-depth: 0
 
       - name: Bump values-staging.yaml to latest release
+        id: bump
         env:
           THIS_PR: ${{ github.event.pull_request.number }}
         run: |
@@ -445,12 +446,14 @@ jobs:
           CUR=$(yq '.global.deployedFromPR // ""' helm/genus-os/values-staging.yaml)
           if [ "$CUR" != "$THIS_PR" ]; then
             echo "Staging is held by PR=$CUR (not this one, $THIS_PR) — leaving alone."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Latest semver tag (strip leading v if present).
+          # Latest semver tag.
           LATEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)
           if [ -z "$LATEST" ]; then
             echo "No released vX.Y.Z yet — staging will sit on the previous tag until a release lands."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           yq -i ".global.imageTag = \"$LATEST\" |
@@ -460,12 +463,19 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add helm/genus-os/values-staging.yaml
           if git diff --staged --quiet; then
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git commit -m "chore(staging): reset to ${LATEST} [skip ci]"
           git push origin main
+          echo "synced=true" >> "$GITHUB_OUTPUT"
 
+      # Everything below runs ONLY when the bump actually committed a change,
+      # i.e. this PR was the one currently holding staging. PRs that never
+      # held staging short-circuit at the step above with no work — no
+      # Tailscale, no argocd, no sticky comment noise.
       - name: Tailscale up
+        if: steps.bump.outputs.synced == 'true'
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
@@ -473,12 +483,14 @@ jobs:
           tags: tag:github-ci
 
       - name: Install ArgoCD CLI
+        if: steps.bump.outputs.synced == 'true'
         run: |
           curl -sSL -o /usr/local/bin/argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x /usr/local/bin/argocd
 
       - name: Sync staging
+        if: steps.bump.outputs.synced == 'true'
         env:
           ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
@@ -487,6 +499,7 @@ jobs:
           argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900 || true
 
       - name: Sticky released-the-slot comment
+        if: steps.bump.outputs.synced == 'true'
         uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: deploy-staging
