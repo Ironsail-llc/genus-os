@@ -219,7 +219,11 @@ jobs:
   comment-pr:
     name: Sticky PR comment
     needs: [build]
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging') && success()
+    if: |
+      always()
+      && needs.build.result == 'success'
+      && github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,10 +255,11 @@ jobs:
     name: Deploy to production
     needs: [release, build]
     if: |
-      github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
+      always()
+      && needs.build.result == 'success'
       && needs.release.outputs.new_release_published == 'true'
-      && success()
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -299,11 +304,12 @@ jobs:
     name: Deploy to staging
     needs: [build]
     if: |
-      github.event_name == 'pull_request'
+      always()
+      && needs.build.result == 'success'
+      && github.event_name == 'pull_request'
       && github.event.action != 'closed'
       && github.event.action != 'unlabeled'
       && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
-      && success()
     runs-on: ubuntu-latest
     concurrency:
       group: staging-deploy
