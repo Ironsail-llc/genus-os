@@ -3,13 +3,14 @@ name: Release & Build
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - 'helm/**'
-      - 'CHANGELOG.md'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'docs/**'
-      - '**/*.md'
+    # No `paths-ignore`. Every bot-authored push to main carries `[skip ci]`
+    # in the commit message (semantic-release, deploy-staging bump,
+    # staging-reset bump), which GitHub Actions natively respects to skip
+    # the workflow run. Filtering paths additionally swallows legitimate
+    # cases — a chart-only `feat(helm):` PR or a human edit of
+    # values-production.yaml needs to trigger a release + build + deploy,
+    # but `helm/**` paths-ignore would silently skip the workflow and
+    # leave production on stale code.
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, closed]
   workflow_dispatch:
