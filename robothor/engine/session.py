@@ -91,10 +91,77 @@ class AgentSession:
         self._tool_offload_threshold = tool_offload_threshold
         self._step_costs: list[float] = []
         self.todo_list: TodoList | None = None
+        # ── Upgrade-plan session state (Phase 0 foundation) ────────────
+        # Counters and slots that Rip 1 (background-review fork),
+        # Rip 9 (interrupt/steer), and Rip 10 (trajectory capture)
+        # all read or write. Promoted here so the runner can stay
+        # ignorant of which rips are enabled; the hooks read them
+        # off the session directly.
+        self._iters_since_skill: int = 0
+        self._turns_since_memory: int = 0
+        self._user_turn_count: int = 0
+        self._cached_system_prompt: str | None = None
+        self._pending_steer: str | None = None
+        self._interrupt_requested: bool = False
+        self._interrupt_message: str | None = None
 
     @property
     def run_id(self) -> str:
         return self.run.id
+
+    # ── Rip 9: interrupt / steer APIs ──────────────────────────────
+    # Used by external callers (Telegram bot, future web UI) to
+    # influence a live run without killing it. The runner checks
+    # ``_interrupt_requested`` at every iteration boundary; if set,
+    # it drains ``_interrupt_message`` into the next turn's input
+    # and clears the flag. ``steer`` adds a system-tagged nudge for
+    # the next turn without halting the current one.
+
+    def interrupt(self, message: str | None = None) -> None:
+        """Request that the runner halt this session at the next safe checkpoint.
+
+        ``message``, if provided, is surfaced to the agent on the
+        next turn (so the operator can redirect rather than just
+        kill). Idempotent — calling twice with new messages updates
+        ``_interrupt_message`` and keeps the flag set.
+        """
+        self._interrupt_requested = True
+        self._interrupt_message = message
+
+    def steer(self, text: str) -> None:
+        """Inject a single steering message into the next iteration.
+
+        Unlike :meth:`interrupt`, steer never halts the run — it
+        adds a system-tagged message that the runner drains before
+        the next API call so the agent sees ("here's an update mid-
+        thought, adjust") in-context.
+        """
+        if not text:
+            return
+        # If a prior steer is still pending, concatenate so we don't
+        # lose the operator's earlier guidance.
+        if self._pending_steer:
+            self._pending_steer = f"{self._pending_steer}\n\n{text}"
+        else:
+            self._pending_steer = text
+
+    def consume_pending_steer(self) -> str | None:
+        """Pop and return any pending steer text, or ``None`` if none."""
+        text, self._pending_steer = self._pending_steer, None
+        return text
+
+    def consume_interrupt(self) -> str | None:
+        """Pop and return the pending interrupt message if requested.
+
+        Returns the message (which may be ``None`` when the operator
+        wanted to halt without saying anything) and clears the flag.
+        Returns ``None`` when no interrupt was requested.
+        """
+        if not self._interrupt_requested:
+            return None
+        msg, self._interrupt_message = self._interrupt_message, None
+        self._interrupt_requested = False
+        return msg or ""
 
     def start(
         self,

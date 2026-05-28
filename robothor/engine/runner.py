@@ -454,6 +454,72 @@ class AgentRunner:
         self.registry = get_registry()
         self._active_watchdog: _StallWatchdog | None = None
 
+    # ── Upgrade-plan hook points (Phase 0 foundation) ──────────────────
+    # These two methods are no-ops by default. Future rips wire their
+    # behavior here without further surgery on _run_loop or _finish_run:
+    #
+    #   Rip 1  (background-review fork)  → schedules a forked agent
+    #          in _after_response_delivered when memory/skill nudge
+    #          counters trip.
+    #   Rip 9  (interrupt/steer)         → drains pending steer in
+    #          _after_iteration so the next API call sees it.
+    #   Rip 10 (trajectory capture)      → persists session messages
+    #          in _after_response_delivered when sampling fires.
+    #
+    # Hook methods are kept on AgentRunner (rather than a registry) so
+    # subclasses can override directly and so the hot-path call sites
+    # stay one line each.
+
+    async def _after_iteration(
+        self,
+        session: AgentSession,
+        iteration: int,
+        prev_tool_names: list[str] | None = None,
+    ) -> None:
+        """Per-iteration hook. Called at the end of every tool loop turn.
+
+        Default: no-op. Future rips override to advance session
+        counters, drain steers, or update watchdog state. Must stay
+        non-blocking and exception-safe — the caller suppresses
+        exceptions to keep the loop alive.
+        """
+
+    def _after_response_delivered(
+        self,
+        session: AgentSession,
+        run: AgentRun,
+    ) -> None:
+        """Post-response hook. Called from _finish_run before return.
+
+        Default behaviour (Rip 1): when ``ROBOTHOR_RIP_1_ENABLED=1``
+        and the session's nudge counters have tripped, schedule the
+        background-review fork as a non-blocking asyncio task. The
+        fork runs concurrently while ``_finish_run`` finishes
+        persisting the foreground response.
+
+        The hook is sync because ``_finish_run`` is sync. The actual
+        fork uses ``asyncio.create_task`` inside
+        ``background_review.fire_and_forget``; when no loop is running
+        (e.g. tests calling _finish_run directly without an event
+        loop), the call falls silent rather than raising.
+
+        Subclasses that need additional behaviour can override this
+        and call ``super()._after_response_delivered(...)`` to keep
+        the Rip 1 wiring.
+        """
+        from robothor.engine import background_review
+
+        background_review.fire_and_forget(session)
+
+        # Rip 10: persist trajectory transcript (sampling controlled
+        # by ROBOTHOR_TRAJECTORY_SAMPLE; 0.0 default → never).
+        try:
+            from robothor.engine.trajectory import save_trajectory_for_run
+
+            save_trajectory_for_run(session, run)
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            logger.debug("trajectory: post-response save raised: %s", exc)
+
     async def execute(
         self,
         agent_id: str,
@@ -2306,6 +2372,20 @@ class AgentRunner:
             except Exception as e:
                 logger.debug("Step flush failed (non-fatal): %s", _sanitize(e))
 
+            # Rip 1 — advance the skill nudge counter every iteration
+            # that actually consumed tool calls. Bare-text iterations
+            # (assistant just emits content with no tool calls) don't
+            # count as "work" for the purposes of the skill nudge —
+            # they're chitchat, not lessons-to-capture. The check is
+            # cheap and never raises in practice; suppress for safety.
+            with contextlib.suppress(Exception):
+                session._iters_since_skill += 1
+
+            # Phase 0 hook: per-iteration extension point. No-op by
+            # default; future rips wire counters / steer drain / etc.
+            with contextlib.suppress(Exception):
+                await self._after_iteration(session, _iteration)
+
     # ─── Continuous mode progress report ─────────────────────────────
 
     async def _send_progress_report(
@@ -3475,6 +3555,14 @@ class AgentRunner:
                 check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
             except Exception as e:
                 logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── Phase 0 hook: post-response extension point ──────────────
+        # No-op by default; future rips spawn background reviews
+        # (Rip 1), persist trajectories (Rip 10), etc. Suppressed so a
+        # broken hook never blocks the run from finalizing.
+        if session is not None:
+            with contextlib.suppress(Exception):
+                self._after_response_delivered(session, run)
 
         # ── [STAGE 5] Lift unfinished todo_write items to the parent task ──
         # Closes the "full circle": a worker that ran out of
