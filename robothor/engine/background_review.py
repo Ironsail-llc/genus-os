@@ -373,6 +373,17 @@ async def spawn_background_review(
     transcript = _render_transcript_tail(session.messages)
     message = _build_review_message(decision, transcript_tail=transcript)
 
+    # Rip 4: tag every skill / memory write originating inside the
+    # forked review as 'background_review' so the curator (Rip 5) can
+    # tell auto-created skills from user-authored ones and only prune
+    # the former.
+    from robothor.engine.skill_provenance import (
+        BACKGROUND_REVIEW,
+        reset_current_write_origin,
+        set_current_write_origin,
+    )
+
+    provenance_token = set_current_write_origin(BACKGROUND_REVIEW)
     try:
         result = await _handle_spawn_agent(
             {
@@ -392,6 +403,8 @@ async def spawn_background_review(
             exc,
         )
         return None
+    finally:
+        reset_current_write_origin(provenance_token)
 
     logger.info(
         "background_review completed: session=%s memory=%s skills=%s status=%s",
