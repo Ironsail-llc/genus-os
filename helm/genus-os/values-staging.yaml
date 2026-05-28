@@ -7,9 +7,9 @@
 # released `vX.Y.Z` on PR close / unlabel.
 
 global:
-  imageTag: "pr-135-sha-46e5f1a"
+  imageTag: "pr-135-sha-dbde9ad"
   deployedFromPR: "135"
-  deployedAt: "2026-05-28T19:17:45Z"
+  deployedAt: "2026-05-28T19:57:07Z"
 # Cloud env — never run the in-cluster subcharts. RDS supplies Postgres.
 postgres:
   enabled: false
