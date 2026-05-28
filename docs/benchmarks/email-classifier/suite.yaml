@@ -43,7 +43,7 @@ tasks:
       must_contain: ["routed|calendar|schedule|meeting|reply"]
 
   - id: classify-urgent-deadline-today
-    prompt: "New email from jenkins@example.com — Subject: 'ACTION REQUIRED: Contract expires today — signature needed by 5pm ET'. Body: 'Hi Philip, the MSA with Acme Corp expires end-of-day today. Without a signed renewal, our service agreement lapses and the $42K monthly billing pauses. Legal has the final draft ready. Can you sign today? Reply to this thread or call 555-0142.'"
+    prompt: "New email from jenkins@example.com — Subject: 'ACTION REQUIRED: Contract expires today — signature needed by 5pm ET'. Body: 'Hi Operator, the MSA with Acme Corp expires end-of-day today. Without a signed renewal, our service agreement lapses and the $42K monthly billing pauses. Legal has the final draft ready. Can you sign today? Reply to this thread or call 555-0142.'"
     category: correctness
     weight: 2.0
     expected:

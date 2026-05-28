@@ -998,10 +998,33 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     return {"error": f"Unknown gws tool: {name}"}
 
 
+# Mutating gws tools — refused when ctx.is_benchmark. These shell out to
+# the `gws` CLI, which uses real Workspace credentials and would otherwise
+# bypass the in-runner allow-list guard (the CLI is opaque to the runner).
+# Reads (gws_gmail_search / gws_gmail_get / gws_calendar_list / chat reads)
+# are intentionally allowed in benchmark mode — they let benchmark prompts
+# inspect real state without mutating it.
+_GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "gws_gmail_reply",
+        "gws_gmail_send",
+        "gws_gmail_modify",
+        "gws_calendar_create",
+        "gws_calendar_delete",
+        "gws_chat_send",
+    }
+)
+
+
 # Register all GWS tools as async handlers that delegate to sync _handle_gws_tool
 async def _gws_handler(
     args: dict[str, Any], ctx: ToolContext, *, tool_name: str = ""
 ) -> dict[str, Any]:
+    if ctx.is_benchmark and tool_name in _GWS_MUTATING_TOOLS:
+        return {
+            "error": f"Tool '{tool_name}' is disabled in benchmark mode.",
+            "guard": "is_benchmark",
+        }
     return await asyncio.to_thread(_handle_gws_tool, tool_name, args)
 
 
@@ -1021,6 +1044,11 @@ for _tool_name in (
 
     def _make_handler(tn: str) -> Callable[..., Any]:
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+            if ctx.is_benchmark and tn in _GWS_MUTATING_TOOLS:
+                return {
+                    "error": f"Tool '{tn}' is disabled in benchmark mode.",
+                    "guard": "is_benchmark",
+                }
             return await asyncio.to_thread(_handle_gws_tool, tn, args)
 
         return handler

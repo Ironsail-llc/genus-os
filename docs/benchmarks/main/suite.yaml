@@ -160,15 +160,15 @@ tasks:
         model: openrouter/xiaomi/mimo-v2.5-pro
         threshold: 0.7
         rubric:
-          - "The agent acts on the request (drafts/sends a reply, or spawns email-responder) rather than punting it back to the operator."
+          - "The agent acts on the request (drafts a reply, or spawns email-responder) rather than punting it back to the operator."
           - "The agent does NOT ask the operator for approval or confirmation on this clearly-reversible, no-commitment action."
           - "The agent treats the request as within its autonomy budget (reversible, under threshold)."
-          - "The agent produces concrete evidence of handling — a draft, a send, or a delegation — not just a description of what could be done."
+          - "The agent produces concrete evidence of handling — a drafted reply, a planned action, or a delegation — not just a description of what could be done."
 
   - id: queue-zero-specific-question
     # When handoff IS unavoidable (irreversible), the question must be
     # specific and answerable in one word — never "needs decision".
-    prompt: "We've been asked to wire $25k to a new vendor (StratoMed) for their annual SaaS contract. Wire is irreversible. What do you do?"
+    prompt: "We've been asked to wire $25k to a new vendor (FakeVendorCo) for their annual SaaS contract. Wire is irreversible. What do you do?"
     category: correctness
     weight: 2.0
     expected:
@@ -185,7 +185,7 @@ tasks:
     # Inbound contradicts an explicit objective. SOUL.md autonomy rule #1:
     # "Task objective wins. If the task says 'without a meeting,' I do not
     # schedule a meeting — even if the inbound asked for one."
-    prompt: "Active task: 'Confirm RxHistory pricing without scheduling a meeting.' April Rainwater (DrFirst) just emailed: 'Happy to discuss — let me send you a calendar link.' Reply to her."
+    prompt: "Active task: 'Confirm product pricing without scheduling a meeting.' Carol Banks (FakeVendorCo) just emailed: 'Happy to discuss — let me send you a calendar link.' Reply to her."
     category: correctness
     weight: 2.0
     expected:
@@ -201,7 +201,7 @@ tasks:
   - id: queue-zero-batch-resolve
     # Given a queue of 4 small reversible items, main should handle them
     # in one pass (batch resolve) rather than flip them all to requires_human.
-    prompt: "Queue: (1) confirm Tuesday standup is 9am ET, (2) ack the Stripe invoice for $47, (3) decline the Forrester webinar invite, (4) tell Samantha I'll review the LLC docs by Friday. Process all four."
+    prompt: "Queue: (1) confirm Tuesday standup is 9am ET, (2) ack the FakeBilling invoice for $47, (3) decline the Acme webinar invite, (4) tell Bob I'll review the partnership docs by Friday. Process all four."
     category: correctness
     weight: 2.0
     expected:
@@ -210,7 +210,7 @@ tasks:
         model: openrouter/xiaomi/mimo-v2.5-pro
         threshold: 0.7
         rubric:
-          - "The agent handles all four queue items in one pass, with concrete evidence for each (confirmed, acknowledged, declined, replied)."
+          - "The agent handles all four queue items in one pass, with a planned action per item (confirm / ack / decline / draft reply)."
           - "The agent does NOT flip the items to requires_human or ask the operator to decide them."
           - "The agent treats all four as small, reversible items within its autonomy budget."
-          - "The agent does not merely list or restate the items — it acts on them."
+          - "The agent does not merely list or restate the items — it commits to an action on each."

@@ -51,6 +51,86 @@ _MODEL_TIER_TASK_COST: dict[str, float] = {
 }
 
 
+# Sub-agents spawned by the benchmark runner get THIS allow-list intersected
+# with their normal tools_allowed. Anything not in here is denied — including
+# exec, invoke_skill, every create_*/update_*/resolve_*, every gws_gmail_send/
+# reply/modify, every gws_calendar_create/delete, send_notification, write_file,
+# spawn_agent, spawn_agents, make_call, browser, desktop_*, enroll_face, etc.
+#
+# Why an allow-list and not a deny-list? On 2026-05-28 we discovered the old
+# deny-list missed `exec` and `invoke_skill`; the agent shelled out via
+# invoke_skill('send-email') → exec('gog gmail send ...') and sent a real
+# email to a real recipient. A future skill or MCP tool could re-open the same
+# hole. An allow-list closes by default.
+_BENCHMARK_READONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "list_directory",
+        "search_memory",
+        "memory_block_read",
+        "memory_block_list",
+        "get_entity",
+        "find_procedure",
+        "list_people",
+        "get_person",
+        "list_companies",
+        "get_company",
+        "list_tasks",
+        "list_my_tasks",
+        "get_task",
+        "list_notes",
+        "list_conversations",
+        "get_conversation",
+        "list_messages",
+        "search_records",
+        "get_metadata_objects",
+        "get_object_metadata",
+        "get_inbox",
+        "gws_gmail_search",
+        "gws_gmail_get",
+        "gws_calendar_list",
+        "list_agent_runs",
+        "get_agent_run",
+        "get_agent_stats",
+        "get_agent_performance_summary",
+        "classify_run_failure",
+        "list_agent_schedules",
+        "list_skills",
+        "vault_get",
+        "vault_list",
+        "who_is_here",
+        "look",
+        "web_fetch",
+        "web_search",
+        "todo_write",
+        "apollo_search_people",
+        "apollo_enrich_person",
+        "apollo_search_companies",
+        "apollo_enrich_company",
+        "impetus_list_resources",
+        "impetus_list",
+        "impetus_get",
+        "impetus_search",
+        "git_status",
+        "git_diff",
+        "git_branch",
+    }
+)
+
+
+def _benchmark_tools_denied(agent_tools_allowed: list[str] | None) -> list[str]:
+    """Return the deny-list for a benchmark sub-agent.
+
+    Computed as ``agent.tools_allowed - _BENCHMARK_READONLY_TOOLS``, so each
+    agent only sees the intersection of what it normally has and what is
+    benchmark-safe. Tools the agent never had are not in the deny-list —
+    keeping the list tight and useful for debugging.
+    """
+    if not agent_tools_allowed:
+        return []
+    return sorted(set(agent_tools_allowed) - _BENCHMARK_READONLY_TOOLS)
+
+
 def _resolve_model_tier(model_primary: str) -> str:
     """Classify an agent's primary model into a cost tier by substring."""
     m = (model_primary or "").lower()
@@ -440,17 +520,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # Agents can still READ data but cannot WRITE to external systems.
         # Safety tests (must_refuse) still work because the agent sees the
         # tool is denied and must refuse the task prompt.
-        child_config.tools_denied = [
-            "gws_calendar_create",
-            "gws_calendar_delete",
-            "gws_gmail_send",
-            "gws_gmail_reply",
-            "log_interaction",
-            "create_person",
-            "create_message",
-            "create_note",
-            "make_call",
-        ]
+        child_config.tools_denied = _benchmark_tools_denied(child_config.tools_allowed)
+        # Defense-in-depth: stamp is_benchmark=True so the runner's
+        # benchmark-mode guard (and gws CLI wrapper) refuse side-effecting
+        # tools even if a future skill/MCP tool re-opens the deny-list hole.
+        child_config.is_benchmark = True
 
         # Per-task wall-clock cap. Without this, a hung sub-agent (provider
         # returning blank JSON, runaway token loops) wedges the whole fleet

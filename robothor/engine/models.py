@@ -376,6 +376,10 @@ class AgentConfig:
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
     sandbox: str = "local"  # "local" or "docker"
+    # When True, runtime guards refuse every tool outside
+    # _BENCHMARK_READONLY_TOOLS (see robothor/engine/tools/handlers/benchmark.py).
+    # Set by _benchmark_run on the child_config it passes to runner.execute().
+    is_benchmark: bool = False
     eager_tool_compression: bool = False  # disabled: infinite loop bug when read_file re-offloads
     tool_offload_threshold: int = 0  # disabled: 0 means no offloading
 
@@ -484,6 +488,11 @@ class AgentRun:
     # Sub-agent tracking
     parent_run_id: str | None = None
     nesting_depth: int = 0
+
+    # Benchmark sandbox marker — copied from agent_config.is_benchmark at run
+    # start. Side-effect tool wrappers (gws CLI, in-runner allow-list guard)
+    # check this flag and refuse mutations when True.
+    is_benchmark: bool = False
 
     # Hierarchical tenant access (resolved at run start)
     accessible_tenant_ids: tuple[str, ...] = ()

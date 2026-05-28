@@ -509,6 +509,13 @@ class AgentRunner:
         session.run.user_id = user_id
         session.run.user_role = user_role
 
+        # Benchmark sandbox marker — when the parent (typically benchmark-runner
+        # via _benchmark_run) stamps the child_config with is_benchmark=True,
+        # propagate onto the AgentRun so side-effect tool wrappers (gws CLI
+        # bypass, etc.) can short-circuit. Belt to the L1 allow-list
+        # suspenders in robothor/engine/tools/handlers/benchmark.py.
+        session.run.is_benchmark = bool(getattr(agent_config, "is_benchmark", False))
+
         # Sub-agent: link to parent run + inherit user identity
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id
@@ -1903,6 +1910,7 @@ class AgentRunner:
                             timeout=_tool_timeout,
                             accessible_tenant_ids=session.run.accessible_tenant_ids,
                             task_author_override=agent_config.task_author_override,
+                            is_benchmark=session.run.is_benchmark,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1916,6 +1924,7 @@ class AgentRunner:
                         timeout=_tool_timeout,
                         accessible_tenant_ids=session.run.accessible_tenant_ids,
                         task_author_override=agent_config.task_author_override,
+                        is_benchmark=session.run.is_benchmark,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 

@@ -943,3 +943,238 @@ class TestScoreTaskWithJudge:
         expected = {"must_contain": ["hello"], "must_not_contain": ["goodbye"]}
         score = await _score_task_async("hello world", expected, {})
         assert score == 1.0
+
+
+class TestBenchmarkSandbox:
+    """Benchmark sub-agents must run with a tight read-only allow-list.
+
+    Regression coverage for the 2026-05-28 incident where benchmark sub-agents
+    sent real emails to Samantha @ ironsailpharma.com via:
+        gws_gmail_send  → BLOCKED ✓
+        invoke_skill('send-email') → returned shell instructions
+        exec 'gog gmail send ...' → SENT real email.
+
+    The old deny-list missed exec, invoke_skill, create_task, send_notification,
+    spawn_agent, write_file. The fix is an allow-list intersection.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dangerous_tools_denied_even_if_agent_allows_them(self):
+        """Any tool outside _BENCHMARK_READONLY_TOOLS must end up in tools_denied."""
+        from robothor.engine.tools.handlers.benchmark import (
+            _BENCHMARK_READONLY_TOOLS,
+            _benchmark_run,
+        )
+
+        store, read_fn, write_fn = _mock_blocks()
+        store["benchmark:main:s1"] = json.dumps(
+            {
+                "id": "s1",
+                "agent_id": "main",
+                "max_cost_usd": 1.0,
+                "tasks": [
+                    {
+                        "id": "t1",
+                        "prompt": "x",
+                        "category": "correctness",
+                        "weight": 1.0,
+                        "expected": {"must_contain": ["x"]},
+                    }
+                ],
+            }
+        )
+
+        mock_run = _make_mock_run(output_text="x")
+        mock_runner = MagicMock()
+        mock_runner.execute = AsyncMock(return_value=mock_run)
+        mock_runner.config = MagicMock()
+        mock_runner.config.manifest_dir = "/tmp"
+
+        agent_cfg = MagicMock()
+        agent_cfg.max_iterations = 10
+        agent_cfg.cost_budget_usd = 1.0
+        # Realistic main-agent allow-list: mix of safe and unsafe.
+        agent_cfg.tools_allowed = [
+            "read_file",
+            "search_memory",
+            "gws_gmail_search",
+            "todo_write",
+            # Unsafe — must be denied:
+            "exec",
+            "invoke_skill",
+            "create_task",
+            "update_task",
+            "resolve_task",
+            "send_notification",
+            "spawn_agent",
+            "spawn_agents",
+            "write_file",
+            "gws_gmail_send",
+            "gws_gmail_reply",
+            "gws_gmail_modify",
+            "gws_calendar_create",
+            "gws_calendar_delete",
+            "log_interaction",
+            "create_person",
+            "create_message",
+            "create_note",
+            "make_call",
+        ]
+        agent_cfg.tools_denied = []
+        agent_cfg.is_benchmark = False
+
+        p1, p2 = _block_patches(read_fn, write_fn)
+        with (
+            p1,
+            p2,
+            patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=mock_runner),
+            patch("robothor.engine.config.load_agent_config", return_value=agent_cfg),
+        ):
+            await _benchmark_run(
+                {"agent_id": "main", "suite_id": "s1", "tag": "t"},
+                CTX,
+            )
+
+        # After _benchmark_run, the child_config the runner received has
+        # been mutated. Inspect it via the execute() call.
+        assert mock_runner.execute.await_count == 1
+        kwargs = mock_runner.execute.await_args.kwargs
+        child = kwargs["agent_config"]
+        denied = set(child.tools_denied)
+
+        # Every dangerous tool must be denied.
+        unsafe = {
+            "exec",
+            "invoke_skill",
+            "create_task",
+            "update_task",
+            "resolve_task",
+            "send_notification",
+            "spawn_agent",
+            "spawn_agents",
+            "write_file",
+            "gws_gmail_send",
+            "gws_gmail_reply",
+            "gws_gmail_modify",
+            "gws_calendar_create",
+            "gws_calendar_delete",
+            "log_interaction",
+            "create_person",
+            "create_message",
+            "create_note",
+            "make_call",
+        }
+        leaked = unsafe - denied
+        assert not leaked, f"benchmark sandbox leaks tools: {sorted(leaked)}"
+
+        # Safe read-only tools must NOT be denied.
+        safe_used = {"read_file", "search_memory", "gws_gmail_search", "todo_write"}
+        wrongly_denied = safe_used & denied
+        assert not wrongly_denied, f"benchmark sandbox over-denies: {sorted(wrongly_denied)}"
+
+        # And the allow-list constant must be a frozenset of strings.
+        assert isinstance(_BENCHMARK_READONLY_TOOLS, frozenset)
+        assert all(isinstance(t, str) for t in _BENCHMARK_READONLY_TOOLS)
+        # Sanity: it covers the basics.
+        assert "read_file" in _BENCHMARK_READONLY_TOOLS
+        assert "search_memory" in _BENCHMARK_READONLY_TOOLS
+        assert "gws_gmail_search" in _BENCHMARK_READONLY_TOOLS
+        assert "exec" not in _BENCHMARK_READONLY_TOOLS
+        assert "invoke_skill" not in _BENCHMARK_READONLY_TOOLS
+        assert "create_task" not in _BENCHMARK_READONLY_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_is_benchmark_flag_propagates_to_child_config(self):
+        """L2: benchmark handler must stamp is_benchmark=True on child_config."""
+        from robothor.engine.tools.handlers.benchmark import _benchmark_run
+
+        store, read_fn, write_fn = _mock_blocks()
+        store["benchmark:main:s2"] = json.dumps(
+            {
+                "id": "s2",
+                "agent_id": "main",
+                "max_cost_usd": 1.0,
+                "tasks": [
+                    {
+                        "id": "t1",
+                        "prompt": "x",
+                        "category": "correctness",
+                        "weight": 1.0,
+                        "expected": {"must_contain": ["x"]},
+                    }
+                ],
+            }
+        )
+
+        mock_run = _make_mock_run(output_text="x")
+        mock_runner = MagicMock()
+        mock_runner.execute = AsyncMock(return_value=mock_run)
+        mock_runner.config = MagicMock()
+        mock_runner.config.manifest_dir = "/tmp"
+
+        agent_cfg = MagicMock()
+        agent_cfg.max_iterations = 10
+        agent_cfg.cost_budget_usd = 1.0
+        agent_cfg.tools_allowed = ["read_file"]
+        agent_cfg.tools_denied = []
+        agent_cfg.is_benchmark = False
+
+        p1, p2 = _block_patches(read_fn, write_fn)
+        with (
+            p1,
+            p2,
+            patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=mock_runner),
+            patch("robothor.engine.config.load_agent_config", return_value=agent_cfg),
+        ):
+            await _benchmark_run(
+                {"agent_id": "main", "suite_id": "s2", "tag": "t"},
+                CTX,
+            )
+
+        child = mock_runner.execute.await_args.kwargs["agent_config"]
+        assert child.is_benchmark is True, (
+            "benchmark handler must stamp is_benchmark=True so the runner and "
+            "gws CLI wrapper can enforce read-only at runtime"
+        )
+
+
+class TestIsBenchmarkRuntimeGuard:
+    """The is_benchmark flag must be enforced at the side-effect choke points.
+
+    Layer 2 belt to layer 1's suspenders: even if a future skill or MCP tool
+    re-introduces a side-effecting path, ctx.is_benchmark short-circuits it.
+    """
+
+    def test_tool_context_has_is_benchmark_field(self):
+        from robothor.engine.tools.dispatch import ToolContext
+
+        ctx = ToolContext(agent_id="x", is_benchmark=True)
+        assert ctx.is_benchmark is True
+
+        ctx_default = ToolContext(agent_id="x")
+        assert ctx_default.is_benchmark is False
+
+    @pytest.mark.asyncio
+    async def test_gws_send_refuses_when_is_benchmark(self):
+        """gws_gmail_send must NOT shell out when ctx.is_benchmark is True."""
+        from robothor.engine.tools.dispatch import ToolContext
+        from robothor.engine.tools.handlers.gws import HANDLERS
+
+        handler = HANDLERS["gws_gmail_send"]
+        ctx = ToolContext(agent_id="main", is_benchmark=True)
+
+        # If the guard fails, this would try to shell out to `gws` CLI and
+        # send a real email. We rely on the guard refusing before any I/O.
+        called = {"hit": False}
+
+        def _no_shell(*args, **kwargs):
+            called["hit"] = True
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
+        with patch("robothor.engine.tools.handlers.gws._run_gws", side_effect=_no_shell):
+            result = await handler({"to": "bob@example.com", "subject": "x", "body": "x"}, ctx)
+
+        assert called["hit"] is False, "gws_gmail_send shelled out in benchmark mode"
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "benchmark" in result["error"].lower()
