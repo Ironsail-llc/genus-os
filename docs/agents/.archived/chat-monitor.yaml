@@ -1,0 +1,96 @@
+id: chat-monitor
+name: Chat Monitor
+description: Classifies incoming Google Chat messages and routes them for response
+  or escalation
+version: '2026-03-08'
+department: communications
+reports_to: main
+creates_tasks_for:
+- chat-responder
+receives_tasks_from: []
+escalates_to: main
+downstream_agents:
+- chat-responder
+model:
+  primary: openrouter/xiaomi/mimo-v2.5-pro
+  fallbacks:
+  - openrouter/minimax/minimax-m2.5
+  - openrouter/google/gemini-2.5-pro
+  payload_alias: glm5
+schedule:
+  timezone: America/New_York
+  max_iterations: 5
+  session_target: isolated
+  enabled: false
+delivery:
+  mode: none
+hooks:
+- stream: chat
+  event_type: chat.new_message
+  message: New Google Chat message detected. Read chat-log.json, classify messages,
+    and create tasks.
+tools_allowed:
+- read_file
+- write_file
+- search_memory
+- get_entity
+- store_memory
+- create_task
+- list_tasks
+- gws_chat_list_messages
+- append_to_block
+tools_denied:
+- message
+- gws_chat_send
+streams:
+  read:
+  - chat
+  write: []
+status_file: brain/memory/chat-monitor-status.md
+goals:
+  quality:
+  - id: passes-its-job
+    metric: benchmark_pass_rate
+    target: '>=0.85'
+    weight: 5.0
+    window_days: 7
+  correctness:
+  - id: low-error
+    metric: error_rate
+    target: <0.05
+    weight: 1.5
+    window_days: 7
+  - id: tool-success
+    metric: tool_success_rate
+    target: '>0.95'
+    weight: 1.0
+    window_days: 7
+task_protocol: false
+notification_inbox: false
+warmup:
+  context_files:
+  - brain/memory/chat-monitor-status.md
+instruction_file: brain/agents/CHAT_MONITOR.md
+bootstrap_files:
+- brain/AGENTS.md
+- brain/TOOLS.md
+tags_produced:
+- chat
+- chat-respond
+- chat-info
+- escalation
+tags_consumed: []
+v2:
+  error_feedback: true
+  guardrails:
+  - write_path_restrict
+  write_path_allowlist:
+  - brain/memory/chat-monitor-status.md
+  - brain/memory/chat-log.json
+changelog:
+- date: '2026-03-08'
+  change: "Disable standalone schedule (chat-pipeline workflow is canonical trigger\
+    \ \u2014 prevents dual-firing); increase timeout 300s\u2192480s to match fleet\
+    \ standard [nightwatch]"
+- date: '2026-03-06'
+  change: "Initial manifest \u2014 Chat message classifier"

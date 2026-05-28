@@ -12,6 +12,7 @@
 # Agent manifests and instruction files
 brain/*.md
 brain/*.bak
+brain/*.bak.*
 !brain/README.md
 brain/agents/
 brain/delphi/

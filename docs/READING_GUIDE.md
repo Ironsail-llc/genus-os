@@ -38,6 +38,7 @@
 | Contact resolution | `crm/bridge/contact_resolver.py` |
 | Memory blocks | `brain/AGENTS.md` (Memory Blocks section) |
 | Services & ports | `SERVICES.md` |
+| Connecting an external API/MCP | `docs/CONNECTORS.md` (generic REST→MCP bridge for Claude Code + engine) |
 | Hardware & infrastructure | `INFRASTRUCTURE.md` |
 | Writing or running tests | `docs/TESTING.md` + `brain/memory_system/conftest.py` |
 | Backup / SSD / restore | `scripts/backup-ssd.sh` + `INFRASTRUCTURE.md` (External Storage) |

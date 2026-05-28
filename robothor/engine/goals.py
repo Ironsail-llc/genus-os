@@ -288,15 +288,19 @@ def _get_benchmark_pass_rate(
     tenant_id: str = DEFAULT_TENANT,
     as_of: datetime | None = None,
 ) -> float | None:
-    """Return the most recent benchmark pass_rate for an agent within the window.
+    """Return the most recent benchmark pass rate for an agent within the window.
 
-    The pass rate comes from the `benchmark_results` table, which is populated
-    by the benchmark_run tool (see robothor.engine.tools.handlers.benchmark).
-    This is the "did the agent do its job?" metric — set by 2026-05-06
-    operator directive as the canonical agent grade.
+    The pass rate is computed as ``passed / total_cases`` from the latest
+    `benchmark_results` row — a *true* pass rate, not the `pass_rate` column,
+    which actually stores the partial-credit aggregate score (a task only
+    needs a 0.70 partial score to be "passed"). Scoring the >=0.85 goal
+    against that aggregate checked the wrong scale; passed/total_cases is the
+    honest "did the agent do its job?" metric. Both columns have always been
+    written correctly, so this is consistent across all historical rows.
 
-    Returns the latest pass_rate (0.0-1.0) from a row whose run_at falls within
-    [as_of - window_days, as_of]. Returns None if no row exists.
+    Returns a value in [0.0, 1.0] from a row whose run_at falls within
+    [as_of - window_days, as_of]. Returns None if no row exists or the row
+    has zero cases (no data, not a 0% pass rate).
     """
     try:
         from robothor.crm.dal import get_connection
@@ -309,7 +313,7 @@ def _get_benchmark_pass_rate(
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT pass_rate
+                SELECT passed, total_cases
                 FROM benchmark_results
                 WHERE agent_id = %s
                   AND tenant_id = %s
@@ -323,8 +327,10 @@ def _get_benchmark_pass_rate(
             row = cur.fetchone()
             if row is None:
                 return None
-            value = row[0]
-            return float(value) if value is not None else None
+            passed, total_cases = row[0], row[1]
+            if not total_cases:  # None or 0 — no data, not a 0% pass rate
+                return None
+            return round(float(passed) / float(total_cases), 4)
     except Exception as exc:
         logger.debug("benchmark_pass_rate lookup failed for %s: %s", agent_id, exc)
         return None
@@ -379,7 +385,12 @@ def _get_session_goal_progress(
     agent_id: str,
     tenant_id: str = DEFAULT_TENANT,
 ) -> float | None:
-    """Return validated_evidence / max(success_criteria, 1) for this agent's goal."""
+    """Return validated_evidence / len(success_criteria) for this agent's goal.
+
+    Returns None when there is no active goal, no metadata, no criteria,
+    or criteria is empty — so agents without real success criteria don't
+    false-trigger as 0.0 (which would breach >=1.0).
+    """
     row = _load_active_goal_for_agent(agent_id, tenant_id)
     if not row:
         return None
@@ -390,9 +401,10 @@ def _get_session_goal_progress(
     evidence = meta.get("evidence") or []
     if not isinstance(criteria, list) or not isinstance(evidence, list):
         return None
+    if not criteria:
+        return None
     valid_count = sum(1 for e in evidence if isinstance(e, dict) and e.get("valid"))
-    denom = max(len(criteria), 1)
-    return round(valid_count / denom, 4)
+    return round(valid_count / len(criteria), 4)
 
 
 def compute_goal_metrics(
@@ -686,9 +698,33 @@ def compute_achievement_score(
     per_goal: list[dict[str, Any]] = []
     satisfied_ids: list[str] = []
     breached_ids: list[str] = []
+    unmeasured_ids: list[str] = []
 
     for goal in goals:
         metric_value = snapshots[goal.window_days].get(goal.metric)
+
+        # None = "not measured this window" = neutral, NOT a breach. Mirrors
+        # detect_goal_breach's `if val is None: continue` and the
+        # compute_goal_metrics contract that omits absent metrics. Such a goal
+        # is excluded from total_weight entirely — it neither helps nor hurts
+        # the score — and surfaced in `unmeasured_goals` for visibility
+        # instead of being mislabeled a breach. Check `is None`, not
+        # falsiness: a genuine 0.0 metric is measured and must still count.
+        if metric_value is None:
+            unmeasured_ids.append(goal.id)
+            per_goal.append(
+                {
+                    "id": goal.id,
+                    "category": goal.category,
+                    "metric": goal.metric,
+                    "target": goal.target,
+                    "actual": None,
+                    "satisfied": None,
+                    "weight": goal.weight,
+                }
+            )
+            continue
+
         is_satisfied = _evaluate_target(metric_value, goal.target)
         total_weight += goal.weight
         if is_satisfied:
@@ -708,24 +744,34 @@ def compute_achievement_score(
             }
         )
 
-    score = (weighted_satisfied / total_weight) if total_weight > 0 else 0.0
-    # Map [0, 1] → rating [1, 5]
-    if score >= 0.95:
-        rating = 5
-    elif score >= 0.80:
-        rating = 4
-    elif score >= 0.60:
-        rating = 3
-    elif score >= 0.40:
-        rating = 2
+    # Edge case: every goal is unmeasured. There is no evidence either way, so
+    # a numeric score would be a fabrication — return None. 0.0 is what caused
+    # the false fleet-score crash (indistinguishable from "all goals breached").
+    score: float | None
+    rating: int | None
+    if total_weight > 0:
+        score = round(weighted_satisfied / total_weight, 4)
+        # Map [0, 1] → rating [1, 5]
+        if score >= 0.95:
+            rating = 5
+        elif score >= 0.80:
+            rating = 4
+        elif score >= 0.60:
+            rating = 3
+        elif score >= 0.40:
+            rating = 2
+        else:
+            rating = 1
     else:
-        rating = 1
+        score = None
+        rating = None
 
     return {
-        "score": round(score, 4),
+        "score": score,
         "rating": rating,
         "satisfied_goals": satisfied_ids,
         "breached_goals": breached_ids,
+        "unmeasured_goals": unmeasured_ids,
         "per_goal": per_goal,
     }
 
@@ -750,13 +796,22 @@ def run_nightly_auto_review(
         achievement = compute_achievement_score(agent_id, goals, tenant_id=tenant_id)
         breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
 
-        # Build feedback text + action items from breaches.
-        feedback_lines = [
-            f"Goal achievement: {achievement['score']:.2f} "
-            f"({len(achievement['satisfied_goals'])}/"
-            f"{len(achievement['satisfied_goals']) + len(achievement['breached_goals'])}"
-            " goals satisfied)."
-        ]
+        # Build feedback text + action items from breaches. ``score`` is None
+        # when every goal is unmeasured this window — emit an honest "not
+        # measured" line rather than crashing the f-string format.
+        score = achievement["score"]
+        if score is None:
+            feedback_lines = [
+                "Goal achievement: not measured "
+                f"({len(achievement.get('unmeasured_goals', []))} goal(s) have "
+                "no data this window)."
+            ]
+        else:
+            total_goals = len(achievement["satisfied_goals"]) + len(achievement["breached_goals"])
+            feedback_lines = [
+                f"Goal achievement: {score:.2f} "
+                f"({len(achievement['satisfied_goals'])}/{total_goals} goals satisfied)."
+            ]
         if achievement["breached_goals"]:
             feedback_lines.append("Breached: " + ", ".join(achievement["breached_goals"]) + ".")
 
@@ -781,7 +836,9 @@ def run_nightly_auto_review(
 
         review_id = register_review(
             agent_id=agent_id,
-            rating=achievement["rating"],
+            # rating is None when score is None — create_review clamps to
+            # 1-5 and would crash on None; 3 (neutral) is the honest default.
+            rating=achievement["rating"] or 3,
             categories=categories,
             feedback="\n".join(feedback_lines),
             action_items=action_items,
@@ -830,9 +887,10 @@ def _main() -> None:
     if args.cmd == "nightly-review":
         results = run_nightly_auto_review(manifests)
         for r in results:
+            score_str = "  n/a" if r["score"] is None else f"{r['score']:.2f}"
+            rating_str = "-" if r["rating"] is None else str(r["rating"])
             print(
-                f"{r['agent_id']:22} rating={r['rating']} "
-                f"score={r['score']:.2f} breaches={r['breaches']}"
+                f"{r['agent_id']:22} rating={rating_str} score={score_str} breaches={r['breaches']}"
             )
         return
 

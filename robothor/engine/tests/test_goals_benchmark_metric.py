@@ -78,10 +78,13 @@ class FakeConn:
 
 
 class TestGetBenchmarkPassRate:
-    def test_returns_float_when_row_exists(self):
+    def test_returns_true_pass_rate_from_passed_over_total(self):
+        """The metric is passed/total_cases — a real pass rate, not the
+        partial-credit `pass_rate` aggregate column (which only needs 0.70
+        per task to count as a pass)."""
         with patch(
             "robothor.crm.dal.get_connection",
-            return_value=FakeConn([(0.92,)]),
+            return_value=FakeConn([(46, 50)]),
         ):
             value = _get_benchmark_pass_rate("email-classifier", window_days=7)
         assert value == pytest.approx(0.92)
@@ -92,6 +95,15 @@ class TestGetBenchmarkPassRate:
             return_value=FakeConn([]),
         ):
             value = _get_benchmark_pass_rate("never-graded", window_days=7)
+        assert value is None
+
+    def test_returns_none_when_total_cases_zero(self):
+        """A row with zero cases is not a 0% pass rate — it's no data."""
+        with patch(
+            "robothor.crm.dal.get_connection",
+            return_value=FakeConn([(0, 0)]),
+        ):
+            value = _get_benchmark_pass_rate("empty-suite", window_days=7)
         assert value is None
 
 

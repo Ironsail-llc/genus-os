@@ -1189,7 +1189,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.13.4" },
     { name = "apscheduler", specifier = "~=3.10" },
     { name = "cryptography", specifier = ">=46.0.6" },
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115,!=0.136.3" },
     { name = "genusos", extras = ["api", "vision", "rlm", "tui", "federation", "dev"], marker = "extra == 'all'" },
     { name = "html2text", specifier = "~=2024.2" },
     { name = "httpx", specifier = "~=0.27" },

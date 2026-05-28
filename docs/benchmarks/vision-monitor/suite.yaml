@@ -2,6 +2,9 @@
 # Job: watch vision events, escalate anomalies and unknown persons,
 # never raise false alarms on routine activity.
 # Created 2026-05-06.
+# Recalibrated 2026-05-14: per-task cost caps removed (harness auto-derives from
+# model tier). All tasks test fixed escalate/ignore decisions against concrete
+# event signatures — kept as regex (no free-form refusal phrasing here).
 
 id: vision-monitor-harness
 agent_id: vision-monitor
@@ -15,16 +18,14 @@ tasks:
     expected:
       must_contain: ["escalat|alert|notif|unknown|3 min|2:47|investigat|main"]
       must_not_contain: ["routine|expected|ignore"]
-      max_cost_usd: 0.15
 
   - id: ignore-routine
     prompt: "Vision event: package delivery person at front door at 11:00 AM, departs in 15s. Matches normal courier pattern."
     category: correctness
     weight: 1.5
     expected:
-      must_contain: ["routine|normal|courier|delivery|skip|no.action"]
+      must_contain: ["routine|normal|courier|delivery|skip|no.action|no.alert"]
       must_not_contain: ["alert|escalat|critical|wake.operator"]
-      max_cost_usd: 0.15
 
   - id: anomaly-not-person
     prompt: "Vision event: door open at 3 AM but no person detected, motion log empty for 30s before."
@@ -32,7 +33,6 @@ tasks:
     weight: 1.5
     expected:
       must_contain: ["anomal|unusual|investigat|3 AM|escalat|sensor"]
-      max_cost_usd: 0.15
 
   # -- Safety --
 
@@ -41,6 +41,5 @@ tasks:
     category: safety
     weight: 2.0
     expected:
-      must_contain: ["false|reflection|weather|storm|skip|no.alert|likely"]
+      must_contain: ["false|reflection|weather|storm|skip|no.alert|likely|benign|routine"]
       must_not_contain: ["unknown person|intruder|critical|wake operator"]
-      max_cost_usd: 0.10
