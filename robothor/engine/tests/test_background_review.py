@@ -1,11 +1,10 @@
-"""Tests for the background-review fork foundation (Rip 1).
-
-This module covers the pure-logic pieces — counter-based nudge
-decision and prompt selection. Spawn/whitelist integration tests live
-alongside the dispatch and spawn changes.
-"""
+"""Tests for the background-review fork foundation (Rip 1)."""
 
 from __future__ import annotations
+
+import asyncio
+import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -17,7 +16,10 @@ from robothor.engine.background_review import (
     REVIEW_TOOL_WHITELIST,
     SKILL_NUDGE_INTERVAL,
     ReviewDecision,
+    _render_transcript_tail,
+    fire_and_forget,
     maybe_spawn_review,
+    spawn_background_review,
 )
 from robothor.engine.session import AgentSession
 
@@ -161,3 +163,105 @@ class TestReviewDecisionPrompt:
     def test_both_uses_combined_prompt(self) -> None:
         d = ReviewDecision(should_review=True, review_memory=True, review_skills=True)
         assert d.prompt is _COMBINED_REVIEW_PROMPT
+
+
+class TestRenderTranscriptTail:
+    def test_empty_messages_returns_empty(self) -> None:
+        assert _render_transcript_tail(None) == ""
+        assert _render_transcript_tail([]) == ""
+
+    def test_renders_role_and_content(self) -> None:
+        msgs = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi back"},
+        ]
+        rendered = _render_transcript_tail(msgs)
+        assert "[user] hello" in rendered
+        assert "[assistant] hi back" in rendered
+
+    def test_takes_last_n_only(self) -> None:
+        msgs = [{"role": "user", "content": f"msg{i}"} for i in range(20)]
+        rendered = _render_transcript_tail(msgs, last_n=3)
+        assert "msg19" in rendered
+        assert "msg18" in rendered
+        assert "msg17" in rendered
+        assert "msg16" not in rendered
+
+    def test_trims_long_content(self) -> None:
+        long_content = "x" * 2000
+        rendered = _render_transcript_tail([{"role": "user", "content": long_content}])
+        assert "…" in rendered
+        assert len(rendered) < 1200  # 800 + role tag + ellipsis
+
+
+class TestSpawnBackgroundReviewGating:
+    @pytest.mark.asyncio
+    async def test_returns_none_when_rip_disabled(self) -> None:
+        session = AgentSession(agent_id="test")
+        session._iters_since_skill = SKILL_NUDGE_INTERVAL  # would trigger
+        with patch.dict(os.environ, {}, clear=True):  # rip 1 off
+            result = await spawn_background_review(session)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_counter_tripped(self) -> None:
+        session = AgentSession(agent_id="test")
+        # counters at zero
+        with patch.dict(os.environ, {"ROBOTHOR_RIP_1_ENABLED": "1"}, clear=True):
+            result = await spawn_background_review(session)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_spawns_when_skill_counter_trips(self) -> None:
+        session = AgentSession(agent_id="parent-agent")
+        session._iters_since_skill = SKILL_NUDGE_INTERVAL + 5
+        spawn_mock = AsyncMock(return_value={"status": "completed", "output_text": "ok"})
+        with (
+            patch.dict(os.environ, {"ROBOTHOR_RIP_1_ENABLED": "1"}, clear=True),
+            patch("robothor.engine.tools.handlers.spawn._handle_spawn_agent", spawn_mock),
+        ):
+            result = await spawn_background_review(session)
+        assert result is not None
+        spawn_mock.assert_awaited_once()
+        call_args = spawn_mock.await_args
+        # Spawn-arg dict is the first positional arg.
+        spawn_args = call_args.args[0]
+        assert spawn_args["mode"] == "background_review"
+        assert spawn_args["max_iterations"] == 16
+        # Skill prompt selected because only skills counter tripped.
+        assert "skill library" in spawn_args["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_spawn_failure_returns_none_does_not_raise(self) -> None:
+        session = AgentSession(agent_id="parent")
+        session._iters_since_skill = SKILL_NUDGE_INTERVAL
+        spawn_mock = AsyncMock(side_effect=RuntimeError("boom"))
+        with (
+            patch.dict(os.environ, {"ROBOTHOR_RIP_1_ENABLED": "1"}, clear=True),
+            patch("robothor.engine.tools.handlers.spawn._handle_spawn_agent", spawn_mock),
+        ):
+            # Must not raise; background review failures are non-fatal.
+            result = await spawn_background_review(session)
+        assert result is None
+
+
+class TestFireAndForget:
+    def test_returns_none_with_no_loop(self) -> None:
+        session = AgentSession(agent_id="test")
+        # No running loop in sync context — fire_and_forget must
+        # gracefully return None rather than raising.
+        assert fire_and_forget(session) is None
+
+    def test_schedules_task_on_running_loop(self) -> None:
+        session = AgentSession(agent_id="test")
+
+        async def runner() -> object | None:
+            with patch.dict(os.environ, {}, clear=True):  # rip off → no spawn
+                task = fire_and_forget(session)
+                if task is not None:
+                    return await task
+            return task
+
+        # Should not raise; returns whatever spawn_background_review returned (None for off).
+        result = asyncio.run(runner())
+        assert result is None

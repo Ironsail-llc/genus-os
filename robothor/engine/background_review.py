@@ -32,14 +32,25 @@ logs) covers them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from robothor.engine.feature_flags import is_rip_enabled
 
 if TYPE_CHECKING:
     from robothor.engine.session import AgentSession
 
 logger = logging.getLogger(__name__)
+
+
+# Which agent runs the review. The Hermes pattern forks the SAME
+# agent so the cached system prompt matches — that's the prefix-cache
+# trick. Until we plumb system_prompt_override through runner.execute
+# (Rip 1 v2), we use a dedicated reviewer agent if configured, falling
+# back to the parent agent.
+DEFAULT_REVIEWER_AGENT_ID = "main"
 
 
 # ── Tuning knobs ─────────────────────────────────────────────────────
@@ -285,3 +296,124 @@ def maybe_spawn_review(
         review_memory=review_memory,
         review_skills=review_skills,
     )
+
+
+def _build_review_message(decision: ReviewDecision, transcript_tail: str = "") -> str:
+    """Wrap the review prompt with the conversation tail for the fork.
+
+    The Hermes fork inherits parent ``messages`` so the model already
+    sees the conversation; ours uses a fresh sub-agent run via
+    ``spawn_agent``, so we splice a short transcript tail into the
+    review message instead. ``transcript_tail`` is best-effort — the
+    foreground agent renders the same memory tool, so even an empty
+    tail will produce reasonable behaviour (the agent will reason from
+    cold memory state).
+    """
+    prompt = decision.prompt
+    if not transcript_tail:
+        return prompt
+    return f"{prompt}\n\n── Conversation tail for context ──\n{transcript_tail}\n── End of tail ──"
+
+
+def _render_transcript_tail(messages: list[dict[str, object]] | None, last_n: int = 12) -> str:
+    """Render the last N messages as a compact transcript for the review prompt."""
+    if not messages:
+        return ""
+    tail = messages[-last_n:]
+    parts: list[str] = []
+    for m in tail:
+        role = m.get("role", "?")
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            # tool result list — flatten textually
+            content = " ".join(
+                str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content
+            )
+        # Trim very long messages to keep the review prompt manageable
+        if isinstance(content, str) and len(content) > 800:
+            content = content[:800] + " …"
+        parts.append(f"[{role}] {content}")
+    return "\n".join(parts)
+
+
+async def spawn_background_review(
+    session: AgentSession,
+    *,
+    reviewer_agent_id: str = DEFAULT_REVIEWER_AGENT_ID,
+    decision: ReviewDecision | None = None,
+) -> dict[str, object] | None:
+    """Spawn the background-review fork (Rip 1 main entry point).
+
+    Reads the per-session counters via :func:`maybe_spawn_review` (if no
+    explicit ``decision`` is supplied), builds the review prompt with a
+    short transcript tail, and dispatches a child agent run with
+    ``mode='background_review'`` so the dispatch whitelist locks the
+    child to memory + skill CRUD only.
+
+    Returns the child run's structured result dict, or ``None`` when
+    the rip is off / no counter tripped / spawn infrastructure
+    unavailable. Never raises — failures log and return ``None`` so the
+    runner's post-response hook stays free of background-review
+    failure modes.
+    """
+    if not is_rip_enabled(1):
+        return None
+
+    if decision is None:
+        decision = maybe_spawn_review(session)
+    if not decision.should_review:
+        return None
+
+    try:
+        from robothor.engine.tools.handlers.spawn import _handle_spawn_agent
+    except Exception:
+        logger.warning("spawn_background_review: spawn handler unavailable")
+        return None
+
+    transcript = _render_transcript_tail(session.messages)
+    message = _build_review_message(decision, transcript_tail=transcript)
+
+    try:
+        result = await _handle_spawn_agent(
+            {
+                "agent_id": reviewer_agent_id,
+                "message": message,
+                "mode": "background_review",
+                # Cap iterations conservatively — review is a single
+                # focused pass, not a wide search.
+                "max_iterations": 16,
+            },
+            agent_id=session.run.agent_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — background, never propagate
+        logger.warning(
+            "spawn_background_review failed for session %s: %s",
+            session.run_id,
+            exc,
+        )
+        return None
+
+    logger.info(
+        "background_review completed: session=%s memory=%s skills=%s status=%s",
+        session.run_id,
+        decision.review_memory,
+        decision.review_skills,
+        result.get("status") if isinstance(result, dict) else "?",
+    )
+    return result if isinstance(result, dict) else None
+
+
+def fire_and_forget(session: AgentSession, **kwargs: object) -> asyncio.Task[object] | None:
+    """Schedule :func:`spawn_background_review` as a non-blocking task.
+
+    Used by the runner's ``_after_response_delivered`` hook so the
+    background fork runs while the foreground turn returns. Returns
+    the created task, or ``None`` when not on an asyncio event loop
+    (e.g. when called from sync code with no loop available — falls
+    silent rather than raising).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    return loop.create_task(spawn_background_review(session, **kwargs))  # type: ignore[arg-type]
