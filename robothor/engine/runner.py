@@ -491,12 +491,25 @@ class AgentRunner:
     ) -> None:
         """Post-response hook. Called from _finish_run before return.
 
-        Default: no-op. Future rips override to spawn background
-        review forks (Rip 1), persist trajectories (Rip 10), or emit
-        completion telemetry. Sync because _finish_run is sync; use
-        asyncio.create_task() inside overrides if you need async work
-        on the engine's loop.
+        Default behaviour (Rip 1): when ``ROBOTHOR_RIP_1_ENABLED=1``
+        and the session's nudge counters have tripped, schedule the
+        background-review fork as a non-blocking asyncio task. The
+        fork runs concurrently while ``_finish_run`` finishes
+        persisting the foreground response.
+
+        The hook is sync because ``_finish_run`` is sync. The actual
+        fork uses ``asyncio.create_task`` inside
+        ``background_review.fire_and_forget``; when no loop is running
+        (e.g. tests calling _finish_run directly without an event
+        loop), the call falls silent rather than raising.
+
+        Subclasses that need additional behaviour can override this
+        and call ``super()._after_response_delivered(...)`` to keep
+        the Rip 1 wiring.
         """
+        from robothor.engine import background_review
+
+        background_review.fire_and_forget(session)
 
     async def execute(
         self,
@@ -2349,6 +2362,15 @@ class AgentRunner:
                 await asyncio.get_running_loop().run_in_executor(None, session.flush_new_steps_sync)
             except Exception as e:
                 logger.debug("Step flush failed (non-fatal): %s", _sanitize(e))
+
+            # Rip 1 — advance the skill nudge counter every iteration
+            # that actually consumed tool calls. Bare-text iterations
+            # (assistant just emits content with no tool calls) don't
+            # count as "work" for the purposes of the skill nudge —
+            # they're chitchat, not lessons-to-capture. The check is
+            # cheap and never raises in practice; suppress for safety.
+            with contextlib.suppress(Exception):
+                session._iters_since_skill += 1
 
             # Phase 0 hook: per-iteration extension point. No-op by
             # default; future rips wire counters / steer drain / etc.
