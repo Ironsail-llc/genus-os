@@ -41,8 +41,9 @@ docs/workflows/retired/
 /reports/
 /download.html
 
-# Instance runtime state (root memory/ is agent working data)
-memory/
+# Instance runtime state (root memory/ is agent working data — anchored
+# so robothor/memory/ and other tracked package dirs aren't swept up)
+/memory/
 
 # Backup logs
 scripts/backup.log
