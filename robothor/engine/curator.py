@@ -21,12 +21,13 @@ flips ``dry_run=False`` to enable real consolidation.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.engine.skills import SkillDefinition
 
 logger = logging.getLogger(__name__)
