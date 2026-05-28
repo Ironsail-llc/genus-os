@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from robothor.memory.drift import compute_fact_hash
-
-
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _mock_conn_yielding(rows: list) -> MagicMock:
@@ -32,7 +29,8 @@ class TestUpdateFactRip7Off:
     """When Rip 7 is off (default), drift detection is bypassed entirely."""
 
     @patch("robothor.memory.facts.get_connection")
-    def test_proceeds_without_drift_check(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_proceeds_without_drift_check(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         # Stored row with a stale hash that would normally trip drift,
@@ -41,7 +39,7 @@ class TestUpdateFactRip7Off:
         mock_get_conn.return_value = cm
 
         with patch.dict(os.environ, {}, clear=True):  # rip 7 off
-            result = _run(update_fact(42, fact_text="new text", tenant_id="t1"))
+            result = await update_fact(42, fact_text="new text", tenant_id="t1")
 
         assert result == {"ok": True, "fact_id": 42}
         # SELECT + UPDATE; no audit INSERT.
@@ -51,19 +49,21 @@ class TestUpdateFactRip7Off:
 
 class TestUpdateFactNotFound:
     @patch("robothor.memory.facts.get_connection")
-    def test_returns_not_found(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_returns_not_found(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         cm, cur = _mock_conn_yielding([None])
         mock_get_conn.return_value = cm
 
-        result = _run(update_fact(999, fact_text="x", tenant_id="t"))
+        result = await update_fact(999, fact_text="x", tenant_id="t")
         assert result == {"error": "not_found", "fact_id": 999}
 
 
 class TestUpdateFactObserveMode:
     @patch("robothor.memory.facts.get_connection")
-    def test_drift_logged_but_update_proceeds(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_drift_logged_but_update_proceeds(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         # Stored content gives a known good hash; pretend the persisted
@@ -82,7 +82,7 @@ class TestUpdateFactObserveMode:
         _ = good_hash  # noqa — keep variable, lets the test self-document
 
         with patch.dict(os.environ, {"ROBOTHOR_RIP_7_ENABLED": "1"}, clear=True):
-            result = _run(update_fact(42, fact_text="new text", tenant_id="t"))
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
 
         assert result == {"ok": True, "fact_id": 42}
         # SELECT + audit INSERT + UPDATE = 3 executes
@@ -93,7 +93,8 @@ class TestUpdateFactObserveMode:
 
 class TestUpdateFactEnforceMode:
     @patch("robothor.memory.facts.get_connection")
-    def test_drift_refuses_update(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_drift_refuses_update(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         wrong_stored = "0" * 64
@@ -110,7 +111,7 @@ class TestUpdateFactEnforceMode:
             {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": "enforce"},
             clear=True,
         ):
-            result = _run(update_fact(42, fact_text="new text", tenant_id="t"))
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
 
         assert result == {
             "error": "drift_refused",
@@ -125,7 +126,8 @@ class TestUpdateFactEnforceMode:
 
 class TestUpdateFactCleanWrite:
     @patch("robothor.memory.facts.get_connection")
-    def test_matching_hash_proceeds_without_audit(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_matching_hash_proceeds_without_audit(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         good_hash = compute_fact_hash("stored text", tenant_id="t", category="preference")
@@ -142,7 +144,7 @@ class TestUpdateFactCleanWrite:
             {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": "enforce"},
             clear=True,
         ):
-            result = _run(update_fact(42, fact_text="new text", tenant_id="t"))
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
 
         assert result == {"ok": True, "fact_id": 42}
         assert cur.execute.call_count == 2  # SELECT + UPDATE, no audit
@@ -156,7 +158,8 @@ class TestUpdateFactNullStoredHashIsFirstTouch:
     fresh row and proceed without drift complaint."""
 
     @patch("robothor.memory.facts.get_connection")
-    def test_null_stored_hash_proceeds(self, mock_get_conn: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_null_stored_hash_proceeds(self, mock_get_conn: MagicMock) -> None:
         from robothor.memory.facts import update_fact
 
         cm, cur = _mock_conn_yielding(
@@ -172,7 +175,7 @@ class TestUpdateFactNullStoredHashIsFirstTouch:
             {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": "enforce"},
             clear=True,
         ):
-            result = _run(update_fact(42, fact_text="new text", tenant_id="t"))
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
 
         assert result == {"ok": True, "fact_id": 42}
         assert cur.execute.call_count == 2  # no audit, just SELECT + UPDATE
