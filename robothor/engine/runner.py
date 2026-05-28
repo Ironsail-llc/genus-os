@@ -3232,13 +3232,34 @@ class AgentRunner:
         for model in models:
             if broken_models and model in broken_models:
                 continue
+            # Per-call timeout (seconds) — wraps each provider call so the
+            # runner cancels and falls through if the provider hangs. The
+            # `timeout` kwarg already passed to litellm is best-effort and
+            # was observed silently ignored, causing 1800s stalls against
+            # codex/gpt-5.5 in the 2026-05-28 incident.
+            per_call_timeout = (
+                LLM_REQUEST_TIMEOUT_OLLAMA
+                if model.startswith("ollama_chat/")
+                else LLM_REQUEST_TIMEOUT
+            )
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                if is_codex_model(model):
-                    result = await codex_acompletion(**kwargs)
-                else:
-                    result = await litellm.acompletion(**kwargs)
+                async with asyncio.timeout(per_call_timeout):
+                    if is_codex_model(model):
+                        result = await codex_acompletion(**kwargs)
+                    else:
+                        result = await litellm.acompletion(**kwargs)
                 return result
+            except TimeoutError as e:
+                logger.warning(
+                    "LLM call to %s exceeded %ds — cancelling and falling back",
+                    _sanitize(model),
+                    per_call_timeout,
+                )
+                self._handle_model_error(e, model, broken_models)
+                last_error = e
+                if self._active_watchdog:
+                    self._active_watchdog.touch(f"model_fallback:{model}")
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
@@ -3283,12 +3304,21 @@ class AgentRunner:
         for model in models:
             if broken_models and model in broken_models:
                 continue
+            # Per-call timeout for the initial stream-creation await.
+            # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
+            # in the consumption loop below. See _call_llm for context.
+            per_call_timeout = (
+                LLM_REQUEST_TIMEOUT_OLLAMA
+                if model.startswith("ollama_chat/")
+                else LLM_REQUEST_TIMEOUT
+            )
             try:
                 kwargs = self._build_llm_kwargs(
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 if is_codex_model(model):
-                    result = await codex_acompletion(**kwargs)
+                    async with asyncio.timeout(per_call_timeout):
+                        result = await codex_acompletion(**kwargs)
                     content = str(result.choices[0].message.content or "")
                     if on_content and content:
                         await on_content(content)
@@ -3304,7 +3334,8 @@ class AgentRunner:
                     return result
 
                 stream_start = time.monotonic()
-                stream = await litellm.acompletion(**kwargs)
+                async with asyncio.timeout(per_call_timeout):
+                    stream = await litellm.acompletion(**kwargs)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
