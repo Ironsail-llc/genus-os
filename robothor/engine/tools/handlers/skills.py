@@ -236,10 +236,37 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         created_by=ctx.agent_id,
     )
     meta["content_hash"] = _content_hash(content)
+
+    # Rip 4: stamp the write origin so the curator (Rip 5) can tell
+    # autonomous-fork creates from user-directed creates. Foreground
+    # writes (default origin) stay user-owned and are never auto-
+    # consolidated; background-review-fork writes are explicitly
+    # opt-in to curator management.
+    from robothor.engine.skill_provenance import (
+        BACKGROUND_REVIEW,
+        get_current_write_origin,
+    )
+
+    origin = get_current_write_origin()
+    meta["write_origin"] = origin
+    meta["is_agent_created"] = origin == BACKGROUND_REVIEW
+
     write_skill_meta(name, meta)
 
-    logger.info("Skill '%s' created by agent '%s' at %s", name, ctx.agent_id, path)
-    return {"created": True, "name": name, "path": str(path)}
+    logger.info(
+        "Skill '%s' created by agent '%s' (origin=%s) at %s",
+        name,
+        ctx.agent_id,
+        origin,
+        path,
+    )
+    return {
+        "created": True,
+        "name": name,
+        "path": str(path),
+        "write_origin": origin,
+        "is_agent_created": meta["is_agent_created"],
+    }
 
 
 @_handler("update_skill")
