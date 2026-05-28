@@ -21,8 +21,10 @@ flips ``dry_run=False`` to enable real consolidation.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from robothor.engine.skills import SkillDefinition
@@ -91,7 +93,7 @@ class CuratorResult:
 
 def list_curator_candidates(
     skills: dict[str, SkillDefinition] | None = None,
-    meta_loader=None,  # type: ignore[no-untyped-def]
+    meta_loader: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> tuple[list[SkillDefinition], list[str], list[str]]:
     """Return (candidates, skipped_pinned, skipped_human) for one pass.
 
@@ -128,18 +130,16 @@ def list_curator_candidates(
 
 
 def should_run_curator(
-    last_pass_at,  # type: ignore[no-untyped-def]
+    last_pass_at: datetime | None,
     *,
-    now=None,  # type: ignore[no-untyped-def]
+    now: datetime | None = None,
     interval_days: int = CURATOR_DEFAULT_INTERVAL_DAYS,
 ) -> bool:
     """Cadence gate: True iff at least ``interval_days`` have elapsed."""
-    from datetime import UTC, datetime, timedelta
-
     now = now or datetime.now(UTC)
     if last_pass_at is None:
         return True
-    return (now - last_pass_at) >= timedelta(days=interval_days)
+    return bool((now - last_pass_at) >= timedelta(days=interval_days))
 
 
 # NOTE: the actual fork spawn re-uses Rip 1's spawn_background_review

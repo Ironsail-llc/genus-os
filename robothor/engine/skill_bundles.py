@@ -158,7 +158,7 @@ def resolve_slash_command(
     command: str,
     *,
     bundles_dir: Path | None = None,
-    skills: dict | None = None,
+    skills: dict[str, object] | None = None,
 ) -> tuple[str, BundleDefinition | None]:
     """Classify a ``/command`` token as bundle, skill, or unknown.
 
@@ -179,7 +179,9 @@ def resolve_slash_command(
     if skills is None:
         from robothor.engine.skills import load_skills
 
-        skills = load_skills()
-    if token in skills:
+        loaded: dict[str, object] = dict(load_skills())
+    else:
+        loaded = skills
+    if token in loaded:
         return ("skill", None)
     return ("unknown", None)
