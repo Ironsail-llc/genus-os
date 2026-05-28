@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-from robothor.engine.feature_flags import is_rip_enabled, trajectory_sample_rate
+from robothor.engine.feature_flags import (
+    is_rip_enabled,
+    rip_7_enforcement_mode,
+    trajectory_sample_rate,
+)
 
 
 class TestIsRipEnabled:
@@ -77,3 +81,54 @@ class TestTrajectorySampleRate:
             clear=True,
         ):
             assert trajectory_sample_rate() == 0.0
+
+
+class TestRip7EnforcementMode:
+    def test_default_off_when_rip_disabled(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert rip_7_enforcement_mode() == "off"
+
+    def test_off_when_mode_set_but_rip_disabled(self) -> None:
+        with patch.dict(os.environ, {"ROBOTHOR_RIP_7_MODE": "enforce"}, clear=True):
+            assert rip_7_enforcement_mode() == "off"
+
+    def test_observe_is_default_when_enabled(self) -> None:
+        with patch.dict(os.environ, {"ROBOTHOR_RIP_7_ENABLED": "1"}, clear=True):
+            assert rip_7_enforcement_mode() == "observe"
+
+    def test_explicit_modes(self) -> None:
+        for mode in ("observe", "alert", "enforce"):
+            with patch.dict(
+                os.environ,
+                {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": mode},
+                clear=True,
+            ):
+                assert rip_7_enforcement_mode() == mode
+
+    def test_case_insensitive_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": "ENFORCE"},
+            clear=True,
+        ):
+            assert rip_7_enforcement_mode() == "enforce"
+
+    def test_invalid_mode_falls_back_to_observe(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ROBOTHOR_RIP_7_ENABLED": "1", "ROBOTHOR_RIP_7_MODE": "bogus"},
+            clear=True,
+        ):
+            assert rip_7_enforcement_mode() == "observe"
+
+    def test_global_panic_overrides_to_off(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ROBOTHOR_RIP_7_ENABLED": "1",
+                "ROBOTHOR_RIP_7_MODE": "enforce",
+                "ROBOTHOR_DISABLE_ALL_RIPS": "1",
+            },
+            clear=True,
+        ):
+            assert rip_7_enforcement_mode() == "off"
