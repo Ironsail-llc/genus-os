@@ -175,13 +175,45 @@ def get_skill_content(name: str) -> str | None:
 
 
 def build_skill_catalog(skills: dict[str, SkillDefinition] | None = None) -> str:
-    """Build a system prompt section listing available skills."""
+    """Build a system prompt section listing available skills.
+
+    Two modes:
+
+    * **Rip 3 lean catalog** (``ROBOTHOR_RIP_3_ENABLED=1``) — emits
+      one line per skill: ``- /name — description``. Description is
+      truncated to 100 chars (agentskills.io frontmatter convention).
+      No signatures, no triggers, no per-skill bullet structure. The
+      agent loads bodies on demand via the ``skill_view`` tool. This
+      keeps the per-turn system prompt small and scales to hundreds
+      of skills.
+
+    * **Legacy catalog** (default, when Rip 3 off) — full per-skill
+      description plus parameter signature plus trigger phrases.
+      Preserves backwards compatibility while Rip 3 rolls out.
+    """
     if skills is None:
         skills = load_skills()
 
     if not skills:
         return ""
 
+    from robothor.engine.feature_flags import is_rip_enabled
+
+    if is_rip_enabled(3):
+        lines = ["## Available Skills"]
+        lines.append(
+            "Call `skill_view(name=...)` to load any skill's full body before "
+            "invoking it. Call `invoke_skill(name=..., args=...)` to run."
+        )
+        lines.append("")
+        for defn in skills.values():
+            desc = (defn.description or "").strip()
+            if len(desc) > 100:
+                desc = desc[:97] + "..."
+            lines.append(f"- /{defn.name} — {desc}")
+        return "\n".join(lines)
+
+    # Legacy verbose catalog (pre-Rip 3 behaviour).
     lines = ["## Available Skills", ""]
     lines.append("Use `invoke_skill` with `name` and optional `args` dict.")
     lines.append("")

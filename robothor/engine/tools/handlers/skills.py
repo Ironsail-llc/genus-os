@@ -139,6 +139,67 @@ async def _list_skills(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     }
 
 
+@_handler("skill_view")
+async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Return the full body of one skill on demand (Rip 3).
+
+    Pair with the lean ``build_skill_catalog`` that emits only
+    name + truncated description in the system prompt. The agent
+    sees the catalog cheaply, then calls ``skill_view(name=...)``
+    when it actually needs the procedure body. Bumps the usage
+    counter so the curator (Rip 5) can rank stale skills.
+    """
+    from robothor.engine.skills import (
+        get_skill_content,
+        increment_usage,
+        load_skills,
+        read_skill_meta,
+    )
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+
+    content = get_skill_content(name)
+    if content is None:
+        return {"error": f"Skill '{name}' not found"}
+
+    skills = load_skills()
+    defn = skills[name]
+    meta = read_skill_meta(name) or {}
+
+    # Side effect: bump the usage counter so the curator can
+    # distinguish hot skills (don't archive) from cold ones
+    # (candidate for consolidation).
+    try:
+        increment_usage(name)
+    except Exception as exc:  # noqa: BLE001 — counter is best-effort
+        logger.debug("skill_view increment_usage failed for %s: %s", name, exc)
+
+    return {
+        "name": defn.name,
+        "description": defn.description,
+        "content": content,
+        "tags": list(defn.tags),
+        "parameters": [
+            {
+                "name": p.name,
+                "type": p.type,
+                "description": p.description,
+                "required": p.required,
+                **({"default": p.default} if p.default is not None else {}),
+            }
+            for p in defn.parameters
+        ],
+        "trigger_phrases": list(defn.trigger_phrases),
+        "tools_required": list(defn.tools_required),
+        "output_format": defn.output_format,
+        "write_origin": meta.get("write_origin", "foreground"),
+        "is_agent_created": meta.get("is_agent_created", False),
+        "usage_count": meta.get("usage_count", 0),
+    }
+
+
 @_handler("create_skill")
 async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Create a new reusable skill from a procedure."""
