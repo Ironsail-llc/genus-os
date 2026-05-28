@@ -91,6 +91,19 @@ class AgentSession:
         self._tool_offload_threshold = tool_offload_threshold
         self._step_costs: list[float] = []
         self.todo_list: TodoList | None = None
+        # ── Upgrade-plan session state (Phase 0 foundation) ────────────
+        # Counters and slots that Rip 1 (background-review fork),
+        # Rip 9 (interrupt/steer), and Rip 10 (trajectory capture)
+        # all read or write. Promoted here so the runner can stay
+        # ignorant of which rips are enabled; the hooks read them
+        # off the session directly.
+        self._iters_since_skill: int = 0
+        self._turns_since_memory: int = 0
+        self._user_turn_count: int = 0
+        self._cached_system_prompt: str | None = None
+        self._pending_steer: str | None = None
+        self._interrupt_requested: bool = False
+        self._interrupt_message: str | None = None
 
     @property
     def run_id(self) -> str:
