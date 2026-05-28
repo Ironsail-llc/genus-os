@@ -99,6 +99,30 @@ class TestComputeAgentScore:
         assert result.breached_goals == 1
         assert result.stat_date == date(2026, 4, 18)
 
+    @patch("robothor.engine.buddy.compute_achievement_score")
+    @patch("robothor.engine.buddy.compose_goals")
+    def test_handles_none_score(self, mock_parse, mock_compute):
+        """When every goal is unmeasured, compute_achievement_score returns
+        score=None — compute_agent_score must not crash on the int() cast."""
+        from robothor.engine.buddy import BuddyEngine
+
+        mock_parse.return_value = [object()]
+        mock_compute.return_value = {
+            "score": None,
+            "rating": None,
+            "satisfied_goals": [],
+            "breached_goals": [],
+            "unmeasured_goals": ["g1"],
+            "per_goal": [],
+        }
+        result = BuddyEngine().compute_agent_score(
+            "unmeasured-agent",
+            manifest={"id": "unmeasured-agent", "goals": {"quality": [{"id": "g"}]}},
+            target_date=date(2026, 4, 18),
+        )
+        assert result.achievement_score == 0
+        assert result.rating == 1
+
     @patch("robothor.engine.buddy.compose_goals")
     def test_no_goals_returns_zero(self, mock_parse):
         from robothor.engine.buddy import BuddyEngine

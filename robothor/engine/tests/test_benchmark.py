@@ -300,7 +300,69 @@ tasks:
             )
 
         assert result["success"] is True
-        assert result["max_cost_usd"] <= 5.0
+        # Suite-level hard cap is _MAX_COST_PER_SUITE_USD (15.0); the per-task
+        # 999.0 is clamped to the agent's model-tier ceiling (default 0.50 —
+        # no manifest at the test workspace path).
+        assert result["max_cost_usd"] <= 15.0
+
+
+class TestModelTierCostCeiling:
+    """Per-task cost ceilings derive from the agent's model tier."""
+
+    def test_resolve_model_tier(self):
+        from robothor.engine.tools.handlers.benchmark import _resolve_model_tier
+
+        assert _resolve_model_tier("openrouter/anthropic/claude-opus-4.7") == "opus"
+        assert _resolve_model_tier("openrouter/anthropic/claude-sonnet-4.6") == "sonnet"
+        assert _resolve_model_tier("openrouter/xiaomi/mimo-v2.5-pro") == "default"
+        assert _resolve_model_tier("") == "default"
+
+    def test_opus_agent_task_cap_not_clamped_to_default(self, tmp_path):
+        """An Opus agent's per-task cost cap must resolve to the Opus tier."""
+        from robothor.engine.tools.handlers.benchmark import _agent_task_cost_ceiling
+
+        agents_dir = tmp_path / "docs" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "devops-analyst.yaml").write_text(
+            "id: devops-analyst\nmodel:\n  primary: openrouter/anthropic/claude-opus-4.7\n"
+        )
+        assert _agent_task_cost_ceiling("devops-analyst", agents_dir) == 3.00
+
+    def test_missing_manifest_falls_back_to_default_tier(self, tmp_path):
+        from robothor.engine.tools.handlers.benchmark import _agent_task_cost_ceiling
+
+        assert _agent_task_cost_ceiling("nonexistent", tmp_path / "docs" / "agents") == 0.50
+
+    @pytest.mark.asyncio
+    async def test_opus_suite_keeps_high_task_cost(self, tmp_path):
+        """auto_define_suite_from_disk must not clamp an Opus suite to 0.50."""
+        from robothor.engine.tools.handlers.benchmark import auto_define_suite_from_disk
+
+        agents_dir = tmp_path / "docs" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "devops-analyst.yaml").write_text(
+            "id: devops-analyst\nmodel:\n  primary: openrouter/anthropic/claude-opus-4.7\n"
+        )
+        suite_dir = tmp_path / "docs" / "benchmarks" / "devops-analyst"
+        suite_dir.mkdir(parents=True)
+        (suite_dir / "suite.yaml").write_text(
+            "id: devops-analyst-harness\nagent_id: devops-analyst\n"
+            "tasks:\n"
+            "  - id: t1\n"
+            "    prompt: Produce a report\n"
+            "    category: correctness\n"
+            "    expected:\n"
+            '      must_contain: ["report"]\n'
+        )
+
+        _, read_fn, write_fn = _mock_blocks()
+        p1, p2 = _block_patches(read_fn, write_fn)
+        with p1, p2:
+            suite = await auto_define_suite_from_disk("devops-analyst", str(tmp_path))
+
+        assert "error" not in suite
+        # Task omitted max_cost_usd → defaults to the Opus tier ceiling, 3.00.
+        assert suite["tasks"][0]["expected"]["max_cost_usd"] == 3.00
 
 
 # ─── Handler tests: benchmark_run ───────────────────────────────────

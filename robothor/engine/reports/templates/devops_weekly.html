@@ -12,6 +12,34 @@
   <p style="margin:6px 0 0;color:#b3d4ff;font-size:14px;">{{ period }} &middot; Generated {{ generated_at }}</p>
 </td></tr>
 
+<!-- Report Quality (only shown when anomalies exist) -->
+{% if data_quality and (data_quality.unresolved_handles or data_quality.missing_from_roster) %}
+<tr><td style="padding:16px 32px;background:#fffae6;border-bottom:1px solid #ffe0b2;">
+  <h2 style="margin:0 0 8px;font-size:13px;color:#bf6500;text-transform:uppercase;letter-spacing:0.5px;">&#9888; Report Quality</h2>
+  {% if data_quality.unresolved_handles %}
+  <p style="margin:0 0 6px;font-size:12px;color:#172b4d;">
+    <strong>{{ data_quality.unresolved_handles | length }} unresolved handle(s)</strong>
+    — activity from these handles was excluded because no CRM person is linked. Add a <code>contact_identifiers</code> row to fix.
+  </p>
+  <ul style="margin:0 0 8px 16px;padding:0;font-size:12px;color:#6b778c;">
+    {% for u in data_quality.unresolved_handles[:8] %}
+    <li>{{ u.channel }}: <code>{{ u.identifier }}</code> ({{ u.occurrences }} occurrence{{ 's' if u.occurrences != 1 else '' }})</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if data_quality.missing_from_roster %}
+  <p style="margin:0 0 6px;font-size:12px;color:#172b4d;">
+    <strong>{{ data_quality.missing_from_roster | length }} engineer(s) on roster with no activity</strong> this period:
+  </p>
+  <ul style="margin:0 0 0 16px;padding:0;font-size:12px;color:#6b778c;">
+    {% for m in data_quality.missing_from_roster[:8] %}
+    <li>{{ m.name }}{% if m.job_title %} <span style="color:#a5adba;">({{ m.job_title }})</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</td></tr>
+{% endif %}
+
 <!-- Executive Summary -->
 <tr><td style="padding:24px 32px;">
   <h2 style="margin:0 0 16px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Executive Summary</h2>
@@ -145,7 +173,7 @@
   <tbody>
     {% for p in people %}
     <tr>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ p.name }}{% if p.note %} <span style="font-size:11px;color:#6b778c;">({{ p.note }})</span>{% endif %}</td>
+      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ p.name }}{% if p.note %} <span style="font-size:11px;color:#6b778c;">({{ p.note }})</span>{% endif %}{% if p.resolved is defined and not p.resolved %} <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#fffae6;color:#bf6500;border:1px solid #ffe0b2;">unlinked</span>{% endif %}</td>
       <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.tickets }}</td>
       <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.prs }}</td>
       <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.reviews }}</td>

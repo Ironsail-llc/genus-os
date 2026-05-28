@@ -108,6 +108,19 @@ def format_report(data: dict) -> str:
             for t in stale
         )
 
+    # Data quality flags — let the team see when the pipeline missed something
+    dq = data.get("data_quality") or {}
+    unresolved = dq.get("unresolved_handles") or []
+    missing = dq.get("missing_from_roster") or []
+    if unresolved or missing:
+        bits = []
+        if unresolved:
+            bits.append(f"{len(unresolved)} unresolved handle(s)")
+        if missing:
+            bits.append(f"{len(missing)} engineer(s) absent")
+        lines.append("")
+        lines.append(f"⚠ Report quality: {', '.join(bits)} (see email panel)")
+
     lines.append("")
     lines.append(
         "Full HTML report emailed to stakeholders. Full data in devops_latest_report memory block — ask me to unpack any section."

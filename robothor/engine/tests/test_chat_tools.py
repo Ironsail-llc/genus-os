@@ -62,9 +62,10 @@ class TestChatListSpaces:
             assert "spaces" in result
             assert result["spaces"][0]["name"] == "spaces/AAAA"
 
-            # Verify gws command structure
+            # Verify gws command structure (handler may resolve the real binary path)
             call_args = mock_run.call_args[0][0]
-            assert call_args[:4] == ["gws", "chat", "spaces", "list"]
+            assert call_args[0].endswith("gws")
+            assert call_args[1:4] == ["chat", "spaces", "list"]
             params = json.loads(call_args[call_args.index("--params") + 1])
             assert params["pageSize"] == 50
 

@@ -4,11 +4,12 @@ After=postgresql.service robothor-engine.service
 
 [Service]
 Type=oneshot
-User=robothor
-Group=robothor
+User=philip
+Group=philip
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 Environment=ROBOTHOR_TENANT_ID=robothor-primary
+Environment=HOME=/home/philip
 TimeoutStartSec=120
-WorkingDirectory=${ROBOTHOR_WORKSPACE}
-ExecStart=${ROBOTHOR_WORKSPACE}/venv/bin/python ${ROBOTHOR_WORKSPACE}/scripts/daily_benchmark_summary.py
+WorkingDirectory=/home/philip/robothor
+ExecStart=/home/philip/robothor/venv/bin/python /home/philip/robothor/scripts/daily_benchmark_summary.py

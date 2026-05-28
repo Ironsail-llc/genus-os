@@ -193,15 +193,97 @@ async def _github_get_pr(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     return result
 
 
+_BOT_LOGIN_BASENAMES = frozenset(
+    {
+        "dependabot",
+        "renovate",
+        "github-actions",
+        "release-please",
+        "pre-commit-ci",
+        "codecov",
+        "codecov-commenter",
+        "semantic-release",
+    }
+)
+
+
+def _is_bot_login(login: str) -> bool:
+    """Detect bot GitHub logins.
+
+    Matches the conventional `<name>[bot]` suffix or a small allowlist of
+    known bot base names (some bots author PRs from a user account without
+    the [bot] suffix).
+    """
+    if not login:
+        return False
+    if login.endswith("[bot]"):
+        return True
+    return login.lower() in _BOT_LOGIN_BASENAMES
+
+
+def _to_github_search_ts(iso: str) -> str:
+    """Normalize an RFC3339/ISO timestamp to GitHub Search's `Z`-suffixed form.
+
+    GitHub Search accepts `YYYY-MM-DDTHH:MM:SSZ`; the `+00:00` offset form
+    is silently *ignored* by the qualifier parser, so we must rewrite.
+    """
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _search_merged_pr_numbers(
+    client: httpx.AsyncClient,
+    repo: str,
+    since_iso: str,
+    until_iso: str,
+    headers: dict[str, str],
+    max_pages: int = 10,
+) -> list[int]:
+    """Return PR numbers merged in [since, until) via the GitHub Search API.
+
+    GitHub Search does NOT combine `merged:>=A merged:<B` (only the last
+    qualifier wins). Use the `merged:A..B` range form. The range is
+    inclusive on both ends — subtract 1s from `until` so a PR merged
+    exactly at the boundary doesn't double-count across week windows.
+    """
+    since = _to_github_search_ts(since_iso)
+    until_dt = datetime.fromisoformat(until_iso) - timedelta(seconds=1)
+    if until_dt.tzinfo is None:
+        until_dt = until_dt.replace(tzinfo=UTC)
+    until = until_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = f"repo:{repo} is:pr is:merged merged:{since}..{until}"
+    numbers: list[int] = []
+    next_url: str | None = f"{_GITHUB_API}/search/issues"
+    params: dict[str, Any] | None = {"q": q, "per_page": 100}
+    for _ in range(max_pages):
+        if not next_url:
+            break
+        resp = await client.get(next_url, headers=headers, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        for item in data.get("items", []):
+            num = item.get("number")
+            if num is not None:
+                numbers.append(num)
+        link = resp.headers.get("Link", "")
+        next_url = None
+        params = None
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                next_url = part.split(";")[0].strip().strip("<>")
+                break
+    return numbers
+
+
 @_handler("github_pr_stats")
 async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Get aggregated PR metrics for a repo over a date range.
+    """Aggregated PR metrics for a repo over a date range.
 
-    Supports two modes:
-    - days: N — rolling N-day lookback (legacy)
-    - since + until: RFC3339 — precise date range (new, for dual-window reports)
-    If 'since' is provided, it takes precedence over 'days'.
-    'until' is optional — if omitted, defaults to now.
+    Uses the GitHub Search API to enumerate PRs merged in [since, until),
+    then fans out per-PR detail fetches for cycle time / size / merged_by.
+    Server-side date filtering means high-churn repos no longer undercount.
     """
     token = _get_token()
     if not token:
@@ -211,38 +293,45 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     if not repo:
         return {"error": "repo is required (format: owner/repo)"}
 
-    # Determine date range
     since_str = args.get("since")
-    until_str = args.get("until")
-
-    if since_str:
-        since = datetime.fromisoformat(since_str)
-        if since.tzinfo is None:
-            since = since.replace(tzinfo=UTC)
-        if until_str:
-            until = datetime.fromisoformat(until_str)
-            if until.tzinfo is None:
-                until = until.replace(tzinfo=UTC)
-        else:
-            until = datetime.now(UTC)
-        period = {"since": since_str, "until": until_str or until.isoformat()}
-    else:
-        days = min(args.get("days", 30), 90)
-        since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        since = since - timedelta(days=days)
-        until = datetime.now(UTC)
-        period = days  # integer for legacy callers
+    if not since_str:
+        return {"error": "since is required (RFC3339 timestamp)"}
+    until_str = args.get("until") or datetime.now(UTC).isoformat()
+    period = {"since": since_str, "until": until_str}
 
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            # Get merged PRs
-            prs = await _paginate(
-                client,
-                f"{_GITHUB_API}/repos/{repo}/pulls",
-                _headers(token),
-                {"state": "closed", "sort": "updated", "direction": "desc", "per_page": 100},
-                max_pages=5,
-            )
+            headers = _headers(token)
+            numbers = await _search_merged_pr_numbers(client, repo, since_str, until_str, headers)
+            if not numbers:
+                return {
+                    "repo": repo,
+                    "period": period,
+                    "merged_count": 0,
+                    "bot_merged_count": 0,
+                    "bot_authors": {},
+                    "avg_cycle_time_hours": 0,
+                    "median_cycle_time_hours": 0,
+                    "avg_size_lines": 0,
+                    "authors": {},
+                    "merged_by": {},
+                    "message": "No merged PRs in this period",
+                }
+            sem = asyncio.Semaphore(8)
+
+            async def _fetch_detail(num: int) -> dict[str, Any] | None:
+                async with sem:
+                    try:
+                        resp = await client.get(
+                            f"{_GITHUB_API}/repos/{repo}/pulls/{num}", headers=headers
+                        )
+                        resp.raise_for_status()
+                        data: dict[str, Any] = resp.json()
+                        return data
+                    except Exception:
+                        return None
+
+            details = await asyncio.gather(*[_fetch_detail(n) for n in numbers])
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             return {"error": f"Repository {repo} not found"}
@@ -250,52 +339,46 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     except Exception as e:
         return {"error": f"GitHub request failed: {e}"}
 
-    # Filter to merged PRs within date range (skip closed-but-not-merged)
-    merged_prs = []
-    for pr in prs:
-        merged_at = pr.get("merged_at")
-        if not merged_at:
-            continue
-        merged_dt = datetime.fromisoformat(merged_at)
-        if merged_dt >= since.replace(tzinfo=UTC) and merged_dt < until.replace(tzinfo=UTC):
-            merged_prs.append(pr)
+    merged_prs = [d for d in details if d and d.get("merged_at")]
 
-    if not merged_prs:
-        return {
-            "repo": repo,
-            "period": period,
-            "merged_count": 0,
-            "message": "No merged PRs in this period",
-        }
-
-    # Calculate metrics — exclude drafts from cycle time to avoid inflation
-    cycle_times_hours = []
-    sizes = []
+    human_prs: list[dict[str, Any]] = []
+    bot_authors: dict[str, int] = {}
     for pr in merged_prs:
-        created = datetime.fromisoformat(pr["created_at"])
-        merged = datetime.fromisoformat(pr["merged_at"])
-        # Skip drafts from cycle time calc (they inflate averages)
+        author = (pr.get("user") or {}).get("login", "unknown")
+        if _is_bot_login(author):
+            bot_authors[author] = bot_authors.get(author, 0) + 1
+        else:
+            human_prs.append(pr)
+
+    cycle_times_hours: list[float] = []
+    sizes: list[int] = []
+    for pr in human_prs:
         if pr.get("draft"):
+            continue
+        try:
+            created = datetime.fromisoformat(pr["created_at"])
+            merged = datetime.fromisoformat(pr["merged_at"])
+        except (KeyError, TypeError, ValueError):
             continue
         cycle_times_hours.append((merged - created).total_seconds() / 3600)
         sizes.append((pr.get("additions") or 0) + (pr.get("deletions") or 0))
 
-    # Author breakdown
     author_counts: dict[str, int] = {}
-    for pr in merged_prs:
+    for pr in human_prs:
         author = (pr.get("user") or {}).get("login", "unknown")
         author_counts[author] = author_counts.get(author, 0) + 1
 
-    # Merged-by breakdown (who actually clicked merge)
     merged_by_counts: dict[str, int] = {}
-    for pr in merged_prs:
+    for pr in human_prs:
         merger = (pr.get("merged_by") or {}).get("login", "unknown")
         merged_by_counts[merger] = merged_by_counts.get(merger, 0) + 1
 
     return {
         "repo": repo,
         "period": period,
-        "merged_count": len(merged_prs),
+        "merged_count": len(human_prs),
+        "bot_merged_count": sum(bot_authors.values()),
+        "bot_authors": bot_authors,
         "avg_cycle_time_hours": round(sum(cycle_times_hours) / len(cycle_times_hours), 1)
         if cycle_times_hours
         else 0,

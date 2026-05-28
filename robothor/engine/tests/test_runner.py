@@ -996,3 +996,38 @@ class TestAssessOutcome:
         )
         AgentRunner._assess_outcome(run)
         assert run.outcome_assessment == "successful"
+
+
+class TestSynthesizeWrapupSummary:
+    """When the force-wrapup LLM call comes back empty, the run must still
+    produce a non-empty final text — synthesized from the tool actions taken.
+    Regression: curiosity-engine ending on a memory_block_write at the
+    iteration cap used to yield output_text=None."""
+
+    def test_summary_lists_distinct_tool_actions(self):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("curiosity-engine", trigger_type=TriggerType.CRON)
+        session.record_tool_call("memory_search", {}, {"ok": True}, "tc-1")
+        session.record_tool_call("store_memory", {}, {"ok": True}, "tc-2")
+        session.record_tool_call("store_memory", {}, {"ok": True}, "tc-3")  # dup
+
+        summary = AgentRunner._synthesize_wrapup_summary(session, "Iteration cap reached.")
+
+        assert "memory_search" in summary
+        assert "store_memory" in summary
+        assert "2 tool action(s)" in summary  # deduplicated
+        assert summary.strip()
+
+    def test_summary_when_no_tools_called(self):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("curiosity-engine", trigger_type=TriggerType.CRON)
+        summary = AgentRunner._synthesize_wrapup_summary(session, "Iteration cap reached.")
+
+        assert "No output was produced" in summary
+        assert summary.strip()

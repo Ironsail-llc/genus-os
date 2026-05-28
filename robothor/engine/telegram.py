@@ -144,6 +144,7 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
+    "GPT-5.5 (subscription)": "codex/gpt-5.5",
     "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
     "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",

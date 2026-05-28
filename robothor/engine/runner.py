@@ -2387,6 +2387,43 @@ class AgentRunner:
             trace,
         )
 
+        # The wrap-up call can still come back empty — provider returns blank
+        # content, or only thinking blocks with no text. Without a final
+        # assistant text the run's output_text is None, so a run that did
+        # real work (e.g. curiosity-engine ending on a memory_block_write at
+        # the iteration cap) looks like it produced nothing. Synthesize a
+        # minimal summary from the tool calls so output_text is never empty
+        # after work was done.
+        if not (session.get_final_text() or "").strip():
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "content": self._synthesize_wrapup_summary(session, reason),
+                }
+            )
+
+    @staticmethod
+    def _synthesize_wrapup_summary(session: AgentSession, reason: str) -> str:
+        """Build a fallback final summary when the wrap-up call produced no text.
+
+        Lists the distinct tool actions the run completed so a truncated run
+        that did real work is not reported as empty output.
+        """
+        tool_names: list[str] = []
+        for step in session.run.steps:
+            if (
+                step.step_type == StepType.TOOL_CALL
+                and step.tool_name
+                and step.tool_name not in tool_names
+            ):
+                tool_names.append(step.tool_name)
+        if tool_names:
+            return (
+                f"[Run ended: {reason}] No final summary was produced. "
+                f"Completed {len(tool_names)} tool action(s): {', '.join(tool_names)}."
+            )
+        return f"[Run ended: {reason}] No output was produced."
+
     # ─── LLM call helper (shared by main loop and wrap-up) ─────
 
     async def _llm_call_and_record(
@@ -2490,34 +2527,63 @@ class AgentRunner:
         )
 
         # Best-effort cost tracking (cache-aware fallback)
-        try:
-            cost = litellm.completion_cost(completion_response=response, model=models[0])
-            if cost and cost > 0:
-                session.run.total_cost_usd += cost
-            else:
-                cost = self._calculate_cost(
-                    models[0],
-                    input_tokens,
-                    output_tokens,
-                    cache_creation_tokens,
-                    cache_read_tokens,
-                )
-                session.run.total_cost_usd += cost
-        except Exception as e:
-            logger.warning("litellm cost calculation failed, using fallback: %s", e)
-            cost = self._calculate_cost(
-                models[0],
-                input_tokens,
-                output_tokens,
-                cache_creation_tokens,
-                cache_read_tokens,
-            )
-            session.run.total_cost_usd += cost
+        cost = self._response_cost(
+            response=response,
+            model_used=model_used,
+            models=models,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
+        )
+        session.run.total_cost_usd += cost
 
         # Record step cost for projection (used by hard budget pre-flight check)
         session.record_step_cost(cost or 0.0)
 
         return response, model_used, elapsed_ms, msg_dict
+
+    def _response_cost(
+        self,
+        *,
+        response: Any,
+        model_used: str,
+        models: list[str],
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int,
+        cache_read_tokens: int,
+    ) -> float:
+        """Compute the USD cost for one LLM response.
+
+        codex/* models are subscription-billed; litellm cannot price them
+        (it doesn't recognize the provider prefix) and raises on every call,
+        spamming the log. Those are priced from the registry ($0) with the
+        litellm call skipped entirely. Every other model keeps the original
+        litellm-first, registry-fallback behavior — including the fallback
+        case where codex failed over to an OpenRouter model.
+        """
+        if is_codex_model(model_used):
+            return self._calculate_cost(
+                model_used,
+                input_tokens,
+                output_tokens,
+                cache_creation_tokens,
+                cache_read_tokens,
+            )
+        try:
+            cost = litellm.completion_cost(completion_response=response, model=models[0])
+            if cost and cost > 0:
+                return cost
+        except Exception as e:
+            logger.warning("litellm cost calculation failed, using fallback: %s", e)
+        return self._calculate_cost(
+            models[0],
+            input_tokens,
+            output_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
+        )
 
     def _calculate_cost(
         self,

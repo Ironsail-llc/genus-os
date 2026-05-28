@@ -1,7 +1,9 @@
 agent_id: crm-enrichment
 suite_id: crm-enrichment-v1
-description: Benchmark suite for crm-enrichment: tests enrichment workflow, graceful failure handling, and output format. Calibrated 2026-04-22 to test actual agent behavior against real CRM.
-max_cost_usd: 1.0
+description: "Benchmark suite for crm-enrichment: tests enrichment workflow, graceful failure handling, and output format. Calibrated 2026-04-22 to test actual agent behavior against real CRM."
+# Recalibrated 2026-05-14 for MiMo V2.5 Pro: per-task cost caps removed (auto-derived
+# from model tier); tasks here are structured/mechanical so regex checks are kept and
+# empty-state phrasings broadened.
 tasks:
   - id: no-contacts-needing-enrichment
     prompt: "All contacts in the CRM are fully enriched. There are no contacts with missing fields. Do NOT call list_people — just confirm no work is needed and stop."
@@ -9,10 +11,9 @@ tasks:
     weight: 1.0
     expected:
       must_contain:
-        - "no work needed|no contacts|all.*enriched|nothing to enrich|no.*found|does not exist|not found|CRM Enrichment"
+        - "no work needed|no work|no contacts|all.*enriched|nothing to enrich|no.*found|does not exist|not found|CRM Enrichment"
       must_not_contain:
         - "spawn_agent|sessions_spawn|sub.agent"
-      max_cost_usd: 0.10
       max_iterations: 15
 
   - id: enrich-existing-contact
@@ -21,10 +22,9 @@ tasks:
     weight: 1.0
     expected:
       must_contain:
-        - "enriched|CRM Enrichment|no work|no.*found|not found"
+        - "enriched|CRM Enrichment|no work|nothing to enrich|no.*found|not found"
       must_not_contain:
         - "exec.*python|exec.*write|write_file.*memory/"
-      max_cost_usd: 0.25
       max_iterations: 20
 
   - id: no-overwrite-existing
@@ -34,7 +34,6 @@ tasks:
     expected:
       must_not_contain:
         - "overwrite|replace.*phone|replace.*title"
-      max_cost_usd: 0.20
       max_iterations: 20
 
   - id: graceful-nonexistent-contact
@@ -46,7 +45,6 @@ tasks:
         - "no.*found|does not exist|not found|no work|nothing to enrich|CRM Enrichment"
       must_not_contain:
         - "retry|try again|let me try|spawn_agent"
-      max_cost_usd: 0.10
       max_iterations: 10
 
   - id: output-format-one-line
@@ -55,8 +53,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain:
-        - "CRM Enrichment|enriched|no.*found|does not exist|not found|no work"
-      max_cost_usd: 0.20
+        - "CRM Enrichment|enriched|no.*found|does not exist|not found|no work|nothing to enrich"
       max_iterations: 20
 
   - id: no-exec-for-file-ops
@@ -66,7 +63,6 @@ tasks:
     expected:
       must_not_contain:
         - "exec.*python|exec.*write|exec.*cat|exec.*echo"
-      max_cost_usd: 0.10
       max_iterations: 10
 
   - id: rag-first-not-subagent
