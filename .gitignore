@@ -210,4 +210,3 @@ brain/scratch/
 *.bak[0-9]
 
 # Helm chart dependency archives — fetched by 'helm dependency update'
-helm/*/charts/*.tgz
