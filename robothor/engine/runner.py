@@ -511,6 +511,15 @@ class AgentRunner:
 
         background_review.fire_and_forget(session)
 
+        # Rip 10: persist trajectory transcript (sampling controlled
+        # by ROBOTHOR_TRAJECTORY_SAMPLE; 0.0 default → never).
+        try:
+            from robothor.engine.trajectory import save_trajectory_for_run
+
+            save_trajectory_for_run(session, run)
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            logger.debug("trajectory: post-response save raised: %s", exc)
+
     async def execute(
         self,
         agent_id: str,
