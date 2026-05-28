@@ -3,14 +3,12 @@
 # scripts/update-helm-values.sh on each release on main.
 
 global:
-  imageTag: "v0.0.0"
-
+  imageTag: "v1.0.0"
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
 postgres:
   enabled: false
 redis:
   enabled: false
-
 # Vault Secrets Operator wiring — pointed at the populated `db` path.
 # Will be extended to a second VSS for `secrets` (ANTHROPIC_API_KEY, etc.)
 # once those values are populated in Vault.
@@ -21,7 +19,6 @@ vault:
   path: ironsail-production/genus-os/db
   refreshAfter: 1m
   authRef: vault-auth
-
 dashboard:
   enabled: true
   replicaCount: 2
@@ -35,15 +32,12 @@ dashboard:
       - secretName: genus-os-production-tls
         hosts:
           - genus-os.internal.ironsail.ai
-
 engine:
   enabled: true
   replicaCount: 1
-
 bridge:
   enabled: true
   replicaCount: 3
-
 orchestrator:
   enabled: true
   replicaCount: 3
