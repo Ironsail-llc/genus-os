@@ -162,6 +162,26 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     if not description:
         return {"error": "description is required"}
 
+    # Rip 2: class-level umbrella guardrail. Off by default; flipped on
+    # via ROBOTHOR_RIP_2_ENABLED. Rejects names that look like one-off
+    # session artifacts (PR numbers, fix-/debug-/audit- prefixes, single
+    # library names, dates, error strings) — the failure mode that
+    # produced Nightwatch's duplicate alerts.py PR spam.
+    from robothor.engine.feature_flags import is_rip_enabled
+    from robothor.engine.skills import class_level_check
+
+    if is_rip_enabled(2):
+        reason = class_level_check(name, description)
+        if reason:
+            return {
+                "error": (
+                    f"Skill name '{name}' rejected: {reason}. "
+                    "Re-target as a CLASS-LEVEL umbrella (broader category, durable "
+                    "across sessions) or PATCH an existing skill via update_skill."
+                ),
+                "rejected_by": "class_level_check",
+            }
+
     content = args.get("content", "").strip()
     if not content:
         return {"error": "content (markdown body) is required"}

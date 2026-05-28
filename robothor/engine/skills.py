@@ -246,6 +246,97 @@ def validate_skill_name(name: str) -> str | None:
     return None
 
 
+# ── Rip 2: class-level umbrella naming guardrail ─────────────────────
+# Ported from the Hermes background-review prompt rules
+# (/tmp/research/hermes-agent/agent/background_review.py:100-105).
+# These patterns are exactly the failure mode Nightwatch hit:
+# the same `test: add unit tests for robothor/engine/alerts.py` PR
+# (#109/110/112/113) recreated daily because the skill name was
+# scoped to a one-off task instead of the class of work.
+#
+# The check fires from _create_skill / _update_skill before any
+# write happens; on rejection, the agent gets a structured error
+# explaining which class-level pattern to use instead.
+
+_CLASS_LEVEL_REJECTIONS: tuple[tuple[str, str], ...] = (
+    # Each tuple is (regex_pattern, human_reason).
+    (r"-pr-\d+", "skill names must not embed PR numbers"),
+    (r"-#\d+", "skill names must not embed issue numbers"),
+    (r"^fix-", "names starting with 'fix-' describe a one-off bug, not a class of work"),
+    (r"^debug-", "names starting with 'debug-' describe a one-off session"),
+    (r"^audit-", "names starting with 'audit-' describe a one-off review"),
+    (
+        r"-(today|yesterday|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        "skill names must not embed dates or day-of-week — they should describe a "
+        "durable class of work, not a session timestamp",
+    ),
+    (
+        r"-(error|exception|traceback|crash|stacktrace)\b",
+        "skill names must not embed error keywords — capture the FIX as a class, not "
+        "the error string",
+    ),
+)
+
+
+_KNOWN_SINGLE_LIBRARY_NAMES: frozenset[str] = frozenset(
+    {
+        "requests",
+        "pandas",
+        "numpy",
+        "pydantic",
+        "fastapi",
+        "django",
+        "flask",
+        "sqlalchemy",
+        "asyncio",
+        "psycopg2",
+        "celery",
+        "redis",
+    }
+)
+
+
+def class_level_check(name: str, description: str = "") -> str | None:
+    """Return rejection reason if *name* looks like a one-off session
+    artifact rather than a class-level umbrella.
+
+    Returns ``None`` when the name passes. Reasons match the
+    background-review prompt's "do not capture" list so the
+    autonomous review fork that creates skills can produce
+    consistent, durable names instead of the spam Nightwatch
+    generated.
+
+    Called from ``_create_skill`` and ``_update_skill`` only when
+    Rip 2 is enabled (``ROBOTHOR_RIP_2_ENABLED=1``); off by
+    default to keep existing operator-authored creates unblocked
+    while the rip is rolling out.
+    """
+    import re
+
+    lowered = name.lower()
+
+    for pattern, reason in _CLASS_LEVEL_REJECTIONS:
+        if re.search(pattern, lowered):
+            return reason
+
+    # Bare single-word library names are valid Python identifiers but
+    # are too narrow for a class-level skill — there's no "shape" of
+    # task they describe, just the dependency.
+    if lowered in _KNOWN_SINGLE_LIBRARY_NAMES:
+        return (
+            f"'{name}' is a single library name — skill names should describe a "
+            "class of WORK ('database-migrations', 'api-client-debugging') not a "
+            "single dependency"
+        )
+
+    # All-digit names (e.g. raw error codes copied verbatim) are
+    # always one-off artifacts.
+    if re.fullmatch(r"[\d\-]+", lowered):
+        return "skill names must not be all digits / dashes — that's an error code, not a class"
+
+    return None
+
+
 def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | None:
     """Read meta.json sidecar for a skill, or None if missing."""
     path = _meta_path(name, base)
