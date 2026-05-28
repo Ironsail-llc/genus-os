@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -466,16 +467,65 @@ def _find_duplicate_event(
     return None
 
 
+_GWS_BINARY: str | None = None
+
+
+def _resolve_gws_binary() -> str:
+    """Resolve the actual gws binary, bypassing the Node.js wrapper.
+
+    The ``gws`` symlink (``/usr/bin/gws -> run-gws.js``) launches a Node.js
+    shim that calls ``process.cwd()`` before invoking the real Rust binary.
+    When the engine daemon has a deleted CWD, this crashes with
+    ``ENOENT: no such file or directory, uv_cwd``.
+
+    Resolving to the Rust binary directly avoids the Node.js layer entirely.
+    """
+    global _GWS_BINARY
+    if _GWS_BINARY is not None:
+        return _GWS_BINARY
+
+    # Primary: the real Rust binary extracted by the npm installer
+    real_bin = "/usr/lib/node_modules/@googleworkspace/cli/node_modules/.bin_real/gws"
+    if Path(real_bin).is_file() and os.access(real_bin, os.X_OK):
+        _GWS_BINARY = real_bin
+        logger.debug("gws: using direct binary at %s", real_bin)
+        return _GWS_BINARY
+
+    # Fallback: resolve via shutil (follows symlinks)
+    import shutil
+
+    resolved = shutil.which("gws")
+    if resolved:
+        real_resolved = os.path.realpath(resolved)
+        _GWS_BINARY = real_resolved
+        logger.debug("gws: resolved via which -> %s", real_resolved)
+        return _GWS_BINARY
+
+    # Last resort: use "gws" and hope for the best
+    _GWS_BINARY = "gws"
+    return _GWS_BINARY
+
+
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     """Run a gws CLI command, return parsed JSON or error dict."""
     import json as _json
 
     try:
+        # Ensure the process CWD is valid — the engine daemon may have a
+        # deleted temp dir as CWD which breaks subprocess spawning on some
+        # systems (libc getcwd failure in posix_spawn).
+        work_dir = str(Path.home())
+        try:
+            Path.cwd()
+        except OSError:
+            os.chdir(work_dir)
+
         proc = subprocess.run(
-            ["gws"] + args,
+            [_resolve_gws_binary()] + args,
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=work_dir,
         )
         if proc.returncode != 0:
             return {
