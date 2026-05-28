@@ -454,6 +454,50 @@ class AgentRunner:
         self.registry = get_registry()
         self._active_watchdog: _StallWatchdog | None = None
 
+    # ── Upgrade-plan hook points (Phase 0 foundation) ──────────────────
+    # These two methods are no-ops by default. Future rips wire their
+    # behavior here without further surgery on _run_loop or _finish_run:
+    #
+    #   Rip 1  (background-review fork)  → schedules a forked agent
+    #          in _after_response_delivered when memory/skill nudge
+    #          counters trip.
+    #   Rip 9  (interrupt/steer)         → drains pending steer in
+    #          _after_iteration so the next API call sees it.
+    #   Rip 10 (trajectory capture)      → persists session messages
+    #          in _after_response_delivered when sampling fires.
+    #
+    # Hook methods are kept on AgentRunner (rather than a registry) so
+    # subclasses can override directly and so the hot-path call sites
+    # stay one line each.
+
+    async def _after_iteration(
+        self,
+        session: AgentSession,
+        iteration: int,
+        prev_tool_names: list[str] | None = None,
+    ) -> None:
+        """Per-iteration hook. Called at the end of every tool loop turn.
+
+        Default: no-op. Future rips override to advance session
+        counters, drain steers, or update watchdog state. Must stay
+        non-blocking and exception-safe — the caller suppresses
+        exceptions to keep the loop alive.
+        """
+
+    def _after_response_delivered(
+        self,
+        session: AgentSession,
+        run: AgentRun,
+    ) -> None:
+        """Post-response hook. Called from _finish_run before return.
+
+        Default: no-op. Future rips override to spawn background
+        review forks (Rip 1), persist trajectories (Rip 10), or emit
+        completion telemetry. Sync because _finish_run is sync; use
+        asyncio.create_task() inside overrides if you need async work
+        on the engine's loop.
+        """
+
     async def execute(
         self,
         agent_id: str,
@@ -2306,6 +2350,11 @@ class AgentRunner:
             except Exception as e:
                 logger.debug("Step flush failed (non-fatal): %s", _sanitize(e))
 
+            # Phase 0 hook: per-iteration extension point. No-op by
+            # default; future rips wire counters / steer drain / etc.
+            with contextlib.suppress(Exception):
+                await self._after_iteration(session, _iteration)
+
     # ─── Continuous mode progress report ─────────────────────────────
 
     async def _send_progress_report(
@@ -3475,6 +3524,14 @@ class AgentRunner:
                 check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
             except Exception as e:
                 logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── Phase 0 hook: post-response extension point ──────────────
+        # No-op by default; future rips spawn background reviews
+        # (Rip 1), persist trajectories (Rip 10), etc. Suppressed so a
+        # broken hook never blocks the run from finalizing.
+        if session is not None:
+            with contextlib.suppress(Exception):
+                self._after_response_delivered(session, run)
 
         # ── [STAGE 5] Lift unfinished todo_write items to the parent task ──
         # Closes the "full circle": a worker that ran out of
