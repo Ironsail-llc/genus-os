@@ -375,6 +375,8 @@ def _escalate_unfinished_todos(
     parent_task_id: str | None,
     agent_id: str,
     tenant_id: str = "",
+    agent_config: Any = None,
+    run_id: str | None = None,
 ) -> bool:
     """Lift unfinished todo_write items back to the CRM parent task so the
     next heartbeat's planner picks up where this run left off.
@@ -391,6 +393,12 @@ def _escalate_unfinished_todos(
         on the parent. If the parent isn't already tagged `thread`, add
         the tag and seed `objective` from the title if empty. Non-
         destructive — never touches status, owner, or other tags.
+
+    Phase 3 addition: when ``agent_config.todo_list_enabled`` and
+    ``agent_config.task_protocol`` are both true AND the
+    ``ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED`` env is "1", unfinished
+    items are ALSO promoted to real CRM subtasks (idempotent via content
+    hash). The ``next_action`` write above stays — promotion is additive.
     """
     if todos is None:
         return False
@@ -442,6 +450,25 @@ def _escalate_unfinished_todos(
         if not (parent.get("objective") or "").strip():
             update_kwargs["objective"] = parent.get("title") or ""
         dal.update_task(**update_kwargs)
+        # Refresh the local parent dict so the promotion step below sees the
+        # freshly added `thread` tag.
+        parent["tags"] = new_tags
+
+    # Phase 3 — promote unfinished items to real subtasks (best-effort).
+    if agent_config is not None:
+        try:
+            from robothor.engine.todo_promotion import promote_unfinished_items
+
+            promote_unfinished_items(
+                parent=parent,
+                items=unfinished,
+                agent_config=agent_config,
+                agent_id=agent_id,
+                run_id=run_id or "",
+                tenant_id=effective_tenant,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("todo promotion error (non-fatal): %s", _sanitize(e))
 
     return True
 
@@ -3615,6 +3642,8 @@ class AgentRunner:
                         parent_task_id=parent_task_id,
                         agent_id=run.agent_id,
                         tenant_id=getattr(run, "tenant_id", "") or "",
+                        agent_config=agent_config,
+                        run_id=getattr(run, "id", None),
                     )
             except Exception as e:
                 logger.warning("todo escalation error: %s", _sanitize(e))
