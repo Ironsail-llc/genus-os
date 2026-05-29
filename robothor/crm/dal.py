@@ -2351,8 +2351,9 @@ def answer_question(
 ) -> bool | dict[str, Any]:
     """The operator answered a planner-set question.
 
-    Atomic: clears ``question_for_operator``, ``requires_human``, resets
-    ``escalation_count`` to 0, sets ``question_resolved_at`` / ``_by``, and
+    In a single transaction: clears ``question_for_operator``,
+    ``requires_human``, resets ``escalation_count`` to 0, sets
+    ``question_resolved_at`` / ``_by``, and
     optionally advances the task status (``advance_to`` must satisfy
     ``VALID_TRANSITIONS`` for the current status). Records one history row
     with ``metadata={"kind": "answer", "answer": ..., "channel": ..., "advance_to": ...}``.
@@ -2450,17 +2451,20 @@ def answer_question(
                     },
                 )
                 # Tell the assigned agent the question was answered so the
-                # next heartbeat can pick up the thread.
-                send_notification(
-                    from_agent=by,
-                    to_agent=row.get("assigned_to_agent") or "",
-                    notification_type="question_answered",
-                    subject=f"Question answered: {task_id}",
-                    body=answer,
-                    task_id=task_id,
-                    metadata={"channel": channel, "advance_to": advance_to},
-                    tenant_id=tenant_id,
-                )
+                # next heartbeat can pick up the thread. Skip when the task has
+                # no assignee — an empty to_agent is a notification nobody reads.
+                assigned_agent = row.get("assigned_to_agent")
+                if assigned_agent:
+                    send_notification(
+                        from_agent=by,
+                        to_agent=assigned_agent,
+                        notification_type="question_answered",
+                        subject=f"Question answered: {task_id}",
+                        body=answer,
+                        task_id=task_id,
+                        metadata={"channel": channel, "advance_to": advance_to},
+                        tenant_id=tenant_id,
+                    )
             return ok
         except Exception as e:
             conn.rollback()

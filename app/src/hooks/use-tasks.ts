@@ -26,8 +26,6 @@ export interface Task {
   nextAction?: string;
   nextActionAgent?: string;
   questionForOperator?: string;
-  questionResolvedAt?: string;
-  questionResolvedBy?: string;
 }
 
 interface UseTasksOptions {
