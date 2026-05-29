@@ -2362,8 +2362,8 @@ def answer_question(
       - ``True`` on success.
       - ``False`` if the task is missing (→ 404).
       - ``{"error": reason}`` if ``advance_to`` is not a valid transition from
-        the current status (→ 409): the task exists, the request conflicts
-        with its state.
+        the current status (→ 422, matching reject_task / update_task): the
+        task exists, so 404 is reserved for a genuinely missing task.
 
     Sends a ``question_answered`` notification to the assigned agent so the
     next heartbeat picks it up.
@@ -2398,8 +2398,8 @@ def answer_question(
                         task_id,
                         reason,
                     )
-                    # The task exists; the conflict is the requested transition.
-                    # Return an error dict (→ 409) rather than False (→ 404) so
+                    # The task exists; the requested transition is invalid.
+                    # Return an error dict (→ 422) rather than False (→ 404) so
                     # the client can tell a bad transition from a missing task.
                     return {
                         "error": reason or f"Invalid transition {current_status} -> {advance_to}"

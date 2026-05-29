@@ -410,14 +410,13 @@ async def api_answer_task_question(
         channel=body.channel,
         tenant_id=tenant_id,
     )
-    # answer_question shares the error-dict return SHAPE of reject_task /
-    # update_task, but we deliberately map it to 409 Conflict here (those
-    # endpoints use 422). A rejected advance_to is a conflict with the task's
-    # current state, not a malformed request — and 409 lets the client tell
-    # an invalid transition from a missing task (404). Empty answer is still
-    # 422 above (request validation). Divergence from approve/reject is intentional.
+    # answer_question shares the error-dict return contract of reject_task /
+    # update_task / approve_task: an invalid advance_to transition maps to 422,
+    # matching every sibling task endpoint. 404 is reserved for a genuinely
+    # missing task, so the client can still tell the two apart. (Empty answer
+    # is also 422 above, as request validation.)
     if isinstance(result, dict) and "error" in result:
-        return JSONResponse(result, status_code=409)
+        return JSONResponse(result, status_code=422)
     # Task genuinely missing → 404.
     if not result:
         return JSONResponse({"error": "task not found"}, status_code=404)

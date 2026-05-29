@@ -89,9 +89,10 @@ async def test_answer_endpoint_returns_404_when_task_missing(test_client):
 
 
 @pytest.mark.asyncio
-async def test_answer_endpoint_returns_409_on_invalid_transition(test_client):
-    """DAL returns an error dict (task exists, advanceTo invalid) → 409, not
-    404 — lets the client distinguish a missing task from a bad transition."""
+async def test_answer_endpoint_returns_422_on_invalid_transition(test_client):
+    """DAL returns an error dict (task exists, advanceTo invalid) → 422,
+    matching approve/reject/update. 404 stays reserved for a missing task, so
+    the client can still distinguish a bad transition from a missing task."""
     err = {"error": "Cannot transition from TODO to DONE. Allowed: IN_PROGRESS"}
     with patch("routers.notes_tasks.answer_question", return_value=err):
         with patch("routers.notes_tasks.publish") as mock_pub:
@@ -100,7 +101,7 @@ async def test_answer_endpoint_returns_409_on_invalid_transition(test_client):
                 json={"answer": "force done", "advanceTo": "DONE"},
             )
 
-    assert r.status_code == 409
+    assert r.status_code == 422
     assert r.json() == err
     # No task.answered event on a rejected transition.
     mock_pub.assert_not_called()
