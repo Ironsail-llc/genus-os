@@ -181,6 +181,7 @@ class ToolRegistry:
         accessible_tenant_ids: tuple[str, ...] = (),
         timeout: int = 120,
         task_author_override: str = "",
+        is_benchmark: bool = False,
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -188,6 +189,8 @@ class ToolRegistry:
             timeout: Per-tool timeout in seconds. 0 = unlimited.
             accessible_tenant_ids: Tenant IDs this run may access
                 (resolved from user role + tenant hierarchy).
+            is_benchmark: When True, side-effect tool wrappers refuse
+                mutations (see ToolContext.is_benchmark).
         """
         try:
             if timeout > 0:
@@ -202,6 +205,7 @@ class ToolRegistry:
                         user_role=user_role,
                         accessible_tenant_ids=accessible_tenant_ids,
                         task_author_override=task_author_override,
+                        is_benchmark=is_benchmark,
                     )
             else:
                 return await _execute_tool(
@@ -214,6 +218,7 @@ class ToolRegistry:
                     user_role=user_role,
                     accessible_tenant_ids=accessible_tenant_ids,
                     task_author_override=task_author_override,
+                    is_benchmark=is_benchmark,
                 )
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)

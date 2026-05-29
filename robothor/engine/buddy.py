@@ -125,9 +125,23 @@ class BuddyEngine:
             )
 
         result = compute_achievement_score(agent_id, goals, tenant_id=self.tenant_id)
+        raw_score = result["score"]
+        if raw_score is None:
+            # Every goal is unmeasured — no signal. Treat as 0/neutral for the
+            # fleet snapshot rather than crashing the int() cast. This does not
+            # reintroduce the None-as-breach bug: the *partial* unmeasured case
+            # (some goals measured) now scores only the measured goals.
+            return AgentScore(
+                agent_id=agent_id,
+                achievement_score=0,
+                rating=1,
+                satisfied_goals=0,
+                breached_goals=0,
+                stat_date=target_date or datetime.now(UTC).date(),
+            )
         return AgentScore(
             agent_id=agent_id,
-            achievement_score=int(round(float(result["score"]) * 100)),
+            achievement_score=int(round(float(raw_score) * 100)),
             rating=int(result["rating"]),
             satisfied_goals=len(result.get("satisfied_goals", [])),
             breached_goals=len(result.get("breached_goals", [])),

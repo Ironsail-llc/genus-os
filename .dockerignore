@@ -1,4 +1,4 @@
-# Keep Python images thin
+# ─── Python ──────────────────────────────────────────────────────────────────
 venv/
 .venv/
 .venv-test/
@@ -13,19 +13,43 @@ coverage*.json
 .coverage
 *.egg-info/
 
-# Keep dashboard image thin
+# ─── Node / Next.js ──────────────────────────────────────────────────────────
 app/node_modules/
 app/.next/
 app/dist/
+app/.turbo/
+app/test-results/
+app/playwright-report/
 
-# Misc
+# ─── Repo metadata ───────────────────────────────────────────────────────────
 .git/
 .github/
+.husky/
+.claude/
+
+# ─── Docs / instance / local data ────────────────────────────────────────────
 docs/
 brain/
 local/
+memory/
+examples/
+sandbox/
+templates/
+agents/
+test-results/
+
+# ─── Logs / artifacts ────────────────────────────────────────────────────────
 logs/
 *.log
 .env
 .env.*
 *.tar.gz
+*.bak
+robothor.db
+robothor.db-*
+
+# ─── Editor / OS noise ───────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp

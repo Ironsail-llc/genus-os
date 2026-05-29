@@ -246,6 +246,63 @@ class TestAgentRunnerExecute:
         assert len(run.models_attempted) >= 1
 
     @pytest.mark.asyncio
+    async def test_hung_primary_falls_back_within_request_timeout(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """When the primary LLM hangs longer than LLM_REQUEST_TIMEOUT, the
+        runner must cancel that call and fall through to the next model.
+
+        Regression for the 2026-05-28 incident where main's worker timed out
+        for 1800s because litellm.acompletion silently ignored its `timeout`
+        kwarg and hung indefinitely after the codex/gpt-5.5 model_fallback
+        step. The fix wraps each per-model awaitable in an asyncio.timeout
+        the runner enforces directly (independent of litellm).
+        """
+        import asyncio as _asyncio
+        import time
+
+        import robothor.engine.runner as _runner_mod
+
+        # Squeeze the per-LLM-call timeout so the test runs in ~1s. The
+        # primary "hangs" for 5s, the fallback completes immediately.
+        call_count = 0
+        observed_primary_wait: list[float] = []
+
+        async def mock_completion(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if kwargs.get("model") == "openrouter/test/model":
+                start = time.monotonic()
+                try:
+                    await _asyncio.sleep(30)  # would hang forever absent a timeout
+                finally:
+                    observed_primary_wait.append(time.monotonic() - start)
+                return mock_litellm_response()  # never reached
+            return mock_litellm_response(content="fallback ok", model="openrouter/test/fallback")
+
+        with (
+            patch.object(_runner_mod, "LLM_REQUEST_TIMEOUT", 1),
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", side_effect=mock_completion),
+        ):
+            t0 = time.monotonic()
+            run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+            elapsed = time.monotonic() - t0
+
+        assert run.status == RunStatus.COMPLETED, run.error_message
+        assert run.model_used == "openrouter/test/fallback"
+        # The hung primary should have been cancelled at or near the
+        # 1-second LLM_REQUEST_TIMEOUT — not allowed to run the full 30s.
+        assert observed_primary_wait, "primary was never invoked"
+        assert max(observed_primary_wait) < 5, (
+            f"primary hung for {observed_primary_wait}s — runner did not "
+            f"enforce LLM_REQUEST_TIMEOUT (=1s)"
+        )
+        assert elapsed < 10, f"overall run took {elapsed}s — fallback too slow"
+
+    @pytest.mark.asyncio
     async def test_trigger_type_preserved(self, runner, sample_agent_config, mock_litellm_response):
         """Trigger type and detail are preserved in the run."""
         response = mock_litellm_response(content="Done")
@@ -996,3 +1053,38 @@ class TestAssessOutcome:
         )
         AgentRunner._assess_outcome(run)
         assert run.outcome_assessment == "successful"
+
+
+class TestSynthesizeWrapupSummary:
+    """When the force-wrapup LLM call comes back empty, the run must still
+    produce a non-empty final text — synthesized from the tool actions taken.
+    Regression: curiosity-engine ending on a memory_block_write at the
+    iteration cap used to yield output_text=None."""
+
+    def test_summary_lists_distinct_tool_actions(self):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("curiosity-engine", trigger_type=TriggerType.CRON)
+        session.record_tool_call("memory_search", {}, {"ok": True}, "tc-1")
+        session.record_tool_call("store_memory", {}, {"ok": True}, "tc-2")
+        session.record_tool_call("store_memory", {}, {"ok": True}, "tc-3")  # dup
+
+        summary = AgentRunner._synthesize_wrapup_summary(session, "Iteration cap reached.")
+
+        assert "memory_search" in summary
+        assert "store_memory" in summary
+        assert "2 tool action(s)" in summary  # deduplicated
+        assert summary.strip()
+
+    def test_summary_when_no_tools_called(self):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession("curiosity-engine", trigger_type=TriggerType.CRON)
+        summary = AgentRunner._synthesize_wrapup_summary(session, "Iteration cap reached.")
+
+        assert "No output was produced" in summary
+        assert summary.strip()

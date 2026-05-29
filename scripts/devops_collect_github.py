@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
 
+from robothor.engine.reports.devops_periods import ET, period_block, week_windows_github
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.github_api import (
     _github_list_prs,
@@ -53,25 +54,6 @@ REPOS: list[str] = _load_repos()
 CTX = ToolContext(agent_id="devops-manager")
 
 
-def _week_windows(now: datetime) -> tuple[str, str, str]:
-    """Calculate Monday-aligned date windows for dual-window collection.
-
-    Returns (current_week_since, last_week_since, last_week_until) as ISO strings:
-    - current_week_since: last Monday 00:00 UTC (open-ended, goes to now)
-    - last_week_since: Monday before that 00:00 UTC
-    - last_week_until: this Monday 00:00 UTC (exclusive upper bound)
-    """
-    today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    days_since_monday = now.weekday()  # 0=Mon, 6=Sun
-    current_week_start = today_midnight - timedelta(days=days_since_monday)
-    last_week_start = current_week_start - timedelta(days=7)
-    return (
-        current_week_start.isoformat(),
-        last_week_start.isoformat(),
-        current_week_start.isoformat(),
-    )
-
-
 async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list]:
     """Collect data for a single repo. Returns (short_name, repo_data, stale_prs, errors)."""
     short = repo.split("/")[-1]
@@ -79,7 +61,7 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
     stale: list = []
     errors: list = []
 
-    current_week_since, last_week_since, last_week_until = _week_windows(now)
+    current_week_since, last_week_since, last_week_until = week_windows_github(now)
 
     # --- Current week PR stats (Monday → now) ---
     result = await _github_pr_stats({"repo": repo, "since": current_week_since}, CTX)
@@ -162,8 +144,14 @@ async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list
 
 
 async def collect() -> dict:
-    data: dict = {"repos": {}, "totals": {"merged": 0, "reviews": 0}, "stale_prs": [], "errors": []}
-    now = datetime.now(UTC)
+    now = datetime.now(ET)
+    data: dict = {
+        "period": period_block(now),
+        "repos": {},
+        "totals": {"merged": 0, "reviews": 0},
+        "stale_prs": [],
+        "errors": [],
+    }
 
     # Run all repos concurrently
     results = await asyncio.gather(*[_collect_repo(repo, now) for repo in REPOS])

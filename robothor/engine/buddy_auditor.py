@@ -159,10 +159,10 @@ def run_sentinel_check(hours: int = 168, tenant_id: str = DEFAULT_TENANT) -> dic
         logger.warning("Sentinel unavailable: %s", e)
         return {"error": str(e)}
 
-    report = audit_recent_reviews(hours=hours, tenant_id=tenant_id)
+    report: dict[str, Any] = audit_recent_reviews(hours=hours, tenant_id=tenant_id)
     alerted = emit_alert_if_drifting(report)
     report["alerted"] = alerted
-    return report  # type: ignore[no-any-return]
+    return report
 
 
 def run_audit(

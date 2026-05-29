@@ -38,17 +38,46 @@ steps:
       timeout: 120
     on_failure: abort
 
+  - id: aggregate-people
+    # Deterministic per-person rollup: joins every author/assignee/reviewer
+    # handle to a CRM person via contact_identifiers, surfaces unresolved
+    # handles, roster engineers with zero activity, and bot authors. Writes
+    # /tmp/devops_people_rollup.json for the analyst to narrate.
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/devops_aggregate_people.py"
+      timeout: 60
+    on_failure: abort
+
+  - id: collect-claude-usage
+    # Pulls the latest weekly Claude Usage Report email from
+    # <USAGE_REPORT_SENDER> (the 'Claude Usage Interceptor' automation),
+    # parses it, archives to local/devops/claude_usage_reports/, and
+    # writes /tmp/devops_claude_usage.json for the analyst. Skip on
+    # failure — Claude adoption metrics are nice-to-have, not blocking.
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/claude_usage_report.py"
+      timeout: 30
+    on_failure: skip
+
   - id: analyze
     type: agent
     agent_id: devops-analyst
     message: >
       Weekly analysis run. Pre-collected data is waiting for you:
-        - JIRA: /tmp/devops_jira_data.json
-        - GitHub: /tmp/devops_github_data.json
+        - JIRA:          /tmp/devops_jira_data.json
+        - GitHub:        /tmp/devops_github_data.json
+        - People roll:   /tmp/devops_people_rollup.json    (deterministic per-person totals)
+        - Claude usage:  /tmp/devops_claude_usage.json     (weekly adoption; may be unavailable)
 
       Follow your instruction file end-to-end. Write the structured report to
       /tmp/devops_report.json AND to the devops_latest_report memory block.
       Do NOT call jira_* or github_* tools — those are blocked for a reason.
+      Do NOT call resolve_identities — the rollup file already has every
+      person joined to CRM. Your job is narration, not joining.
       Your output_text should be a short status line; downstream agents handle
       email and Telegram delivery.
     on_failure: abort

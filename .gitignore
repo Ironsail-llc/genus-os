@@ -12,6 +12,7 @@
 # Agent manifests and instruction files
 brain/*.md
 brain/*.bak
+brain/*.bak.*
 !brain/README.md
 brain/agents/
 brain/delphi/
@@ -40,8 +41,9 @@ docs/workflows/retired/
 /reports/
 /download.html
 
-# Instance runtime state (root memory/ is agent working data)
-memory/
+# Instance runtime state (root memory/ is agent working data — anchored
+# so robothor/memory/ and other tracked package dirs aren't swept up)
+/memory/
 
 # Backup logs
 scripts/backup.log
@@ -206,3 +208,6 @@ brain/scratch/
 # Editor backup files
 *.bak
 *.bak[0-9]
+
+# Helm chart dependency archives — fetched by 'helm dependency update'
+helm/*/charts/*.tgz

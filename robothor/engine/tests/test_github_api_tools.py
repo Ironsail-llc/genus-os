@@ -290,6 +290,59 @@ class TestGithubGetPr:
         assert result["hours_to_first_review"] == 24.0
 
 
+def _mk_search_resp(items: list[dict], link: str = "") -> MagicMock:
+    """Build a mocked /search/issues response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = lambda: None
+    resp.json.return_value = {"total_count": len(items), "items": items}
+    resp.headers = {"Link": link}
+    return resp
+
+
+def _mk_pr_detail_resp(
+    number: int,
+    author: str,
+    created_at: str,
+    merged_at: str | None,
+    *,
+    merged_by: str = "alice",
+    additions: int = 50,
+    deletions: int = 10,
+    draft: bool = False,
+) -> MagicMock:
+    """Build a mocked /repos/.../pulls/{n} response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = lambda: None
+    resp.json.return_value = {
+        "number": number,
+        "title": f"PR {number}",
+        "state": "closed",
+        "user": {"login": author},
+        "created_at": created_at,
+        "updated_at": merged_at or created_at,
+        "merged_at": merged_at,
+        "closed_at": merged_at,
+        "draft": draft,
+        "additions": additions,
+        "deletions": deletions,
+        "merged_by": {"login": merged_by},
+        "labels": [],
+    }
+    resp.headers = {}
+    return resp
+
+
+def _mock_async_client(responses: list[MagicMock]) -> AsyncMock:
+    """Wrap a list of pre-built responses as an httpx.AsyncClient mock."""
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.get = AsyncMock(side_effect=responses)
+    return client
+
+
 class TestGithubPrStats:
     @pytest.mark.asyncio
     async def test_missing_repo(self):
@@ -298,6 +351,181 @@ class TestGithubPrStats:
         with patch.dict("os.environ", _ENV):
             result = await _github_pr_stats({}, _CTX)
             assert "required" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_missing_since(self):
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        with patch.dict("os.environ", _ENV):
+            result = await _github_pr_stats({"repo": "acme/test"}, _CTX)
+            assert "error" in result
+            assert "since" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_merged_prs_in_window(self):
+        """Search returns empty → no detail fetches, merged_count is 0."""
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        client = _mock_async_client([_mk_search_resp([])])
+
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_pr_stats(
+                {
+                    "repo": "acme/test",
+                    "since": "2026-05-12T04:00:00+00:00",
+                    "until": "2026-05-19T04:00:00+00:00",
+                },
+                _CTX,
+            )
+
+        assert result["merged_count"] == 0
+        # Only the search call should have happened — no /pulls/{n} fetches.
+        assert client.get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_aggregates_humans_filters_bots(self):
+        """Bots routed to bot_authors/bot_merged_count; humans aggregated normally."""
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        search = _mk_search_resp([{"number": 1}, {"number": 2}, {"number": 3}, {"number": 4}])
+        details = [
+            _mk_pr_detail_resp(
+                1, "alice", "2026-05-13T10:00:00+00:00", "2026-05-14T10:00:00+00:00"
+            ),
+            _mk_pr_detail_resp(2, "bob", "2026-05-14T10:00:00+00:00", "2026-05-15T22:00:00+00:00"),
+            _mk_pr_detail_resp(
+                3,
+                "dependabot[bot]",
+                "2026-05-13T10:00:00+00:00",
+                "2026-05-13T10:30:00+00:00",
+            ),
+            _mk_pr_detail_resp(
+                4,
+                "renovate[bot]",
+                "2026-05-13T10:00:00+00:00",
+                "2026-05-13T10:30:00+00:00",
+            ),
+        ]
+        client = _mock_async_client([search, *details])
+
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_pr_stats(
+                {
+                    "repo": "acme/test",
+                    "since": "2026-05-12T04:00:00+00:00",
+                    "until": "2026-05-19T04:00:00+00:00",
+                },
+                _CTX,
+            )
+
+        # Humans-only count
+        assert result["merged_count"] == 2
+        # Bots visible, not silently dropped
+        assert result["bot_merged_count"] == 2
+        assert result["bot_authors"]["dependabot[bot]"] == 1
+        assert result["bot_authors"]["renovate[bot]"] == 1
+        # Human author aggregation
+        assert result["authors"] == {"alice": 1, "bob": 1}
+        # Cycle time computed only from human, non-draft PRs (24h + 36h)
+        assert result["avg_cycle_time_hours"] == 30.0
+
+    @pytest.mark.asyncio
+    async def test_drafts_excluded_from_cycle_time_but_counted(self):
+        """Drafts inflate cycle time → exclude from cycle calc but include in merged_count."""
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        search = _mk_search_resp([{"number": 1}, {"number": 2}])
+        details = [
+            # Non-draft: 24h cycle
+            _mk_pr_detail_resp(
+                1, "alice", "2026-05-13T10:00:00+00:00", "2026-05-14T10:00:00+00:00"
+            ),
+            # Draft: 240h cycle — would inflate average if included
+            _mk_pr_detail_resp(
+                2,
+                "bob",
+                "2026-05-04T10:00:00+00:00",
+                "2026-05-14T10:00:00+00:00",
+                draft=True,
+            ),
+        ]
+        client = _mock_async_client([search, *details])
+
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_pr_stats(
+                {
+                    "repo": "acme/test",
+                    "since": "2026-05-12T04:00:00+00:00",
+                    "until": "2026-05-19T04:00:00+00:00",
+                },
+                _CTX,
+            )
+
+        # Both PRs counted in merged_count
+        assert result["merged_count"] == 2
+        # Cycle excludes draft → only the 24h PR contributes
+        assert result["avg_cycle_time_hours"] == 24.0
+
+    @pytest.mark.asyncio
+    async def test_search_query_uses_range_with_z_suffix(self):
+        """The Search API must use the `merged:A..B` range form with Z-suffixed timestamps.
+
+        Regression: GitHub silently ignores `merged:>=A merged:<B` combined
+        and the `+00:00` offset form. Production was returning ALL merged
+        PRs for the repo instead of the date-windowed subset.
+        """
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        search = _mk_search_resp([])
+        client = _mock_async_client([search])
+
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            await _github_pr_stats(
+                {
+                    "repo": "acme/test",
+                    "since": "2026-05-12T04:00:00+00:00",
+                    "until": "2026-05-19T04:00:00+00:00",
+                },
+                _CTX,
+            )
+
+        call_args = client.get.await_args_list[0]
+        url = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
+        params = call_args.kwargs.get("params", {})
+        assert "/search/issues" in url
+        q = params.get("q", "")
+        assert "repo:acme/test" in q
+        assert "is:pr" in q
+        assert "is:merged" in q
+        # Range syntax with Z suffix; upper bound is until-1s for half-open
+        assert "merged:2026-05-12T04:00:00Z..2026-05-19T03:59:59Z" in q
+        # Make sure the buggy forms are NOT used
+        assert "merged:>=" not in q
+        assert "+00:00" not in q
 
 
 class TestGithubCommitActivity:

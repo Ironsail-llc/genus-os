@@ -115,7 +115,15 @@ async def _handle_spawn_agent(
     *,
     agent_id: str = "",
 ) -> dict[str, Any]:
-    """Spawn a single child agent and wait for its result."""
+    """Spawn a single child agent and wait for its result.
+
+    ``args["mode"]`` is optional. The default ``"normal"`` is a
+    standard sub-agent spawn. ``"background_review"`` (Rip 1)
+    installs the REVIEW_TOOL_WHITELIST via a per-task ContextVar
+    before the child runs, restricting the child's tool dispatch to
+    memory + skill CRUD only. The whitelist is async-safe — it
+    applies only to the spawned task and any tasks it inherits from.
+    """
     from robothor.engine.config import load_agent_config
     from robothor.engine.models import DeliveryMode, TriggerType
 
@@ -223,6 +231,20 @@ async def _handle_spawn_agent(
             "error": f"Agent {child_agent_id} with this exact message is already running as a sub-agent"
         }
 
+    # Rip 1: background-review mode installs a per-task tool whitelist
+    # that restricts the child to memory + skill CRUD. The ContextVar
+    # is set inside the asyncio.create_task scope (via the semaphore
+    # async-with block below) so the whitelist applies to the child
+    # run and is cleared on exit. Sibling spawns and the parent task
+    # see no whitelist.
+    mode = (args.get("mode") or "normal").lower()
+    review_whitelist_token = None
+    if mode == "background_review":
+        from robothor.engine.background_review import REVIEW_TOOL_WHITELIST
+        from robothor.engine.tools.dispatch import set_tool_whitelist
+
+        review_whitelist_token = set_tool_whitelist(REVIEW_TOOL_WHITELIST)
+
     start_time = time.monotonic()
     try:
         sem = _get_spawn_semaphore()
@@ -240,6 +262,10 @@ async def _handle_spawn_agent(
                 tenant_id=ctx.tenant_id if ctx else "",
             )
     finally:
+        if review_whitelist_token is not None:
+            from robothor.engine.tools.dispatch import clear_tool_whitelist
+
+            clear_tool_whitelist(review_whitelist_token)
         await release(dedup_key)
 
     elapsed_ms = int((time.monotonic() - start_time) * 1000)

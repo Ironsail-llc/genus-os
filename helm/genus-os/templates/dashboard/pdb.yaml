@@ -1,0 +1,13 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.podDisruptionBudget.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "genus-os.fullname" . }}-dashboard
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.dashboard.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "dashboard") | nindent 6 }}
+{{- end }}

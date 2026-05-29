@@ -26,6 +26,11 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory.drift import (
+    audit_snapshot,
+    compute_fact_hash,
+    evaluate_drift,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +285,10 @@ async def store_fact(
         The database ID of the stored fact.
     """
     embedding = await llm_client.get_embedding_async(fact["fact_text"])
+    resolved_tenant = tenant_id or DEFAULT_TENANT
+    content_hash = compute_fact_hash(
+        fact["fact_text"], tenant_id=resolved_tenant, category=fact["category"]
+    )
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -287,8 +296,8 @@ async def store_fact(
             """
             INSERT INTO memory_facts
             (fact_text, category, entities, confidence, source_content, source_type,
-             embedding, metadata, tenant_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+             embedding, metadata, tenant_id, content_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -300,7 +309,8 @@ async def store_fact(
                 source_type,
                 embedding,
                 json.dumps(metadata or {}),
-                tenant_id or DEFAULT_TENANT,
+                resolved_tenant,
+                content_hash,
             ),
         )
         fact_id: int = cur.fetchone()[0]
@@ -336,18 +346,22 @@ async def store_facts_batch(
 
     texts = [f["fact_text"] for f in facts]
     embeddings = await llm_client.get_embeddings_batch_async(texts)
+    resolved_tenant = tenant_id or DEFAULT_TENANT
 
     with get_connection() as conn:
         cur = conn.cursor()
         ids = []
 
         for fact, embedding in zip(facts, embeddings, strict=True):
+            content_hash = compute_fact_hash(
+                fact["fact_text"], tenant_id=resolved_tenant, category=fact["category"]
+            )
             cur.execute(
                 """
                 INSERT INTO memory_facts
                 (fact_text, category, entities, confidence, source_content, source_type,
-                 embedding, metadata, tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 embedding, metadata, tenant_id, content_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -359,13 +373,127 @@ async def store_facts_batch(
                     source_type,
                     embedding,
                     json.dumps(metadata or {}),
-                    tenant_id or DEFAULT_TENANT,
+                    resolved_tenant,
+                    content_hash,
                 ),
             )
             ids.append(cur.fetchone()[0])
 
     logger.info("store_facts_batch: stored %d facts with batch embeddings", len(ids))
     return ids
+
+
+async def update_fact(
+    fact_id: int,
+    *,
+    fact_text: str,
+    tenant_id: str = "",
+    category: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update a `memory_facts` row with Rip 7 external-drift detection.
+
+    Reads the current row, recomputes the canonical content_hash from
+    the stored fields, and compares it to the persisted hash. If the
+    two disagree, another writer has touched the row out of band — we
+    snapshot the stored state into `memory_facts_audit` and (in
+    enforce mode) refuse the update.
+
+    Returns one of::
+
+        {"ok": True, "fact_id": int}
+        {"error": "not_found", "fact_id": int}
+        {"error": "drift_refused", "fact_id": int, "audit_snapshot_id": int|None}
+
+    The drift check is fully bypassed when Rip 7 is off (default).
+    """
+    resolved_tenant = tenant_id or DEFAULT_TENANT
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT fact_text, tenant_id, category, person_id, content_hash
+              FROM memory_facts
+             WHERE id = %s AND tenant_id = %s
+            """,
+            (fact_id, resolved_tenant),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {"error": "not_found", "fact_id": fact_id}
+
+        current_text, current_tenant, current_category, current_person, stored_hash = row
+
+        decision = evaluate_drift(
+            stored_hash,
+            fact_text=current_text or "",
+            tenant_id=current_tenant or resolved_tenant,
+            category=current_category or "",
+            person_id=str(current_person) if current_person else None,
+        )
+
+        if decision.drift_detected:
+            recomputed = compute_fact_hash(
+                current_text or "",
+                tenant_id=current_tenant or resolved_tenant,
+                category=current_category or "",
+                person_id=str(current_person) if current_person else None,
+            )
+            snap_id = audit_snapshot(
+                cur,
+                fact_id=fact_id,
+                tenant_id=current_tenant or resolved_tenant,
+                fact_text=current_text,
+                hash_at_snapshot=stored_hash,
+                hash_expected=recomputed,
+                reason="pre_update_drift_detected",
+            )
+            logger.warning(
+                "Memory drift detected on fact %d (tenant=%s, mode=%s, snapshot=%s)",
+                fact_id,
+                current_tenant,
+                decision.mode,
+                snap_id,
+            )
+            if decision.action == "refuse":
+                return {
+                    "error": "drift_refused",
+                    "fact_id": fact_id,
+                    "audit_snapshot_id": snap_id,
+                }
+
+        # Apply the update with a fresh hash over the new state.
+        new_category = category if category is not None else current_category
+        new_person = str(current_person) if current_person else None
+        new_hash = compute_fact_hash(
+            fact_text,
+            tenant_id=current_tenant or resolved_tenant,
+            category=new_category or "",
+            person_id=new_person,
+        )
+
+        cur.execute(
+            """
+            UPDATE memory_facts
+               SET fact_text = %s,
+                   category = COALESCE(%s, category),
+                   metadata = COALESCE(%s::jsonb, metadata),
+                   content_hash = %s,
+                   updated_at = NOW()
+             WHERE id = %s AND tenant_id = %s
+            """,
+            (
+                fact_text,
+                category,
+                json.dumps(metadata) if metadata is not None else None,
+                new_hash,
+                fact_id,
+                resolved_tenant,
+            ),
+        )
+
+    return {"ok": True, "fact_id": fact_id}
 
 
 async def search_insights(

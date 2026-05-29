@@ -185,6 +185,227 @@ class TestComputeAchievementScore:
         assert "fast-revert" in result["satisfied_goals"]
         assert "slow-revert" in result["breached_goals"]
 
+    def test_none_metric_excluded_from_score(self):
+        """A goal whose metric has no data is 'not measured' — neutral, not a
+        breach. It must not enter the weighted denominator."""
+        goals = [
+            GoalSpec(
+                id="g-measured",
+                category="correctness",
+                metric="error_rate",
+                target="<0.05",
+                weight=1.0,
+                window_days=7,
+            ),
+            GoalSpec(
+                id="g-unmeasured",
+                category="quality",
+                metric="benchmark_pass_rate",
+                target=">=0.85",
+                weight=5.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"error_rate": 0.02}  # benchmark_pass_rate absent
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("some-agent", goals)
+
+        # Only the measured goal counts: 1.0/1.0, not 1.0/6.0.
+        assert result["score"] == 1.0
+        assert result["satisfied_goals"] == ["g-measured"]
+        assert result["breached_goals"] == []
+        assert result["unmeasured_goals"] == ["g-unmeasured"]
+
+    def test_partial_unmeasured_scores_only_measured_goals(self):
+        goals = [
+            GoalSpec(
+                id="big",
+                category="quality",
+                metric="benchmark_pass_rate",
+                target=">=0.85",
+                weight=5.0,
+                window_days=7,
+            ),
+            GoalSpec(
+                id="ok-a",
+                category="reach",
+                metric="delivery_success_rate",
+                target=">=0.95",
+                weight=2.0,
+                window_days=7,
+            ),
+            GoalSpec(
+                id="ok-b",
+                category="correctness",
+                metric="error_rate",
+                target="<0.05",
+                weight=2.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"delivery_success_rate": 0.99, "error_rate": 0.0}
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("some-agent", goals)
+
+        assert result["score"] == 1.0  # 4.0/4.0 — the weight-5 goal is excluded
+        assert result["unmeasured_goals"] == ["big"]
+
+    def test_all_goals_unmeasured_returns_none_score(self):
+        """Zero measured goals = zero signal. Score None, not 0.0 — 0.0 is
+        indistinguishable from 'all goals breached'."""
+        goals = [
+            GoalSpec(
+                id="passes-its-job",
+                category="quality",
+                metric="benchmark_pass_rate",
+                target=">=0.85",
+                weight=5.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"total_runs": 5}
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("never-graded", goals)
+
+        assert result["score"] is None
+        assert result["rating"] is None
+        assert result["unmeasured_goals"] == ["passes-its-job"]
+        assert result["breached_goals"] == []
+        assert result["satisfied_goals"] == []
+
+    def test_zero_metric_value_still_counts_as_breach(self):
+        """Regression guard: a genuine 0.0 metric is measured — it must count
+        toward the score as a breach, not be skipped as 'no data'."""
+        goals = [
+            GoalSpec(
+                id="delivers",
+                category="reach",
+                metric="delivery_success_rate",
+                target=">0.5",
+                weight=2.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"delivery_success_rate": 0.0}
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("broken-agent", goals)
+
+        assert result["score"] == 0.0
+        assert result["breached_goals"] == ["delivers"]
+        assert result["unmeasured_goals"] == []
+
+    def test_unmeasured_goal_appears_in_per_goal_with_null_actual(self):
+        goals = [
+            GoalSpec(
+                id="big",
+                category="quality",
+                metric="benchmark_pass_rate",
+                target=">=0.85",
+                weight=5.0,
+                window_days=7,
+            ),
+            GoalSpec(
+                id="ok",
+                category="correctness",
+                metric="error_rate",
+                target="<0.05",
+                weight=1.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"error_rate": 0.10}  # ok is measured-and-breached
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("some-agent", goals)
+
+        by_id = {g["id"]: g for g in result["per_goal"]}
+        # Unmeasured: actual None, satisfied None — distinct from a real breach.
+        assert by_id["big"]["actual"] is None
+        assert by_id["big"]["satisfied"] is None
+        # Measured breach: satisfied is False (not None).
+        assert by_id["ok"]["satisfied"] is False
+
+    def test_score_unchanged_when_all_goals_measured(self):
+        """Baseline regression: with every metric present, behaviour matches
+        pre-fix and unmeasured_goals is empty."""
+        goals = [
+            GoalSpec(
+                id="a",
+                category="correctness",
+                metric="error_rate",
+                target="<0.05",
+                weight=1.0,
+                window_days=7,
+            ),
+            GoalSpec(
+                id="b",
+                category="quality",
+                metric="benchmark_pass_rate",
+                target=">=0.85",
+                weight=3.0,
+                window_days=7,
+            ),
+        ]
+
+        def fake_compute(agent_id, window_days, tenant_id):
+            return {"error_rate": 0.0, "benchmark_pass_rate": 0.90}
+
+        with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
+            result = compute_achievement_score("healthy-agent", goals)
+
+        assert result["score"] == 1.0
+        assert result["rating"] == 5
+        assert result["unmeasured_goals"] == []
+        assert sorted(result["satisfied_goals"]) == ["a", "b"]
+
+
+class TestRunNightlyAutoReviewNoneScore:
+    def test_nightly_review_handles_none_score(self):
+        """run_nightly_auto_review must not crash when an agent's score is
+        None (all goals unmeasured) — the feedback f-string used to blow up."""
+        from robothor.engine.goals import run_nightly_auto_review
+
+        goal = GoalSpec(
+            id="passes-its-job",
+            category="quality",
+            metric="benchmark_pass_rate",
+            target=">=0.85",
+            weight=5.0,
+            window_days=7,
+        )
+
+        captured: dict[str, Any] = {}
+
+        def fake_register(agent_id, rating, categories, feedback, action_items, **kwargs):
+            captured["rating"] = rating
+            captured["feedback"] = feedback
+            return "review-1"
+
+        with (
+            patch("robothor.engine.goals.compose_goals", return_value=[goal]),
+            patch("robothor.engine.goals.compute_goal_metrics", return_value={"total_runs": 5}),
+            patch("robothor.engine.goals.detect_goal_breach", return_value=[]),
+            patch("robothor.engine.goals.register_review", side_effect=fake_register),
+        ):
+            results = run_nightly_auto_review([{"id": "never-graded"}])
+
+        assert results[0]["score"] is None
+        assert "not measured" in captured["feedback"].lower()
+
 
 # ─── compute_goal_metrics + detect_goal_breach ────────────────────────
 

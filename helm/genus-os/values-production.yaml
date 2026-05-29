@@ -1,0 +1,43 @@
+# Layer 2 — production environment.
+# `global.imageTag` is bumped by semantic-release via @semantic-release/exec →
+# scripts/update-helm-values.sh on each release on main.
+
+global:
+  imageTag: "v1.0.0"
+# Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
+postgres:
+  enabled: false
+redis:
+  enabled: false
+# Vault Secrets Operator wiring — pointed at the populated `db` path.
+# Will be extended to a second VSS for `secrets` (ANTHROPIC_API_KEY, etc.)
+# once those values are populated in Vault.
+vault:
+  enabled: true
+  mount: cluster-is
+  type: kv-v2
+  path: ironsail-production/genus-os/db
+  refreshAfter: 1m
+  authRef: vault-auth
+dashboard:
+  enabled: true
+  replicaCount: 2
+  ingress:
+    enabled: true
+    className: traefik-private
+    host: genus-os.internal.ironsail.ai
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - secretName: genus-os-production-tls
+        hosts:
+          - genus-os.internal.ironsail.ai
+engine:
+  enabled: true
+  replicaCount: 1
+bridge:
+  enabled: true
+  replicaCount: 3
+orchestrator:
+  enabled: true
+  replicaCount: 3

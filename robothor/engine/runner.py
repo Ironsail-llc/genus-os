@@ -481,6 +481,72 @@ class AgentRunner:
         self.registry = get_registry()
         self._active_watchdog: _StallWatchdog | None = None
 
+    # ── Upgrade-plan hook points (Phase 0 foundation) ──────────────────
+    # These two methods are no-ops by default. Future rips wire their
+    # behavior here without further surgery on _run_loop or _finish_run:
+    #
+    #   Rip 1  (background-review fork)  → schedules a forked agent
+    #          in _after_response_delivered when memory/skill nudge
+    #          counters trip.
+    #   Rip 9  (interrupt/steer)         → drains pending steer in
+    #          _after_iteration so the next API call sees it.
+    #   Rip 10 (trajectory capture)      → persists session messages
+    #          in _after_response_delivered when sampling fires.
+    #
+    # Hook methods are kept on AgentRunner (rather than a registry) so
+    # subclasses can override directly and so the hot-path call sites
+    # stay one line each.
+
+    async def _after_iteration(
+        self,
+        session: AgentSession,
+        iteration: int,
+        prev_tool_names: list[str] | None = None,
+    ) -> None:
+        """Per-iteration hook. Called at the end of every tool loop turn.
+
+        Default: no-op. Future rips override to advance session
+        counters, drain steers, or update watchdog state. Must stay
+        non-blocking and exception-safe — the caller suppresses
+        exceptions to keep the loop alive.
+        """
+
+    def _after_response_delivered(
+        self,
+        session: AgentSession,
+        run: AgentRun,
+    ) -> None:
+        """Post-response hook. Called from _finish_run before return.
+
+        Default behaviour (Rip 1): when ``ROBOTHOR_RIP_1_ENABLED=1``
+        and the session's nudge counters have tripped, schedule the
+        background-review fork as a non-blocking asyncio task. The
+        fork runs concurrently while ``_finish_run`` finishes
+        persisting the foreground response.
+
+        The hook is sync because ``_finish_run`` is sync. The actual
+        fork uses ``asyncio.create_task`` inside
+        ``background_review.fire_and_forget``; when no loop is running
+        (e.g. tests calling _finish_run directly without an event
+        loop), the call falls silent rather than raising.
+
+        Subclasses that need additional behaviour can override this
+        and call ``super()._after_response_delivered(...)`` to keep
+        the Rip 1 wiring.
+        """
+        from robothor.engine import background_review
+
+        background_review.fire_and_forget(session)
+
+        # Rip 10: persist trajectory transcript (sampling controlled
+        # by ROBOTHOR_TRAJECTORY_SAMPLE; 0.0 default → never).
+        try:
+            from robothor.engine.trajectory import save_trajectory_for_run
+
+            save_trajectory_for_run(session, run)
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            logger.debug("trajectory: post-response save raised: %s", exc)
+
     async def execute(
         self,
         agent_id: str,
@@ -535,6 +601,13 @@ class AgentRunner:
         # User identity threading
         session.run.user_id = user_id
         session.run.user_role = user_role
+
+        # Benchmark sandbox marker — when the parent (typically benchmark-runner
+        # via _benchmark_run) stamps the child_config with is_benchmark=True,
+        # propagate onto the AgentRun so side-effect tool wrappers (gws CLI
+        # bypass, etc.) can short-circuit. Belt to the L1 allow-list
+        # suspenders in robothor/engine/tools/handlers/benchmark.py.
+        session.run.is_benchmark = bool(getattr(agent_config, "is_benchmark", False))
 
         # Sub-agent: link to parent run + inherit user identity
         if spawn_context:
@@ -1930,6 +2003,7 @@ class AgentRunner:
                             timeout=_tool_timeout,
                             accessible_tenant_ids=session.run.accessible_tenant_ids,
                             task_author_override=agent_config.task_author_override,
+                            is_benchmark=session.run.is_benchmark,
                         )
                 else:
                     result = await self.registry.execute(
@@ -1943,6 +2017,7 @@ class AgentRunner:
                         timeout=_tool_timeout,
                         accessible_tenant_ids=session.run.accessible_tenant_ids,
                         task_author_override=agent_config.task_author_override,
+                        is_benchmark=session.run.is_benchmark,
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
@@ -2324,6 +2399,20 @@ class AgentRunner:
             except Exception as e:
                 logger.debug("Step flush failed (non-fatal): %s", _sanitize(e))
 
+            # Rip 1 — advance the skill nudge counter every iteration
+            # that actually consumed tool calls. Bare-text iterations
+            # (assistant just emits content with no tool calls) don't
+            # count as "work" for the purposes of the skill nudge —
+            # they're chitchat, not lessons-to-capture. The check is
+            # cheap and never raises in practice; suppress for safety.
+            with contextlib.suppress(Exception):
+                session._iters_since_skill += 1
+
+            # Phase 0 hook: per-iteration extension point. No-op by
+            # default; future rips wire counters / steer drain / etc.
+            with contextlib.suppress(Exception):
+                await self._after_iteration(session, _iteration)
+
     # ─── Continuous mode progress report ─────────────────────────────
 
     async def _send_progress_report(
@@ -2413,6 +2502,43 @@ class AgentRunner:
             temperature,
             trace,
         )
+
+        # The wrap-up call can still come back empty — provider returns blank
+        # content, or only thinking blocks with no text. Without a final
+        # assistant text the run's output_text is None, so a run that did
+        # real work (e.g. curiosity-engine ending on a memory_block_write at
+        # the iteration cap) looks like it produced nothing. Synthesize a
+        # minimal summary from the tool calls so output_text is never empty
+        # after work was done.
+        if not (session.get_final_text() or "").strip():
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "content": self._synthesize_wrapup_summary(session, reason),
+                }
+            )
+
+    @staticmethod
+    def _synthesize_wrapup_summary(session: AgentSession, reason: str) -> str:
+        """Build a fallback final summary when the wrap-up call produced no text.
+
+        Lists the distinct tool actions the run completed so a truncated run
+        that did real work is not reported as empty output.
+        """
+        tool_names: list[str] = []
+        for step in session.run.steps:
+            if (
+                step.step_type == StepType.TOOL_CALL
+                and step.tool_name
+                and step.tool_name not in tool_names
+            ):
+                tool_names.append(step.tool_name)
+        if tool_names:
+            return (
+                f"[Run ended: {reason}] No final summary was produced. "
+                f"Completed {len(tool_names)} tool action(s): {', '.join(tool_names)}."
+            )
+        return f"[Run ended: {reason}] No output was produced."
 
     # ─── LLM call helper (shared by main loop and wrap-up) ─────
 
@@ -2517,34 +2643,63 @@ class AgentRunner:
         )
 
         # Best-effort cost tracking (cache-aware fallback)
-        try:
-            cost = litellm.completion_cost(completion_response=response, model=models[0])
-            if cost and cost > 0:
-                session.run.total_cost_usd += cost
-            else:
-                cost = self._calculate_cost(
-                    models[0],
-                    input_tokens,
-                    output_tokens,
-                    cache_creation_tokens,
-                    cache_read_tokens,
-                )
-                session.run.total_cost_usd += cost
-        except Exception as e:
-            logger.warning("litellm cost calculation failed, using fallback: %s", e)
-            cost = self._calculate_cost(
-                models[0],
-                input_tokens,
-                output_tokens,
-                cache_creation_tokens,
-                cache_read_tokens,
-            )
-            session.run.total_cost_usd += cost
+        cost = self._response_cost(
+            response=response,
+            model_used=model_used,
+            models=models,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
+        )
+        session.run.total_cost_usd += cost
 
         # Record step cost for projection (used by hard budget pre-flight check)
         session.record_step_cost(cost or 0.0)
 
         return response, model_used, elapsed_ms, msg_dict
+
+    def _response_cost(
+        self,
+        *,
+        response: Any,
+        model_used: str,
+        models: list[str],
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int,
+        cache_read_tokens: int,
+    ) -> float:
+        """Compute the USD cost for one LLM response.
+
+        codex/* models are subscription-billed; litellm cannot price them
+        (it doesn't recognize the provider prefix) and raises on every call,
+        spamming the log. Those are priced from the registry ($0) with the
+        litellm call skipped entirely. Every other model keeps the original
+        litellm-first, registry-fallback behavior — including the fallback
+        case where codex failed over to an OpenRouter model.
+        """
+        if is_codex_model(model_used):
+            return self._calculate_cost(
+                model_used,
+                input_tokens,
+                output_tokens,
+                cache_creation_tokens,
+                cache_read_tokens,
+            )
+        try:
+            cost = litellm.completion_cost(completion_response=response, model=models[0])
+            if cost and cost > 0:
+                return cost
+        except Exception as e:
+            logger.warning("litellm cost calculation failed, using fallback: %s", e)
+        return self._calculate_cost(
+            models[0],
+            input_tokens,
+            output_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
+        )
 
     def _calculate_cost(
         self,
@@ -3184,13 +3339,34 @@ class AgentRunner:
         for model in models:
             if broken_models and model in broken_models:
                 continue
+            # Per-call timeout (seconds) — wraps each provider call so the
+            # runner cancels and falls through if the provider hangs. The
+            # `timeout` kwarg already passed to litellm is best-effort and
+            # was observed silently ignored, causing 1800s stalls against
+            # codex/gpt-5.5 in the 2026-05-28 incident.
+            per_call_timeout = (
+                LLM_REQUEST_TIMEOUT_OLLAMA
+                if model.startswith("ollama_chat/")
+                else LLM_REQUEST_TIMEOUT
+            )
             try:
                 kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                if is_codex_model(model):
-                    result = await codex_acompletion(**kwargs)
-                else:
-                    result = await litellm.acompletion(**kwargs)
+                async with asyncio.timeout(per_call_timeout):
+                    if is_codex_model(model):
+                        result = await codex_acompletion(**kwargs)
+                    else:
+                        result = await litellm.acompletion(**kwargs)
                 return result
+            except TimeoutError as e:
+                logger.warning(
+                    "LLM call to %s exceeded %ds — cancelling and falling back",
+                    _sanitize(model),
+                    per_call_timeout,
+                )
+                self._handle_model_error(e, model, broken_models)
+                last_error = e
+                if self._active_watchdog:
+                    self._active_watchdog.touch(f"model_fallback:{model}")
             except Exception as e:
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
@@ -3235,12 +3411,21 @@ class AgentRunner:
         for model in models:
             if broken_models and model in broken_models:
                 continue
+            # Per-call timeout for the initial stream-creation await.
+            # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
+            # in the consumption loop below. See _call_llm for context.
+            per_call_timeout = (
+                LLM_REQUEST_TIMEOUT_OLLAMA
+                if model.startswith("ollama_chat/")
+                else LLM_REQUEST_TIMEOUT
+            )
             try:
                 kwargs = self._build_llm_kwargs(
                     model, messages, tools, input_est, temperature, stream=True
                 )
                 if is_codex_model(model):
-                    result = await codex_acompletion(**kwargs)
+                    async with asyncio.timeout(per_call_timeout):
+                        result = await codex_acompletion(**kwargs)
                     content = str(result.choices[0].message.content or "")
                     if on_content and content:
                         await on_content(content)
@@ -3256,7 +3441,8 @@ class AgentRunner:
                     return result
 
                 stream_start = time.monotonic()
-                stream = await litellm.acompletion(**kwargs)
+                async with asyncio.timeout(per_call_timeout):
+                    stream = await litellm.acompletion(**kwargs)
 
                 chunks: list[Any] = []
                 accumulated_content = ""
@@ -3396,6 +3582,14 @@ class AgentRunner:
                 check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
             except Exception as e:
                 logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── Phase 0 hook: post-response extension point ──────────────
+        # No-op by default; future rips spawn background reviews
+        # (Rip 1), persist trajectories (Rip 10), etc. Suppressed so a
+        # broken hook never blocks the run from finalizing.
+        if session is not None:
+            with contextlib.suppress(Exception):
+                self._after_response_delivered(session, run)
 
         # ── [STAGE 5] Lift unfinished todo_write items to the parent task ──
         # Closes the "full circle": a worker that ran out of

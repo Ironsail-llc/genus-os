@@ -55,12 +55,19 @@ def collect_summary() -> dict:
     prior_rows: dict[str, float] = {}
     in_flight_experiments: list[str] = []
 
+    # NOTE: the `pass_rate` column stores the partial-credit aggregate score
+    # (a task only needs 0.70 to "pass"). The honest grade — and what the
+    # benchmark_pass_rate goal metric now uses — is passed / total_cases.
+    # We compute that here so the 6 PM summary matches the goal scoring.
+    def _true_pass_rate(passed: int, total: int) -> float:
+        return (passed / total) if total else 0.0
+
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT DISTINCT ON (agent_id)
               agent_id, suite_id, run_at, total_cases, passed, failed,
-              pass_rate, failures
+              failures
             FROM benchmark_results
             WHERE tenant_id = %s
               AND run_at >= %s AND run_at <= %s
@@ -69,7 +76,7 @@ def collect_summary() -> dict:
             (TENANT_ID, start, end),
         )
         for row in cur.fetchall():
-            agent_id, suite_id, run_at, total, passed, failed, pass_rate, failures = row
+            agent_id, suite_id, run_at, total, passed, failed, failures = row
             if isinstance(failures, str):
                 failures = json.loads(failures)
             today_rows.append(
@@ -80,7 +87,7 @@ def collect_summary() -> dict:
                     "total_cases": total,
                     "passed": passed,
                     "failed": failed,
-                    "pass_rate": float(pass_rate),
+                    "pass_rate": _true_pass_rate(passed, total),
                     "failing_ids": [f.get("case_id") for f in (failures or []) if f.get("case_id")],
                 }
             )
@@ -89,7 +96,7 @@ def collect_summary() -> dict:
         for r in today_rows:
             cur.execute(
                 """
-                SELECT pass_rate FROM benchmark_results
+                SELECT passed, total_cases FROM benchmark_results
                 WHERE tenant_id = %s
                   AND agent_id = %s
                   AND run_at < %s
@@ -99,8 +106,8 @@ def collect_summary() -> dict:
                 (TENANT_ID, r["agent_id"], r["run_at"]),
             )
             row = cur.fetchone()
-            if row:
-                prior_rows[r["agent_id"]] = float(row[0])
+            if row and row[1]:
+                prior_rows[r["agent_id"]] = _true_pass_rate(row[0], row[1])
 
         # Experiments touched today
         cur.execute(
