@@ -17,7 +17,13 @@ global:
   # Image registry. Single GHCR org, two image names beneath it.
   registry: ghcr.io/ironsail-llc/genus-os
   imagePullPolicy: IfNotPresent
-  imagePullSecrets: []
+  # GHCR images are private packages. Every ironsail namespace has a
+  # `ghcr-credentials` dockerconfigjson Secret, materialized by the shared
+  # `ghcr-secret` VaultStaticSecret (argocd/ironsail-<env>/manifests/).
+  # Reference it so the engine/bridge/orchestrator/dashboard/migration pods
+  # can pull from ghcr.io/ironsail-llc/genus-os/*.
+  imagePullSecrets:
+    - name: ghcr-credentials
 
   # Pod-level metadata applied to every workload.
   podAnnotations: {}
