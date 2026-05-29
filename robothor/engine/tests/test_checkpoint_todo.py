@@ -20,9 +20,8 @@ from unittest.mock import MagicMock, patch
 class TestCheckpointSaveEmbedsTodoList:
     """checkpoint.save(todo_list=…) should put the dict under scratchpad._todo_list."""
 
-    @patch("robothor.engine.checkpoint.get_connection", create=True)
     @patch("robothor.db.connection.get_connection")
-    def test_save_with_todo_list_only(self, mock_get_conn, _unused):
+    def test_save_with_todo_list_only(self, mock_get_conn):
         from robothor.engine.checkpoint import CheckpointManager
 
         mock_cur = MagicMock()
