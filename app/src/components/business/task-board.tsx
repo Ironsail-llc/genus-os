@@ -31,7 +31,11 @@ interface TaskBoardProps {
   onApprove?: (taskId: string, resolution: string) => void;
   onReject?: (taskId: string, reason: string) => void;
   onResolve?: (taskId: string, resolution: string) => void;
-  onAnswer?: (taskId: string, answer: string, advanceTo?: string) => void;
+  // advanceTo is constrained to the status union so this stays assignable
+  // from useTasks().answerQuestion (whose advanceTo is Task["status"]). The
+  // Promise<boolean> result lets the wired handler report POST success so the
+  // board can keep the operator's typed answer for retry on failure.
+  onAnswer?: (taskId: string, answer: string, advanceTo?: Task["status"]) => void | Promise<boolean>;
 }
 
 const statusColumns = ["TODO", "IN_PROGRESS", "REVIEW", "DONE"] as const;
@@ -72,19 +76,30 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
   const [answerText, setAnswerText] = useState<Record<string, string>>({});
   const [overrideOpen, setOverrideOpen] = useState<Record<string, boolean>>({});
 
-  const handleAnswer = async (taskId: string, advanceTo?: string) => {
+  const handleAnswer = async (taskId: string, advanceTo?: Task["status"]) => {
     const text = (answerText[taskId] || "").trim();
     if (!text) return;
     setActionPending(taskId);
     try {
       if (onAnswer) {
-        onAnswer(taskId, text, advanceTo);
+        // Wired path: useTasks().answerQuestion applies the optimistic status
+        // flip (which unmounts this block) and rolls back on a failed POST.
+        // Await its success result so we only clear the typed answer below on
+        // success — on failure the rollback re-shows the question and the
+        // preserved text lets the operator retry. Mirrors the fallback below.
+        const result = onAnswer(taskId, text, advanceTo);
+        const ok = result instanceof Promise ? await result : true;
+        if (!ok) return;
       } else {
-        await fetch(`/api/tasks/${taskId}/answer`, {
+        // Fallback for standalone usage: check res.ok and throw so a failed
+        // POST isn't silently swallowed (the throw skips the clear below, so
+        // the operator keeps their text to retry).
+        const res = await fetch(`/api/tasks/${taskId}/answer`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ answer: text, advanceTo, channel: "helm" }),
         });
+        if (!res.ok) throw new Error(`answer failed: ${res.status}`);
       }
       setAnswerText((prev) => {
         const next = { ...prev };
@@ -176,6 +191,15 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                     {task.requiresHuman && (
                       <Badge className="text-[10px] px-1 py-0 bg-red-500/20 text-red-400" data-testid="requires-human-badge">
                         needs you
+                      </Badge>
+                    )}
+                    {task.escalationCount != null && task.escalationCount > 0 && (
+                      <Badge
+                        className="text-[10px] px-1 py-0 bg-amber-500/20 text-amber-400"
+                        data-testid="escalation-badge"
+                        title={`Escalated ${task.escalationCount}× since last operator answer`}
+                      >
+                        ↑{task.escalationCount}
                       </Badge>
                     )}
                     <CardTitle className="text-sm flex-1">{task.title}</CardTitle>

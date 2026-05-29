@@ -102,7 +102,7 @@ export function useTasks(options: UseTasksOptions = {}) {
     const latest = events[0];
     if (
       latest.id !== lastEventIdRef.current &&
-      ["task.created", "task.updated", "task.resolved"].includes(latest.type)
+      ["task.created", "task.updated", "task.resolved", "task.answered"].includes(latest.type)
     ) {
       lastEventIdRef.current = latest.id;
       fetchTasks();
@@ -240,9 +240,12 @@ export function useTasks(options: UseTasksOptions = {}) {
   );
 
   // Phase 4 — answer a planner-set question_for_operator. Clears the
-  // question, resets escalation_count, optionally advances status.
+  // question, resets escalation_count, optionally advances status. The
+  // status flip is applied optimistically (snappy board); returns whether
+  // the POST succeeded so the caller can preserve the operator's typed
+  // answer for retry when it didn't (state is rolled back here either way).
   const answerQuestion = useCallback(
-    async (taskId: string, answer: string, advanceTo?: Task["status"]) => {
+    async (taskId: string, answer: string, advanceTo?: Task["status"]): Promise<boolean> => {
       const previousTasks = tasks;
       setTasks((prev) =>
         prev.map((t) =>
@@ -265,9 +268,12 @@ export function useTasks(options: UseTasksOptions = {}) {
         });
         if (!res.ok) {
           setTasks(previousTasks);
+          return false;
         }
+        return true;
       } catch {
         setTasks(previousTasks);
+        return false;
       }
     },
     [tasks]

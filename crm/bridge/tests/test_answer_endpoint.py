@@ -76,8 +76,8 @@ async def test_answer_endpoint_rejects_empty_answer(test_client):
 
 
 @pytest.mark.asyncio
-async def test_answer_endpoint_returns_404_when_dal_returns_false(test_client):
-    """Task not found OR invalid transition → 404."""
+async def test_answer_endpoint_returns_404_when_task_missing(test_client):
+    """DAL returns False (task genuinely missing) → 404."""
     with patch("routers.notes_tasks.answer_question", return_value=False):
         r = await test_client.post(
             "/api/tasks/missing/answer",
@@ -86,6 +86,24 @@ async def test_answer_endpoint_returns_404_when_dal_returns_false(test_client):
 
     assert r.status_code == 404
     assert "error" in r.json()
+
+
+@pytest.mark.asyncio
+async def test_answer_endpoint_returns_409_on_invalid_transition(test_client):
+    """DAL returns an error dict (task exists, advanceTo invalid) → 409, not
+    404 — lets the client distinguish a missing task from a bad transition."""
+    err = {"error": "Cannot transition from TODO to DONE. Allowed: IN_PROGRESS"}
+    with patch("routers.notes_tasks.answer_question", return_value=err):
+        with patch("routers.notes_tasks.publish") as mock_pub:
+            r = await test_client.post(
+                "/api/tasks/abc-123/answer",
+                json={"answer": "force done", "advanceTo": "DONE"},
+            )
+
+    assert r.status_code == 409
+    assert r.json() == err
+    # No task.answered event on a rejected transition.
+    mock_pub.assert_not_called()
 
 
 @pytest.mark.asyncio

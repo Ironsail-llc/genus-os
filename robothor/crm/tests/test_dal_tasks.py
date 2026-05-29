@@ -824,3 +824,35 @@ class TestAnswerQuestion:
         from robothor.crm.dal import answer_question
 
         assert answer_question(task_id="missing", answer="x", by="helm-user") is False
+
+    @patch("robothor.crm.dal.get_connection")
+    @patch("robothor.crm.dal._safe_audit")
+    @patch("robothor.crm.dal.send_notification")
+    def test_answer_returns_error_dict_on_invalid_transition(self, _notify, _audit, mock_get_conn):
+        """The task exists but advance_to is not a valid transition → error
+        dict (so the bridge can return 409, not 404). No UPDATE is issued."""
+        mock_conn, mock_cur = _make_mock_conn(
+            fetchone_return={
+                "status": "TODO",
+                "assigned_to_agent": "responder",
+                "escalation_count": 1,
+            },
+            rowcount=1,
+        )
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import answer_question
+
+        # TODO -> DONE is not a valid transition.
+        result = answer_question(
+            task_id="task-789",
+            answer="force done",
+            by="helm-user",
+            advance_to="DONE",
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        # The conflict is surfaced before any UPDATE is attempted.
+        update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
+        assert update_calls == []

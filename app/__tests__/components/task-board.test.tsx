@@ -181,6 +181,24 @@ describe("TaskBoard", () => {
     expect(onAnswer).toHaveBeenCalledWith("15", "yes, drop them", "IN_PROGRESS");
   });
 
+  it("renders an escalation badge when escalationCount > 0", () => {
+    const t = [
+      { id: "17", title: "Stalled", status: "REVIEW" as const, escalationCount: 3 },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const badge = screen.getByTestId("escalation-badge");
+    expect(badge.textContent).toContain("3");
+  });
+
+  it("does not render an escalation badge when escalationCount is 0 or absent", () => {
+    const t = [
+      { id: "18", title: "Zero", status: "REVIEW" as const, escalationCount: 0 },
+      { id: "19", title: "Absent", status: "TODO" as const },
+    ];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.queryByTestId("escalation-badge")).toBeNull();
+  });
+
   it("reveals override approve/reject when the operator toggles it", () => {
     const t = [
       {

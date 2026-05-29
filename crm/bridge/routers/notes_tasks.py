@@ -402,7 +402,7 @@ async def api_answer_task_question(
     by = x_agent_id or "helm-user"
     if not body.answer.strip():
         return JSONResponse({"error": "answer is required"}, status_code=422)
-    ok = answer_question(
+    result = answer_question(
         task_id=task_id,
         answer=body.answer,
         by=by,
@@ -410,8 +410,17 @@ async def api_answer_task_question(
         channel=body.channel,
         tenant_id=tenant_id,
     )
-    if not ok:
-        return JSONResponse({"error": "task not found or invalid transition"}, status_code=404)
+    # answer_question shares the error-dict return SHAPE of reject_task /
+    # update_task, but we deliberately map it to 409 Conflict here (those
+    # endpoints use 422). A rejected advance_to is a conflict with the task's
+    # current state, not a malformed request — and 409 lets the client tell
+    # an invalid transition from a missing task (404). Empty answer is still
+    # 422 above (request validation). Divergence from approve/reject is intentional.
+    if isinstance(result, dict) and "error" in result:
+        return JSONResponse(result, status_code=409)
+    # Task genuinely missing → 404.
+    if not result:
+        return JSONResponse({"error": "task not found"}, status_code=404)
     publish(
         "agent",
         "task.answered",

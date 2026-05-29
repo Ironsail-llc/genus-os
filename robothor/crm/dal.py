@@ -2348,7 +2348,7 @@ def answer_question(
     advance_to: str | None = None,
     channel: str = "helm",
     tenant_id: str = DEFAULT_TENANT,
-) -> bool:
+) -> bool | dict[str, Any]:
     """The operator answered a planner-set question.
 
     Atomic: clears ``question_for_operator``, ``requires_human``, resets
@@ -2357,9 +2357,16 @@ def answer_question(
     ``VALID_TRANSITIONS`` for the current status). Records one history row
     with ``metadata={"kind": "answer", "answer": ..., "channel": ..., "advance_to": ...}``.
 
-    Returns True on success, False if the task is missing or the requested
-    advance_to is not a valid transition. Sends a ``question_answered``
-    notification to the assigned agent so the next heartbeat picks it up.
+    Returns (mirrors ``reject_task`` / ``update_task`` so the bridge can map
+    the result to the right HTTP status):
+      - ``True`` on success.
+      - ``False`` if the task is missing (→ 404).
+      - ``{"error": reason}`` if ``advance_to`` is not a valid transition from
+        the current status (→ 409): the task exists, the request conflicts
+        with its state.
+
+    Sends a ``question_answered`` notification to the assigned agent so the
+    next heartbeat picks it up.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2378,6 +2385,10 @@ def answer_question(
 
             target_status = current_status
             if advance_to and advance_to != current_status:
+                # The answer text doubles as the transition resolution (e.g. a
+                # REVIEW -> DONE advance requires a non-empty resolution). The
+                # bridge enforces a non-empty answer (422) before calling us, so
+                # this is always satisfied on the HTTP path.
                 ok_t, reason = _validate_transition(current_status, advance_to, answer)
                 if not ok_t:
                     logger.warning(
@@ -2387,7 +2398,12 @@ def answer_question(
                         task_id,
                         reason,
                     )
-                    return False
+                    # The task exists; the conflict is the requested transition.
+                    # Return an error dict (→ 409) rather than False (→ 404) so
+                    # the client can tell a bad transition from a missing task.
+                    return {
+                        "error": reason or f"Invalid transition {current_status} -> {advance_to}"
+                    }
                 target_status = advance_to
 
             cur.execute(
