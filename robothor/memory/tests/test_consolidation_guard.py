@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import robothor.memory.lifecycle as lc
+from robothor.memory.lifecycle import importance_floor
 
 
 def _mock_conn() -> tuple[Any, Any]:
@@ -59,3 +60,14 @@ class TestSupersession:
         assert any("GREATEST(importance_score" in s for s in sqls)  # importance propagated
         supersedes = [s for s in sqls if "SET is_active = FALSE" in s]
         assert len(supersedes) == 1  # source 2 (deep chain) skipped, source 1 superseded
+
+
+class TestImportanceFloor:
+    def test_security_and_resolution_floored(self) -> None:
+        assert importance_floor("An unauthorized sign-in was detected on OpenRouter") == 0.7
+        assert importance_floor("The login was confirmed legitimate and marked as closed") == 0.7
+        assert importance_floor("the migration incident was resolved") == 0.7
+
+    def test_routine_not_floored(self) -> None:
+        assert importance_floor("Bob prefers tea over coffee") == 0.0
+        assert importance_floor("") == 0.0

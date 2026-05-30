@@ -6,7 +6,9 @@ all search sites share one policy:
 - ``hnsw.ef_search`` — candidate budget (default 100, env ``MEMORY_HNSW_EF_SEARCH``).
 - ``hnsw.iterative_scan`` — pgvector >= 0.8: keep fetching past the ``WHERE``
   filter until ``LIMIT`` is met (the proper fix for post-filter recall collapse).
-  Off until ``MEMORY_HNSW_ITERATIVE`` is set, so a 0.6 build is never asked for it.
+  The live build is 0.8.2 and the partial active index (migrations 073/074)
+  already keeps dead vectors out of the budget; iterative scan is opt-in via
+  ``MEMORY_HNSW_ITERATIVE`` (so an older build is never asked for an unsupported GUC).
 - ``hnsw.max_scan_tuples`` — ceiling for iterative scan (env
   ``MEMORY_HNSW_MAX_SCAN_TUPLES``, default 20000).
 

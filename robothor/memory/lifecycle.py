@@ -201,6 +201,30 @@ def compute_decay_score(
     return max(0.0, min(1.0, score))
 
 
+# High-stakes cues the LLM judge (or the 0.5 default on timeout) under-scores:
+# security incidents and resolutions must not sit at neutral importance, or the
+# blend's importance term can't lift them above routine noise (WS-7).
+_HIGH_SIGNAL_CUES = (
+    "unauthorized",
+    "suspicious",
+    "breach",
+    "compromise",
+    "unrecognized",
+    "security alert",
+    "confirmed legitimate",
+    "marked as closed",
+    "false alarm",
+    "resolved",
+)
+_HIGH_SIGNAL_FLOOR = 0.7
+
+
+def importance_floor(content: str) -> float:
+    """Deterministic minimum importance for clearly high-stakes facts (pure)."""
+    low = (content or "").lower()
+    return _HIGH_SIGNAL_FLOOR if any(cue in low for cue in _HIGH_SIGNAL_CUES) else 0.0
+
+
 async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
     """Use the LLM to judge the importance of a fact.
 
@@ -209,8 +233,10 @@ async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
         timeout_s: Maximum seconds to wait for LLM response.
 
     Returns:
-        Importance score between 0.0 and 1.0.
+        Importance score between 0.0 and 1.0. A deterministic floor is applied
+        for high-stakes facts so a security/resolution fact never scores neutral.
     """
+    floor = importance_floor(content)
     try:
         prompt = f"""Rate the long-term importance of this fact on a scale of 0.0 to 1.0.
 
@@ -234,13 +260,13 @@ Fact: "{content}" """
 
         parsed = json.loads(raw.strip())
         score = float(parsed.get("score", 0.5))
-        return max(0.0, min(1.0, score))
+        return max(floor, min(1.0, score))
 
     except TimeoutError:
         logger.warning("judge_importance timed out after %.0fs", timeout_s)
-        return 0.5
+        return max(floor, 0.5)
     except Exception:
-        return 0.5
+        return max(floor, 0.5)
 
 
 async def find_consolidation_candidates(
