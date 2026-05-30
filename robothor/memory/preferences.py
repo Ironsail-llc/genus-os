@@ -112,9 +112,17 @@ async def extract_preferences_from_facts(
               AND created_at >= %s
               AND (category IN ('preference', 'opinion', 'decision', 'personal')
                    OR metadata->>'type' IN ('preference', 'choice'))
-              AND importance_score >= 0.6
+              AND importance_score >= 0.5
+              -- Exclude vision/camera analysis miscategorized as preference/personal
+              -- ("the woman in the image is a cleaner"); it floods the candidate
+              -- pool and the LLM correctly rejects it, starving real preferences.
+              AND COALESCE(source_channel, '') <> 'camera'
+              AND fact_text NOT ILIKE '%%camera%%'
+              AND fact_text NOT ILIKE '%%in the image%%'
+              AND fact_text NOT ILIKE '%%the woman %%'
+              AND fact_text NOT ILIKE '%%the man %%'
             ORDER BY importance_score DESC, created_at DESC
-            LIMIT 40
+            LIMIT 80
             """,
             (tid, cutoff),
         )
