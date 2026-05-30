@@ -551,28 +551,72 @@ def _rank_blend_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
-def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Re-rank by a unified score: relevance-dominant + importance + recency + access.
+def _dedup_enabled() -> bool:
+    """Suppress near-duplicate hits in results. Default on."""
+    raw = os.environ.get("MEMORY_DEDUP", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
-    Mirrors production agent-memory practice (similarity ~60-65%, the rest as
-    boosts). Relevance stays dominant so on-topic hits keep the top spots; the
-    other signals break near-ties (e.g. surface the most recent of two equally
-    relevant decisions). Auxiliary rows without these signals fall back to their
-    current rank.
+
+# Recency half-life: a 7-day half-life keeps a usable gradient across the
+# week+ window where most queries live (a 72h half-life flattened everything
+# older than a few days to ~0, so recency stopped differentiating).
+_RECENCY_HALFLIFE_HOURS = 168.0
+
+
+def _norm_tokens(text: str) -> frozenset[str]:
+    return frozenset(re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split())
+
+
+def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict[str, Any]]:
+    """Drop near-duplicate rows, keeping the higher-ranked one.
+
+    Catches exact dups, subsets, and lexical near-dups (Jaccard token overlap
+    >= threshold) — e.g. the camera-detection spam and reworded restatements
+    that otherwise fill the top of a result set. Conservative: only suppresses
+    clear textual overlap, not merely topically-related facts.
     """
-    n = len(results) or 1
+    kept: list[dict[str, Any]] = []
+    kept_tokens: list[frozenset[str]] = []
+    for r in results:
+        txt = r.get("fact_text") or r.get("insight_text") or r.get("content") or ""
+        toks = _norm_tokens(txt)
+        is_dup = False
+        for kt in kept_tokens:
+            if not toks or not kt:
+                continue
+            union = len(toks | kt)
+            jac = len(toks & kt) / union if union else 0.0
+            if jac >= threshold or toks <= kt or kt <= toks:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(r)
+            kept_tokens.append(toks)
+    return kept
+
+
+def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Unified-score re-rank (relevance + recency + importance + access), then dedupe.
+
+    Per live feedback, recency is weighted heavily (operator wants the freshest
+    of several relevant hits surfaced first) while relevance stays the largest
+    single signal so on-topic hits keep the top. Near-duplicates are then
+    collapsed so the first few results are distinct.
+    """
     for i, r in enumerate(results):
         rel = r.get("similarity")
-        rel = (1.0 - i / n) if rel is None else float(rel)
+        rel = (1.0 - i / (len(results) or 1)) if rel is None else float(rel)
         imp = r.get("importance_score")
         imp = 0.5 if imp is None else float(imp)
         age_s = r.get("age_seconds")
-        recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / 72.0)
+        recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / _RECENCY_HALFLIFE_HOURS)
         acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
-        r["_blend"] = 0.65 * rel + 0.2 * imp + 0.10 * recency + 0.05 * acc_norm
+        r["_blend"] = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
     ranked = sorted(results, key=lambda x: x.get("_blend", 0.0), reverse=True)
     for r in ranked:
         r.pop("_blend", None)
+    if _dedup_enabled():
+        ranked = _dedupe(ranked)
     return ranked[:limit]
 
 
