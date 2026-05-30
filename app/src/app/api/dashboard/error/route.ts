@@ -8,7 +8,10 @@ const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 30;
 const errorLog: number[] = [];
 
-const oneLine = (s: unknown) => String(s).replace(/[\r\n\u2028\u2029]/g, " ");
+// Strip all C0/C1 control chars + line/paragraph separators so user-supplied
+// values cannot forge or break log lines (log-injection guard).
+const oneLine = (s: unknown) =>
+  String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 
 export async function POST(req: Request) {
   // Simple rate limit to prevent log spam

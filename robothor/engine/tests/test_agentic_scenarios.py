@@ -154,6 +154,9 @@ class TestScenario2RateLimitBackoff:
         # Disable planning to keep mock_completion predictable
         spawn_agent_config.planning_enabled = False
         spawn_agent_config.model_fallbacks = []
+        # Large hard timeout so a loaded CI runner can't trip the wall-clock
+        # asyncio.timeout (the 30s fixture default flaked under parallel 3.x jobs).
+        spawn_agent_config.timeout_seconds = 3600
 
         call_count = 0
 

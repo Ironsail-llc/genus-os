@@ -140,13 +140,14 @@ class HubClient:
 
     @staticmethod
     def _safe_path(base: Path, candidate: str) -> Path:
-        """Return ``base / <leaf>`` for ``candidate``.
+        """Return ``base / <name>`` for a single trusted filename ``candidate``.
 
-        ``Path(candidate).name`` strips any directory/traversal component so the
-        result can never escape ``base`` (path-injection guard).
+        ``candidate`` must already be a bare filename (callers pass ``path.name``
+        / ``f"{slug}.tar.gz"``); any directory separator or traversal component
+        is rejected (path-injection guard).
         """
         leaf = Path(candidate).name
-        if leaf in ("", ".", ".."):
+        if leaf != candidate or leaf in ("", ".", ".."):
             raise HubError(f"unsafe path: {candidate}")
         return base / leaf
 
