@@ -1,0 +1,82 @@
+id: memory-recall-v1
+description: >
+  Memory retrieval quality benchmark for the Genus OS memory system.
+  Seeds known fixture facts into an isolated tenant, runs the real hybrid
+  retrieval path, and scores recall, temporal/supersession correctness,
+  verbatim exactness, and multi-session persona consistency. All fixtures
+  are de-personalized (Alice / Bob / FakeVendorCo) per the platform rule.
+k: 5
+
+cases:
+  # --- recall@k: can we surface the right fact for a paraphrased query? ---
+  - id: recall-project-owner
+    kind: recall
+    query: "Who is responsible for the Helios project?"
+    gold: "Alice manages the Helios project"
+    seed:
+      - fact_text: "Alice manages the Helios project at FakeVendorCo."
+        category: project
+        entities: [Alice, Helios, FakeVendorCo]
+      - fact_text: "Bob prefers async standups over live meetings."
+        category: preference
+        entities: [Bob]
+      - fact_text: "The Helios project ships in Q3."
+        category: project
+        entities: [Helios]
+
+  - id: recall-contact-role
+    kind: recall
+    query: "What does Bob do at FakeVendorCo?"
+    gold: "Bob is the security lead"
+    seed:
+      - fact_text: "Bob is the security lead at FakeVendorCo."
+        category: contact
+        entities: [Bob, FakeVendorCo]
+      - fact_text: "Carol joined FakeVendorCo as a designer."
+        category: contact
+        entities: [Carol, FakeVendorCo]
+
+  # --- temporal: latest decision must win over the superseded one ---
+  - id: temporal-storage-decision
+    kind: temporal
+    query: "What storage engine did Alice decide to use for Helios?"
+    gold: "switch Helios storage to SQLite"
+    seed:
+      - fact_text: "Alice decided to use Postgres for Helios storage."
+        category: decision
+        entities: [Alice, Helios, Postgres]
+      - fact_text: "Alice later decided to switch Helios storage to SQLite."
+        category: decision
+        entities: [Alice, Helios, SQLite]
+
+  # --- verbatim: exact strings must survive retrieval (Vault target) ---
+  - id: verbatim-support-line
+    kind: verbatim
+    query: "FakeVendorCo support phone number"
+    gold_exact: "555-0142 ext 7"
+    seed:
+      - fact_text: "FakeVendorCo support line is 555-0142 ext 7."
+        category: contact
+        entities: [FakeVendorCo]
+
+  - id: verbatim-account-id
+    kind: verbatim
+    query: "Helios billing account identifier"
+    gold_exact: "ACCT-HEL-00917"
+    seed:
+      - fact_text: "The Helios billing account id is ACCT-HEL-00917."
+        category: technical
+        entities: [Helios]
+
+  # --- persona: stable preference recalled across sessions ---
+  - id: persona-meeting-pref
+    kind: persona
+    query: "How does Bob like to run standups?"
+    gold: "async standups"
+    seed:
+      - fact_text: "Bob prefers async standups over live meetings."
+        category: preference
+        entities: [Bob]
+      - fact_text: "Bob reiterated he wants standups kept async."
+        category: preference
+        entities: [Bob]
