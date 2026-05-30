@@ -112,3 +112,119 @@ cases:
       - fact_text: "Bob reiterated he wants standups kept async."
         category: preference
         entities: [Bob]
+
+  # --- noise floor: a FRESH high-importance fact must survive a DIVERSE
+  #     distractor cloud that is lexically STRONGER to the query. This is the
+  #     operator's real failure (generic facts returned instead of the answer).
+  #     Per-seed importance/age_hours break the harness's co-creation symmetry.
+  - id: noise-fresh-buried
+    kind: noise
+    query: "Is the FakeVendorCo VPN security incident resolved?"
+    gold: "reviewed and closed as a false alarm"
+    k: 5
+    seed:
+      # gold — fresh + high importance, deliberately weaker query overlap
+      - fact_text: "Alice reviewed and closed as a false alarm the odd weeknight sign-in to FakeVendorCo."
+        category: event
+        entities: [FakeVendorCo, Alice]
+        importance: 0.9
+        age_hours: 1
+      # distractors — stale, low importance, HIGH lexical overlap with the query
+      - fact_text: "A suspicious VPN login to FakeVendorCo was detected from an unknown device."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.35
+        age_hours: 72
+      - fact_text: "FakeVendorCo security raised a VPN access alert that needs review."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.35
+        age_hours: 80
+      - fact_text: "The FakeVendorCo VPN security incident remains an open item pending triage."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 96
+      - fact_text: "Unusual VPN traffic on the FakeVendorCo network was logged for the security team."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 110
+      - fact_text: "FakeVendorCo rotated VPN credentials after the access incident."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 120
+      - fact_text: "The FakeVendorCo security incident response runbook covers VPN compromise."
+        category: technical
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 200
+      - fact_text: "A VPN security advisory was circulated to the FakeVendorCo engineering team."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 150
+      - fact_text: "FakeVendorCo's VPN gateway logs are retained for ninety days for security review."
+        category: technical
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 300
+
+  # --- resolution after detection: a detection event is later RESOLVED; a query
+  #     for the OUTCOME must return the resolution, not the open detection.
+  - id: resolution-after-detection
+    kind: resolution
+    query: "What was the outcome of the unrecognized FakeVendorCo login alert?"
+    gold: "Bob confirmed the FakeVendorCo login was legitimate"
+    k: 5
+    seed:
+      - fact_text: "An unrecognized login to FakeVendorCo was detected and flagged for review."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 48
+      - fact_text: "Bob confirmed the FakeVendorCo login was legitimate and closed the alert."
+        category: decision
+        entities: [Bob, FakeVendorCo]
+        importance: 0.9
+        age_hours: 1
+      - fact_text: "FakeVendorCo uses Okta for single sign-on."
+        category: technical
+        entities: [FakeVendorCo, Okta]
+        importance: 0.4
+        age_hours: 240
+      - fact_text: "The FakeVendorCo login alert was escalated to the on-call engineer overnight."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 40
+
+  # --- resolution capture via the EXTRACTION path: a raw confirmation turn must
+  #     become a discrete fact recording the outcome (exercises WS-4 capture).
+  - id: resolution-capture-ingest
+    kind: resolution
+    seed_mode: ingest
+    query: "Did Bob resolve the FakeVendorCo login alert?"
+    gold: "legitimate"
+    k: 5
+    seed:
+      - source_content: "Bob: Yes — that unrecognized FakeVendorCo login alert from last night was me. It is legitimate, please mark it resolved and close it."
+
+  # --- event-category temporal: latest EVENT must win (R1 only acts on
+  #     decisions, so this must be carried by recency, not supersession).
+  - id: temporal-event-latest
+    kind: temporal
+    query: "What is the current status of the FakeVendorCo data migration?"
+    gold: "migration completed successfully"
+    seed:
+      - fact_text: "The FakeVendorCo data migration started and is in progress."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 72
+      - fact_text: "The FakeVendorCo data migration completed successfully."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 1

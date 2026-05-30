@@ -15,6 +15,7 @@ import pytest
 from robothor.memory.eval import (
     CaseResult,
     EvalCase,
+    _signal_updates,
     format_report,
     load_suite,
     run_case,
@@ -113,10 +114,42 @@ class TestScoreCaseDispatch:
         res = score_case(case, ["Bob prefers async standups"])
         assert res.passed is True
 
+    def test_noise_kind_scored_like_recall(self) -> None:
+        case = EvalCase(id="n1", kind="noise", query="q", gold="false alarm", k=5)
+        res = score_case(case, ["Alice closed it as a false alarm", "distractor"])
+        assert res.passed is True
+        assert res.kind == "noise"
+
+    def test_resolution_kind_scored_like_recall(self) -> None:
+        case = EvalCase(id="res1", kind="resolution", query="q", gold="confirmed legitimate", k=5)
+        res = score_case(case, ["Bob confirmed legitimate and closed it"])
+        assert res.passed is True
+
     def test_unknown_kind_raises(self) -> None:
         case = EvalCase(id="x", kind="bogus", query="q", gold="z", k=5)
         with pytest.raises(ValueError):
             score_case(case, ["z"])
+
+
+class TestSignalUpdates:
+    def test_pairs_ids_with_overrides_and_skips_plain_seeds(self) -> None:
+        ids = [10, 11, 12]
+        seed = [
+            {"fact_text": "gold", "importance": 0.9, "age_hours": 1},
+            {"fact_text": "plain"},  # no overrides → skipped
+            {"fact_text": "stale", "age_hours": 72},
+        ]
+        out = _signal_updates(ids, seed)
+        assert out == [(10, 0.9, 1.0), (12, None, 72.0)]
+
+    def test_empty_when_no_overrides(self) -> None:
+        assert _signal_updates([1, 2], [{"fact_text": "a"}, {"fact_text": "b"}]) == []
+
+    def test_tolerates_length_mismatch(self) -> None:
+        # zip(strict=False): extra ids without a seed are ignored
+        assert _signal_updates([1, 2, 3], [{"fact_text": "a", "importance": 0.7}]) == [
+            (1, 0.7, None)
+        ]
 
 
 class TestLoadSuite:
@@ -153,6 +186,31 @@ cases:
         assert cases[0].k == 5  # inherits suite-level k
         assert cases[1].gold_exact == "555-0142"
         assert cases[0].seed[0]["fact_text"].startswith("Alice")
+
+    def test_accepts_noise_and_resolution_kinds(self, tmp_path: Path) -> None:
+        suite = tmp_path / "suite.yaml"
+        suite.write_text(
+            """
+id: x
+cases:
+  - id: n1
+    kind: noise
+    query: q
+    gold: g
+    seed:
+      - fact_text: "gold fact"
+        importance: 0.9
+        age_hours: 1
+  - id: res1
+    kind: resolution
+    query: q
+    gold: g
+""",
+            encoding="utf-8",
+        )
+        _meta, cases = load_suite(suite)
+        assert {c.kind for c in cases} == {"noise", "resolution"}
+        assert cases[0].seed[0]["importance"] == 0.9
 
     def test_rejects_unknown_kind(self, tmp_path: Path) -> None:
         suite = tmp_path / "bad.yaml"
@@ -256,4 +314,5 @@ cases:
         assert report["passed"] == 1
         assert report["by_kind"]["recall"]["total"] == 2
         ensure.assert_called_once()
-        cleanup.assert_called_once()  # cleanup runs even with a partial pass
+        # per-case isolation: cleanup runs before each case + once in finally
+        assert cleanup.call_count == 3

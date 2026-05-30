@@ -571,6 +571,31 @@ def _temporal_coherence_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _rerank_wide_enabled() -> bool:
+    """Rerank a WIDE survivor pool, then let `_blend_rank` cut to `limit` (WS-1).
+
+    Default OFF (observe). When off, the cross-encoder truncates to `limit`
+    *before* the recency/importance blend runs, so a fresh, high-importance,
+    on-topic fact the 0.6B reranker drops can never be rescued. When on, rerank
+    keeps ``max(limit*4, 24)`` survivors — each carrying its yes/no verdict — and
+    the blend does the final cut, with a small bonus for ``rerank_relevant=yes``.
+    """
+    raw = os.environ.get("MEMORY_RERANK_WIDE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _episode_merge_enabled() -> bool:
+    """Merge episodes/insights/chat-turns on the RERANKED path too (WS-1.3).
+
+    Default OFF. The reranker branch used to return before the
+    include_episodes / second include_insights append, so the (only populated)
+    episode store was invisible whenever the reranker was on (the prod default).
+    When on, both the reranked and fallback paths share ``_append_auxiliary``.
+    """
+    raw = os.environ.get("MEMORY_EPISODE_MERGE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def _recency_key(r: dict[str, Any]) -> tuple[float, int]:
     """Sortable "how recent" key: (created_at epoch, id).
 
@@ -631,6 +656,10 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
     collapsed so the first few results are distinct.
     """
     coherence_on = _temporal_coherence_enabled()
+    # When the wide-rerank pool is in use, the candidate list mixes cross-encoder
+    # "yes" and "no" rows; fold the verdict in as a soft signal (not a hard gate)
+    # so relevance stays authoritative but a confirmed-relevant hit is nudged up.
+    wide_on = _rerank_wide_enabled()
 
     # R1: read-time supersession inference. Among `decision` facts, a decision
     # that shares a topic (>=2 entities) with a LATER decision is treated as
@@ -661,6 +690,8 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
         recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / _RECENCY_HALFLIFE_HOURS)
         acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
         blend = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
+        if wide_on and r.get("rerank_relevant") == "yes":
+            blend += 0.10  # cross-encoder confirmed relevance — soft boost, not a gate
         if coherence_on:
             if r.get("superseded_by") is not None or id(r) in inferred_superseded:
                 blend *= 0.5  # demote known-stale / superseded decision
@@ -675,6 +706,53 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
     if _dedup_enabled():
         ranked = _dedupe(ranked)
     return ranked[:limit]
+
+
+async def _append_auxiliary(
+    result: list[dict[str, Any]],
+    *,
+    query: str,
+    embedding: list[float],
+    tenant_id: str,
+    _tenant: str,
+    include_insights: bool,
+    include_episodes: bool,
+    include_chat_turns: bool,
+) -> list[dict[str, Any]]:
+    """Append cross-domain insights, episodic summaries, and verbatim chat turns.
+
+    Each leg is best-effort. Shared by the reranker and fallback paths so the
+    populated episode store is no longer dropped on the reranked path (WS-1.3).
+    """
+    if include_insights:
+        try:
+            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
+            result.extend(insights)
+        except Exception:
+            pass  # Insight search is best-effort
+    if include_episodes:
+        try:
+            from robothor.memory.episodes import search_episodes
+
+            result.extend(await search_episodes(query, limit=3, tenant_id=tenant_id))
+        except Exception:
+            pass  # Episode search is best-effort
+    if include_chat_turns:
+        try:
+            from robothor.engine.chat_store import search_chat_turns
+
+            turns = await asyncio.to_thread(
+                search_chat_turns, embedding, limit=5, tenant_id=_tenant
+            )
+            for t in turns:
+                t["fact_text"] = f"[{t['role']}] {t['content']}"
+                t["category"] = "chat_turn"
+                t["confidence"] = 0.5
+                t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
+            result.extend(turns)
+        except Exception:
+            pass  # Chat turn search is best-effort
+    return result
 
 
 async def search_facts(
@@ -714,14 +792,18 @@ async def search_facts(
     embedding = await llm_client.get_embedding_async(query)
 
     active_clause = "AND is_active = TRUE" if active_only else ""
-    fetch_limit = max(30, limit * 3)
+    # WS-1.4: modestly widen the candidate pool when the wide-rerank path is on,
+    # giving the blend more headroom. Kept conservative because the cross-encoder
+    # scores every candidate (per-candidate Ollama cost).
+    fetch_limit = max(45, limit * 3) if _rerank_wide_enabled() else max(30, limit * 3)
     _tenant = tenant_id or DEFAULT_TENANT
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Widen the HNSW candidate budget for this txn so the active-row
-        # post-filter has headroom (pgvector 0.6 post-filters; see migration 073).
+        # Widen the HNSW candidate budget for this txn so the active-row filter
+        # has headroom. Live build is pgvector 0.8.2 with a partial active index
+        # (migrations 073/074) + optional iterative_scan; see apply_hnsw_session.
         apply_hnsw_session(cur)
 
         # Vector search — also pull the ranking signals (importance/recency/access).
@@ -836,20 +918,39 @@ async def search_facts(
             for c in candidates:
                 c["content"] = c.get("fact_text", "")
             t0 = time.time()
+            # WS-1: decouple the reranker survivor pool from the final limit so
+            # the blend can rescue a fresh/high-importance fact the cross-encoder
+            # under-scores. When off, behaviour is unchanged (truncate to limit).
+            rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
             reranked: list[dict[str, Any]] = await rerank_with_fallback(
-                query, candidates, top_k=limit
+                query, candidates, top_k=rerank_topk
             )
             logger.info(
-                "search_facts rerank: %d candidates → %d results in %dms",
+                "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(candidates),
                 len(reranked),
+                rerank_topk,
                 int((time.time() - t0) * 1000),
             )
             # Unified-score re-rank: relevance-dominant, with importance/recency/
             # access as tie-breakers (surfaces the most recent of equally-relevant hits).
             if _rank_blend_enabled():
                 reranked = _blend_rank(reranked, limit)
-            if include_insights:
+            else:
+                reranked = reranked[:limit]
+            if _episode_merge_enabled():
+                reranked = await _append_auxiliary(
+                    reranked,
+                    query=query,
+                    embedding=embedding,
+                    tenant_id=tenant_id,
+                    _tenant=_tenant,
+                    include_insights=include_insights,
+                    include_episodes=include_episodes,
+                    include_chat_turns=include_chat_turns,
+                )
+            elif include_insights:
+                # Legacy reranked-path behaviour (flag off): insights only.
                 try:
                     insights = await search_insights(query, limit=3, tenant_id=tenant_id)
                     reranked.extend(insights)
@@ -860,43 +961,16 @@ async def search_facts(
             logger.warning("search_facts rerank failed, falling back: %s", e)
 
     result = _blend_rank(candidates, limit) if _rank_blend_enabled() else candidates[:limit]
-
-    # Append cross-domain insights if requested
-    if include_insights:
-        try:
-            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
-            result.extend(insights)
-        except Exception:
-            pass  # Insight search is best-effort
-
-    # Append episodic summaries if requested
-    if include_episodes:
-        try:
-            from robothor.memory.episodes import search_episodes
-
-            episodes = await search_episodes(query, limit=3, tenant_id=tenant_id)
-            result.extend(episodes)
-        except Exception:
-            pass  # Episode search is best-effort
-
-    # Append verbatim chat turns (low-weight — facts still dominate)
-    if include_chat_turns:
-        try:
-            from robothor.engine.chat_store import search_chat_turns
-
-            turns = await asyncio.to_thread(
-                search_chat_turns, embedding, limit=5, tenant_id=_tenant
-            )
-            for t in turns:
-                t["fact_text"] = f"[{t['role']}] {t['content']}"
-                t["category"] = "chat_turn"
-                t["confidence"] = 0.5
-                t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
-            result.extend(turns)
-        except Exception:
-            pass  # Chat turn search is best-effort
-
-    return result
+    return await _append_auxiliary(
+        result,
+        query=query,
+        embedding=embedding,
+        tenant_id=tenant_id,
+        _tenant=_tenant,
+        include_insights=include_insights,
+        include_episodes=include_episodes,
+        include_chat_turns=include_chat_turns,
+    )
 
 
 def get_memory_stats(tenant_id: str = "") -> dict[str, Any]:

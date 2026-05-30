@@ -32,7 +32,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 EVAL_TENANT = "memory-eval"
-VALID_KINDS = frozenset({"recall", "temporal", "verbatim", "persona"})
+# recall/persona/noise/resolution → gold must appear in top-k (noise adds a
+# distractor cloud; resolution seeds a detection→resolution arc). temporal →
+# latest must rank first. verbatim → exact string must survive.
+VALID_KINDS = frozenset({"recall", "temporal", "verbatim", "persona", "noise", "resolution"})
+_RECALL_KINDS = frozenset({"recall", "persona", "noise", "resolution"})
 _DEFAULT_K = 5
 
 
@@ -114,7 +118,7 @@ def score_verbatim(
 
 def score_case(case: EvalCase, top_texts: list[str]) -> CaseResult:
     """Dispatch scoring by case kind."""
-    if case.kind in ("recall", "persona"):
+    if case.kind in _RECALL_KINDS:
         passed, score = score_recall(top_texts, case.gold, case.k)
     elif case.kind == "temporal":
         passed, score = score_temporal(top_texts, case.gold)
@@ -226,12 +230,63 @@ def _cleanup_tenant(tenant_id: str) -> None:
         cur.execute("DELETE FROM memory_facts WHERE tenant_id = %s", (tenant_id,))
 
 
+def _signal_updates(
+    ids: list[int], seed: list[dict[str, Any]]
+) -> list[tuple[int, float | None, float | None]]:
+    """Pure: pair seeded ids with any per-seed (importance, age_hours) overrides.
+
+    ``store_facts_batch`` co-creates every seed at ``now()`` with the default
+    importance (0.5), so recency and importance are uniform and cannot model the
+    operator's real failure (a *fresh, high-importance* fact buried under *stale,
+    low-importance* distractors). A seed item may carry ``importance`` and/or
+    ``age_hours`` to break that symmetry. Returns only the rows needing a patch.
+    """
+    out: list[tuple[int, float | None, float | None]] = []
+    for fact_id, item in zip(ids, seed, strict=False):
+        imp = item.get("importance")
+        age = item.get("age_hours")
+        if imp is None and age is None:
+            continue
+        out.append(
+            (fact_id, None if imp is None else float(imp), None if age is None else float(age))
+        )
+    return out
+
+
+def _apply_seed_signals(ids: list[int], seed: list[dict[str, Any]], tenant_id: str) -> None:
+    """Apply per-seed importance_score / created_at overrides (see _signal_updates)."""
+    updates = _signal_updates(ids, seed)
+    if not updates:
+        return
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for fact_id, imp, age in updates:
+            sets: list[str] = []
+            params: list[Any] = []
+            if imp is not None:
+                sets.append("importance_score = %s")
+                params.append(imp)
+            if age is not None:
+                sets.append("created_at = now() - (%s || ' hours')::interval")
+                params.append(str(age))
+            params.extend([fact_id, tenant_id])
+            cur.execute(
+                f"UPDATE memory_facts SET {', '.join(sets)} WHERE id = %s AND tenant_id = %s",  # noqa: S608 — fixed column set, params bound
+                params,
+            )
+
+
 async def _seed_case(case: EvalCase, tenant_id: str) -> list[int]:
     """Seed a case's fixture facts into the eval tenant.
 
     ``direct`` (default) stores the exact fact text via ``store_facts_batch``
     (no LLM paraphrase). ``ingest`` routes through the extraction pipeline
     (LLM), which is what the verbatim-vs-vault comparison exercises.
+
+    Per-seed ``importance`` / ``age_hours`` overrides are applied after a direct
+    seed so cases can model fresh-high-importance vs stale-low-importance facts.
     """
     if not case.seed:
         return []
@@ -258,9 +313,11 @@ async def _seed_case(case: EvalCase, tenant_id: str) -> list[int]:
         }
         for item in case.seed
     ]
-    return await store_facts_batch(
+    ids = await store_facts_batch(
         facts, source_content="memory-eval seed", source_type="eval", tenant_id=tenant_id
     )
+    _apply_seed_signals(ids, case.seed, tenant_id)
+    return ids
 
 
 async def _retrieve(case: EvalCase, tenant_id: str) -> list[str]:
@@ -291,6 +348,11 @@ async def run_suite(
     results: list[CaseResult] = []
     try:
         for case in cases:
+            # Per-case isolation: wipe the tenant before each case so an earlier
+            # case's seeds (esp. noise distractors) can't contaminate a later one
+            # and make results order-dependent. Disabled when cleanup=False (debug).
+            if cleanup:
+                _cleanup_tenant(tenant_id)
             results.append(await run_case(case, tenant_id))  # noqa: PERF401 — await in body
     finally:
         if cleanup:
