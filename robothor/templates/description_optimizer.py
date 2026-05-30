@@ -16,12 +16,16 @@ import yaml
 
 
 def _safe_bundle_path(base: Path, name: str) -> Path:
-    """Resolve ``base / name`` and confirm it stays within ``base``."""
-    base_resolved = base.resolve()
-    target = (base_resolved / name).resolve()
-    if not target.is_relative_to(base_resolved):
+    """Return ``base / <leaf>`` for a single trusted filename.
+
+    ``name`` must be a bare filename — any directory separator or traversal
+    component is rejected (path-injection guard). ``os.path.basename`` strips
+    the directory so the result can never escape ``base``.
+    """
+    leaf = Path(name).name
+    if leaf != name or leaf in ("", ".", ".."):
         raise ValueError(f"unsafe path: {name}")
-    return target
+    return base / leaf
 
 
 @dataclass

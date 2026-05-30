@@ -19,6 +19,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 RETAINED_CONTEXT_MARKER = "[RETAINED CONTEXT]"
@@ -299,7 +301,7 @@ def _dedup_tool_results(
         m = messages[i]
         c = m.get("content")
         if m.get("role") == "tool" and isinstance(c, str) and len(c) > 200:
-            last_seen[hashlib.sha1(c.encode("utf-8", "ignore")).hexdigest()] = i
+            last_seen[hashlib.sha256(c.encode("utf-8", "ignore")).hexdigest()] = i
 
     out = list(messages)
     elided = 0
@@ -307,7 +309,7 @@ def _dedup_tool_results(
         m = messages[i]
         c = m.get("content")
         if m.get("role") == "tool" and isinstance(c, str) and len(c) > 200:
-            h = hashlib.sha1(c.encode("utf-8", "ignore")).hexdigest()
+            h = hashlib.sha256(c.encode("utf-8", "ignore")).hexdigest()
             if last_seen.get(h) != i:  # an earlier duplicate of a later copy
                 out[i] = {**m, "content": "[duplicate of a later identical tool result — elided]"}
                 elided += 1
@@ -403,9 +405,9 @@ async def compact(
         working, _med = _strip_historical_media(working, _KEEP_RECENT)
         if _eli or _med:
             logger.info(
-                "Compaction pre-pass: elided %d duplicate tool results, stripped %d media blocks",
-                _eli,
-                _med,
+                "Compaction pre-pass: elided %s duplicate tool results, stripped %s media blocks",
+                sanitize_log(_eli),
+                sanitize_log(_med),
             )
             est0 = estimate_tokens(working)
             if est0 < drain_to:

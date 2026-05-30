@@ -140,17 +140,15 @@ class HubClient:
 
     @staticmethod
     def _safe_path(base: Path, candidate: str) -> Path:
-        """Resolve ``candidate`` under ``base`` as a single leaf name.
+        """Return ``base / <leaf>`` for ``candidate``.
 
-        Constrains the candidate to its basename and verifies the resolved
-        path stays within ``base``; raises ``HubError`` otherwise.
+        ``Path(candidate).name`` strips any directory/traversal component so the
+        result can never escape ``base`` (path-injection guard).
         """
-        base_resolved = base.resolve()
         leaf = Path(candidate).name
-        target = (base_resolved / leaf).resolve()
-        if not target.is_relative_to(base_resolved):
+        if leaf in ("", ".", ".."):
             raise HubError(f"unsafe path: {candidate}")
-        return target
+        return base / leaf
 
     def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
         """Verify file checksum if provided."""

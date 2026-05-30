@@ -30,6 +30,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.engine.sanitize import sanitize_log
 from robothor.llm import ollama as llm_client
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -105,7 +106,9 @@ async def populate_vault_from_content(
             )
             stored.append(vid)
         except Exception as e:  # noqa: BLE001 — auto-populate is best-effort
-            logger.debug("vault auto-populate skipped (%s): %s", c.get("entry_type"), e)
+            logger.debug(
+                "vault auto-populate skipped (%s): %s", sanitize_log(c.get("entry_type")), e
+            )
     return stored
 
 

@@ -223,7 +223,7 @@ async def _handle_spawn_agent(
 
     # Namespaced dedup key — includes message hash so the same agent can be
     # spawned multiple times with different messages (wide research pattern)
-    msg_hash = hashlib.md5(message.encode(), usedforsecurity=False).hexdigest()[:8]
+    msg_hash = hashlib.sha256(message.encode()).hexdigest()[:8]
     dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}:{msg_hash}"
     from robothor.engine.dedup import release, try_acquire
 
