@@ -149,6 +149,24 @@ class TestRecallNodeHandler:
         assert "not found" in out["error"]
         sm.clear_graph("run-10")
 
+    @pytest.mark.asyncio
+    async def test_run_id_flows_through_dispatch(self, tmp_path) -> None:
+        # Proves the dispatch chain threads run_id into ToolContext so the
+        # handler can find the per-run graph (the fix that makes recall_node work).
+        from robothor.engine.tools.dispatch import _execute_tool
+
+        ref = tmp_path / "out.txt"
+        ref.write_text("DISPATCHED FULL OUTPUT", encoding="utf-8")
+        sm.clear_graph("run-disp")
+        sm.get_or_create_graph("run-disp").add_node("exec", "x", ref_path=str(ref))
+
+        with patch.dict(os.environ, {"ROBOTHOR_RIP_13_ENABLED": "1"}, clear=True):
+            out = await _execute_tool(
+                "recall_node", {"node_id": "n1"}, run_id="run-disp", tenant_id="t1"
+            )
+        assert out["content"] == "DISPATCHED FULL OUTPUT"
+        sm.clear_graph("run-disp")
+
 
 class TestSessionIntegration:
     def test_record_tool_call_builds_node_in_observe(self) -> None:

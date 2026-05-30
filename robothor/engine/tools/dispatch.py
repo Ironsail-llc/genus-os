@@ -56,6 +56,7 @@ class ToolContext:
     """Context passed to every tool handler."""
 
     agent_id: str = ""
+    run_id: str = ""  # current AgentRun id — lets handlers find per-run state
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     workspace: str = ""
     user_id: str = ""
@@ -220,6 +221,7 @@ async def _execute_tool(
     args: dict[str, Any],
     *,
     agent_id: str = "",
+    run_id: str = "",
     tenant_id: str = "",
     workspace: str = "",
     user_id: str = "",
@@ -276,6 +278,7 @@ async def _execute_tool(
 
     ctx = ToolContext(
         agent_id=agent_id,
+        run_id=run_id,
         tenant_id=tenant_id,
         workspace=workspace,
         user_id=user_id,
