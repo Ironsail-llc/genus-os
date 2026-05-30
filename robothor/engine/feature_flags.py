@@ -124,6 +124,21 @@ def catalog_backed_models_enabled() -> bool:
     return is_rip_enabled(17)
 
 
+def goal_judge_enabled() -> bool:
+    """Return True iff the goal-judge (self-improvement Phase 1) is active.
+
+    When on, the ``judge_run`` tool grades an agent's recent runs against real
+    outcome signals (declared goal, run trace, operator words, obstacles) and
+    writes ``agent_reviews`` rows with ``reviewer_type='judge'`` that become the
+    spine of the achievement score. Off by default; gated by
+    ``ROBOTHOR_JUDGE_ENABLED`` (not a numbered rip — a distinct subsystem).
+    Forced off by ``ROBOTHOR_DISABLE_ALL_RIPS=1``.
+    """
+    if _disabled_all():
+        return False
+    return _env_bool("ROBOTHOR_JUDGE_ENABLED")
+
+
 def deferred_tools_threshold() -> int:
     """Min advertised-tool count above which an agent's set is deferred.
 

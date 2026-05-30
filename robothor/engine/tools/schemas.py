@@ -2868,6 +2868,42 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["judge_run"] = {
+        "type": "function",
+        "function": {
+            "name": "judge_run",
+            "description": (
+                "Goal-judge: grade an agent's recent runs against REAL outcome "
+                "signals (its declared session goal, the run trace, the "
+                "operator's own words, and obstacles like timeouts/escalations) "
+                "and write one agent_reviews row per run with reviewer_type="
+                "'judge', dimension='goal_achievement'. goals.py reads these as "
+                "the spine of the achievement score. Evidence-or-abstain: a run "
+                "the judge cannot ground in cited evidence writes nothing "
+                "(stays neutral). Uses a separate model tier (Sonnet 4.6) so an "
+                "agent never grades itself. Inert unless ROBOTHOR_JUDGE_ENABLED=1."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent whose recent runs to judge.",
+                    },
+                    "window_hours": {
+                        "type": "integer",
+                        "description": "Look-back window in hours. Default 24.",
+                    },
+                    "max_runs": {
+                        "type": "integer",
+                        "description": "Max unjudged runs to grade this pass. Default 5.",
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+    }
+
     schemas["buddy_verify_pass"] = {
         "type": "function",
         "function": {

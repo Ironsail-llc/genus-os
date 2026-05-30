@@ -174,6 +174,14 @@ SESSION_GOAL_ALIGNMENT_METRIC = "session_goal_alignment_score"
 SESSION_GOAL_PROGRESS_METRIC = "session_goal_progress"
 SESSION_GOAL_SYNTHETIC_WEIGHT = 5.0
 
+# The goal-judge's verdict (self-improvement Phase 1). An LLM reads real
+# outcome signals (operator words, task resolution, obstacles, the run trace)
+# and rates goal achievement 1-5; judge.py persists those as agent_reviews
+# rows with reviewer_type='judge'. This is the metric that REPLACES
+# benchmark_pass_rate as the spine of the grade — a real-outcome signal, not a
+# synthetic exam. It is a grade and a gate; nothing hill-climbs it directly.
+GOAL_ACHIEVEMENT_METRIC = "goal_achievement"
+
 
 def _load_active_goal_for_agent(agent_id: str, tenant_id: str) -> dict[str, Any] | None:
     """Indirection so tests can patch the DB lookup cleanly."""
@@ -381,6 +389,60 @@ def _get_session_goal_alignment_score(
         return None
 
 
+def _get_goal_achievement_judgment(
+    agent_id: str,
+    window_days: int = 7,
+    tenant_id: str = DEFAULT_TENANT,
+    as_of: datetime | None = None,
+) -> float | None:
+    """Return the confidence-weighted goal-achievement score (0.0-1.0).
+
+    Reads ``agent_reviews`` where ``reviewer_type='judge'`` and
+    ``categories.dimension='goal_achievement'`` — rows written by the goal-judge
+    (``judge.py``) after grading an agent's runs against real outcome signals.
+    Each row carries a 1-5 ``rating`` and a 0-1 ``confidence`` (in ``categories``);
+    we weight ratings by confidence so a low-evidence judgment counts for less,
+    then map 1-5 → 0-1. Returns None when no judge row exists in the window — so
+    a not-yet-judged agent stays neutral (None), never spuriously 0.0.
+
+    Mirror of ``_get_session_goal_alignment_score`` (same shape, same caller
+    contract) so the change at the ``compute_goal_metrics`` injection point is a
+    single extra line.
+    """
+    try:
+        from robothor.crm.dal import get_connection
+    except Exception:
+        return None
+    end = as_of or datetime.now(UTC)
+    start = end - timedelta(days=window_days)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT SUM(rating::float * COALESCE((categories ->> 'confidence')::float, 1.0))
+                       / NULLIF(SUM(COALESCE((categories ->> 'confidence')::float, 1.0)), 0)
+                FROM agent_reviews
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND created_at >= %s
+                  AND created_at <= %s
+                  AND reviewer_type = 'judge'
+                  AND categories ->> 'dimension' = 'goal_achievement'
+                """,
+                (agent_id, tenant_id, start, end),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return None
+            avg_rating = float(row[0])
+            score = max(0.0, min(1.0, (avg_rating - 1.0) / 4.0))
+            return round(score, 4)
+    except Exception as exc:
+        logger.debug("goal_achievement lookup failed for %s: %s", agent_id, exc)
+        return None
+
+
 def _get_session_goal_progress(
     agent_id: str,
     tenant_id: str = DEFAULT_TENANT,
@@ -434,6 +496,14 @@ def compute_goal_metrics(
     )
     if pass_rate is not None:
         metrics["benchmark_pass_rate"] = round(pass_rate, 4)
+
+    # The grade's new spine: the goal-judge's real-outcome verdict (Phase 1).
+    # None when no judge row yet → neutral, never a false 0.0.
+    achievement = _get_goal_achievement_judgment(
+        agent_id, window_days=window_days, tenant_id=tenant_id, as_of=as_of
+    )
+    if achievement is not None:
+        metrics[GOAL_ACHIEVEMENT_METRIC] = achievement
 
     # Operator-facing: "is this agent doing what I asked of it?" (buddy-judged)
     alignment = _get_session_goal_alignment_score(
