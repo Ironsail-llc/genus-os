@@ -34,8 +34,8 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
-from robothor.engine.codex_provider import is_codex_model
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -3332,14 +3332,27 @@ class AgentRunner:
         """Handle model failure: mark broken or log warning."""
         status = getattr(e, "status_code", None)
         is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
+        # Provider-availability failures (e.g. the Codex CLI missing from the
+        # engine's PATH, or a misconfigured local provider) carry no HTTP
+        # status, so they previously slipped into the generic warning branch and
+        # the primary was never marked broken nor flagged — that is exactly how
+        # codex/gpt-5.5 silently fell back to mimo for the whole fleet without a
+        # single ERROR line (audit 2026-05-29). Treat them like other hard
+        # provider failures so the PRIMARY-failed path fires.
+        is_provider_down = isinstance(e, (CodexProviderError, FileNotFoundError))
         # Mark broken for auth, rate limit, provider failures, and timeouts
         if broken_models is not None and (
-            status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout
+            status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout or is_provider_down
         ):
             # First model to fail = primary model — log at ERROR for visibility
             is_primary = len(broken_models) == 0
             broken_models.add(model)
-            reason = "timeout" if is_timeout else str(status)
+            if is_timeout:
+                reason = "timeout"
+            elif is_provider_down:
+                reason = f"provider unavailable: {e}"
+            else:
+                reason = str(status)
             if is_primary:
                 logger.error(
                     "PRIMARY model %s failed (%s), falling back — primary_model_fallback=True",
@@ -3595,6 +3608,54 @@ class AgentRunner:
         logger.error("All models failed (streaming). Last error: %s", last_error)
         return None
 
+    @staticmethod
+    def _check_primary_model_reached(run: AgentRun, agent_config: Any) -> None:
+        """Alert when a run answered on a fallback instead of the configured primary.
+
+        This is the single highest-leverage degradation detector: it turns an
+        invisible, fleet-wide silent fallback (codex-not-on-PATH, 2026-05-29)
+        into a per-run WARN + operator alert. Only fires for top-level runs that
+        actually produced a model answer and whose used model differs from the
+        manifest's primary.
+        """
+        if agent_config is None or getattr(run, "parent_run_id", None):
+            return
+        primary = getattr(agent_config, "model_primary", "") or ""
+        used = run.model_used or ""
+        if not primary or not used or used == primary:
+            return
+
+        logger.error(
+            "DEGRADED model: agent=%s ran on %s, not configured primary %s "
+            "— primary_model_unreached=True",
+            _sanitize(run.agent_id),
+            _sanitize(used),
+            _sanitize(primary),
+        )
+        note = f"Ran on fallback {used}, not primary {primary}"
+        run.outcome_notes = f"{run.outcome_notes}; {note}" if run.outcome_notes else note
+
+        with contextlib.suppress(RuntimeError):
+            asyncio.get_running_loop()
+            from robothor.engine.alerts import alert as _alert
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                _alert(
+                    "warning",
+                    f"Primary model unreached: {run.agent_id}",
+                    f"Agent `{run.agent_id}` completed on fallback `{used}` instead of "
+                    f"its configured primary `{primary}`. The primary may be "
+                    f"misconfigured or unavailable.",
+                    metadata={
+                        "agent_id": run.agent_id,
+                        "model_used": used,
+                        "model_primary": primary,
+                    },
+                ),
+                name=f"primary-unreached-alert:{run.agent_id}",
+            )
+
     def _finish_run(
         self,
         run: AgentRun,
@@ -3619,6 +3680,15 @@ class AgentRunner:
                 check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
             except Exception as e:
                 logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── [OBSERVABILITY] Configured-primary-not-reached detector ──────
+        # A run that completes on a fallback model looks identical to a healthy
+        # run in the DB, so a dead primary (e.g. codex/gpt-5.5 missing from the
+        # engine PATH) can degrade the whole fleet silently. Emit a loud signal
+        # whenever the model that actually answered isn't the configured
+        # primary. Sub-agent runs inherit the parent's models, so skip them.
+        with contextlib.suppress(Exception):
+            self._check_primary_model_reached(run, agent_config)
 
         # ── Phase 0 hook: post-response extension point ──────────────
         # No-op by default; future rips spawn background reviews

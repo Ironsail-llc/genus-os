@@ -1055,6 +1055,92 @@ class TestAssessOutcome:
         assert run.outcome_assessment == "successful"
 
 
+class TestPrimaryModelReached:
+    """_check_primary_model_reached — surface silent fallback degradation.
+
+    Regression for the 2026-05-29 audit: codex/gpt-5.5 was missing from the
+    engine PATH, so every top agent silently completed on the mimo fallback
+    with no error. The detector must flag any run whose used model isn't the
+    configured primary.
+    """
+
+    def _make_run(self, **kw):
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+        defaults = {
+            "id": "run-x",
+            "agent_id": "main",
+            "trigger_type": TriggerType.CRON,
+            "status": RunStatus.COMPLETED,
+        }
+        defaults.update(kw)
+        return AgentRun(**defaults)
+
+    def _config(self, primary):
+        from unittest.mock import MagicMock
+
+        cfg = MagicMock()
+        cfg.model_primary = primary
+        return cfg
+
+    def test_flags_fallback_run(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="openrouter/xiaomi/mimo-v2.5-pro")
+        cfg = self._config("codex/gpt-5.5")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" in caplog.text
+        assert run.outcome_notes and "fallback" in run.outcome_notes
+
+    def test_silent_when_primary_used(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="codex/gpt-5.5")
+        cfg = self._config("codex/gpt-5.5")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+        assert run.outcome_notes is None
+
+    def test_skips_sub_agent_runs(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="fallback-model", parent_run_id="parent-1")
+        cfg = self._config("primary-model")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+
+
+class TestHandleModelErrorProviderDown:
+    """_handle_model_error — provider-availability failures mark the model broken.
+
+    A missing Codex CLI raises CodexProviderError (no HTTP status); it must be
+    treated like other hard provider failures so the primary is marked broken
+    and the PRIMARY-failed ERROR line fires (audit 2026-05-29).
+    """
+
+    def test_codex_missing_marks_primary_broken(self, caplog):
+        import logging
+
+        from robothor.engine.codex_provider import CodexProviderError
+        from robothor.engine.runner import AgentRunner
+
+        broken: set[str] = set()
+        err = CodexProviderError("Codex CLI not found: codex")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._handle_model_error(err, "codex/gpt-5.5", broken)
+        assert "codex/gpt-5.5" in broken
+        assert "PRIMARY model" in caplog.text
+
+
 class TestSynthesizeWrapupSummary:
     """When the force-wrapup LLM call comes back empty, the run must still
     produce a non-empty final text — synthesized from the tool actions taken.
