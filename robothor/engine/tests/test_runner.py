@@ -1316,3 +1316,75 @@ class TestInterruptSteerWiring:
         assert calls["n"] == 2, f"expected 2 LLM calls before interrupt, got {calls['n']}"
         assert run.status != RunStatus.FAILED
         assert "interrupt" in (run.outcome_notes or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_via_public_api_reaches_live_run(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """End-to-end: an external caller (Telegram/health API) halts a LIVE run
+        by run_id via interrupt_session -> session_registry.lookup. Proves the
+        runner registers the session (without registration this lookup fails and
+        the loop runs to safety_cap)."""
+        from robothor.engine.interrupt_api import interrupt_session
+
+        sample_agent_config.max_iterations = 10
+        sample_agent_config.safety_cap = 8
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        calls = {"n": 0}
+        captured = {"interrupt_ok": None}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                # External caller reaches the live run ONLY via the registry.
+                captured["interrupt_ok"] = interrupt_session(session.run_id, "operator stop")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        assert captured["interrupt_ok"] is True, "session was not registered — lookup failed"
+        assert calls["n"] == 2
+        assert "interrupt" in (run.outcome_notes or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_session_unregistered_after_run(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """The registry must not leak: after a run completes, lookup returns None."""
+        from robothor.engine import session_registry
+
+        seen = {"run_id": None}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            seen["run_id"] = session.run_id
+            assert session_registry.lookup(session.run_id) is session  # live during the run
+            return mock_litellm_response(content="done")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        assert seen["run_id"] is not None
+        assert session_registry.lookup(seen["run_id"]) is None  # unregistered in finally

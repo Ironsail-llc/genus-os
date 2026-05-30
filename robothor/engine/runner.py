@@ -887,6 +887,16 @@ class AgentRunner:
                         self.registry.deferred_whitelist(agent_config)
                     )
 
+                # G3: register the live session so external callers
+                # (interrupt_api.interrupt_session / steer_session, driven by
+                # the Telegram bot or health API) can look it up by run_id and
+                # steer/halt it mid-loop. Without this the loop-side consume is
+                # unreachable in production. Scoped to the loop window; always
+                # unregistered in the finally so the registry can't leak.
+                from robothor.engine import session_registry
+
+                session_registry.register(session)
+
                 try:
                     await self._run_loop(
                         session,
@@ -907,6 +917,8 @@ class AgentRunner:
                         on_stream_event=on_stream_event,
                     )
                 finally:
+                    with contextlib.suppress(Exception):
+                        session_registry.unregister(session)
                     if _defer_token is not None:
                         from robothor.engine.tools.dispatch import clear_deferred_allowed
 
