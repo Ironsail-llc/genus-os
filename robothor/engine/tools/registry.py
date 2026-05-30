@@ -128,8 +128,9 @@ class ToolRegistry:
         When deferral (Rip 16 / G4) is active for this agent, advertise only the
         CORE_TOOLS subset plus the tool_search/tool_describe/tool_call meta-tools;
         the agent's other allowed tools load on demand. Enforcement of the real
-        allow-list is handled by the per-task whitelist the runner installs (so
-        tool_call cannot reach a denied tool).
+        allow-list lives in the tool_call/tool_describe handlers, which check the
+        ``_deferred_allowed`` set the runner publishes via ``set_deferred_allowed``
+        (see deferred_whitelist) — so tool_call cannot reach a denied tool.
         """
         names = self._get_filtered_names(config)
         if self.should_defer(config):
@@ -160,11 +161,12 @@ class ToolRegistry:
         return len(self._get_filtered_names(config)) > deferred_tools_threshold()
 
     def deferred_whitelist(self, config: AgentConfig) -> frozenset[str]:
-        """Tool names the runner should whitelist for a deferred run.
+        """The deferred-run allow-set the runner publishes via set_deferred_allowed.
 
-        The agent's full allowed set plus the meta-tools — so a direct CORE call
-        or a tool_call to any allowed (non-denied) tool passes, while a tool_call
-        to a denied tool is refused by _execute_tool's whitelist gate.
+        The agent's full allowed set plus the meta-tools. tool_describe/tool_call
+        check membership in this set (the _deferred_allowed ContextVar), so a
+        direct CORE call or a tool_call to any allowed tool passes, while a
+        tool_call to a denied tool is refused before registry.execute.
         """
         return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
 
@@ -172,8 +174,8 @@ class ToolRegistry:
         """Rank a set of tool names against a free-text query.
 
         Returns ``[{"name", "description"}]`` for the top matches. Used by the
-        tool_search meta-tool, which passes the agent's allowed set (the runner's
-        per-task whitelist) so search is scoped to what the agent may actually call.
+        tool_search meta-tool, which passes the agent's allow-set (the runner's
+        _deferred_allowed set) so search is scoped to what the agent may run.
         """
         terms = [t for t in query.lower().split() if t]
         scored: list[tuple[int, str, str]] = []

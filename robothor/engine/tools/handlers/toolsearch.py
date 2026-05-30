@@ -7,11 +7,13 @@ set plus three meta-tools defined here:
 - ``tool_describe(name)`` — fetch one tool's full parameter schema.
 - ``tool_call(name, arguments)`` — invoke a discovered tool.
 
-Security: ``tool_call`` forwards to ``registry.execute``, which enforces the
-per-task whitelist the runner installs for deferred runs. So a ``tool_call`` to
-a tool outside the agent's allow-list is refused by the same gate that guards
-direct calls — no privilege escalation. The searchable set is likewise scoped
-to that whitelist, so the model only discovers tools it may actually run.
+Security: ``tool_describe`` and ``tool_call`` check the requested name against
+``_allowed_names()`` — the agent's allow-set published by the runner via
+``set_deferred_allowed`` (the ``_deferred_allowed`` ContextVar), NOT the
+``set_tool_whitelist`` path. A ``tool_call`` to a tool outside the agent's
+allow-list is refused here, before ``registry.execute`` is ever reached — no
+privilege escalation. The searchable set is likewise scoped to that allow-set,
+so the model only discovers tools it may actually run.
 """
 
 from __future__ import annotations
@@ -98,10 +100,9 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not isinstance(tool_args, dict):
         return {"error": "arguments must be an object"}
 
-    # Forward to the registry. The per-task whitelist (installed by the runner
-    # for deferred runs) is re-checked inside _execute_tool, so a call to a
-    # denied/out-of-allow-list tool is refused here exactly as a direct call
-    # would be — tool_call grants no extra reach.
+    # The out-of-allow-list check above (against the _deferred_allowed set) is
+    # what prevents escalation; we never reach registry.execute for a denied
+    # tool. tool_call grants no reach beyond the agent's own allow-list.
     return await get_registry().execute(
         name,
         tool_args,

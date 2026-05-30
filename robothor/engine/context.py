@@ -40,15 +40,52 @@ def register_post_compress_hook(fn: Callable[..., Any]) -> None:
     _post_compress_hooks.append(fn)
 
 
+# Flat char-equivalent cost of an image block (≈1500 tokens after the /4),
+# matching typical vision token accounting. Used so multimodal content is
+# sized realistically — and so stripping an image to a text placeholder
+# (compaction G7 / Rip 18) produces a *visible* token reduction.
+_IMAGE_CHARS_EQUIV = 6000
+
+
+def _content_chars(content: Any) -> int:
+    """Char-equivalent size of a message ``content`` (str OR content-block list).
+
+    Plain string → its length. A content-block list (multimodal) → sum of text
+    block lengths + a flat per-image cost. The old code did ``len(content)`` on
+    a list, which counted the *number of blocks* (≈2), so text-in-list was
+    ignored and a base64 image counted as ~0 — under-sizing vision context.
+    """
+    if not content:
+        return 0
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        chars = 0
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") in ("image_url", "image"):
+                    chars += _IMAGE_CHARS_EQUIV
+                else:
+                    chars += len(block.get("text") or block.get("content") or "")
+            else:
+                chars += len(str(block))
+        return chars
+    return len(str(content))
+
+
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    """Fast token estimate: total chars / 4, plus 400 per tool call."""
+    """Fast token estimate: total chars / 4, plus 400 per tool call.
+
+    Handles both string and content-block (multimodal) content via
+    ``_content_chars`` so images and text-in-list are sized realistically.
+    """
     total_chars = 0
     tool_call_count = 0
 
     for msg in messages:
         content = msg.get("content")
         if content:
-            total_chars += len(content)
+            total_chars += _content_chars(content)
         tool_calls = msg.get("tool_calls")
         if tool_calls:
             tool_call_count += len(tool_calls)
