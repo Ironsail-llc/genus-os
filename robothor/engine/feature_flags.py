@@ -100,6 +100,18 @@ def deferred_tools_enabled() -> bool:
     return is_rip_enabled(16)
 
 
+def catalog_backed_models_enabled() -> bool:
+    """Return True iff the catalog-backed model registry (Rip 17 / G6) is active.
+
+    When on: (1) litellm pricing is registered from the single ``_MODEL_REGISTRY``
+    source instead of a separate hand-maintained dict (ends drift), and (2)
+    unknown models fall back to litellm's bundled catalog (accurate window +
+    pricing for hundreds of models) instead of a flat 128K/8K guess. Off by
+    default; gated by ``ROBOTHOR_RIP_17_ENABLED``.
+    """
+    return is_rip_enabled(17)
+
+
 def deferred_tools_threshold() -> int:
     """Min advertised-tool count above which an agent's set is deferred.
 

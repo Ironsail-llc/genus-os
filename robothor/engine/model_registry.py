@@ -182,14 +182,112 @@ _FALLBACK = ModelLimits(
     output_cost_per_token=0.000_003,
 )
 
+# Cache of ModelLimits derived from litellm's bundled catalog (G6), keyed by
+# model id. None means "litellm has no entry" — don't re-probe every call.
+_catalog_cache: dict[str, ModelLimits | None] = {}
+
+
+def _from_litellm_catalog(model_id: str) -> ModelLimits | None:
+    """Build ModelLimits from litellm's bundled model catalog, or None.
+
+    litellm ships ``model_prices_and_context_window.json`` (context windows +
+    pricing for hundreds of models) — effectively a Models.dev-style catalog
+    with no network dependency. We consult it for models not in our curated
+    ``_MODEL_REGISTRY`` so unknown models get accurate limits instead of the
+    flat 128K/8K fallback.
+    """
+    if model_id in _catalog_cache:
+        return _catalog_cache[model_id]
+    result: ModelLimits | None = None
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model_id)
+        if info:
+            max_in = int(info.get("max_input_tokens") or info.get("max_tokens") or 0)
+            max_out = int(info.get("max_output_tokens") or 0)
+            if max_in > 0:
+                default_out = min(16_384, max_out) if max_out else 8_192
+                result = ModelLimits(
+                    max_input_tokens=max_in,
+                    max_output_tokens=max_out or default_out,
+                    default_output_tokens=default_out,
+                    input_cost_per_token=float(info.get("input_cost_per_token") or 0.0),
+                    output_cost_per_token=float(info.get("output_cost_per_token") or 0.0),
+                    cache_read_cost_per_token=float(info.get("cache_read_input_token_cost") or 0.0),
+                    supports_thinking=bool(info.get("supports_reasoning", False)),
+                )
+    except Exception as e:  # noqa: BLE001 — litellm raises for unknown models
+        logger.debug("litellm catalog lookup failed for '%s': %s", model_id, e)
+    _catalog_cache[model_id] = result
+    return result
+
 
 def get_model_limits(model_id: str) -> ModelLimits:
-    """Look up model limits. Returns conservative fallback for unknown models."""
+    """Look up model limits.
+
+    Order: curated ``_MODEL_REGISTRY`` (authoritative) → litellm's bundled
+    catalog when catalog-backed mode (Rip 17 / G6) is on → conservative
+    fallback. The curated registry always wins so our hand-tuned cache pricing
+    and thinking flags are never overridden.
+    """
     limits = _MODEL_REGISTRY.get(model_id)
     if limits:
         return limits
+
+    from robothor.engine.feature_flags import catalog_backed_models_enabled
+
+    if catalog_backed_models_enabled():
+        catalog = _from_litellm_catalog(model_id)
+        if catalog:
+            return catalog
+
     logger.debug("Unknown model '%s', using fallback limits", model_id)
     return _FALLBACK
+
+
+def register_pricing_with_litellm() -> None:
+    """Seed litellm's cost table so ``completion_cost`` prices our models.
+
+    When catalog-backed mode (Rip 17 / G6) is on, registers EVERY model in the
+    curated ``_MODEL_REGISTRY`` from that single source — ending the historical
+    drift where a separate hand-maintained dict in runner.py held divergent
+    prices. When off, registers the legacy two-model dict to preserve exact
+    prior behavior until the flag is flipped.
+    """
+    import litellm
+
+    from robothor.engine.feature_flags import catalog_backed_models_enabled
+
+    if catalog_backed_models_enabled():
+        litellm.register_model(
+            {
+                model_id: {
+                    "max_tokens": limits.max_input_tokens,
+                    "input_cost_per_token": limits.input_cost_per_token,
+                    "output_cost_per_token": limits.output_cost_per_token,
+                }
+                for model_id, limits in _MODEL_REGISTRY.items()
+                # codex is subscription-billed ($0) — leave it out of litellm pricing.
+                if not model_id.startswith("codex/")
+            }
+        )
+    else:
+        # Legacy block (verbatim prior behavior) — kept until Rip 17 is enabled.
+        litellm.register_model(
+            {
+                "openrouter/xiaomi/mimo-v2-pro": {
+                    "max_tokens": 1000000,
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000003,
+                },
+                "openrouter/anthropic/claude-sonnet-4.6": {
+                    "max_tokens": 200000,
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000015,
+                },
+            }
+        )
 
 
 def compute_token_budget(model_id: str, max_iterations: int) -> int:

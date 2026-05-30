@@ -126,23 +126,12 @@ logger = logging.getLogger(__name__)
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
-# Register custom pricing for OpenRouter-routed models.
-# Without this, litellm.completion_cost() returns $0.00 for these models.
-# NOTE: max_tokens here is the MODEL's context window, not the output cap we request.
-litellm.register_model(
-    {
-        "openrouter/xiaomi/mimo-v2-pro": {
-            "max_tokens": 1000000,
-            "input_cost_per_token": 0.000001,  # $0.80/M
-            "output_cost_per_token": 0.000003,  # $2.56/M
-        },
-        "openrouter/anthropic/claude-sonnet-4.6": {
-            "max_tokens": 200000,
-            "input_cost_per_token": 0.000003,  # $3/M
-            "output_cost_per_token": 0.000015,  # $15/M
-        },
-    }
-)
+# Register custom pricing so litellm.completion_cost() prices our models.
+# Single-sourced from model_registry._MODEL_REGISTRY (G6) when Rip 17 is on;
+# otherwise the legacy two-model block, preserved inside the function.
+from robothor.engine.model_registry import register_pricing_with_litellm  # noqa: E402
+
+register_pricing_with_litellm()
 
 
 def _escalate_unfinished_todos(
