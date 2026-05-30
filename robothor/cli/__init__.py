@@ -168,6 +168,25 @@ def main(argv: list[str] | None = None) -> int:
     goal_remove_target.add_argument("target_id", help="Target id (typically the metric name)")
     goal_remove_target.add_argument("--json", dest="json_output", action="store_true")
 
+    # memory-eval — memory retrieval benchmark (recall/temporal/verbatim/persona)
+    memeval_parser = subparsers.add_parser(
+        "memory-eval", help="Run the memory retrieval benchmark suite"
+    )
+    memeval_parser.add_argument(
+        "--suite",
+        default="docs/benchmarks/memory/suite.yaml",
+        help="Path to the eval suite YAML",
+    )
+    memeval_parser.add_argument(
+        "--tenant", default=None, help="Isolated eval tenant (default: memory-eval)"
+    )
+    memeval_parser.add_argument(
+        "--keep", action="store_true", help="Skip cleanup of seeded facts (debugging)"
+    )
+    memeval_parser.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
     # status
     subparsers.add_parser("status", help="Show system status")
 
@@ -420,6 +439,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_migrate
 
         return cmd_migrate(args)
+    if args.command == "memory-eval":
+        from robothor.cli.memory_eval import cmd_memory_eval
+
+        return cmd_memory_eval(args)
     if args.command == "serve":
         from robothor.cli.admin import cmd_serve
 
