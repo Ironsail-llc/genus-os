@@ -539,6 +539,9 @@ async def run_judgment_pass(
     end = as_of or datetime.now(UTC)
     start = end - timedelta(hours=window_hours)
 
+    from robothor.engine.operator_signals import operator_verdict_for_run
+
+    verdicts: dict[str, int | None] = {}
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -549,6 +552,14 @@ async def run_judgment_pass(
                 d = _fetch_run_digest(cur, rid, tenant_id)
                 if d is not None:
                     digests.append(d)
+                    # Real operator verdict (reaction/intervention) for this run,
+                    # if any — anchors the judge's inferred satisfaction (Phase 2).
+                    try:
+                        verdicts[rid] = operator_verdict_for_run(
+                            cur, rid, agent_id, start, end, tenant_id
+                        )
+                    except Exception:
+                        verdicts[rid] = None
     except Exception as exc:
         logger.warning("judge: signal fetch failed for %s: %s", agent_id, exc)
         return {"error": str(exc), "agent_id": agent_id}
@@ -563,6 +574,7 @@ async def run_judgment_pass(
             session_goal_meta=ctx.get("session_goal_meta"),
             operator_messages=ctx.get("operator_messages"),
             obstacles=ctx.get("obstacles"),
+            operator_verdict=verdicts.get(digest.run_id),
         )
         judgment = await judge_agent_run(bundle)
         if judgment is None:
