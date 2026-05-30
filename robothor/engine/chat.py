@@ -45,6 +45,7 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
 )
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
+from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -357,7 +358,11 @@ async def chat_inject(request: Request) -> JSONResponse:
             )
         )
 
-    logger.debug("Injected system message into %s (label=%s)", session_key, label)
+    logger.debug(
+        "Injected system message into %s (label=%s)",
+        sanitize_log(session_key),
+        sanitize_log(label),
+    )
     return JSONResponse({"ok": True})
 
 

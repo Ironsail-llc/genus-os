@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.engine.sanitize import sanitize_log
+
 if TYPE_CHECKING:
     from robothor.engine.escalation import EscalationManager
     from robothor.engine.scratchpad import Scratchpad
@@ -133,7 +135,7 @@ async def generate_plan(
                 raw=data,
             )
         except Exception as e:
-            logger.debug("Planning failed with model %s: %s", m, e)
+            logger.debug("Planning failed with model %s: %s", sanitize_log(m), e)
             continue
 
     return PlanResult(success=False, error="All planning models failed")
@@ -255,7 +257,7 @@ async def replan(
                 raw=data,
             )
         except Exception as e:
-            logger.debug("Replanning failed with model %s: %s", m, e)
+            logger.debug("Replanning failed with model %s: %s", sanitize_log(m), e)
             continue
 
     logger.warning("Replanning failed — continuing with original plan")

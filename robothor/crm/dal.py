@@ -43,6 +43,7 @@ from robothor.crm.validation import (
     validate_person_input,
 )
 from robothor.db.connection import get_connection as get_connection
+from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ def update_person(person_id: str, tenant_id: str = DEFAULT_TENANT, **fields: Any
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to update person %s: %s", person_id, e)
+            logger.error("Failed to update person %s: %s", sanitize_log(person_id), e)
             return False
 
 
@@ -244,7 +245,7 @@ def delete_person(person_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to delete person %s: %s", person_id, e)
+            logger.error("Failed to delete person %s: %s", sanitize_log(person_id), e)
             return False
 
 
@@ -654,7 +655,7 @@ def update_company(company_id: str, tenant_id: str = DEFAULT_TENANT, **fields: A
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to update company %s: %s", company_id, e)
+            logger.error("Failed to update company %s: %s", sanitize_log(company_id), e)
             return False
 
 
@@ -675,7 +676,7 @@ def delete_company(company_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to delete company %s: %s", company_id, e)
+            logger.error("Failed to delete company %s: %s", sanitize_log(company_id), e)
             return False
 
 
@@ -839,7 +840,7 @@ def delete_note(note_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to delete note %s: %s", note_id, e)
+            logger.error("Failed to delete note %s: %s", sanitize_log(note_id), e)
             return False
 
 
@@ -1347,7 +1348,7 @@ def update_task(
             return ok_bool
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to update task %s: %s", task_id, e)
+            logger.error("Failed to update task %s: %s", sanitize_log(task_id), e)
             return False
 
 
@@ -2037,7 +2038,7 @@ def delete_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to delete task %s: %s", task_id, e)
+            logger.error("Failed to delete task %s: %s", sanitize_log(task_id), e)
             return False
 
 
@@ -2189,7 +2190,7 @@ def resolve_task(
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to resolve task %s: %s", task_id, e)
+            logger.error("Failed to resolve task %s: %s", sanitize_log(task_id), e)
             return False
 
 
@@ -2253,7 +2254,7 @@ def approve_task(
             return True
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to approve task %s: %s", task_id, e)
+            logger.error("Failed to approve task %s: %s", sanitize_log(task_id), e)
             return False
 
 
@@ -2337,7 +2338,7 @@ def reject_task(
             return True
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to reject task %s: %s", task_id, e)
+            logger.error("Failed to reject task %s: %s", sanitize_log(task_id), e)
             return False
 
 
@@ -2525,7 +2526,7 @@ def toggle_conversation_status(
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to toggle conversation %s: %s", conversation_id, e)
+            logger.error("Failed to toggle conversation %s: %s", sanitize_log(conversation_id), e)
             return False
 
 
@@ -2664,7 +2665,7 @@ def update_routine(routine_id: str, tenant_id: str = DEFAULT_TENANT, **fields: A
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to update routine %s: %s", routine_id, e)
+            logger.error("Failed to update routine %s: %s", sanitize_log(routine_id), e)
             return False
 
 
@@ -2683,7 +2684,7 @@ def delete_routine(routine_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to delete routine %s: %s", routine_id, e)
+            logger.error("Failed to delete routine %s: %s", sanitize_log(routine_id), e)
             return False
 
 
@@ -2836,7 +2837,9 @@ def mark_notification_read(notification_id: str, tenant_id: str = DEFAULT_TENANT
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to mark notification %s read: %s", notification_id, e)
+            logger.error(
+                "Failed to mark notification %s read: %s", sanitize_log(notification_id), e
+            )
             return False
 
 
@@ -2860,7 +2863,7 @@ def acknowledge_notification(notification_id: str, tenant_id: str = DEFAULT_TENA
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to ack notification %s: %s", notification_id, e)
+            logger.error("Failed to ack notification %s: %s", sanitize_log(notification_id), e)
             return False
 
 
@@ -3029,7 +3032,7 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to update tenant %s: %s", tenant_id, e)
+            logger.error("Failed to update tenant %s: %s", sanitize_log(tenant_id), e)
             return False
 
 

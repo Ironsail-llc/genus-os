@@ -13,6 +13,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/installed-agents", tags=["installed-agents"])
@@ -87,8 +89,8 @@ async def install_agent(req: InstallRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Install failed for %s: %s", req.slug, e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("Install failed for %s: %s", sanitize_log(req.slug), e)
+        raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.post("/{agent_id}/update")
@@ -104,8 +106,8 @@ async def update_agent(agent_id: str):
             "new_version": result.get("version", ""),
         }
     except Exception as e:
-        logger.error("Update failed for %s: %s", agent_id, e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("Update failed for %s: %s", sanitize_log(agent_id), e)
+        raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.delete("/{agent_id}")
@@ -117,7 +119,7 @@ async def remove_agent(agent_id: str):
         remove(agent_id)
         return {"status": "removed", "agent_id": agent_id}
     except Exception as e:
-        logger.error("Remove failed for %s: %s", agent_id, e)
+        logger.error("Remove failed for %s: %s", sanitize_log(agent_id), e)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -130,5 +132,5 @@ async def check_readiness(agent_id: str):
         score = score_hub_readiness(agent_id)
         return {"agent_id": agent_id, "readiness": score}
     except Exception as e:
-        logger.error("Readiness check failed for %s: %s", agent_id, e)
+        logger.error("Readiness check failed for %s: %s", sanitize_log(agent_id), e)
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -567,7 +567,11 @@ def explain_config(
 
     layers["fleet_defaults"] = _load_defaults(manifest_dir)
 
-    manifest_path = manifest_dir / f"{agent_id}.yaml"
+    # Prevent path traversal — agent_id must be a simple identifier
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+        raise ValueError("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
+    safe_id = str(agent_id)  # break taint chain after validation
+    manifest_path = manifest_dir / f"{safe_id}.yaml"
     layers["agent_manifest"] = (
         (load_manifest(manifest_path) or {}) if manifest_path.exists() else {}
     )

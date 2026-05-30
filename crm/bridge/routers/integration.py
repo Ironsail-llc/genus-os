@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from models import (  # noqa: TC002 — used at runtime by FastAPI
@@ -11,6 +13,8 @@ from models import (  # noqa: TC002 — used at runtime by FastAPI
 
 from robothor.audit.logger import log_event
 from robothor.events.bus import publish
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["integration"])
 
@@ -116,5 +120,6 @@ async def api_vault_get(key: str = Query(..., description="Secret key")):
         if value is not None:
             return {"key": key, "value": value}
         return JSONResponse({"error": f"No secret with key '{key}'"}, status_code=404)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception:
+        logger.exception("vault get failed")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)

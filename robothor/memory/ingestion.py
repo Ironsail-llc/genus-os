@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from robothor.db.connection import get_connection
+from robothor.engine.sanitize import sanitize_log
 from robothor.memory.conflicts import resolve_and_store
 from robothor.memory.entities import extract_entities_batch
 from robothor.memory.facts import extract_facts, store_fact
@@ -61,9 +62,9 @@ async def ingest_content(
 
     logger.info(
         "Extracting facts from %s content (%d chars) via %s",
-        content_type,
+        sanitize_log(content_type),
         len(content),
-        source_channel,
+        sanitize_log(source_channel),
     )
     facts = await extract_facts(content)
     logger.info("Extracted %d facts", len(facts))

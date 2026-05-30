@@ -18,6 +18,8 @@ from typing import Any
 
 import httpx
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger("robothor.hub")
 
 HUB_BASE_URL = os.getenv("PROGRAMMATIC_RESOURCES_URL", "https://programmaticresources.com")
@@ -84,7 +86,12 @@ class HubClient:
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
             try:
-                logger.debug("Hub request: %s %s (attempt %d)", method, url, attempt + 1)
+                logger.debug(
+                    "Hub request: %s %s (attempt %d)",
+                    sanitize_log(method),
+                    sanitize_log(url),
+                    attempt + 1,
+                )
                 resp = self.client.request(method, url, **kwargs)
 
                 # Handle rate limiting
@@ -106,8 +113,8 @@ class HubClient:
                     logger.warning(
                         "Server error %d on %s %s (attempt %d/%d)",
                         resp.status_code,
-                        method,
-                        url,
+                        sanitize_log(method),
+                        sanitize_log(url),
                         attempt + 1,
                         MAX_RETRIES,
                     )
@@ -120,8 +127,8 @@ class HubClient:
                 last_exc = e
                 logger.warning(
                     "Connection error on %s %s (attempt %d/%d): %s",
-                    method,
-                    url,
+                    sanitize_log(method),
+                    sanitize_log(url),
                     attempt + 1,
                     MAX_RETRIES,
                     e,
@@ -131,15 +138,30 @@ class HubClient:
 
         raise HubError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")
 
+    @staticmethod
+    def _safe_path(base: Path, candidate: str) -> Path:
+        """Resolve ``candidate`` under ``base`` as a single leaf name.
+
+        Constrains the candidate to its basename and verifies the resolved
+        path stays within ``base``; raises ``HubError`` otherwise.
+        """
+        base_resolved = base.resolve()
+        leaf = Path(candidate).name
+        target = (base_resolved / leaf).resolve()
+        if not target.is_relative_to(base_resolved):
+            raise HubError(f"unsafe path: {candidate}")
+        return target
+
     def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
         """Verify file checksum if provided."""
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        safe_path = self._safe_path(path.parent, path.name)
+        actual = hashlib.sha256(safe_path.read_bytes()).hexdigest()
         if actual != expected_sha256:
             logger.error(
                 "Checksum mismatch for %s: expected %s, got %s",
-                path.name,
-                expected_sha256,
-                actual,
+                sanitize_log(path.name),
+                sanitize_log(expected_sha256),
+                sanitize_log(actual),
             )
             return False
         return True
@@ -220,7 +242,7 @@ class HubClient:
 
         # Write to temp file and extract
         dest = Path(dest_dir) if dest_dir else Path(tempfile.mkdtemp(prefix="pr-"))
-        tarball_path = dest / f"{slug}.tar.gz"
+        tarball_path = self._safe_path(dest, f"{slug}.tar.gz")
         tarball_path.write_bytes(resp.content)
 
         # Verify checksum if provided
@@ -239,7 +261,7 @@ class HubClient:
         # Validate extracted bundle
         bundle_dir = subdirs[0] if len(subdirs) == 1 else dest
         if not (bundle_dir / "setup.yaml").exists():
-            logger.warning("Downloaded bundle '%s' missing setup.yaml", slug)
+            logger.warning("Downloaded bundle '%s' missing setup.yaml", sanitize_log(slug))
 
         if len(subdirs) == 1:
             return subdirs[0]

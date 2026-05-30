@@ -184,7 +184,7 @@ def _escalate_unfinished_todos(
     try:
         parent = dal.get_task(parent_task_id, tenant_id=effective_tenant)
     except Exception as e:
-        logger.warning("todo escalation: get_task failed for %s: %s", parent_task_id, e)
+        logger.warning("todo escalation: get_task failed for %s: %s", _sanitize(parent_task_id), e)
         return False
     if not parent:
         return False
@@ -640,7 +640,7 @@ class AgentRunner:
                         _sanitize(agent_id),
                         _sanitize(journal_state.experiment_id),
                         journal_state.iteration,
-                        journal_state.next_action,
+                        _sanitize(journal_state.next_action),
                     )
             except Exception as e:
                 logger.warning(

@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 # Default thinking budget for models that support extended thinking
@@ -218,7 +220,7 @@ def _from_litellm_catalog(model_id: str) -> ModelLimits | None:
                     supports_thinking=bool(info.get("supports_reasoning", False)),
                 )
     except Exception as e:  # noqa: BLE001 — litellm raises for unknown models
-        logger.debug("litellm catalog lookup failed for '%s': %s", model_id, e)
+        logger.debug("litellm catalog lookup failed for '%s': %s", sanitize_log(model_id), e)
     _catalog_cache[model_id] = result
     return result
 
@@ -242,7 +244,7 @@ def get_model_limits(model_id: str) -> ModelLimits:
         if catalog:
             return catalog
 
-    logger.debug("Unknown model '%s', using fallback limits", model_id)
+    logger.debug("Unknown model '%s', using fallback limits", sanitize_log(model_id))
     return _FALLBACK
 
 

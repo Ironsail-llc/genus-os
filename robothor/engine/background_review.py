@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from robothor.engine.feature_flags import is_rip_enabled
+from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.session import AgentSession
@@ -440,10 +441,10 @@ async def spawn_background_review(
 
     logger.info(
         "background_review completed: session=%s memory=%s skills=%s status=%s",
-        session.run_id,
+        sanitize_log(session.run_id),
         decision.review_memory,
         decision.review_skills,
-        result.get("status") if isinstance(result, dict) else "?",
+        sanitize_log(result.get("status") if isinstance(result, dict) else "?"),
     )
     return result if isinstance(result, dict) else None
 

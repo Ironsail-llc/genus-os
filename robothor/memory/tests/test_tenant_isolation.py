@@ -11,8 +11,13 @@ from unittest.mock import MagicMock, patch
 
 
 def _run(coro):
-    """Helper to run async functions in sync tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Helper to run async functions in sync tests.
+
+    Uses asyncio.run (a fresh loop per call) rather than get_event_loop(), which
+    raises 'no current event loop' on 3.12 once an earlier test in the suite has
+    closed the main-thread loop — making this file order-dependent in CI.
+    """
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------

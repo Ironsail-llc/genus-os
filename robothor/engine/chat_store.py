@@ -20,6 +20,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -478,7 +479,7 @@ async def save_exchange_async(
             ),
         )
     except Exception as e:
-        logger.warning("Failed to persist chat exchange for %s: %s", session_key, e)
+        logger.warning("Failed to persist chat exchange for %s: %s", sanitize_log(session_key), e)
         return None
 
     if inserted_ids:
@@ -648,7 +649,7 @@ async def save_message_async(
             ),
         )
     except Exception as e:
-        logger.warning("Failed to persist chat message for %s: %s", session_key, e)
+        logger.warning("Failed to persist chat message for %s: %s", sanitize_log(session_key), e)
 
 
 async def save_channel_surface_async(
@@ -698,7 +699,7 @@ async def clear_session_async(
             lambda: clear_session(session_key, tenant_id=tenant_id),
         )
     except Exception as e:
-        logger.warning("Failed to clear chat session %s: %s", session_key, e)
+        logger.warning("Failed to clear chat session %s: %s", sanitize_log(session_key), e)
 
 
 async def save_plan_state_async(
@@ -714,7 +715,7 @@ async def save_plan_state_async(
             lambda: save_plan_state(session_key, plan_dict, tenant_id=tenant_id),
         )
     except Exception as e:
-        logger.warning("Failed to persist plan state for %s: %s", session_key, e)
+        logger.warning("Failed to persist plan state for %s: %s", sanitize_log(session_key), e)
 
 
 async def clear_plan_state_async(
@@ -729,7 +730,7 @@ async def clear_plan_state_async(
             lambda: clear_plan_state(session_key, tenant_id=tenant_id),
         )
     except Exception as e:
-        logger.warning("Failed to clear plan state for %s: %s", session_key, e)
+        logger.warning("Failed to clear plan state for %s: %s", sanitize_log(session_key), e)
 
 
 async def update_model_override_async(
