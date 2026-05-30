@@ -1,14 +1,30 @@
-"""Shared LLM call abstraction for the Agent Engine.
+"""LLM call layer for the Agent Engine.
 
-Provides three entry points that wrap ``litellm.acompletion`` with consistent
-timeout handling, retry logic, and multi-model fallback:
+Two coexisting surfaces, kept separate on purpose:
 
-- :func:`llm_call` — single-model call with optional retry.
-- :func:`llm_call_with_fallback` — multi-model fallback (non-streaming).
-- :func:`llm_call_streaming` — multi-model fallback with streaming.
+1. :class:`LLMClient` — the canonical **main agent-loop** path. Model-fallback
+   chain, streaming with per-chunk timeouts + structured events, stall-watchdog
+   touches, Anthropic prompt-cache kwargs, cost accounting, and message hygiene.
+   ``AgentRunner`` owns one instance and the tool loop delegates to it.
 
-This module is Phase 3A of the enterprise-hardening effort.  Callers
-(planner, verifier, compaction, PDF handler) will be migrated in Phase 3B.
+2. Module-level helpers below — lightweight **auxiliary** one-shot calls for
+   non-loop work:
+
+   - :func:`llm_call` — single-model call with optional retry. (Used by
+     ``buddy_critic``.)
+   - :func:`llm_call_with_fallback` — multi-model fallback (non-streaming).
+   - :func:`llm_call_streaming` — multi-model fallback with streaming.
+
+   These are intentionally simpler than ``LLMClient`` (no watchdog/cost/cache
+   wiring) and serve callers that just need a quick completion.
+
+Convergence note (Phase A / Slice 4): an audit found the originally-anticipated
+"migrate planner/verifier/compaction/PDF onto a shared client" never happened —
+in practice only ``buddy_critic`` calls :func:`llm_call`, and
+:func:`llm_call_with_fallback` / :func:`llm_call_streaming` currently have **no
+production callers** (tests only). Rather than force-converge two layers with
+different contracts, the split is kept and documented; the two unused fallback
+helpers are removal candidates once confirmed dead long-term.
 """
 
 from __future__ import annotations
