@@ -316,6 +316,20 @@ def _check_experiment_guardrails(
 
     Returns an error message if a guardrail is violated, or None if all clear.
     """
+    # Hard-deny (Phase 0a): independent of any per-experiment allowlist, an
+    # agent may never write the benchmark suite it is graded against. Letting
+    # the exam-taker edit the exam was the single worst reward-hack surface —
+    # the cheapest way to raise the score was to weaken the test. Benchmark
+    # suites are operator/benchmark-runner owned; edit them via benchmark_define
+    # under human review, never through the experiment hill-climb.
+    for change in changes:
+        file_path = str(change.get("file", "")).replace("\\", "/")
+        if "docs/benchmarks/" in file_path:
+            return (
+                f"Guardrail violation: '{file_path}' targets a benchmark suite. "
+                "Agents may not edit the exam they are graded against (Phase 0a)."
+            )
+
     guardrails = config.get("guardrails", [])
     if not guardrails:
         return None

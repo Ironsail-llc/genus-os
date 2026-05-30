@@ -129,21 +129,25 @@ class TestScoreTask:
         }
         assert _score_task(output, expected, {}) == 1.0
 
-    def test_cost_check_pass(self):
-        expected = {"max_cost_usd": 0.10}
-        assert _score_task("output", expected, {"total_cost_usd": 0.05}) == 1.0
+    def test_cost_is_not_graded(self):
+        """Cost is telemetry only — overspending must NOT lower a correct score.
 
-    def test_cost_check_fail(self):
-        expected = {"max_cost_usd": 0.10}
-        assert _score_task("output", expected, {"total_cost_usd": 0.20}) == 0.0
+        Decontaminated 2026-05-30: folding cost into the grade made the loop
+        reward cheapness over correctness (see SELF_IMPROVEMENT_REDESIGN).
+        """
+        expected = {"must_contain": ["done"], "max_cost_usd": 0.10}
+        # Content passes; cost is 4x over the old cap → still a perfect score.
+        assert _score_task("done", expected, {"total_cost_usd": 0.40}) == 1.0
 
-    def test_iteration_check_pass(self):
-        expected = {"max_iterations": 5}
-        assert _score_task("output", expected, {"steps": 3}) == 1.0
+    def test_iterations_are_not_graded(self):
+        """Iteration count is telemetry only — over-stepping must not lower score."""
+        expected = {"must_contain": ["done"], "max_iterations": 3}
+        assert _score_task("done", expected, {"steps": 25}) == 1.0
 
-    def test_iteration_check_fail(self):
-        expected = {"max_iterations": 3}
-        assert _score_task("output", expected, {"steps": 5}) == 0.0
+    def test_cost_only_expected_has_no_signal(self):
+        """A task whose only criterion is cost/iter carries no correctness signal."""
+        assert _score_task("output", {"max_cost_usd": 0.10}, {"total_cost_usd": 0.05}) == 0.0
+        assert _score_task("output", {"max_iterations": 5}, {"steps": 3}) == 0.0
 
     def test_empty_expected(self):
         assert _score_task("output", {}, {}) == 0.0
@@ -1178,3 +1182,33 @@ class TestIsBenchmarkRuntimeGuard:
         assert isinstance(result, dict)
         assert "error" in result
         assert "benchmark" in result["error"].lower()
+
+
+# ─── Fleet runner: dead-agent suite guard (Phase 0f) ─────────────────
+
+
+class TestBenchmarkRunFleetManifestGuard:
+    @pytest.mark.asyncio
+    async def test_skips_suites_without_live_manifest(self, tmp_path):
+        """A suite dir with no docs/agents/<id>.yaml is skipped, not graded at 0%."""
+        from robothor.engine.tools.handlers.benchmark import _benchmark_run_fleet
+
+        (tmp_path / "docs/benchmarks/live-agent").mkdir(parents=True)
+        (tmp_path / "docs/benchmarks/live-agent/suite.yaml").write_text("id: x\n")
+        (tmp_path / "docs/benchmarks/dead-agent").mkdir(parents=True)
+        (tmp_path / "docs/benchmarks/dead-agent/suite.yaml").write_text("id: y\n")
+        (tmp_path / "docs/agents").mkdir(parents=True)
+        (tmp_path / "docs/agents/live-agent.yaml").write_text("id: live-agent\n")
+
+        ctx = ToolContext(agent_id="auto-agent", workspace=str(tmp_path))
+        with patch(
+            "robothor.engine.tools.handlers.benchmark._benchmark_run_for_agent",
+            new_callable=AsyncMock,
+            return_value={"aggregate_score": 0.9, "tasks_run": 1, "total_cost_usd": 0.0},
+        ) as mock_run:
+            result = await _benchmark_run_fleet({"tag": "t"}, ctx)
+
+        assert result["agents_attempted"] == 1
+        assert result["skipped_no_manifest"] == ["dead-agent"]
+        called_ids = [c.args[0]["agent_id"] for c in mock_run.call_args_list]
+        assert called_ids == ["live-agent"]

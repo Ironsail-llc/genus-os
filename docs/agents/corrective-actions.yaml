@@ -95,8 +95,12 @@ efficiency.default:
   remediations_in_order:
     - "Trim instruction file and warmup context (fewer input tokens)"
     - "Prune tools_allowed to the set the agent actually uses"
-    - "Downgrade model tier if quality goals are still met"
     - "Lower max_iterations only if the agent is looping unproductively"
+    # NOTE: "downgrade model tier" was removed 2026-05-30 (Phase 0d). It was
+    # the one remediation that traded answer quality for cost — the literal
+    # lever that let the self-improvement loop degrade an agent while reporting
+    # an efficiency "win". Model tier is an operator decision, never an
+    # autonomous efficiency remediation.
 
 # NOTE: cost and duration diagnostics live on dashboards and in
 # post-run analytics. If you need a one-off investigation of high
