@@ -87,6 +87,24 @@ class TestRenderBundlePrompt:
         b = assemble_evidence_bundle(agent_id="main", run=_digest(), operator_verdict=-2)
         assert "operator verdict" in render_bundle_prompt(b).lower()
 
+    def test_judges_against_role_and_trigger_when_no_objective(self):
+        run = RunDigest(
+            run_id="run-1",
+            status="completed",
+            output_excerpt="routed 4 emails",
+            tool_calls=4,
+            tool_errors=0,
+            trigger_type="cron",
+            trigger_detail="email-sweep",
+        )
+        b = assemble_evidence_bundle(
+            agent_id="email-analyst", run=run, role="Analyze and route inbound email."
+        )
+        text = render_bundle_prompt(b)
+        assert "Analyze and route inbound email." in text
+        assert "email-sweep" in text
+        assert "no operator-declared objective" in text
+
 
 # ─── parse_judgment (evidence-or-abstain) ───────────────────────────
 
@@ -138,6 +156,19 @@ class TestParseJudgment:
             {"goal_achievement": 2, "evidence_refs": ["run-1"], "confidence": 0.3}, run_id="run-1"
         )
         assert j is not None and j.goal_achievement == 2
+
+    def test_strips_markdown_code_fences(self):
+        """openrouter/anthropic wraps JSON in ```json fences despite json_mode —
+        a bare json.loads would make every real judgment abstain."""
+        raw = '```json\n{"goal_achievement": 4, "confidence": 0.7, "evidence_refs": ["run-1"]}\n```'
+        j = parse_judgment(raw, run_id="run-1")
+        assert j is not None
+        assert j.goal_achievement == 4
+
+    def test_extracts_object_from_surrounding_prose(self):
+        raw = 'Here is my verdict:\n{"goal_achievement": 3, "evidence_refs": ["run-1"]}\nDone.'
+        j = parse_judgment(raw, run_id="run-1")
+        assert j is not None and j.goal_achievement == 3
 
 
 # ─── clamp_operator_satisfaction ────────────────────────────────────

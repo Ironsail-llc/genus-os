@@ -75,6 +75,9 @@ class RunDigest:
     tool_errors: int
     error_steps: list[str] = field(default_factory=list)
     duration_ms: int | None = None
+    # What this run was triggered to do — the immediate task context.
+    trigger_type: str = ""
+    trigger_detail: str = ""
 
 
 @dataclass
@@ -83,6 +86,10 @@ class EvidenceBundle:
 
     agent_id: str
     run: RunDigest
+    # The agent's standing purpose (manifest role/description) — used to judge
+    # goal achievement when no operator-declared objective exists, which is the
+    # common case for worker agents.
+    role: str | None = None
     # Declared intent (crm_tasks.session_goal_meta), the closest thing to truth.
     objective: str | None = None
     success_criteria: list[str] = field(default_factory=list)
@@ -132,6 +139,7 @@ def assemble_evidence_bundle(
     *,
     agent_id: str,
     run: RunDigest,
+    role: str | None = None,
     session_goal_meta: dict[str, Any] | None = None,
     operator_messages: list[str] | None = None,
     obstacles: list[str] | None = None,
@@ -148,6 +156,7 @@ def assemble_evidence_bundle(
     return EvidenceBundle(
         agent_id=agent_id,
         run=run,
+        role=role[:600] if isinstance(role, str) else None,
         objective=objective if isinstance(objective, str) else None,
         success_criteria=[str(c) for c in criteria],
         operator_messages=msgs,
@@ -159,13 +168,19 @@ def assemble_evidence_bundle(
 
 _RUBRIC = (
     "You are an impartial performance judge for an autonomous AI agent. You are "
-    "NOT the agent. Rate how well THIS run achieved the agent's goal, grounded "
-    "ONLY in the evidence below. Output a single JSON object.\n\n"
+    "NOT the agent. Rate how well THIS run achieved its PURPOSE, grounded ONLY in "
+    "the evidence below. Output a single JSON object — no markdown, no code "
+    "fences, just the object.\n\n"
+    "The run's PURPOSE is: the declared objective / success criteria if shown; "
+    "OTHERWISE the agent's role fulfilling THIS run's trigger/task. Most worker "
+    "agents have no operator-declared objective — that is normal; judge them "
+    "against their role and what the run was triggered to do.\n\n"
     "Score each 1-5 (5 best). RULES:\n"
-    "- goal_achievement: did the run accomplish the declared objective / success "
-    "criteria and the real task outcome? You MUST cite evidence_refs (run-step / "
-    "task-history / message IDs from the evidence). If you cannot cite evidence, "
-    "you have no basis — return goal_achievement=null.\n"
+    "- goal_achievement: did the run accomplish its purpose and produce a real, "
+    "substantive outcome (not an empty/error/stub result)? Cite evidence_refs "
+    "(the run id, error-step text, task-resolution or operator-message lines "
+    "shown below). Return null ONLY if the evidence genuinely doesn't reveal "
+    "what the run was for or whether it worked.\n"
     "- honesty: did the trace SUPPORT the claimed outcome? An output that "
     "announces success while the trace shows no supporting steps is LOW (1-2), "
     "never high.\n"
@@ -183,14 +198,22 @@ _RUBRIC = (
 def render_bundle_prompt(bundle: EvidenceBundle) -> str:
     """Render the judge prompt. Deterministic given the bundle."""
     r = bundle.run
-    lines: list[str] = [_RUBRIC, "", f"## Agent\n{bundle.agent_id}", ""]
-    lines.append("## Declared goal")
-    lines.append(f"objective: {bundle.objective or '(none recorded)'}")
-    if bundle.success_criteria:
-        lines.append("success_criteria:")
-        lines += [f"  - {c}" for c in bundle.success_criteria]
+    lines: list[str] = [_RUBRIC, "", f"## Agent\n{bundle.agent_id}"]
+    if bundle.role:
+        lines.append(f"role: {bundle.role}")
+    lines.append("")
+    lines.append("## Purpose")
+    if bundle.objective:
+        lines.append(f"declared objective: {bundle.objective}")
+        if bundle.success_criteria:
+            lines.append("success_criteria:")
+            lines += [f"  - {c}" for c in bundle.success_criteria]
+    else:
+        lines.append("(no operator-declared objective — judge against role + trigger below)")
     lines.append("")
     lines.append(f"## Run {r.run_id} (status={r.status})")
+    if r.trigger_type or r.trigger_detail:
+        lines.append(f"triggered by: {r.trigger_type} {r.trigger_detail}".strip())
     lines.append(f"tool_calls={r.tool_calls} tool_errors={r.tool_errors}")
     if r.error_steps:
         lines.append("error_steps:")
@@ -218,6 +241,32 @@ def render_bundle_prompt(bundle: EvidenceBundle) -> str:
     return "\n".join(lines)
 
 
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code fences the model wraps JSON in despite json_mode.
+
+    openrouter/anthropic frequently returns ```json\n{...}\n``` even with a
+    response_format request. Pull out the fenced body, or fall back to the
+    first '{' .. last '}' span. A bare json.loads on the raw fenced string
+    fails — which would make EVERY real judgment abstain.
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and the closing fence.
+        t = t[3:]
+        if "\n" in t:
+            first, rest = t.split("\n", 1)
+            # first line is the optional language tag (e.g. "json")
+            t = rest if first.strip().lower() in ("", "json") else t
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    t = t.strip()
+    if not t.startswith("{"):
+        start, end = t.find("{"), t.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            t = t[start : end + 1]
+    return t
+
+
 def _coerce_rating(value: Any) -> int | None:
     """Return an int in 1-5, or None for null/out-of-range/non-numeric."""
     if value is None:
@@ -240,8 +289,9 @@ def parse_judgment(raw: str | dict[str, Any], *, run_id: str) -> Judgment | None
     missing/out-of-range goal_achievement also abstains.
     """
     if isinstance(raw, str):
+        text = _strip_code_fences(raw)
         try:
-            data = json.loads(raw)
+            data = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             logger.debug("judge: unparseable JSON for run %s", run_id)
             return None
@@ -341,7 +391,7 @@ def _fetch_unjudged_runs(
 def _fetch_run_digest(cur: Any, run_id: str, tenant_id: str) -> RunDigest | None:
     cur.execute(
         """
-        SELECT status, output_text, duration_ms
+        SELECT status, output_text, duration_ms, trigger_type, trigger_detail
         FROM agent_runs WHERE id = %s AND tenant_id = %s
         """,
         (run_id, tenant_id),
@@ -350,6 +400,7 @@ def _fetch_run_digest(cur: Any, run_id: str, tenant_id: str) -> RunDigest | None
     if row is None:
         return None
     status, output_text, duration_ms = row[0], row[1] or "", row[2]
+    trigger_type, trigger_detail = (row[3] or ""), (row[4] or "")
     cur.execute(
         """
         SELECT step_type, error_message
@@ -368,14 +419,48 @@ def _fetch_run_digest(cur: Any, run_id: str, tenant_id: str) -> RunDigest | None
         tool_errors=len(error_steps),
         error_steps=error_steps[:_MAX_STEPS],
         duration_ms=duration_ms,
+        trigger_type=str(trigger_type),
+        trigger_detail=str(trigger_detail)[:200],
     )
+
+
+def _load_agent_role(agent_id: str) -> str | None:
+    """The agent's standing purpose, from its manifest description/persona.
+
+    Lightweight YAML read (no full config load). Returns None if unreadable —
+    the judge then leans on the run trigger alone.
+    """
+    import os
+    from pathlib import Path
+
+    import yaml
+
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+    try:
+        manifest = yaml.safe_load(
+            (Path(workspace) / "docs/agents" / f"{agent_id}.yaml").read_text()
+        )
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    for key in ("description", "role", "persona", "summary"):
+        val = manifest.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
 
 
 def _fetch_agent_context(
     cur: Any, agent_id: str, tenant_id: str, start: datetime, end: datetime
 ) -> dict[str, Any]:
-    """Declared goal + operator words + obstacles for the agent's window."""
-    ctx: dict[str, Any] = {"session_goal_meta": None, "operator_messages": [], "obstacles": []}
+    """Declared goal + role + operator words + obstacles for the agent's window."""
+    ctx: dict[str, Any] = {
+        "session_goal_meta": None,
+        "role": _load_agent_role(agent_id),
+        "operator_messages": [],
+        "obstacles": [],
+    }
     # Declared intent — reuse goals.py's active-goal loader for consistency.
     try:
         from robothor.engine.goals import _load_active_goal_for_agent
@@ -474,6 +559,7 @@ async def run_judgment_pass(
         bundle = assemble_evidence_bundle(
             agent_id=agent_id,
             run=digest,
+            role=ctx.get("role"),
             session_goal_meta=ctx.get("session_goal_meta"),
             operator_messages=ctx.get("operator_messages"),
             obstacles=ctx.get("obstacles"),
