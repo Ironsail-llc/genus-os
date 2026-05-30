@@ -296,6 +296,13 @@ class AgentRunner:
         non-blocking and exception-safe — the caller suppresses
         exceptions to keep the loop alive.
         """
+        # G3 (Rip 9 wiring): drain any operator steer queued via
+        # interrupt_api.steer_session into the conversation so the next LLM
+        # call sees it. Injected as a *user* turn — never the system prompt —
+        # so the cached prefix stays intact (prompt-cache discipline).
+        steer = session.consume_pending_steer()
+        if steer:
+            session.messages.append({"role": "user", "content": f"[steer] {steer}"})
 
     def _after_response_delivered(
         self,
@@ -1321,6 +1328,31 @@ class AgentRunner:
                     self._active_watchdog.abort_reason,
                 )
                 session.record_error(self._active_watchdog.abort_reason)
+                return
+
+            # ── [INTERRUPT] Operator halt requested via interrupt_api ──
+            # G3 (Rip 9 wiring): consume any pending interrupt and stop the run
+            # *gracefully* — through the normal return path into _finish_run, not
+            # as an error — so the run persists as completed with a note rather
+            # than failed/timeout. consume_interrupt() returns the message (which
+            # may be "" when the operator halted without text) or None.
+            _interrupt_msg = session.consume_interrupt()
+            if _interrupt_msg is not None:
+                note = (
+                    f"Run interrupted by operator: {_interrupt_msg}"
+                    if _interrupt_msg
+                    else "Run interrupted by operator"
+                )
+                logger.info(
+                    "Run %s interrupted at iteration %d: %s",
+                    session.run_id,
+                    _iteration,
+                    _sanitize(_interrupt_msg or "(no message)"),
+                )
+                session.messages.append({"role": "assistant", "content": note})
+                session.run.outcome_notes = (
+                    f"{session.run.outcome_notes}; {note}" if session.run.outcome_notes else note
+                )
                 return
 
             # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──

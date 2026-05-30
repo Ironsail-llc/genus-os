@@ -1236,3 +1236,83 @@ class TestSynthesizeWrapupSummary:
 
         assert "No output was produced" in summary
         assert summary.strip()
+
+
+class TestInterruptSteerWiring:
+    """G3: the session interrupt/steer API (built in Rip 9) must actually be
+    consumed by the loop. Before this, `_after_iteration` was a no-op and
+    `_run_loop` never called `consume_interrupt`/`consume_pending_steer`, so the
+    advertised live-steering capability did nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_after_iteration_drains_steer_into_user_message(self, runner):
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession(agent_id="test-agent")
+        session.steer("focus on the budget question")
+
+        await runner._after_iteration(session, 1)
+
+        # Steer is consumed (drained) and surfaced for the next API call.
+        assert session.consume_pending_steer() is None
+        assert any(
+            m.get("role") == "user" and "budget question" in str(m.get("content", ""))
+            for m in session.messages
+        ), "steer text was not injected as a user message"
+
+    @pytest.mark.asyncio
+    async def test_steer_never_touches_system_prompt(self, runner):
+        """Cache safety: steering must not mutate the system prompt prefix."""
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession(agent_id="test-agent")
+        session.messages = [{"role": "system", "content": "STATIC SYSTEM PROMPT"}]
+        session.steer("new guidance")
+
+        await runner._after_iteration(session, 1)
+
+        assert session.messages[0] == {"role": "system", "content": "STATIC SYSTEM PROMPT"}
+
+    @pytest.mark.asyncio
+    async def test_interrupt_halts_loop_gracefully(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        sample_agent_config.max_iterations = 10  # check-in interval (won't fire)
+        sample_agent_config.safety_cap = 8  # would run this far absent interrupt
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        calls = {"n": 0}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            calls["n"] += 1
+            # Operator interrupts mid-run on the 2nd turn; the top-of-loop check
+            # on the 3rd iteration must consume it and stop gracefully.
+            if calls["n"] == 2:
+                session.interrupt("operator says stop")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        # Stopped at the top of iteration 3 → exactly 2 LLM calls, not safety_cap.
+        assert calls["n"] == 2, f"expected 2 LLM calls before interrupt, got {calls['n']}"
+        assert run.status != RunStatus.FAILED
+        assert "interrupt" in (run.outcome_notes or "").lower()
