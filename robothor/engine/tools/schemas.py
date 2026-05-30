@@ -389,6 +389,89 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         }
 
+    # ── Intent memory (prospective objectives; RIP 14) ──
+    if is_rip_enabled(14):
+        schemas["intent_add"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_add",
+                "description": (
+                    "Record a STANDING INTENT — an ongoing objective the operator is "
+                    "working toward (e.g. 'grow Valhalla revenue'), not a one-off task. "
+                    "Persists across sessions so it can be advanced proactively."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short objective"},
+                        "description": {"type": "string", "description": "What success looks like"},
+                        "horizon": {
+                            "type": "string",
+                            "description": "ongoing | this_quarter | this_week | dated",
+                            "default": "ongoing",
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "description": "1 (high) .. 5 (low)",
+                            "default": 3,
+                        },
+                    },
+                    "required": ["title"],
+                },
+            },
+        }
+        schemas["intent_search"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_search",
+                "description": "Search standing intents semantically (default: active only).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status (default active)",
+                        },
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+        schemas["intent_list"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_list",
+                "description": "List the highest-priority active standing intents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "default": 10}},
+                },
+            },
+        }
+        schemas["intent_advance"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_advance",
+                "description": (
+                    "Mark that you advanced a standing intent; pass goal_id to link a "
+                    "completed session goal to it."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "description": "Intent id"},
+                        "goal_id": {
+                            "type": "integer",
+                            "description": "Optional session-goal id to link",
+                        },
+                    },
+                    "required": ["id"],
+                },
+            },
+        }
+
     # ── Convenience aliases ──
     schemas["list_my_tasks"] = {
         "type": "function",

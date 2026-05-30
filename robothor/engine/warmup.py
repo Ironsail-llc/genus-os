@@ -179,6 +179,19 @@ def build_warmth_preamble(
 
     _run_section("agent_goal", _agent_goal)
 
+    def _active_intents() -> str | None:
+        # Prospective/intent memory (RIP 14) — what the operator is working
+        # toward, so the heartbeat can advance standing objectives.
+        from robothor.engine.feature_flags import is_rip_enabled
+
+        if not is_rip_enabled(14):
+            return None
+        from robothor.memory.intents import build_active_intents_context
+
+        return build_active_intents_context(tenant_id)
+
+    _run_section("active_intents", _active_intents)
+
     total_elapsed = time.monotonic() - total_start
     if total_elapsed > 5.0:
         breakdown = " ".join(

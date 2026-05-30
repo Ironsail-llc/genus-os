@@ -355,6 +355,19 @@ def complete_goal(
     )
     if not ok:
         raise RuntimeError("failed to complete session goal")
+
+    # Loop closure (RIP 14): advance any standing intents this goal was
+    # linked to. Best-effort — never block goal completion on it.
+    try:
+        from robothor.engine.feature_flags import is_rip_enabled
+
+        if is_rip_enabled(14):
+            from robothor.memory.intents import attribute_goal_completion
+
+            attribute_goal_completion(int(row["id"]), tenant_id=tenant_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("intent attribution skipped: %s", e)
+
     return SessionGoal(
         id=goal.id,
         objective=goal.objective,

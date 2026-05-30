@@ -110,6 +110,7 @@ def _collect_handlers() -> dict[str, Any]:
         goal,
         gws,
         identity,
+        intents,
         jira,
         mcp_client,
         memory,
@@ -134,6 +135,7 @@ def _collect_handlers() -> dict[str, Any]:
     for mod in [
         memory,
         memory_vault,
+        intents,
         vision,
         web,
         apollo,
