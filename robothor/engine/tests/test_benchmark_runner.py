@@ -225,6 +225,12 @@ tasks:
         )
         (bench / "empty-dir").mkdir()  # no suite.yaml
 
+        # Phase 0f: the fleet runner skips suites without a live manifest, so
+        # give main one (the dead-suite guard is covered separately).
+        agents_dir = tmp_path / "docs" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "main.yaml").write_text("id: main\n")
+
         ctx = ToolContext(agent_id="benchmark-runner", workspace=str(tmp_path))
         _, read_fn, write_fn = _mock_blocks()
 
