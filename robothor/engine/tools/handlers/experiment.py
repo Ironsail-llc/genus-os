@@ -237,9 +237,23 @@ def _calc_improvement(baseline: float, current: float, direction: str) -> float:
 # Snapshot helpers for untracked-file revert support
 # ---------------------------------------------------------------------------
 
-# Directory used to store per-experiment snapshots of search-space files.
-# Each experiment gets a subdirectory: /tmp/robothor_exp_snapshots/<experiment_id>/
-_SNAPSHOT_BASE = Path(tempfile.gettempdir()) / "robothor_exp_snapshots"
+
+# Per-experiment snapshots of search-space files (for revert). Phase 4a: moved
+# off /tmp — a reboot used to wipe the only real rollback the experiment loop
+# had, so a kept-then-bad change could never be undone. Falls back to /tmp only
+# if the durable workspace dir is unwritable.
+def _resolve_snapshot_base() -> Path:
+    ws = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+    base = Path(ws) / ".robothor" / "exp_snapshots"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.error("exp_snapshots dir unwritable (%s); falling back to /tmp", exc)
+        return Path(tempfile.gettempdir()) / "robothor_exp_snapshots"
+
+
+_SNAPSHOT_BASE = _resolve_snapshot_base()
 
 
 def _snapshot_search_space(experiment_id: str, search_space: str, workspace: str) -> str | None:
@@ -307,6 +321,15 @@ def _restore_snapshot(experiment_id: str, search_space: str, workspace: str) -> 
 # ---------------------------------------------------------------------------
 
 
+def _normalize_path(file_path: str) -> str:
+    """Collapse repeated slashes + lowercase so substring denies can't be evaded
+    (BUG-5: `docs//benchmarks/` previously slipped past `docs/benchmarks/`)."""
+    fp = file_path.replace("\\", "/").lower()
+    while "//" in fp:
+        fp = fp.replace("//", "/")
+    return fp.lstrip("./")
+
+
 def _check_experiment_guardrails(
     config: dict[str, Any],
     changes: list[dict[str, Any]],
@@ -316,17 +339,15 @@ def _check_experiment_guardrails(
 
     Returns an error message if a guardrail is violated, or None if all clear.
     """
-    # Hard-deny (Phase 0a): independent of any per-experiment allowlist, an
-    # agent may never write the benchmark suite it is graded against. Letting
-    # the exam-taker edit the exam was the single worst reward-hack surface —
-    # the cheapest way to raise the score was to weaken the test. Benchmark
-    # suites are operator/benchmark-runner owned; edit them via benchmark_define
-    # under human review, never through the experiment hill-climb.
+    # Hard-deny (Phase 0a, BUG-5 hardened): independent of any per-experiment
+    # allowlist, an agent may never write the benchmark suite it is graded
+    # against — the worst reward-hack surface. Path is normalized so
+    # `docs//benchmarks/` and case tricks can't evade the substring test.
     for change in changes:
-        file_path = str(change.get("file", "")).replace("\\", "/")
-        if "docs/benchmarks/" in file_path:
+        fp = str(change.get("file", "")).strip()
+        if fp and "docs/benchmarks/" in _normalize_path(fp):
             return (
-                f"Guardrail violation: '{file_path}' targets a benchmark suite. "
+                f"Guardrail violation: '{fp}' targets a benchmark suite. "
                 "Agents may not edit the exam they are graded against (Phase 0a)."
             )
 

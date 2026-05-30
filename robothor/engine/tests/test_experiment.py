@@ -709,6 +709,18 @@ class TestExperimentGuardrails:
         assert result is not None
         assert "benchmark" in result.lower()
 
+    def test_benchmark_deny_resists_path_evasion(self):
+        """BUG-5: `docs//benchmarks/` and case tricks must not slip past the deny."""
+        config: dict[str, Any] = {"guardrails": []}
+        for evasion in (
+            "docs//benchmarks/main/suite.yaml",
+            "DOCS/Benchmarks/main/suite.yaml",
+            "./docs/benchmarks/main/suite.yaml",
+        ):
+            result = _check_experiment_guardrails(config, [{"file": evasion}])
+            assert result is not None, evasion
+            assert "benchmark" in result.lower()
+
     def test_benchmark_suite_write_hard_denied_even_if_allowlisted(self):
         """Hard-deny overrides any allowlist that re-adds docs/benchmarks/**."""
         config = {
