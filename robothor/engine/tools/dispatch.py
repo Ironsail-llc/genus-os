@@ -113,6 +113,7 @@ def _collect_handlers() -> dict[str, Any]:
         jira,
         mcp_client,
         memory,
+        memory_vault,
         messaging,
         observability,
         pdf,
@@ -132,6 +133,7 @@ def _collect_handlers() -> dict[str, Any]:
     all_handlers: dict[str, Any] = {}
     for mod in [
         memory,
+        memory_vault,
         vision,
         web,
         apollo,

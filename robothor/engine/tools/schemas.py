@@ -314,6 +314,81 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Knowledge Vault (verbatim memory store; RIP 12) ──
+    # Distinct from the secrets vault above. Stores reference data the agent
+    # must recall exactly (numbers, ids, addresses). Only registered when
+    # ROBOTHOR_RIP_12_ENABLED so the tools stay dark until the operator opts in.
+    from robothor.engine.feature_flags import is_rip_enabled
+
+    if is_rip_enabled(12):
+        schemas["memory_vault_store"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_store",
+                "description": (
+                    "Store a value in the Knowledge Vault to be recalled VERBATIM "
+                    "(exact phone numbers, account/case ids, addresses, bookmarks). "
+                    "Use this instead of store_memory when the exact characters matter. "
+                    "Set sensitivity='high' for credential-like values (encrypted at rest)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "caption": {
+                            "type": "string",
+                            "description": "Human description used to find the entry later",
+                        },
+                        "value": {"type": "string", "description": "The exact value to preserve"},
+                        "entry_type": {
+                            "type": "string",
+                            "description": "contact_info | account_id | address | bookmark | credential | api_key",
+                            "default": "contact_info",
+                        },
+                        "sensitivity": {
+                            "type": "string",
+                            "description": "low | medium | high (high is encrypted at rest)",
+                            "default": "medium",
+                        },
+                    },
+                    "required": ["caption", "value"],
+                },
+            },
+        }
+        schemas["memory_vault_search"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_search",
+                "description": (
+                    "Search the Knowledge Vault by description. Returns matching captions "
+                    "and ids only — call memory_vault_get with an id to read the exact value."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "What you're looking for"},
+                        "entry_type": {"type": "string", "description": "Optional type filter"},
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+        schemas["memory_vault_get"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_get",
+                "description": (
+                    "Retrieve the exact, verbatim value of a Knowledge Vault entry by id "
+                    "(decrypts high-sensitivity entries; the read is audited)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {"type": "integer", "description": "Vault entry id"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
     # ── Convenience aliases ──
     schemas["list_my_tasks"] = {
         "type": "function",

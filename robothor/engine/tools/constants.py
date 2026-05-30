@@ -170,6 +170,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_knowledge_gaps",
         "memory_block_read",
         "memory_block_list",
+        # Knowledge Vault: search is read-only (caption-only, no value).
+        # memory_vault_get is deliberately NOT readonly — it reveals values
+        # and writes an audit row, so plan-mode cannot exfiltrate via it.
+        "memory_vault_search",
         # CRM read
         "list_conversations",
         "get_conversation",
