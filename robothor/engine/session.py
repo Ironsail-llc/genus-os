@@ -89,6 +89,7 @@ class AgentSession:
         self._step_counter = 0
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold
+        self._last_offload_path: str | None = None  # set by _offload_tool_result
         self._step_costs: list[float] = []
         self.todo_list: TodoList | None = None
         # ── Upgrade-plan session state (Phase 0 foundation) ────────────
@@ -300,10 +301,17 @@ class AgentSession:
                 return step
 
         content = json.dumps(tool_output, default=str)
+        raw_len = len(content)
 
         # Offload large results to temp file, keeping summary + path in context
+        self._last_offload_path = None
         if self._tool_offload_threshold and len(content) > self._tool_offload_threshold:
             content = self._offload_tool_result(content, tool_name)
+
+        # Symbolic short-term memory (Rip 13): build a per-run task-state graph
+        # node for this step. Observe-safe — does NOT change `content`; the
+        # runner injects the graph only in enforce mode.
+        self._record_symbol_node(tool_name, tool_output, raw_len)
 
         # Wrap untrusted external data with tags so the LLM sees a boundary
         if tool_name in EXTERNAL_DATA_TOOLS:
@@ -333,6 +341,30 @@ class AgentSession:
         self.run.steps.append(step)
         return step
 
+    def _finalize_symbol_graph(self) -> None:
+        """Log symbolic-memory token savings (observe value) and clear the graph."""
+        from robothor.engine.feature_flags import symbolic_memory_mode
+
+        if symbolic_memory_mode() == "off":
+            return
+        try:
+            from robothor.engine.symbolic_memory import clear_graph, get_graph
+
+            graph = get_graph(self.run_id)
+            if graph and graph.nodes:
+                s = graph.savings()
+                logger.info(
+                    "symbolic_memory run=%s nodes=%d raw_tokens=%d graph_tokens=%d saved=%d",
+                    self.run_id,
+                    s["nodes"],
+                    s["raw_tokens"],
+                    s["graph_tokens"],
+                    s["saved_tokens"],
+                )
+            clear_graph(self.run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("symbol graph finalize skipped: %s", e)
+
     def complete(self, output_text: str | None = None) -> AgentRun:
         """Mark the run as completed successfully."""
         self.run.status = RunStatus.COMPLETED
@@ -340,6 +372,7 @@ class AgentSession:
         self.run.output_text = output_text
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
+        self._finalize_symbol_graph()
         return self.run
 
     def fail(self, error_message: str, traceback: str | None = None) -> AgentRun:
@@ -350,6 +383,7 @@ class AgentSession:
         self.run.error_traceback = traceback
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
+        self._finalize_symbol_graph()
         return self.run
 
     def timeout(self, reason: str | None = None, traceback: str | None = None) -> AgentRun:
@@ -370,6 +404,7 @@ class AgentSession:
             self.run.error_traceback = traceback
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
+        self._finalize_symbol_graph()
         return self.run
 
     def check_budget(self, token_budget: int = 0, max_cost_usd: float = 0.0) -> str:
@@ -452,7 +487,30 @@ class AgentSession:
         fd, path = tempfile.mkstemp(prefix=f"tool_{tool_name}_", suffix=".txt")
         with os.fdopen(fd, "w") as f:
             f.write(content)
+        self._last_offload_path = path  # picked up for the symbol graph node
         return f"{summary}\n[Full output: {path} — use read_file to retrieve if needed]"
+
+    def _record_symbol_node(self, tool_name: str, tool_output: Any, raw_len: int) -> None:
+        """Add a symbol-graph node for this tool step (Rip 13). Best-effort."""
+        from robothor.engine.feature_flags import symbolic_memory_mode
+
+        if symbolic_memory_mode() == "off":
+            return
+        try:
+            from robothor.engine.compaction import extract_tool_summary
+            from robothor.engine.symbolic_memory import get_or_create_graph
+
+            raw = json.dumps(tool_output, default=str)
+            summary = extract_tool_summary(raw) if raw_len > 200 else raw
+            graph = get_or_create_graph(self.run_id)
+            graph.add_node(
+                tool_name,
+                summary,
+                ref_path=self._last_offload_path,
+                full_chars=raw_len,
+            )
+        except Exception as e:  # noqa: BLE001 — never break tool recording
+            logger.debug("symbol node skipped for %s: %s", tool_name, e)
 
     def thin_previous_tool_results(self, protect_after_index: int) -> int:
         """Compress tool results from previous iterations to one-line summaries.

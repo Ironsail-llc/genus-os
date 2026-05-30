@@ -56,6 +56,26 @@ Results from each store are fused with the shared `rrf_fuse` (k=60, in
 `robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
 signature for back-compat; only the tool path changes.
 
+## Symbolic short-term memory (RIP 13)
+
+Long tool-heavy runs blow the context budget. Beyond the existing offload
+(`session._offload_tool_result` writes large tool outputs to a tempfile),
+`robothor/engine/symbolic_memory.py` encodes the run's tool activity as a compact
+**Mermaid task-state graph** keyed by `node_id`. The agent reasons over the graph
+and calls `recall_node(node_id)` to read the byte-exact output of any step on
+demand (the TencentDB-Agent-Memory technique).
+
+Modes (`feature_flags.symbolic_memory_mode`, env `ROBOTHOR_RIP_13_MODE`):
+
+- `observe` (default when `ROBOTHOR_RIP_13_ENABLED=1`) — build the per-run graph
+  and log the would-be token savings; injected context is **unchanged** (safe).
+- `enforce` — the runner injects `render_injection_block()` in place of raw tool
+  tails. (Wired once the runner refactor lands; observe-mode is the current rollout.)
+
+Ratio knobs (ported from the source project): `ROBOTHOR_MEMORY_OFFLOAD_MILD_RATIO`
+(0.5), `ROBOTHOR_MEMORY_OFFLOAD_AGGRESSIVE_RATIO` (0.85),
+`ROBOTHOR_MEMORY_MMD_MAX_TOKEN_RATIO` (0.2). Tool: `recall_node` (readonly).
+
 ## Lifecycle
 
 Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
