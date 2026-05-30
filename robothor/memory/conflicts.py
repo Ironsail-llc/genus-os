@@ -20,10 +20,15 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
-from robothor.memory.facts import store_fact
+from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
+
+# WS-3: above this similarity, a same-category match is the SAME fact re-reported
+# (e.g. the agent's own briefing re-ingested), not a new one — reinforce it
+# rather than fork a near-duplicate row.
+_REINFORCE_THRESHOLD = 0.92
 
 # JSON schema for conflict classification structured output.
 CLASSIFICATION_SCHEMA = {
@@ -142,6 +147,27 @@ async def classify_relationship(new_fact: str, existing_fact: str) -> dict[str, 
         return {"classification": "new", "reasoning": "Failed to classify, treating as new"}
 
 
+def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
+    """Strengthen an existing fact instead of forking a near-duplicate.
+
+    Repeated mentions of the same event (the dominant churn source) should raise
+    the fact's salience, not inflate the table with reworded copies. Nudges
+    importance up (capped at 1.0), counts an access, and refreshes updated_at.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE memory_facts
+            SET importance_score = LEAST(COALESCE(importance_score, 0.5) + 0.05, 1.0),
+                access_count = COALESCE(access_count, 0) + 1,
+                updated_at = NOW()
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (fact_id, tenant_id or DEFAULT_TENANT),
+        )
+
+
 def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     """Mark an old fact as superseded by a new one."""
     with get_connection() as conn:
@@ -188,6 +214,22 @@ async def resolve_and_store(
         return {"action": "stored", "new_id": fact_id}
 
     best_match = similar[0]
+
+    # WS-3 reinforce-not-fork: a near-identical, same-category match is the same
+    # event re-reported, not a new one. Reinforce it and skip the LLM classify
+    # (which is biased to "new") so re-ingested briefings stop minting copies.
+    if (
+        _write_dedup_enabled()
+        and float(best_match.get("similarity") or 0) >= _REINFORCE_THRESHOLD
+        and (best_match.get("category") or "") == (fact.get("category") or "")
+    ):
+        _reinforce_fact(best_match["id"], tenant_id=tenant_id)
+        return {
+            "action": "reinforced",
+            "existing_id": best_match["id"],
+            "similarity": round(float(best_match.get("similarity") or 0), 4),
+        }
+
     classification = await classify_relationship(
         fact["fact_text"],
         best_match["fact_text"],

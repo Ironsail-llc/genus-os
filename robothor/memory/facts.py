@@ -265,6 +265,54 @@ async def _extract_facts_inner(
     return []
 
 
+def _write_dedup_enabled() -> bool:
+    """Reject byte-identical active facts at write time (WS-3). Default OFF.
+
+    Requires migration 078 (partial unique index on active (tenant_id,
+    content_hash)). When on, store_fact/store_facts_batch
+    ``ON CONFLICT ... DO NOTHING`` and return the existing id instead of minting
+    a fresh copy of a fact already in memory. Do NOT enable before 078 is applied.
+    """
+    raw = os.environ.get("MEMORY_WRITE_DEDUP", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+_INSERT_FACT_SQL = """
+    INSERT INTO memory_facts
+    (fact_text, category, entities, confidence, source_content, source_type,
+     embedding, metadata, tenant_id, content_hash)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+_INSERT_FACT_ON_CONFLICT = (
+    " ON CONFLICT (tenant_id, content_hash) "
+    "WHERE is_active = TRUE AND content_hash IS NOT NULL DO NOTHING"
+)
+
+
+def _insert_fact(cur: Any, params: tuple[Any, ...], *, tenant_id: str, content_hash: str) -> int:
+    """Insert one memory_facts row and return its id.
+
+    With MEMORY_WRITE_DEDUP on, a byte-identical active fact short-circuits to
+    the existing row's id (no new row) via the partial unique index. With the
+    flag off this is a plain ``INSERT ... RETURNING id`` (unchanged behaviour).
+    """
+    if _write_dedup_enabled():
+        cur.execute(_INSERT_FACT_SQL + _INSERT_FACT_ON_CONFLICT + " RETURNING id", params)
+        row = cur.fetchone()
+        if row is not None:
+            return int(row[0])
+        cur.execute(
+            "SELECT id FROM memory_facts "
+            "WHERE tenant_id = %s AND content_hash = %s AND is_active = TRUE "
+            "ORDER BY id DESC LIMIT 1",
+            (tenant_id, content_hash),
+        )
+        existing = cur.fetchone()
+        return int(existing[0]) if existing else 0
+    cur.execute(_INSERT_FACT_SQL + " RETURNING id", params)
+    return int(cur.fetchone()[0])
+
+
 async def store_fact(
     fact: dict[str, Any],
     source_content: str,
@@ -293,14 +341,8 @@ async def store_fact(
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO memory_facts
-            (fact_text, category, entities, confidence, source_content, source_type,
-             embedding, metadata, tenant_id, content_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
+        fact_id = _insert_fact(
+            cur,
             (
                 fact["fact_text"],
                 fact["category"],
@@ -313,8 +355,9 @@ async def store_fact(
                 resolved_tenant,
                 content_hash,
             ),
+            tenant_id=resolved_tenant,
+            content_hash=content_hash,
         )
-        fact_id: int = cur.fetchone()[0]
 
     return fact_id
 
@@ -357,28 +400,25 @@ async def store_facts_batch(
             content_hash = compute_fact_hash(
                 fact["fact_text"], tenant_id=resolved_tenant, category=fact["category"]
             )
-            cur.execute(
-                """
-                INSERT INTO memory_facts
-                (fact_text, category, entities, confidence, source_content, source_type,
-                 embedding, metadata, tenant_id, content_hash)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    fact["fact_text"],
-                    fact["category"],
-                    fact.get("entities", []),
-                    fact.get("confidence", 1.0),
-                    source_content,
-                    source_type,
-                    embedding,
-                    json.dumps(metadata or {}),
-                    resolved_tenant,
-                    content_hash,
-                ),
+            ids.append(
+                _insert_fact(
+                    cur,
+                    (
+                        fact["fact_text"],
+                        fact["category"],
+                        fact.get("entities", []),
+                        fact.get("confidence", 1.0),
+                        source_content,
+                        source_type,
+                        embedding,
+                        json.dumps(metadata or {}),
+                        resolved_tenant,
+                        content_hash,
+                    ),
+                    tenant_id=resolved_tenant,
+                    content_hash=content_hash,
+                )
             )
-            ids.append(cur.fetchone()[0])
 
     logger.info("store_facts_batch: stored %d facts with batch embeddings", len(ids))
     return ids
