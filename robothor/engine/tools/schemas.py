@@ -2937,6 +2937,35 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["get_accretion_ledger"] = {
+        "type": "function",
+        "function": {
+            "name": "get_accretion_ledger",
+            "description": (
+                "Self-improvement health line: skill accretion (total, added this "
+                "week, archived, most-used), goal-judge volume (judgments written "
+                "this week), and the DIVERGENCE list — agents whose benchmark "
+                "passes but whose judge-measured real-outcome score is much lower "
+                "(acing the exam while failing in reality). A non-empty divergence "
+                "list is the reward-hack tripwire. Read-only. Surface in the "
+                "evening summary; escalate from the heartbeat when divergent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "window_days": {
+                        "type": "integer",
+                        "description": "Look-back window. Default 7.",
+                    },
+                    "gap_threshold": {
+                        "type": "number",
+                        "description": "Min benchmark−judge gap to flag as divergent. Default 0.25.",
+                    },
+                },
+            },
+        },
+    }
+
     schemas["get_fleet_achievement_score"] = {
         "type": "function",
         "function": {

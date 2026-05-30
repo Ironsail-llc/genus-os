@@ -813,7 +813,10 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
     except yaml.YAMLError as exc:
         return {"error": f"Invalid YAML in {path}: {exc}"}
 
-    suite_id = suite_data.get("id") or f"{agent_id}-default"
+    # Accept both `id:` and `suite_id:` — 8 fleet suites declare `suite_id:`,
+    # which previously fell through to `<agent>-default`, silently scattering
+    # their benchmark_results under the wrong suite id (Phase 4b).
+    suite_id = suite_data.get("id") or suite_data.get("suite_id") or f"{agent_id}-default"
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
 

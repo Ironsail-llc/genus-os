@@ -98,6 +98,27 @@ class TestAutoDefineSuiteFromDisk:
         result = await auto_define_suite_from_disk("nonexistent", str(tmp_path))
         assert "error" in result
 
+    @pytest.mark.asyncio
+    async def test_suite_id_field_is_honored(self, tmp_path: Path):
+        """Phase 4b: 8 fleet suites declare `suite_id:` not `id:` — must not fall
+        through to <agent>-default, which scattered their benchmark_results."""
+        from robothor.engine.tools.handlers.benchmark import auto_define_suite_from_disk
+
+        bench = tmp_path / "docs" / "benchmarks" / "archy"
+        bench.mkdir(parents=True)
+        (bench / "suite.yaml").write_text(
+            "suite_id: archy-v1\nagent_id: archy\ntasks:\n"
+            "  - id: t\n    prompt: hi\n    category: correctness\n"
+            "    expected: {must_contain: ['hi']}\n"
+        )
+        _, read_fn, write_fn = _mock_blocks()
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=read_fn),
+            patch("robothor.memory.blocks.write_block", side_effect=write_fn),
+        ):
+            result = await auto_define_suite_from_disk("archy", str(tmp_path))
+        assert result["id"] == "archy-v1"
+
 
 # ─── benchmark_run_for_agent ─────────────────────────────────────────
 
