@@ -40,6 +40,8 @@ DEFAULT_BLOCK_SEEDS = [
     # Curiosity Engine + Self Model
     ("curiosity_engine_findings", "persistent", 5000),
     ("self_model", "persistent", 8000),
+    # Skill curator (Rip 5) — last consolidation-pass timestamp (ISO-8601)
+    ("curator_state", "persistent", 1000),
     # Preferences (JSON list of {preference, confidence, last_confirmed, evidence_fact_ids, stale})
     ("preferences", "persistent", 10000),
 ]

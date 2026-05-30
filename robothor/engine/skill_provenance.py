@@ -41,6 +41,20 @@ _write_origin: contextvars.ContextVar[str] = contextvars.ContextVar(
 # Sentinel for writes coming from the background review fork.
 BACKGROUND_REVIEW = "background_review"
 
+# Sentinel for writes from the slow consolidation curator (Rip 5).
+CURATOR = "curator"
+
+
+def is_agent_authored_origin(origin: str | None = None) -> bool:
+    """True iff the write origin is an autonomous fork (review OR curator).
+
+    Both the per-turn review fork and the curator are the agent acting on its
+    own skill library — their writes are curator-eligible. Foreground (operator-
+    driven) writes are not.
+    """
+    o = origin if origin is not None else get_current_write_origin()
+    return o in (BACKGROUND_REVIEW, CURATOR)
+
 
 def set_current_write_origin(origin: str) -> contextvars.Token[str]:
     """Bind the active write origin to the current asyncio context.

@@ -2084,6 +2084,27 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["skill_archive"] = {
+        "type": "function",
+        "function": {
+            "name": "skill_archive",
+            "description": (
+                "Retire an agent-created skill by moving it to "
+                "agents/skills/.archive/ (reversible — content preserved). The "
+                "curator's only destructive action. Refuses pinned and operator-"
+                "authored skills. Use to consolidate near-duplicates (after "
+                "merging into the umbrella) or to archive cold one-offs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name to archive."},
+                },
+                "required": ["name"],
+            },
+        },
+    }
+
     schemas["update_skill"] = {
         "type": "function",
         "function": {

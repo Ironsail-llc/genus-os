@@ -143,9 +143,98 @@ def should_run_curator(
     return bool((now - last_pass_at) >= timedelta(days=interval_days))
 
 
-# NOTE: the actual fork spawn re-uses Rip 1's spawn_background_review
-# infrastructure — the curator is just "the same fork pattern with a
-# different prompt + a candidate filter". The next commit wires the
-# scheduler tick that calls into spawn_background_review with
-# decision.prompt = CURATOR_REVIEW_PROMPT and a candidate list
-# rendered into the transcript tail.
+_CURATOR_STATE_BLOCK = "curator_state"
+
+
+def _curator_tool_whitelist() -> frozenset[str]:
+    """Review-fork tools PLUS skill_archive (the per-turn fork never archives)."""
+    from robothor.engine.background_review import REVIEW_TOOL_WHITELIST
+
+    return REVIEW_TOOL_WHITELIST | frozenset({"skill_archive"})
+
+
+async def spawn_curator(
+    scheduler: Any,
+    *,
+    curator_agent_id: str = "curator",
+    tenant_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Run one LLM consolidation pass as a top-level ``curator`` agent run.
+
+    Drives a real top-level run via ``scheduler._run_agent`` (which installs a
+    fresh spawn context) rather than ``spawn_background_review`` (which needs an
+    active spawn context and would fail from a daemon tick). The CURATOR write
+    origin tags its skill writes agent-created; the tool whitelist hard-limits it
+    to memory+skill tools plus skill_archive. Never raises — a failed pass must
+    not take down the daemon loop.
+    """
+    from robothor.engine.skill_provenance import (
+        CURATOR,
+        reset_current_write_origin,
+        set_current_write_origin,
+    )
+    from robothor.engine.tools.dispatch import clear_tool_whitelist, set_tool_whitelist
+
+    candidates, pinned, human = list_curator_candidates()
+    if not candidates:
+        logger.info("spawn_curator: no agent-created candidates; skipping LLM pass")
+        return {"status": "skipped", "reason": "no_candidates"}
+
+    origin_token = set_current_write_origin(CURATOR)
+    whitelist_token = set_tool_whitelist(_curator_tool_whitelist())
+    try:
+        await scheduler._run_agent(curator_agent_id)  # noqa: SLF001
+    except Exception as exc:  # noqa: BLE001 — background, never propagate
+        logger.warning("spawn_curator run failed: %s", exc)
+        return None
+    finally:
+        clear_tool_whitelist(whitelist_token)
+        reset_current_write_origin(origin_token)
+
+    logger.info(
+        "curator pass complete: candidates=%d pinned_skipped=%d human_skipped=%d",
+        len(candidates),
+        len(pinned),
+        len(human),
+    )
+    return {
+        "status": "completed",
+        "candidates": len(candidates),
+        "skipped_pinned": len(pinned),
+        "skipped_human": len(human),
+    }
+
+
+def load_curator_last_pass(tenant_id: str | None = None) -> datetime | None:
+    """Read the last curator-pass timestamp from the curator_state block."""
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.memory.blocks import read_block
+
+    tid = tenant_id or DEFAULT_TENANT
+    try:
+        block = read_block(_CURATOR_STATE_BLOCK, tenant_id=tid)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("load_curator_last_pass read failed: %s", exc)
+        return None
+    if block.get("error"):
+        return None
+    raw = (block.get("content") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+    except (ValueError, TypeError):
+        return None
+
+
+def store_curator_last_pass(when: datetime, tenant_id: str | None = None) -> None:
+    """Persist the curator-pass timestamp to the curator_state block."""
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.memory.blocks import write_block
+
+    tid = tenant_id or DEFAULT_TENANT
+    try:
+        write_block(_CURATOR_STATE_BLOCK, when.astimezone(UTC).isoformat(), tenant_id=tid)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("store_curator_last_pass write failed: %s", exc)

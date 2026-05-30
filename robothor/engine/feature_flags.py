@@ -139,6 +139,17 @@ def goal_judge_enabled() -> bool:
     return _env_bool("ROBOTHOR_JUDGE_ENABLED")
 
 
+def curator_enabled() -> bool:
+    """True iff the destructive LLM skill-consolidation curator (Rip 5) is active.
+
+    Gates ONLY the LLM consolidation pass (merge/archive). The non-destructive
+    lifecycle (apply_skill_lifecycle: time-based stale/archived state) runs
+    unconditionally in the daemon loop. Off by default; gated by
+    ``ROBOTHOR_RIP_5_ENABLED``. Forced off by ``ROBOTHOR_DISABLE_ALL_RIPS=1``.
+    """
+    return is_rip_enabled(5)
+
+
 def deferred_tools_threshold() -> int:
     """Min advertised-tool count above which an agent's set is deferred.
 

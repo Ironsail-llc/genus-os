@@ -458,6 +458,7 @@ async def main() -> None:
         asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
+        asyncio.create_task(_curator_loop(scheduler), name="curator"),
     ]
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
@@ -800,6 +801,60 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             return
         except Exception as e:
             logger.warning("curiosity-density loop error: %s", e)
+
+
+_CURATOR_CHECK_INTERVAL = 6 * 3600  # re-evaluate cadence every 6h
+
+
+async def _curator_loop(scheduler: Any) -> None:
+    """Skill-library maintenance (Phase 3 / Rip 5).
+
+    Tier 1 ALWAYS (no flag, no LLM): apply_skill_lifecycle() persists time-derived
+    stale/archived transitions — reversible, content-preserving anti-bloat.
+    Tier 2 OPT-IN (curator_enabled(), default OFF): destructive LLM consolidation.
+    Cadence keyed to should_run_curator (default 7d); only acts when engine idle.
+    """
+    from datetime import UTC, datetime
+
+    from robothor.engine.curator import (
+        load_curator_last_pass,
+        should_run_curator,
+        spawn_curator,
+        store_curator_last_pass,
+    )
+    from robothor.engine.dedup import running_agents
+    from robothor.engine.feature_flags import curator_enabled
+    from robothor.engine.skills import apply_skill_lifecycle
+
+    await asyncio.sleep(600)  # stagger past boot
+
+    while True:
+        await asyncio.sleep(_CURATOR_CHECK_INTERVAL)
+        try:
+            if not should_run_curator(load_curator_last_pass()):
+                continue
+            if running_agents():
+                logger.debug("curator: engine busy, deferring pass")
+                continue
+
+            loop = asyncio.get_running_loop()
+            transitions = await loop.run_in_executor(None, apply_skill_lifecycle)
+            if any(transitions.values()):
+                logger.info("curator: lifecycle transitions %s", transitions)
+
+            if curator_enabled():
+                if running_agents():
+                    logger.info("curator: busy at LLM gate, deferring consolidation")
+                else:
+                    await spawn_curator(scheduler)
+            else:
+                logger.debug("curator: RIP_5 off — lifecycle only, no LLM pass")
+
+            await loop.run_in_executor(None, store_curator_last_pass, datetime.now(UTC))
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("curator loop error: %s", e)
 
 
 async def _autodream_loop() -> None:

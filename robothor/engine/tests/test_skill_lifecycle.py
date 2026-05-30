@@ -107,3 +107,45 @@ class TestCatalogFilterAndLifecycle:
         assert "going-archived" in result["to_archived"]
         persisted = json.loads((base / "going-archived" / "meta.json").read_text())
         assert persisted["state"] == "archived"
+
+
+# ─── skill_archive handler (curator's only destructive action) ──────
+
+
+class TestSkillArchive:
+    @staticmethod
+    def _run(name, workspace):
+        import asyncio
+
+        from robothor.engine.tools.handlers.skills import _skill_archive
+
+        class _Ctx:
+            agent_id = "curator"
+            tenant_id = "robothor-primary"
+
+        return asyncio.run(_skill_archive({"name": name}, _Ctx()))
+
+    def test_archives_agent_skill_reversibly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_skill(tmp_path, "cold-one", is_agent_created=True)
+        result = self._run("cold-one", tmp_path)
+        assert result.get("archived") == "cold-one"
+        assert not (tmp_path / "agents/skills/cold-one").exists()
+        assert (tmp_path / "agents/skills/.archive/cold-one/SKILL.md").exists()
+
+    def test_refuses_pinned(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_skill(tmp_path, "keepme", is_agent_created=True, pinned=True)
+        result = self._run("keepme", tmp_path)
+        assert "error" in result
+        assert (tmp_path / "agents/skills/keepme").exists()
+
+    def test_refuses_operator_authored(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        d = tmp_path / "agents" / "skills" / "human-skill"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("---\nname: human-skill\ndescription: x\n---\n\nbody\n")
+        (d / "meta.json").write_text('{"is_agent_created": false}')
+        result = self._run("human-skill", tmp_path)
+        assert "error" in result
+        assert (tmp_path / "agents/skills/human-skill").exists()
