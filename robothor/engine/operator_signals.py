@@ -73,6 +73,13 @@ def record_reaction(
                 INSERT INTO message_reactions
                     (tenant_id, chat_id, message_id, agent_id, run_id, emoji, verdict, reactor)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, chat_id, message_id, reactor)
+                DO UPDATE SET
+                    emoji = EXCLUDED.emoji,
+                    verdict = EXCLUDED.verdict,
+                    agent_id = COALESCE(EXCLUDED.agent_id, message_reactions.agent_id),
+                    run_id = COALESCE(EXCLUDED.run_id, message_reactions.run_id),
+                    created_at = NOW()
                 """,
                 (
                     tenant_id,
@@ -88,6 +95,32 @@ def record_reaction(
             conn.commit()
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("record_reaction failed (chat=%s msg=%s): %s", chat_id, message_id, exc)
+
+
+def clear_reaction(
+    *,
+    chat_id: str,
+    message_id: int,
+    reactor: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> None:
+    """Remove a retracted reaction so its verdict stops counting (BUG-4). Fails soft."""
+    try:
+        from robothor.crm.dal import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM message_reactions
+                WHERE tenant_id = %s AND chat_id = %s AND message_id = %s
+                  AND reactor IS NOT DISTINCT FROM %s
+                """,
+                (tenant_id, str(chat_id), int(message_id), reactor),
+            )
+            conn.commit()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("clear_reaction failed (chat=%s msg=%s): %s", chat_id, message_id, exc)
 
 
 def record_intervention(
@@ -119,13 +152,17 @@ def record_intervention(
 
 
 def resolve_reacted_message(
-    message_id: int, tenant_id: str = DEFAULT_TENANT
+    message_id: int, chat_id: str | None = None, tenant_id: str = DEFAULT_TENANT
 ) -> tuple[str | None, str | None]:
     """Best-effort (agent_id, run_id) for a reacted-to Telegram message.
 
     Outbound deliveries are persisted in chat_messages with the telegram message
     id and the producing run in the JSONB payload. Returns (None, None) when the
     message can't be resolved — the reaction is still recorded, just unlinked.
+
+    BUG-6: Telegram message ids are unique only per-chat, so we additionally
+    scope by chat_id when both the caller and the stored payload carry it
+    (NULL-tolerant so resolution still works for older rows without chat_id).
     """
     try:
         from robothor.crm.dal import get_connection
@@ -137,10 +174,13 @@ def resolve_reacted_message(
                 SELECT message ->> 'author_agent_id', message ->> 'surfaced_from_run_id'
                 FROM chat_messages
                 WHERE message ->> 'telegram_message_id' = %s
+                  AND (%s::text IS NULL
+                       OR message ->> 'chat_id' IS NULL
+                       OR message ->> 'chat_id' = %s)
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (str(message_id),),
+                (str(message_id), chat_id, chat_id),
             )
             row = cur.fetchone()
             if row:
@@ -192,12 +232,16 @@ def operator_verdict_for_run(
     if candidates:
         return min(candidates)
 
-    # 3. Window-level operator mood for this agent (worst reaction).
+    # 3. Window-level operator mood for this agent — the MOST RECENT non-neutral
+    # reaction (BUG-4): a flat window-MIN let one stale 😡 clamp every run judged
+    # in the 24h window forever; "most recent wins" lets a later 👍 supersede it.
     cur.execute(
         """
-        SELECT MIN(verdict) FROM message_reactions
+        SELECT verdict FROM message_reactions
         WHERE agent_id = %s AND tenant_id = %s
           AND created_at >= %s AND created_at <= %s AND verdict <> 0
+        ORDER BY created_at DESC
+        LIMIT 1
         """,
         (agent_id, tenant_id, start, end),
     )

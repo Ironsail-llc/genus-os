@@ -157,6 +157,11 @@ class TestParseJudgment:
         )
         assert j is not None and j.goal_achievement == 2
 
+    def test_rejects_boolean_ratings(self):
+        """BUG-8: bool is an int subclass — True must NOT become rating 1."""
+        raw = json.dumps({"goal_achievement": True, "confidence": True, "evidence_refs": ["run-1"]})
+        assert parse_judgment(raw, run_id="run-1") is None
+
     def test_strips_markdown_code_fences(self):
         """openrouter/anthropic wraps JSON in ```json fences despite json_mode —
         a bare json.loads would make every real judgment abstain."""

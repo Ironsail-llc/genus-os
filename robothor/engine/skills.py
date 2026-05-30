@@ -10,6 +10,7 @@ The LLM is the orchestrator — skills are just instructions, not automated pipe
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -375,17 +376,33 @@ def class_level_check(name: str, description: str = "") -> str | None:
     return None
 
 
+# BUG-7: mtime-keyed cache so build_skill_catalog's per-skill meta read (one
+# per skill, every prompt) doesn't re-parse JSON from disk each time. Returns a
+# deep copy so callers that mutate-then-write (increment_usage, apply_skill_
+# lifecycle) can't corrupt the cached object.
+_meta_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+
 def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | None:
     """Read meta.json sidecar for a skill, or None if missing."""
     path = _meta_path(name, base)
     if not path.exists():
         return None
     try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    key = str(path)
+    cached = _meta_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return copy.deepcopy(cached[1])
+    try:
         result: dict[str, Any] = json.loads(path.read_text())
-        return result
     except Exception as e:
         logger.warning("Failed to read skill meta %s: %s", path, e)
         return None
+    _meta_cache[key] = (mtime, result)
+    return copy.deepcopy(result)
 
 
 def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
@@ -393,6 +410,8 @@ def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) 
     path = _meta_path(name, base)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(meta, indent=2, default=str) + "\n")
+    with contextlib.suppress(OSError):
+        _meta_cache[str(path)] = (path.stat().st_mtime, copy.deepcopy(meta))
 
 
 def write_skill_file(
@@ -478,7 +497,11 @@ def compute_skill_state(meta: dict[str, Any] | None, now: datetime | None = None
     """
     if not meta:
         return "active"
-    if meta.get("pinned") or not meta.get("is_agent_created", False):
+    # BUG-2: the existing corpus stamps `auto_generated`; only the RIP_1 fork
+    # path stamps `is_agent_created`. Treat either as agent-made, else the whole
+    # anti-bloat guardrail is inert for every skill on disk today.
+    agent_made = meta.get("is_agent_created") or meta.get("auto_generated")
+    if meta.get("pinned") or not agent_made:
         return "active"
     now = now or datetime.now(UTC)
     anchor = _parse_iso(meta.get("last_used")) or _parse_iso(meta.get("created_at"))

@@ -1203,14 +1203,11 @@ class TelegramBot:
             """
             try:
                 from robothor.engine.operator_signals import (
+                    clear_reaction,
                     record_reaction,
                     resolve_reacted_message,
                 )
 
-                added = [getattr(rt, "emoji", None) for rt in (event.new_reaction or [])]
-                emojis = [e for e in added if e]
-                if not emojis:
-                    return  # reaction removed, not added — ignore
                 chat_id = str(event.chat.id)
                 message_id = int(event.message_id)
                 tenant_id = self._get_tenant_id(chat_id)
@@ -1220,7 +1217,20 @@ class TelegramBot:
                     if user
                     else None
                 )
-                agent_id, run_id = resolve_reacted_message(message_id, tenant_id)
+                added = [getattr(rt, "emoji", None) for rt in (event.new_reaction or [])]
+                emojis = [e for e in added if e]
+                if not emojis:
+                    # Reaction retracted — clear the prior verdict so it stops
+                    # counting (BUG-4). Only when an old reaction existed.
+                    if event.old_reaction:
+                        clear_reaction(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            reactor=reactor,
+                            tenant_id=tenant_id,
+                        )
+                    return
+                agent_id, run_id = resolve_reacted_message(message_id, chat_id, tenant_id)
                 for emoji in emojis:
                     record_reaction(
                         chat_id=chat_id,

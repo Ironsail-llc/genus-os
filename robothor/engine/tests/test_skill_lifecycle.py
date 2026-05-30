@@ -54,6 +54,13 @@ class TestComputeSkillState:
         m = _meta(created_at=(NOW - timedelta(days=300)).isoformat(), is_agent_created=False)
         assert compute_skill_state(m, NOW) == "active"
 
+    def test_auto_generated_without_is_agent_created_still_retires(self):
+        """BUG-2: existing skills stamp auto_generated, not is_agent_created.
+        Time-retirement must treat auto_generated as agent-made or it's inert
+        for the entire existing corpus."""
+        m = {"auto_generated": True, "created_at": (NOW - timedelta(days=200)).isoformat()}
+        assert compute_skill_state(m, NOW) == "archived"
+
     def test_no_meta_is_active(self):
         assert compute_skill_state(None, NOW) == "active"
 

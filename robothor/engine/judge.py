@@ -269,7 +269,9 @@ def _strip_code_fences(text: str) -> str:
 
 def _coerce_rating(value: Any) -> int | None:
     """Return an int in 1-5, or None for null/out-of-range/non-numeric."""
-    if value is None:
+    if value is None or isinstance(value, bool):
+        # BUG-8: bool is an int subclass — a JSON `true` must abstain, not
+        # silently become rating 1.
         return None
     try:
         n = int(value)
@@ -318,7 +320,7 @@ def parse_judgment(raw: str | dict[str, Any], *, run_id: str) -> Judgment | None
         return None
 
     conf = data.get("confidence")
-    if isinstance(conf, (int, float)):
+    if isinstance(conf, (int, float)) and not isinstance(conf, bool):
         confidence = max(0.0, min(1.0, float(conf)))
     else:
         confidence = 0.5
@@ -371,8 +373,8 @@ def _fetch_unjudged_runs(
         FROM agent_runs r
         WHERE r.agent_id = %s
           AND r.tenant_id = %s
-          AND r.started_at >= %s
-          AND r.started_at <= %s
+          AND COALESCE(r.started_at, r.created_at) >= %s
+          AND COALESCE(r.started_at, r.created_at) <= %s
           AND r.status IN ('completed', 'failed', 'timeout')
           AND NOT EXISTS (
               SELECT 1 FROM agent_reviews ar
@@ -380,7 +382,7 @@ def _fetch_unjudged_runs(
                 AND ar.reviewer_type = 'judge'
                 AND ar.categories ->> 'dimension' = 'goal_achievement'
           )
-        ORDER BY r.started_at DESC
+        ORDER BY COALESCE(r.started_at, r.created_at) DESC
         LIMIT %s
         """,
         (agent_id, tenant_id, start, end, limit),
@@ -485,6 +487,26 @@ def _fetch_agent_context(
         ctx["obstacles"] = [f"escalation: {r[0]}" for r in cur.fetchall() if r[0]]
     except Exception as exc:
         logger.debug("judge: escalation fetch failed for %s: %s", agent_id, exc)
+    # BUG-3: the operator's own words, scoped to THIS agent's chat sessions
+    # (session_key 'agent:<agent_id>:%') so an operator message to main never
+    # taints email-classifier's grade. role=user only.
+    try:
+        cur.execute(
+            """
+            SELECT cm.message ->> 'content'
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cs.session_key LIKE %s
+              AND cm.message ->> 'role' = 'user'
+              AND cm.created_at >= %s AND cm.created_at <= %s
+            ORDER BY cm.created_at DESC
+            LIMIT 12
+            """,
+            (f"agent:{agent_id}:%", start, end),
+        )
+        ctx["operator_messages"] = [r[0] for r in cur.fetchall() if r[0]]
+    except Exception as exc:
+        logger.debug("judge: operator-message fetch failed for %s: %s", agent_id, exc)
     return ctx
 
 
