@@ -149,11 +149,11 @@ async def test_runner_uses_codex_for_tool_turns(
 
     with (
         patch(
-            "robothor.engine.runner.codex_acompletion",
+            "robothor.engine.llm_client.codex_acompletion",
             new=AsyncMock(return_value=codex_response),
         ) as codex_call,
         patch("litellm.acompletion", new=AsyncMock()) as litellm_call,
-        patch.object(runner, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch.object(runner._llm, "_prepare_llm_call", new=AsyncMock(return_value=100)),
     ):
         result = await runner._call_llm(
             messages,
@@ -230,10 +230,11 @@ async def test_runner_uses_codex_for_text_only_turns(engine_config: EngineConfig
 
     with (
         patch(
-            "robothor.engine.runner.codex_acompletion", new=AsyncMock(return_value=codex_response)
+            "robothor.engine.llm_client.codex_acompletion",
+            new=AsyncMock(return_value=codex_response),
         ) as codex_call,
         patch("litellm.acompletion", new=AsyncMock()) as litellm_call,
-        patch.object(runner, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch.object(runner._llm, "_prepare_llm_call", new=AsyncMock(return_value=100)),
     ):
         result = await runner._call_llm(
             [{"role": "user", "content": "hi"}],

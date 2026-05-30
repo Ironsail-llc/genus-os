@@ -462,11 +462,11 @@ class TestCalculateCostCacheAware:
     """_calculate_cost handles cache tokens correctly."""
 
     def test_cost_with_cache_tokens(self):
-        from robothor.engine.runner import AgentRunner
+        from robothor.engine.llm_client import LLMClient
 
-        runner = AgentRunner.__new__(AgentRunner)
+        client = LLMClient()
         # Use a model that's in litellm registry
-        cost = runner._calculate_cost(
+        cost = client._calculate_cost(
             "openrouter/anthropic/claude-sonnet-4.6",
             input_tokens=1000,
             output_tokens=500,
@@ -476,10 +476,10 @@ class TestCalculateCostCacheAware:
         assert cost > 0
 
     def test_cost_without_cache_tokens(self):
-        from robothor.engine.runner import AgentRunner
+        from robothor.engine.llm_client import LLMClient
 
-        runner = AgentRunner.__new__(AgentRunner)
-        cost = runner._calculate_cost(
+        client = LLMClient()
+        cost = client._calculate_cost(
             "openrouter/anthropic/claude-sonnet-4.6",
             input_tokens=1000,
             output_tokens=500,
@@ -488,11 +488,11 @@ class TestCalculateCostCacheAware:
 
     def test_cost_handles_mock_values(self):
         """Regression: MagicMock values should not crash."""
-        from robothor.engine.runner import AgentRunner
+        from robothor.engine.llm_client import LLMClient
 
-        runner = AgentRunner.__new__(AgentRunner)
+        client = LLMClient()
         # Should not raise TypeError
-        cost = runner._calculate_cost(
+        cost = client._calculate_cost(
             "unknown/model",
             input_tokens=1000,
             output_tokens=500,

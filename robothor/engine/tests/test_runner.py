@@ -261,8 +261,6 @@ class TestAgentRunnerExecute:
         import asyncio as _asyncio
         import time
 
-        import robothor.engine.runner as _runner_mod
-
         # Squeeze the per-LLM-call timeout so the test runs in ~1s. The
         # primary "hangs" for 5s, the fallback completes immediately.
         call_count = 0
@@ -281,7 +279,7 @@ class TestAgentRunnerExecute:
             return mock_litellm_response(content="fallback ok", model="openrouter/test/fallback")
 
         with (
-            patch.object(_runner_mod, "LLM_REQUEST_TIMEOUT", 1),
+            patch("robothor.engine.llm_client.LLM_REQUEST_TIMEOUT", 1),
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
