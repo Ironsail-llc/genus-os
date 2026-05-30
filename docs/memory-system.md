@@ -35,6 +35,27 @@ All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_constructio
 5. Optional **cross-encoder reranker** (Qwen3-Reranker-0.6B) — on by default; kill-switch via `MEMORY_RERANK_ENABLED=0`
 6. Optional appended `memory_insights`, `memory_episodes`, and verbatim `chat_messages` (low-weight RRF merge)
 
+### Memory router (RIP 15)
+
+The `search_memory` tool previously hard-coded `expand_entities + insights +
+episodes = True` on *every* call — a full fan-out for even a trivial lookup.
+When `ROBOTHOR_RIP_15_ENABLED` is set, it routes through
+`robothor/memory/router.py`, which classifies the query (heuristics) and queries
+only the stores that fit:
+
+| Class | Stores | Notes |
+|-------|--------|-------|
+| `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
+| `temporal` | facts + episodes | results recency-reordered (latest first) |
+| `how_to` | procedures + facts | |
+| `who_is` | facts + entity-graph expansion | |
+| `intent` | standing intents + facts | |
+| `default` | facts + insights | no episode/entity fan-out |
+
+Results from each store are fused with the shared `rrf_fuse` (k=60, in
+`robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
+signature for back-compat; only the tool path changes.
+
 ## Lifecycle
 
 Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
