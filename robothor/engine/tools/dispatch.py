@@ -51,6 +51,35 @@ def get_tool_whitelist() -> frozenset[str] | None:
     return _thread_tool_whitelist.get()
 
 
+# ── Deferred-tools allow-set (Rip 16 / G4) ─────────────────────────
+# When an agent's toolset is deferred, the runner records the agent's full
+# allowed tool set here. The tool_call meta-tool consults it so a discovered
+# tool outside the allow-list cannot be invoked (tools_denied is otherwise only
+# enforced by the advertised schema list, which deferral shrinks to core+meta).
+#
+# This is deliberately SEPARATE from _thread_tool_whitelist: it gates only
+# tool_call, not all dispatch, so it cannot wrongly restrict a non-deferring
+# sub-agent that inherits the parent task's context. Default None.
+_deferred_allowed_var: ContextVar[frozenset[str] | None] = ContextVar(
+    "_deferred_allowed_var", default=None
+)
+
+
+def set_deferred_allowed(allowed: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Record the deferred-run allow-set; returns a reset token."""
+    return _deferred_allowed_var.set(allowed)
+
+
+def clear_deferred_allowed(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior deferred allow-set state."""
+    _deferred_allowed_var.reset(token)
+
+
+def get_deferred_allowed() -> frozenset[str] | None:
+    """The current deferred-run allow-set, or None when not a deferred run."""
+    return _deferred_allowed_var.get()
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Context passed to every tool handler."""
@@ -127,6 +156,7 @@ def _collect_handlers() -> dict[str, Any]:
         symbolic,
         timing,
         todolist,
+        toolsearch,
         vault,
         vision,
         voice,
@@ -169,6 +199,7 @@ def _collect_handlers() -> dict[str, Any]:
         mcp_client,
         timing,
         todolist,
+        toolsearch,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

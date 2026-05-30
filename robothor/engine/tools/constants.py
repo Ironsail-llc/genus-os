@@ -266,3 +266,42 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "render_devops_report",
     }
 )
+
+
+# ── Deferred / searchable tool loading (Rip 16 / G4) ──────────────────────
+# The meta-tools that drive tools-as-code. Excluded from the normal advertised
+# set; injected only when an agent's toolset is deferred (see registry).
+TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
+
+# The always-advertised tool set when deferral is active. Chosen as the
+# highest-frequency tools so most turns never need a tool_search round-trip;
+# everything else loads on demand via tool_search → tool_describe → tool_call.
+# GOAL_TOOLS are force-added by the registry filter, so they're omitted here.
+CORE_TOOLS: frozenset[str] = frozenset(
+    {
+        # File / shell
+        "read_file",
+        "write_file",
+        "list_directory",
+        "exec",
+        # Web
+        "web_fetch",
+        "web_search",
+        # Memory reads
+        "search_memory",
+        "memory_block_read",
+        "memory_block_list",
+        # Skills (the on-demand workflow layer)
+        "invoke_skill",
+        "list_skills",
+        # CRM essentials (the operator's domain)
+        "list_my_tasks",
+        "get_task",
+        "create_task",
+        "search_records",
+        # Messaging back to the operator
+        "message",
+        # Waiting / polling
+        "wait_seconds",
+    }
+)

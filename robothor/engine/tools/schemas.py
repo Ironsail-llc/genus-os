@@ -3000,4 +3000,80 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Deferred / searchable tool meta-tools (Rip 16 / G4) ──
+    # Only advertised to an agent when its toolset is deferred (see registry).
+    # They let the model discover and invoke tools that aren't in the small
+    # always-on CORE set, keeping per-turn schema tokens low.
+    schemas["tool_search"] = {
+        "type": "function",
+        "function": {
+            "name": "tool_search",
+            "description": (
+                "Search your full tool catalog for tools not shown in your "
+                "current toolset. Returns matching tool names + short "
+                "descriptions. Use when you need a capability you don't see a "
+                "tool for, then tool_describe it and tool_call it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Keywords describing the capability you need (e.g. 'send email', 'create calendar event', 'github pull request').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return (default 10).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    }
+    schemas["tool_describe"] = {
+        "type": "function",
+        "function": {
+            "name": "tool_describe",
+            "description": (
+                "Return the full schema (parameters) for one tool by name, so "
+                "you can call it correctly via tool_call. Use after tool_search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact tool name (from tool_search results).",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    }
+    schemas["tool_call"] = {
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "description": (
+                "Invoke a tool by name with its arguments. Use this to run any "
+                "tool found via tool_search that isn't directly in your toolset. "
+                "Only tools in your allow-list can be called; others are refused."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact tool name to invoke.",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments object for the tool (per its tool_describe schema).",
+                    },
+                },
+                "required": ["name", "arguments"],
+            },
+        },
+    }
+
     return schemas

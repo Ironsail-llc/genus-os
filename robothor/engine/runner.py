@@ -884,6 +884,18 @@ class AgentRunner:
 
                 # Watchdog already started before setup phase (see above).
 
+                # Deferred tools (Rip 16 / G4): when this agent's toolset is
+                # deferred, tool_schemas above were reduced to core+meta. Record
+                # the agent's full allowed set so the tool_call meta-tool can
+                # reach (only) allowed tools on demand. No-op when deferral off.
+                _defer_token = None
+                if self.registry.should_defer(agent_config):
+                    from robothor.engine.tools.dispatch import set_deferred_allowed
+
+                    _defer_token = set_deferred_allowed(
+                        self.registry.deferred_whitelist(agent_config)
+                    )
+
                 try:
                     await self._run_loop(
                         session,
@@ -904,6 +916,11 @@ class AgentRunner:
                         on_stream_event=on_stream_event,
                     )
                 finally:
+                    if _defer_token is not None:
+                        from robothor.engine.tools.dispatch import clear_deferred_allowed
+
+                        with contextlib.suppress(Exception):
+                            clear_deferred_allowed(_defer_token)
                     watchdog.stop()
                     with contextlib.suppress(Exception):
                         _active_watchdog_var.reset(_wd_token)

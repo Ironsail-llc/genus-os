@@ -6,7 +6,13 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.constants import GOAL_TOOLS, SPAWN_TOOLS, TODO_TOOLS
+from robothor.engine.tools.constants import (
+    CORE_TOOLS,
+    GOAL_TOOLS,
+    SPAWN_TOOLS,
+    TODO_TOOLS,
+    TOOLSEARCH_TOOLS,
+)
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.schemas import get_engine_schemas
 
@@ -117,9 +123,79 @@ class ToolRegistry:
         return self._adapter_routes.get(tool_name)
 
     def build_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
-        """Return filtered tool schemas for an agent based on allow/deny lists."""
+        """Return filtered tool schemas for an agent based on allow/deny lists.
+
+        When deferral (Rip 16 / G4) is active for this agent, advertise only the
+        CORE_TOOLS subset plus the tool_search/tool_describe/tool_call meta-tools;
+        the agent's other allowed tools load on demand. Enforcement of the real
+        allow-list is handled by the per-task whitelist the runner installs (so
+        tool_call cannot reach a denied tool).
+        """
         names = self._get_filtered_names(config)
+        if self.should_defer(config):
+            seen: set[str] = set()
+            advertised: list[str] = []
+            for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
+                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS
+                if in_core and n in self._schemas and n not in seen:
+                    seen.add(n)
+                    advertised.append(n)
+            return [self._schemas[n] for n in advertised]
         return [self._schemas[n] for n in names]
+
+    def should_defer(self, config: AgentConfig) -> bool:
+        """True iff this agent's toolset should be deferred (Rip 16 / G4).
+
+        Deferral kicks in only for broad-access agents — those whose advertised
+        tool count exceeds the threshold — so curated small-toolset workers keep
+        their full set with no extra tool_search round-trip.
+        """
+        from robothor.engine.feature_flags import (
+            deferred_tools_enabled,
+            deferred_tools_threshold,
+        )
+
+        if not deferred_tools_enabled():
+            return False
+        return len(self._get_filtered_names(config)) > deferred_tools_threshold()
+
+    def deferred_whitelist(self, config: AgentConfig) -> frozenset[str]:
+        """Tool names the runner should whitelist for a deferred run.
+
+        The agent's full allowed set plus the meta-tools — so a direct CORE call
+        or a tool_call to any allowed (non-denied) tool passes, while a tool_call
+        to a denied tool is refused by _execute_tool's whitelist gate.
+        """
+        return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
+
+    def search_tools(self, names: Any, query: str, limit: int = 10) -> list[dict[str, str]]:
+        """Rank a set of tool names against a free-text query.
+
+        Returns ``[{"name", "description"}]`` for the top matches. Used by the
+        tool_search meta-tool, which passes the agent's allowed set (the runner's
+        per-task whitelist) so search is scoped to what the agent may actually call.
+        """
+        terms = [t for t in query.lower().split() if t]
+        scored: list[tuple[int, str, str]] = []
+        for n in names:
+            schema = self._schemas.get(n, {})
+            fn = schema.get("function", {})
+            desc = str(fn.get("description", ""))
+            haystack = f"{n} {desc}".lower()
+            if not terms:
+                score = 0
+            else:
+                score = sum(haystack.count(t) for t in terms)
+                # Strong boost when the tool name itself matches a term.
+                score += sum(5 for t in terms if t in n.lower())
+            if score > 0 or not terms:
+                scored.append((score, n, desc[:200]))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [{"name": n, "description": d} for _s, n, d in scored[: max(1, limit)]]
+
+    def get_schema(self, name: str) -> dict[str, Any] | None:
+        """Return the full OpenAI-function schema for one tool, or None."""
+        return self._schemas.get(name)
 
     def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
@@ -165,6 +241,11 @@ class ToolRegistry:
         # Exclude todo list tools unless agent has todo_list_enabled
         if not config.todo_list_enabled:
             names = [n for n in names if n not in TODO_TOOLS]
+
+        # Meta-tools (tool_search/tool_describe/tool_call) are never part of the
+        # normal advertised set; build_for_agent injects them only when deferring.
+        if TOOLSEARCH_TOOLS:
+            names = [n for n in names if n not in TOOLSEARCH_TOOLS]
 
         return names
 
