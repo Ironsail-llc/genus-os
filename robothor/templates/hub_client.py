@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import tarfile
 import tempfile
 import time
@@ -226,6 +227,11 @@ class HubClient:
 
         Returns path to the extracted bundle directory.
         """
+        # Validate the bundle slug at the source: it flows into both the request
+        # URL and the on-disk filename, so constrain it to a safe charset (no
+        # path separators / traversal) before any use (path-injection guard).
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", slug or ""):
+            raise HubError(f"invalid bundle slug: {slug!r}")
         resp = self._request_with_retry(
             "GET",
             f"/api/bundles/{slug}/download",
