@@ -14,6 +14,7 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
 | `memory_vault` | Verbatim Knowledge Vault — exact reference data, never paraphrased (added 2026-05, RIP 12) |
 | `vault_access_log` | Audit trail for every Knowledge Vault value read (added 2026-05) |
+| `memory_intents` | Prospective/intent memory — standing objectives the operator works toward (added 2026-05, RIP 14) |
 | `agent_memory_blocks` | Named text blocks (persona, user_profile, preferences, self_model, …) |
 | `agent_breadcrumbs` | 7-day cross-run scratchpad per agent (added 2026-04) |
 | `chat_messages` | Verbatim conversation turns with embeddings + 90-day TTL (added 2026-04) |
@@ -207,6 +208,29 @@ Tools: `memory_vault_store`, `memory_vault_search` (readonly), `memory_vault_get
 Gated by `ROBOTHOR_RIP_12_ENABLED` — tools stay dark and the table inert until
 the operator opts in (restart the engine after toggling). Global kill switch:
 `ROBOTHOR_DISABLE_ALL_RIPS=1`.
+
+## Intent Memory (prospective, RIP 14)
+
+Everything above is *retrospective*. `memory_intents` (`robothor/memory/intents.py`)
+models what the operator is *working toward* and persists it across sessions, so
+the main agent's heartbeat can advance standing objectives instead of only
+reacting. It's parallel to `session_goal` (per-run, evidence-gated); intents are
+longer-lived business objectives.
+
+Confirmation model:
+
+- `stated` intents (the operator/agent declared them) are `active` immediately.
+- `inferred` intents (proposed by the nightly `infer_intents_from_facts` LLM pass)
+  start as `proposed` and only become `active` via `confirm_intent(id, token)` with
+  a valid HMAC token (`ROBOTHOR_INTENT_HMAC_SECRET`) — the agent never
+  auto-activates a goal it invented.
+
+The top active intents are injected into the warmup preamble (`active_intents`
+section). When a `session_goal` linked to an intent completes, the intent's
+`last_advanced_at` is bumped (loop closure); intents idle > 30 days go `dormant`.
+
+Tools: `intent_add`, `intent_search` / `intent_list` (readonly), `intent_advance`.
+Gated by `ROBOTHOR_RIP_14_ENABLED`.
 
 ## Knowledge Graph
 

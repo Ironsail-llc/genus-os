@@ -174,6 +174,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # memory_vault_get is deliberately NOT readonly — it reveals values
         # and writes an audit row, so plan-mode cannot exfiltrate via it.
         "memory_vault_search",
+        # Intent memory: search/list are read-only.
+        "intent_search",
+        "intent_list",
         # CRM read
         "list_conversations",
         "get_conversation",
