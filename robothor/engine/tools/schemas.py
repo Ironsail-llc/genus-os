@@ -389,6 +389,29 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         }
 
+    # ── Symbolic memory (Rip 13): drill into a condensed tool step ──
+    from robothor.engine.feature_flags import symbolic_memory_mode
+
+    if symbolic_memory_mode() != "off":
+        schemas["recall_node"] = {
+            "type": "function",
+            "function": {
+                "name": "recall_node",
+                "description": (
+                    "Retrieve the full, byte-exact output of a prior tool step from the "
+                    "task-state graph (symbolic memory). Pass the node_id shown in the graph "
+                    "(e.g. 'n3') when you need detail that was condensed out of context."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": {"type": "string", "description": "Graph node id, e.g. n3"}
+                    },
+                    "required": ["node_id"],
+                },
+            },
+        }
+
     # ── Intent memory (prospective objectives; RIP 14) ──
     if is_rip_enabled(14):
         schemas["intent_add"] = {

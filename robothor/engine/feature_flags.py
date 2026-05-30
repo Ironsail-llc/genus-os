@@ -26,6 +26,9 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 Rip7Mode = Literal["off", "observe", "alert", "enforce"]
 _VALID_RIP_7_MODES = frozenset(("observe", "alert", "enforce"))
 
+SymbolicMode = Literal["off", "observe", "enforce"]
+_VALID_SYMBOLIC_MODES = frozenset(("observe", "enforce"))
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -83,5 +86,22 @@ def rip_7_enforcement_mode() -> Rip7Mode:
         return "off"
     raw = os.environ.get("ROBOTHOR_RIP_7_MODE", "observe").strip().lower()
     if raw in _VALID_RIP_7_MODES:
+        return raw  # type: ignore[return-value]
+    return "observe"
+
+
+def symbolic_memory_mode() -> SymbolicMode:
+    """Return the symbolic-compaction mode for tool logs (Rip 13).
+
+    ``"off"`` when Rip 13 is disabled (or the global panic flag is set).
+    Otherwise reads ``ROBOTHOR_RIP_13_MODE``: ``"observe"`` (default — build
+    the symbol graph and log the would-be token savings, but leave injected
+    context unchanged) or ``"enforce"`` (inject the compact graph in place of
+    raw tool output). Rolls out observe → enforce.
+    """
+    if _disabled_all() or not _env_bool("ROBOTHOR_RIP_13_ENABLED"):
+        return "off"
+    raw = os.environ.get("ROBOTHOR_RIP_13_MODE", "observe").strip().lower()
+    if raw in _VALID_SYMBOLIC_MODES:
         return raw  # type: ignore[return-value]
     return "observe"

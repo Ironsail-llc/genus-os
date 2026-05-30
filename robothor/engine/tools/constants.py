@@ -177,6 +177,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Intent memory: search/list are read-only.
         "intent_search",
         "intent_list",
+        # Symbolic memory: reads a stored tool-output file.
+        "recall_node",
         # CRM read
         "list_conversations",
         "get_conversation",
