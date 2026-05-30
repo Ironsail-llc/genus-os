@@ -209,7 +209,7 @@ def set_status(intent_id: int, status: str, *, tenant_id: str = "") -> bool:
             "WHERE id = %s AND tenant_id = %s",
             (status, intent_id, resolved_tenant),
         )
-        return cur.rowcount > 0
+        return int(cur.rowcount or 0) > 0
 
 
 def mark_advanced(intent_id: int, *, tenant_id: str = "") -> bool:
@@ -222,7 +222,7 @@ def mark_advanced(intent_id: int, *, tenant_id: str = "") -> bool:
             "WHERE id = %s AND tenant_id = %s",
             (intent_id, resolved_tenant),
         )
-        return cur.rowcount > 0
+        return int(cur.rowcount or 0) > 0
 
 
 def link_goal(intent_id: int, goal_id: int, *, tenant_id: str = "") -> bool:
@@ -242,7 +242,7 @@ def link_goal(intent_id: int, goal_id: int, *, tenant_id: str = "") -> bool:
             """,
             (goal_id, intent_id, resolved_tenant),
         )
-        return cur.rowcount > 0
+        return int(cur.rowcount or 0) > 0
 
 
 def confirm_intent(intent_id: int, token: str, *, tenant_id: str = "") -> dict[str, Any]:
@@ -277,7 +277,7 @@ def attribute_goal_completion(goal_id: int, *, tenant_id: str = "") -> int:
             """,
             (resolved_tenant, goal_id),
         )
-        return cur.rowcount
+        return int(cur.rowcount or 0)
 
 
 def mark_dormant_intents(*, tenant_id: str = "", after_days: int = DORMANT_AFTER_DAYS) -> int:
@@ -294,7 +294,7 @@ def mark_dormant_intents(*, tenant_id: str = "", after_days: int = DORMANT_AFTER
             """,
             (resolved_tenant, after_days),
         )
-        return cur.rowcount
+        return int(cur.rowcount or 0)
 
 
 # --------------------------------------------------------------------------- #

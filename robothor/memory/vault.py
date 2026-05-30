@@ -337,4 +337,4 @@ def deactivate_entry(entry_id: int, *, tenant_id: str = "") -> bool:
             """,
             (entry_id, resolved_tenant),
         )
-        return cur.rowcount > 0
+        return int(cur.rowcount or 0) > 0

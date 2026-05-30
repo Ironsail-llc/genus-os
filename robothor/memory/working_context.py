@@ -87,7 +87,9 @@ def _active_intents(cur: Any, tenant_id: str) -> list[dict[str, Any]]:
         return []
 
 
-def _render(tasks: list[dict], facts: list[dict], intents: list[dict]) -> str:
+def _render(
+    tasks: list[dict[str, Any]], facts: list[dict[str, Any]], intents: list[dict[str, Any]]
+) -> str:
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"# Working context — refreshed {ts}", ""]
 

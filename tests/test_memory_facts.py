@@ -184,6 +184,7 @@ class TestParseExtractionResponse:
             "event",
             "contact",
             "technical",
+            "resolution",
         }
         assert set(VALID_CATEGORIES) == expected
 

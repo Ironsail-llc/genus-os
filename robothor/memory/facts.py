@@ -646,7 +646,7 @@ def _recency_key(r: dict[str, Any]) -> tuple[float, int]:
     inference.
     """
     ca = r.get("created_at")
-    ts = ca.timestamp() if hasattr(ca, "timestamp") else 0.0
+    ts = ca.timestamp() if ca is not None and hasattr(ca, "timestamp") else 0.0
     return (ts, int(r.get("id") or 0))
 
 

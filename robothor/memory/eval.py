@@ -121,7 +121,8 @@ def score_case(case: EvalCase, top_texts: list[str]) -> CaseResult:
     if case.kind in _RECALL_KINDS:
         passed, score = score_recall(top_texts, case.gold, case.k)
     elif case.kind == "temporal":
-        passed, score = score_temporal(top_texts, case.gold)
+        temporal_gold = case.gold if isinstance(case.gold, str) else None
+        passed, score = score_temporal(top_texts, temporal_gold)
     elif case.kind == "verbatim":
         passed, score = score_verbatim(top_texts, case.gold_exact, case.k)
     else:
