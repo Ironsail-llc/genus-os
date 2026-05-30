@@ -81,6 +81,20 @@ STREAM_CHUNK_TIMEOUT = 90
 LLM_REQUEST_TIMEOUT = 120
 LLM_REQUEST_TIMEOUT_OLLAMA = 600
 
+# Absolute per-run wall-clock ceiling applied to agents that declare
+# timeout_seconds=0 ("no cap"). Generous by design — a backstop against
+# runaway/slow runs, not a normal limit. Override via env.
+_DEFAULT_FLEET_WALLCLOCK_CEILING = 3600
+
+
+def _fleet_wallclock_ceiling() -> int:
+    """Fleet-wide hard wall-clock ceiling (seconds) for uncapped agents."""
+    try:
+        return max(0, int(os.environ.get("ROBOTHOR_MAX_WALLCLOCK_SECONDS", "")))
+    except ValueError:
+        return _DEFAULT_FLEET_WALLCLOCK_CEILING
+
+
 # Announce-mode runs that end with fewer characters than this are flagged
 # as "partial" — almost always a meta-confirmation ("briefing delivered")
 # rather than the real content the agent was supposed to broadcast.
@@ -659,11 +673,19 @@ class AgentRunner:
         # Previously the watchdog was only started after setup completed,
         # meaning a hang during warmup/adapter loading went undetected.
         stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        # Absolute wall-clock ceiling. When an agent sets timeout_seconds=0
+        # ("no cap" — e.g. main's heartbeat/worker) it previously had NO hard
+        # bound, so a slow-but-not-stalled run could grind for 25–128 min
+        # (audit 2026-05-29). Fall back to a generous fleet ceiling instead of
+        # leaving it unbounded; one turn never legitimately needs this long.
+        effective_hard_timeout = agent_config.timeout_seconds
+        if effective_hard_timeout <= 0:
+            effective_hard_timeout = _fleet_wallclock_ceiling()
+        hard_timeout = effective_hard_timeout if effective_hard_timeout > 0 else None
         early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
         watchdog = _StallWatchdog(
             stall_timeout=stall_timeout,
-            hard_timeout=agent_config.timeout_seconds,
+            hard_timeout=effective_hard_timeout,
             early_stall_timeout=early_stall_timeout,
         )
         self._active_watchdog = watchdog  # expose for touch() from tool handlers
@@ -1534,17 +1556,22 @@ class AgentRunner:
                     session.run_id,
                     _used_tokens,
                 )
-                # Fire-and-forget alert — don't block the stop path.
+                # Fire-and-forget alert — don't block the stop path. Use the task
+                # registry's spawn (not bare create_task, which the loop only
+                # weakly references and can GC before it runs — losing exactly
+                # the alert we can least afford to lose; audit 2026-05-29).
                 try:
                     from robothor.engine.alerts import alert as _alert
+                    from robothor.engine.task_registry import get_task_registry
 
-                    asyncio.create_task(
+                    get_task_registry().spawn(
                         _alert(
                             "critical",
                             f"Runaway-token hard cap: {agent_config.id}",
                             f"run_id={session.run_id} tokens={_used_tokens:,} "
                             f"model={session.run.model_used}",
-                        )
+                        ),
+                        name=f"runaway-hardcap-alert:{agent_config.id}",
                     )
                 except Exception:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
@@ -1561,15 +1588,17 @@ class AgentRunner:
                 )
                 try:
                     from robothor.engine.alerts import alert as _alert
+                    from robothor.engine.task_registry import get_task_registry
 
-                    asyncio.create_task(
+                    get_task_registry().spawn(
                         _alert(
                             "warning",
                             f"Runaway-token alert: {agent_config.id}",
                             f"run_id={session.run_id} tokens={_used_tokens:,} "
                             f"(hard cap at {RUNAWAY_TOKEN_HARD_CAP:,}) "
                             f"model={session.run.model_used}",
-                        )
+                        ),
+                        name=f"runaway-alert:{agent_config.id}",
                     )
                 except Exception:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
@@ -1932,8 +1961,35 @@ class AgentRunner:
                                     if scratchpad:
                                         scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                                     continue
+                            elif agent_config.human_approval_fail_open:
+                                pass  # opted-in unattended autonomy: auto-approve
                             else:
-                                pass  # no manager = auto-approve (autonomous default)
+                                # Fail CLOSED: a tool gated on human approval must
+                                # not execute when no approval channel exists (cron,
+                                # workflow, degraded boot). Auto-approving here
+                                # silently disabled the control (audit 2026-05-29).
+                                gr_error_msg = (
+                                    f"Blocked ({gr.guardrail_name}): requires human "
+                                    "approval but no approval channel is available"
+                                )
+                                logger.warning(
+                                    "Human-approval tool %s blocked (fail-closed): "
+                                    "no permission manager for agent %s",
+                                    _sanitize(tool_name),
+                                    _sanitize(agent_config.id),
+                                )
+                                session.record_tool_call(
+                                    tool_name=tool_name,
+                                    tool_input=tool_args,
+                                    tool_output={"error": gr_error_msg},
+                                    tool_call_id=tc.id,
+                                    error_message=gr_error_msg,
+                                )
+                                if scratchpad:
+                                    scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                                if escalation:
+                                    escalation.record_error()
+                                continue
                         else:
                             gr_error_msg = (
                                 f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"

@@ -397,6 +397,10 @@ class AgentConfig:
         default_factory=list
     )  # tool name patterns requiring approval
     human_approval_timeout: int = 300  # auto-approve after N seconds if no response
+    # When no approval channel exists (cron/workflow/degraded boot), approval-gated
+    # tools fail CLOSED (block) by default. Set True only for agents that must run
+    # fully unattended and accept auto-approval in that case.
+    human_approval_fail_open: bool = False
 
     # ── Config validation ──
     validation_warnings: list[str] = field(default_factory=list)

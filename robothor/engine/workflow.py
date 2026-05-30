@@ -457,6 +457,28 @@ class WorkflowEngine:
         finally:
             await release(step.agent_id)
 
+    def _workflow_guardrails(self) -> Any:
+        """Baseline guardrails for workflow tool steps.
+
+        Workflow YAML steps call tools directly via ``registry.execute`` — they
+        have no agent manifest, so they used to bypass guardrails entirely (a
+        workflow step could run ``exec``/``git_push``/cold email unguarded;
+        audit 2026-05-29). Apply the fleet defaults plus protected-branch
+        safety so this path is no longer a hole.
+        """
+        cached = getattr(self, "_wf_guardrail_engine", None)
+        if cached is not None:
+            return cached
+        from robothor.engine.guardrails import DEFAULT_GUARDRAILS, GuardrailEngine
+
+        policies = [*DEFAULT_GUARDRAILS, "no_main_branch_push"]
+        engine = GuardrailEngine(
+            enabled_policies=policies,
+            workspace=str(self.config.workspace) + "/",
+        )
+        self._wf_guardrail_engine = engine
+        return engine
+
     async def _run_tool_step(
         self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult
     ) -> None:
@@ -469,6 +491,17 @@ class WorkflowEngine:
             else:
                 rendered_args[k] = v
 
+        # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
+        guardrails = self._workflow_guardrails()
+        gr = guardrails.check_pre_execution(
+            step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
+        )
+        if not gr.allowed:
+            result.status = WorkflowStepStatus.FAILED
+            result.error_message = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
+            result.output_text = result.error_message
+            return
+
         tool_result = await self.runner.registry.execute(
             step.tool_name,
             rendered_args,
@@ -476,6 +509,17 @@ class WorkflowEngine:
             tenant_id=run.tenant_id,
             workspace=str(self.config.workspace),
         )
+
+        # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──
+        post = guardrails.check_post_execution(step.tool_name, tool_result)
+        if post.action == "warned":
+            logger.warning(
+                "Workflow %s step %s guardrail warning (%s): %s",
+                run.workflow_id,
+                step.tool_name,
+                post.guardrail_name,
+                post.reason,
+            )
 
         result.tool_output = tool_result
         result.output_text = str(tool_result)

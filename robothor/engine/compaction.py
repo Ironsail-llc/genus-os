@@ -13,6 +13,7 @@ future compactions via the [RETAINED CONTEXT] marker.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -30,6 +31,10 @@ TOOL_SUMMARY_MIN_CHARS = 500
 
 # Model for fact extraction (cheap, fast)
 FACT_EXTRACTION_MODEL = "gemini/gemini-2.5-flash"
+# Hard ceiling on the compaction LLM call. It runs inside the agent loop, so a
+# hung provider (Gemini has been flaky) would otherwise stall the whole run and
+# trip the stall watchdog as if the agent itself froze (audit 2026-05-29).
+COMPACTION_LLM_TIMEOUT = 45.0
 
 FACT_EXTRACTION_PROMPT = """\
 Extract key facts from this conversation segment. Return JSON only:
@@ -137,15 +142,18 @@ async def extract_facts(
     try:
         import litellm
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": FACT_EXTRACTION_PROMPT},
-                {"role": "user", "content": conversation_text},
-            ],
-            temperature=0.1,
-            max_tokens=1000,
-            response_format={"type": "json_object"},
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": FACT_EXTRACTION_PROMPT},
+                    {"role": "user", "content": conversation_text},
+                ],
+                temperature=0.1,
+                max_tokens=1000,
+                response_format={"type": "json_object"},
+            ),
+            timeout=COMPACTION_LLM_TIMEOUT,
         )
 
         raw = response.choices[0].message.content
@@ -206,14 +214,17 @@ async def summarize_segment(
     try:
         import litellm
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
-                {"role": "user", "content": "\n".join(text_parts)},
-            ],
-            temperature=0.1,
-            max_tokens=300,
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
+                    {"role": "user", "content": "\n".join(text_parts)},
+                ],
+                temperature=0.1,
+                max_tokens=300,
+            ),
+            timeout=COMPACTION_LLM_TIMEOUT,
         )
 
         summary_text: str | None = response.choices[0].message.content

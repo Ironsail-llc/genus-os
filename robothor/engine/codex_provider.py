@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -214,14 +215,27 @@ async def login_status(timeout: float = 15) -> str:
     return output
 
 
+# Cache a successful login check so we don't spawn `codex login status` before
+# every single completion — a 50-iteration agent otherwise pays 50 redundant
+# subprocess probes (audit 2026-05-29). Only positive results are cached; a real
+# auth failure still surfaces on the next `codex exec`.
+_LOGIN_OK_UNTIL: float = 0.0
+_LOGIN_CACHE_TTL = 300.0
+
+
 async def ensure_chatgpt_login() -> None:
     """Fail unless Codex is currently authenticated through ChatGPT."""
+    global _LOGIN_OK_UNTIL
+    now = time.monotonic()
+    if now < _LOGIN_OK_UNTIL:
+        return
     status = await login_status()
     if "ChatGPT" not in status:
         raise CodexProviderError(
             "Codex is not logged in with ChatGPT subscription auth. "
             "Run `robothor codex login` as the Genus service user."
         )
+    _LOGIN_OK_UNTIL = now + _LOGIN_CACHE_TTL
 
 
 async def _run_codex_exec(

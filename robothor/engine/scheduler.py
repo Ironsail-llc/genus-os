@@ -490,11 +490,18 @@ class CronScheduler:
                             requires_human=True,
                             tenant_id=self.config.tenant_id,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "Circuit breaker: failed to create paused-agent task for %s: %s",
+                            dedup_key,
+                            e,
+                        )
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            # A failed breaker read must be visible: otherwise a failing agent
+            # keeps firing every tick precisely when the DB is unhealthy
+            # (audit 2026-05-29).
+            logger.warning("Circuit breaker check failed for %s: %s", dedup_key, e)
         return False
 
     def _record_timeout(self, dedup_key: str) -> None:
@@ -514,8 +521,10 @@ class CronScheduler:
                 last_status="timeout",
                 consecutive_errors=consecutive_errors,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # If timeout recording stops, consecutive-error tracking silently
+            # stalls and the breaker never trips (audit 2026-05-29).
+            logger.warning("Failed to record timeout for circuit breaker (%s): %s", dedup_key, e)
 
     async def _execute_and_deliver(
         self,

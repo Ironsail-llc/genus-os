@@ -18,6 +18,16 @@ from robothor.engine.codex_provider import (
 )
 from robothor.engine.runner import AgentRunner
 
+
+@pytest.fixture(autouse=True)
+def _reset_login_cache():
+    """ensure_chatgpt_login caches a positive result across calls; clear it so
+    each test sees a fresh login probe."""
+    codex_provider._LOGIN_OK_UNTIL = 0.0
+    yield
+    codex_provider._LOGIN_OK_UNTIL = 0.0
+
+
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
 

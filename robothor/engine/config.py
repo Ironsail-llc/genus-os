@@ -386,6 +386,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         # Human-in-the-loop
         human_approval_tools=v2.get("human_approval_tools", []),
         human_approval_timeout=int(v2.get("human_approval_timeout", 300)),
+        human_approval_fail_open=bool(v2.get("human_approval_fail_open", False)),
     )
 
     # ── Continuous mode overrides — raise caps for sustained multi-hour runs ──
