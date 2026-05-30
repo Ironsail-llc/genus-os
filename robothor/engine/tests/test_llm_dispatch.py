@@ -284,6 +284,77 @@ class TestHandleModelError:
 # ─────────────────────────── fallback dispatch ───────────────────────────
 
 
+class TestG2CostKeyedToAnsweringModel:
+    """G2a: a fallback run must be priced as the model that actually answered,
+    not as ``models[0]`` (the configured primary). On every fallback run — the
+    production default per the codex-PATH audit — the old behavior reported the
+    primary's price.
+    """
+
+    def test_litellm_pricing_uses_model_used(self, client):
+        # models[0] is codex (primary), but mimo actually answered.
+        with patch(
+            "robothor.engine.llm_client.litellm.completion_cost", return_value=0.5
+        ) as completion_cost:
+            client._response_cost(
+                response=MagicMock(),
+                model_used="openrouter/xiaomi/mimo-v2.5-pro",
+                models=["codex/gpt-5.5", "openrouter/xiaomi/mimo-v2.5-pro"],
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            )
+        assert completion_cost.call_args.kwargs["model"] == "openrouter/xiaomi/mimo-v2.5-pro"
+
+    def test_registry_fallback_uses_model_used(self, client):
+        with (
+            patch(
+                "robothor.engine.llm_client.litellm.completion_cost",
+                side_effect=RuntimeError("no pricing"),
+            ),
+            patch.object(client, "_calculate_cost", return_value=0.0) as calc,
+        ):
+            client._response_cost(
+                response=MagicMock(),
+                model_used="openrouter/xiaomi/mimo-v2.5-pro",
+                models=["codex/gpt-5.5", "openrouter/xiaomi/mimo-v2.5-pro"],
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            )
+        assert calc.call_args.args[0] == "openrouter/xiaomi/mimo-v2.5-pro"
+
+
+class TestSizingModel:
+    """G2b: context-window math must key off the model that will actually be
+    tried (the first non-broken one), not ``models[0]``. Otherwise a run that
+    falls back from a 1M-window primary to a 200K model sizes compaction to 1M.
+    """
+
+    def test_first_non_broken_model(self):
+        assert (
+            LLMClient.sizing_model(
+                ["codex/gpt-5.5", "openrouter/xiaomi/mimo-v2.5-pro"],
+                {"codex/gpt-5.5"},
+            )
+            == "openrouter/xiaomi/mimo-v2.5-pro"
+        )
+
+    def test_empty_broken_returns_first(self):
+        assert LLMClient.sizing_model(["a", "b"], set()) == "a"
+
+    def test_none_broken_returns_first(self):
+        assert LLMClient.sizing_model(["a", "b"], None) == "a"
+
+    def test_all_broken_falls_back_to_first(self):
+        assert LLMClient.sizing_model(["a", "b"], {"a", "b"}) == "a"
+
+    def test_empty_models_returns_empty_string(self):
+        assert LLMClient.sizing_model([], set()) == ""
+
+
 class TestCallLLMFallback:
     @pytest.mark.asyncio
     async def test_skips_broken_and_returns_first_success(self, client):

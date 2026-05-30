@@ -347,7 +347,15 @@ class LLMClient:
         litellm call skipped entirely. Every other model keeps the original
         litellm-first, registry-fallback behavior — including the fallback
         case where codex failed over to an OpenRouter model.
+
+        G2a: pricing is keyed to ``model_used`` (the model that actually
+        answered), not ``models[0]`` (the configured primary). On a fallback
+        run — the production default while the codex primary was unreachable
+        (audit 2026-05-29) — keying to models[0] reported the *primary's* price
+        for a response the *fallback* produced. ``models`` is retained in the
+        signature for call-site compatibility but is no longer read.
         """
+        del models  # G2a: cost is keyed to model_used, not the configured primary
         if is_codex_model(model_used):
             return self._calculate_cost(
                 model_used,
@@ -357,13 +365,13 @@ class LLMClient:
                 cache_read_tokens,
             )
         try:
-            cost = litellm.completion_cost(completion_response=response, model=models[0])
+            cost = litellm.completion_cost(completion_response=response, model=model_used)
             if cost and cost > 0:
                 return cost
         except Exception as e:
             logger.warning("litellm cost calculation failed, using fallback: %s", e)
         return self._calculate_cost(
-            models[0],
+            model_used,
             input_tokens,
             output_tokens,
             cache_creation_tokens,
@@ -438,10 +446,28 @@ class LLMClient:
 
     # ─── Pre-flight ──────────────────────────────────────────────────
 
+    @staticmethod
+    def sizing_model(models: list[str], broken_models: set[str] | None = None) -> str:
+        """Return the model the context-window math should be sized against.
+
+        G2b: this is the first model in ``models`` not already marked broken —
+        i.e. the one the fallback loop will actually try next — not ``models[0]``
+        (the configured primary). When the primary is down and the run is on a
+        smaller-window fallback, sizing against the primary's window (e.g. 1M)
+        can overflow the fallback (e.g. 200K). Falls back to ``models[0]`` when
+        every model is broken, or ``""`` for an empty list.
+        """
+        broken = broken_models or set()
+        for model in models:
+            if model not in broken:
+                return model
+        return models[0] if models else ""
+
     async def _prepare_llm_call(
         self,
         messages: list[dict[str, Any]],
         models: list[str],
+        broken_models: set[str] | None = None,
     ) -> int:
         """Shared pre-flight: compress context and estimate input tokens.
 
@@ -451,7 +477,7 @@ class LLMClient:
         from robothor.engine.model_registry import get_model_limits
 
         try:
-            model_limits = get_model_limits(models[0])
+            model_limits = get_model_limits(self.sizing_model(models, broken_models))
             compress_threshold = int(model_limits.max_input_tokens * 0.75)
             messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
         except Exception as e:
@@ -692,7 +718,7 @@ class LLMClient:
         temperature: float = 0.3,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None."""
-        input_est = await self._prepare_llm_call(messages, models)
+        input_est = await self._prepare_llm_call(messages, models, broken_models)
         last_error: Exception | None = None
 
         logger.debug(
@@ -766,7 +792,7 @@ class LLMClient:
         - ``{"type": "usage", "input_tokens": N, "output_tokens": N}``
         - ``{"type": "message_stop"}``
         """
-        input_est = await self._prepare_llm_call(messages, models)
+        input_est = await self._prepare_llm_call(messages, models, broken_models)
         last_error: Exception | None = None
 
         async def _emit(event: dict[str, Any]) -> None:

@@ -1472,7 +1472,11 @@ class AgentRunner:
                     from robothor.engine.model_registry import get_model_limits
 
                     est_tokens = estimate_tokens(session.messages)
-                    model_limits = get_model_limits(models[0])
+                    # G2b: size against the model that will actually be tried
+                    # next (first non-broken), not the configured primary —
+                    # otherwise a run on a smaller-window fallback compacts at
+                    # the primary's (larger) threshold and can overflow.
+                    model_limits = get_model_limits(LLMClient.sizing_model(models, broken_models))
                     proactive_threshold = int(model_limits.max_input_tokens * 0.50)
                     if est_tokens > proactive_threshold:
                         pre_len = len(session.messages)
@@ -2910,8 +2914,9 @@ class AgentRunner:
         self,
         messages: list[dict[str, Any]],
         models: list[str],
+        broken_models: set[str] | None = None,
     ) -> int:
-        return await self._llm._prepare_llm_call(messages, models)
+        return await self._llm._prepare_llm_call(messages, models, broken_models)
 
     # Pure-static helpers — aliased to the extracted implementations so
     # ``AgentRunner._validate_tool_pairs(...)`` etc. keep resolving.
