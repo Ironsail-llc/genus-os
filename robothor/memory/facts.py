@@ -43,6 +43,7 @@ VALID_CATEGORIES = [
     "event",
     "contact",
     "technical",
+    "resolution",
 ]
 
 # JSON schema for Ollama structured output.
@@ -73,7 +74,7 @@ Rules:
 - Each fact MUST reference at least one specific named entity (person, organization, place, project, technology)
 - Each fact MUST be specific to this content — NOT generic knowledge anyone would know
 - Include temporal context when present (dates, "yesterday", "next week", etc.)
-- Categorize each fact: decision (someone decided X), preference (someone prefers X), event (X happened), contact (relationship info), project (work/technical), personal (personal life), technical (system/code)
+- Categorize each fact: decision (someone decided X), preference (someone prefers X), event (X happened), resolution (someone resolved/closed/confirmed an open item, alert, or question), contact (relationship info), project (work/technical), personal (personal life), technical (system/code)
 
 Skip:
 - Greetings, filler, partial sentences
@@ -167,8 +168,8 @@ def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
     for fact in valid_facts:
         text = fact["fact_text"]
 
-        # Too short to be meaningful
-        if len(text) < 15:
+        # Too short to be meaningful (resolutions may be terse but high-value).
+        if len(text) < 15 and fact["category"] != "resolution":
             logger.debug("Rejected (too short): %s", text[:50])
             continue
 

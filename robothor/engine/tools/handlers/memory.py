@@ -126,6 +126,20 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     return {"id": fact_id, "facts_stored": 1}
 
 
+@_handler("record_resolution")
+async def _record_resolution(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Record that an open item/alert/decision is resolved and retire it."""
+    from robothor.memory.resolution import record_resolution
+
+    return await record_resolution(
+        open_item=args.get("open_item", ""),
+        outcome=args.get("outcome", ""),
+        confirmed_by=args.get("confirmed_by", ""),
+        tenant_id=ctx.tenant_id,
+        agent_id=getattr(ctx, "agent_id", "unknown"),
+    )
+
+
 @_handler("get_entity")
 async def _get_entity(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.entities import get_entity

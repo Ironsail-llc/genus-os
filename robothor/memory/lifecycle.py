@@ -371,7 +371,7 @@ async def prune_low_quality_facts() -> dict[str, Any]:
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
               AND length(fact_text) < 15
-              AND category NOT IN ('decision', 'preference')
+              AND category NOT IN ('decision', 'preference', 'resolution')
             RETURNING id, fact_text
             """
         )
@@ -385,7 +385,7 @@ async def prune_low_quality_facts() -> dict[str, Any]:
               AND decay_score < 0.1
               AND importance_score < 0.3
               AND access_count = 0
-              AND category NOT IN ('decision', 'preference')
+              AND category NOT IN ('decision', 'preference', 'resolution')
             RETURNING id, fact_text
             """
         )

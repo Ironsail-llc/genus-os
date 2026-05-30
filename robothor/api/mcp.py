@@ -117,6 +117,34 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "record_resolution",
+            "description": (
+                "Record that an open item, alert, or decision has been resolved or closed. "
+                "Writes a discrete, high-importance resolution fact and (when enabled) retires "
+                "the matching open fact(s), so later recall returns the CURRENT state instead "
+                "of the stale 'open / needs review' framing. Call this whenever the operator "
+                "confirms, closes, or resolves something."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "open_item": {
+                        "type": "string",
+                        "description": "The item that was open, e.g. 'the OpenRouter Inwood login alert'",
+                    },
+                    "outcome": {
+                        "type": "string",
+                        "description": "How it resolved, e.g. 'confirmed legitimate — it was the operator's own device'",
+                    },
+                    "confirmed_by": {
+                        "type": "string",
+                        "description": "Who confirmed it (optional), e.g. 'the operator'",
+                    },
+                },
+                "required": ["open_item", "outcome"],
+            },
+        },
+        {
             "name": "get_stats",
             "description": "Get memory system statistics.",
             "inputSchema": {"type": "object", "properties": {}},
