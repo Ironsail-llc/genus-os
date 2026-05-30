@@ -8,6 +8,8 @@ const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 30;
 const errorLog: number[] = [];
 
+const oneLine = (s: unknown) => String(s).replace(/[\r\n]+/g, " ");
+
 export async function POST(req: Request) {
   // Simple rate limit to prevent log spam
   const now = Date.now();
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
 
     // Log to stdout → journalctl with structured prefix for easy grep
     console.error(
-      `[dashboard-error] source=${source}${status ? ` status=${status}` : ""} | ${message}${details ? ` | ${details}` : ""}`
+      `[dashboard-error] source=${oneLine(source)}${status ? ` status=${oneLine(status)}` : ""} | ${oneLine(message)}${details ? ` | ${oneLine(details)}` : ""}`
     );
 
     return new Response(null, { status: 204 });

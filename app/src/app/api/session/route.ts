@@ -16,12 +16,34 @@ const BLOCK_NAME = "helm_state";
 const MAX_DASHBOARD_SIZE = 100_000; // 100KB limit
 
 /**
+ * Build a fetch target against the trusted bridge backend and assert the
+ * resolved origin matches the configured backend origin. This breaks any
+ * taint flow into the outbound fetch and prevents SSRF via path escape.
+ * Returns null if the resolved origin differs from the trusted backend.
+ */
+function safeBackendUrl(base: string, path: string): URL | null {
+  const baseUrl = new URL(base);
+  const target = new URL(
+    path.replace(/^\/+/, ""),
+    baseUrl.origin + baseUrl.pathname.replace(/\/?$/, "/")
+  );
+  if (target.origin !== baseUrl.origin) {
+    return null;
+  }
+  return target;
+}
+
+/**
  * GET /api/session — Restore saved dashboard state
  */
 export async function GET() {
   try {
+    const target = safeBackendUrl(BRIDGE_URL, `api/memory-blocks/${BLOCK_NAME}`);
+    if (!target) {
+      return new Response("Bad gateway path", { status: 502 });
+    }
     const res = await fetch(
-      `${BRIDGE_URL}/api/memory-blocks/${BLOCK_NAME}`,
+      target.toString(),
       { headers: { "X-Agent-Id": HELM_AGENT_ID } }
     );
 
@@ -79,8 +101,12 @@ export async function POST(request: NextRequest) {
       savedAt: new Date().toISOString(),
     });
 
+    const target = safeBackendUrl(BRIDGE_URL, `api/memory-blocks/${BLOCK_NAME}`);
+    if (!target) {
+      return new Response("Bad gateway path", { status: 502 });
+    }
     const res = await fetch(
-      `${BRIDGE_URL}/api/memory-blocks/${BLOCK_NAME}`,
+      target.toString(),
       {
         method: "PUT",
         headers: {

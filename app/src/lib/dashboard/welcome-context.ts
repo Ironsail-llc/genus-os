@@ -137,7 +137,18 @@ async function fetchEventBusStats() {
 }
 
 async function fetchJson(url: string, options?: RequestInit, timeoutMs = 5000) {
-  const res = await fetch(url, {
+  // Resolve the request against its own configured backend origin and assert
+  // the resolved origin is unchanged — this breaks SSRF taint flows where a
+  // path segment could escape the intended backend.
+  const base = new URL(url);
+  const target = new URL(
+    base.pathname.replace(/^\/+/, "") + base.search,
+    base.origin + "/"
+  );
+  if (target.origin !== base.origin) {
+    throw new Error("Bad gateway path");
+  }
+  const res = await fetch(target.toString(), {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
     signal: AbortSignal.timeout(timeoutMs),

@@ -10,6 +10,14 @@ const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
 const SEARXNG_URL = getServiceUrl("searxng") || "http://localhost:8888";
 const FETCH_TIMEOUT = 5000;
 
+// Trusted backend origins — every outbound fetch must resolve to one of these.
+// Guards against SSRF if a config/user value ever escapes the intended backend.
+const TRUSTED_ORIGINS = new Set(
+  [BRIDGE_URL, ORCHESTRATOR_URL, VISION_URL, SEARXNG_URL].map(
+    (u) => new URL(u).origin
+  )
+);
+
 // ── TTL Cache ──────────────────────────────────────────────────
 interface CacheEntry { data: Record<string, unknown>; expiresAt: number }
 const dataCache = new Map<string, CacheEntry>();
@@ -304,9 +312,14 @@ export async function fetchDataForNeeds(
 }
 
 async function fetchJson(url: string, options?: RequestInit, retries = 1, timeoutMs = FETCH_TIMEOUT) {
+  // Assert the resolved origin is a trusted backend before fetching (anti-SSRF).
+  const target = new URL(url);
+  if (!TRUSTED_ORIGINS.has(target.origin)) {
+    throw new Error("Untrusted backend origin");
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, {
+      const res = await fetch(target.toString(), {
         ...options,
         headers: { "Content-Type": "application/json", ...options?.headers },
         signal: AbortSignal.timeout(timeoutMs),
