@@ -158,14 +158,16 @@ class HubClient:
             raise HubError(f"unsafe path: {candidate}")
         return Path(target_real)
 
-    def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
-        """Verify file checksum if provided."""
-        safe_path = self._safe_path(path.parent, path.name)
-        actual = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+    def _verify_checksum(self, content: bytes, expected_sha256: str) -> bool:
+        """Verify the SHA-256 of the downloaded bytes.
+
+        Hashes the in-memory response body directly (no file read) — both faster
+        and free of any path-injection sink.
+        """
+        actual = hashlib.sha256(content).hexdigest()
         if actual != expected_sha256:
             logger.error(
-                "Checksum mismatch for %s: expected %s, got %s",
-                sanitize_log(path.name),
+                "Checksum mismatch: expected %s, got %s",
                 sanitize_log(expected_sha256),
                 sanitize_log(actual),
             )
@@ -256,8 +258,8 @@ class HubClient:
         tarball_path = self._safe_path(dest, f"{slug}.tar.gz")
         tarball_path.write_bytes(resp.content)
 
-        # Verify checksum if provided
-        if expected_sha256 and not self._verify_checksum(tarball_path, expected_sha256):
+        # Verify checksum if provided (hash the bytes we already have in memory)
+        if expected_sha256 and not self._verify_checksum(resp.content, expected_sha256):
             tarball_path.unlink()
             raise HubError(f"Checksum verification failed for bundle '{slug}'")
 
