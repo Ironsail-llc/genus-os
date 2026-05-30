@@ -149,7 +149,13 @@ class HubClient:
         leaf = Path(candidate).name
         if leaf != candidate or leaf in ("", ".", ".."):
             raise HubError(f"unsafe path: {candidate}")
-        return base / leaf
+        # Resolve and confirm containment with the os.path realpath/commonpath
+        # barrier (the form CodeQL recognises as a path-injection sanitizer).
+        base_real = os.path.realpath(base)
+        target_real = os.path.realpath(os.path.join(base_real, leaf))  # noqa: PTH118
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise HubError(f"unsafe path: {candidate}")
+        return Path(target_real)
 
     def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
         """Verify file checksum if provided."""
