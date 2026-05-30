@@ -30,16 +30,21 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     if is_rip_enabled(15):
         return await _search_memory_routed(args, ctx)
 
+    from robothor.engine.feature_flags import narrow_memory_search_enabled
     from robothor.memory.facts import search_facts
     from robothor.memory.outcomes import log_fact_access
 
+    # R2: by default the tool fans out (entities + insights + episodes) on every
+    # call — expensive for a narrow lookup. When MEMORY_NARROW_SEARCH is on, a
+    # call defaults to facts-only and the caller opts into fan-out via args.
+    fan_out = not narrow_memory_search_enabled()
     results = await search_facts(
         args.get("query", ""),
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
-        expand_entities=True,
-        include_insights=True,
-        include_episodes=True,
+        expand_entities=bool(args.get("expand_entities", fan_out)),
+        include_insights=bool(args.get("include_insights", fan_out)),
+        include_episodes=bool(args.get("include_episodes", fan_out)),
     )
 
     # Log fact access for outcome attribution (best-effort).

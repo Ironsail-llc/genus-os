@@ -179,6 +179,28 @@ def build_warmth_preamble(
 
     _run_section("agent_goal", _agent_goal)
 
+    def _goal_recall() -> str | None:
+        # R2: cron/scheduled runs otherwise start with no query-relevant recall
+        # (only interactive warmup extracts entities). Seed entity recall from
+        # the agent's goal so a heartbeat run recalls facts about its objective's
+        # entities instead of re-deriving them. Reuses the interactive helper.
+        from robothor.engine.feature_flags import cron_warmup_recall_enabled
+
+        if not cron_warmup_recall_enabled():
+            return None
+        from robothor.engine.session_goal import build_agent_goal_context
+
+        goal_text = build_agent_goal_context(
+            tenant_id=tenant_id,
+            agent_id=config.id,
+            manifest_path=getattr(config, "manifest_path", None),
+        )
+        if not goal_text:
+            return None
+        return _build_entity_context(goal_text, tenant_id=tenant_id) or None
+
+    _run_section("goal_recall", _goal_recall)
+
     def _active_intents() -> str | None:
         # Prospective/intent memory (RIP 14) — what the operator is working
         # toward, so the heartbeat can advance standing objectives.

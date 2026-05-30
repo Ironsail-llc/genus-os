@@ -100,6 +100,29 @@ def deferred_tools_enabled() -> bool:
     return is_rip_enabled(16)
 
 
+def cron_warmup_recall_enabled() -> bool:
+    """Give cron/scheduled runs entity-aware recall seeded from the agent goal.
+
+    Interactive (Telegram) warmup already pulls entity facts from the user's
+    message; autonomous cron runs do not, so the fleet starts a turn with no
+    query-relevant recall and re-derives known context (R2). When on,
+    ``build_warmth_preamble`` adds a goal-seeded entity-recall section. Default
+    OFF; gated by ``MEMORY_CRON_WARMUP_RECALL``.
+    """
+    return _env_bool("MEMORY_CRON_WARMUP_RECALL")
+
+
+def narrow_memory_search_enabled() -> bool:
+    """Make the default search_memory tool path fact-only (no auto fan-out).
+
+    The default (RIP-15-off) path hard-codes expand_entities/include_insights/
+    include_episodes=True on every call, so a narrow lookup pays for a full
+    fan-out (R2, token waste). When on, those default to False (facts only).
+    Default OFF (observe token delta first); gated by ``MEMORY_NARROW_SEARCH``.
+    """
+    return _env_bool("MEMORY_NARROW_SEARCH")
+
+
 def compaction_hardening_enabled() -> bool:
     """Return True iff compaction hardening (Rip 18 / G7) is active.
 
