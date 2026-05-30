@@ -1133,6 +1133,56 @@ class TestPrimaryModelReached:
         assert run.outcome_notes is None
 
 
+class TestActiveWatchdogContextVar:
+    """The active watchdog is per-task (ContextVar), not per-singleton — so a
+    nested/concurrent run can't clobber another run's stall watchdog
+    (audit 2026-05-29)."""
+
+    def test_property_reads_contextvar(self, runner):
+        from robothor.engine import runner as runner_mod
+
+        sentinel = object()
+        token = runner_mod._active_watchdog_var.set(sentinel)
+        try:
+            assert runner._active_watchdog is sentinel
+        finally:
+            runner_mod._active_watchdog_var.reset(token)
+        assert runner._active_watchdog is None
+
+    def test_nested_set_restores_parent(self, runner):
+        from robothor.engine import runner as runner_mod
+
+        parent = object()
+        child = object()
+        ptok = runner_mod._active_watchdog_var.set(parent)
+        try:
+            assert runner._active_watchdog is parent
+            ctok = runner_mod._active_watchdog_var.set(child)  # nested run
+            assert runner._active_watchdog is child
+            runner_mod._active_watchdog_var.reset(ctok)  # child finishes
+            assert runner._active_watchdog is parent  # parent restored
+        finally:
+            runner_mod._active_watchdog_var.reset(ptok)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tasks_isolated(self, runner):
+        import asyncio
+
+        from robothor.engine import runner as runner_mod
+
+        seen = {}
+
+        async def run_with(name, wd):
+            runner_mod._active_watchdog_var.set(wd)
+            await asyncio.sleep(0)  # yield so the other task interleaves
+            seen[name] = runner._active_watchdog
+
+        a, b = object(), object()
+        await asyncio.gather(run_with("a", a), run_with("b", b))
+        assert seen["a"] is a  # not clobbered by task b
+        assert seen["b"] is b
+
+
 class TestHandleModelErrorProviderDown:
     """_handle_model_error — provider-availability failures mark the model broken.
 
