@@ -203,6 +203,11 @@ class AgentSession:
             *rendered_history,
             {"role": "user", "content": user_message},
         ]
+        # Count this user turn for the memory-review nudge (Rip 1). Previously
+        # never incremented, so the memory half of the background-review fork
+        # could never reach its threshold. Accumulates across turns on a
+        # persistent session.
+        self._turns_since_memory += 1
 
     def record_llm_call(
         self,

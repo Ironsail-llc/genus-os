@@ -292,6 +292,8 @@ class AgentRunner:
         steer = session.consume_pending_steer()
         if steer:
             session.messages.append({"role": "user", "content": f"[steer] {steer}"})
+            # A steer is a user turn too — count it for the memory-review nudge.
+            session._turns_since_memory += 1
 
     def _after_response_delivered(
         self,

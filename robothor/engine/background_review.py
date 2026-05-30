@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -336,6 +337,32 @@ def _render_transcript_tail(messages: list[dict[str, object]] | None, last_n: in
     return "\n".join(parts)
 
 
+def _fork_skip_reason(session: AgentSession) -> str | None:
+    """Why the background-review fork must NOT fire for this run (or None).
+
+    Three hard exclusions + one soak gate:
+    - benchmark runs (sandboxed grading — must not mutate the skill library);
+    - any nested/spawned run, CRUCIALLY the review fork itself (a SUB_AGENT at
+      nesting_depth>0). Without this the fork spawns a fork spawns a fork…;
+    - ROBOTHOR_RIP_1_AGENTS soak allowlist: when set (comma list), only those
+      agents fork; unset/empty → fleet-wide.
+    """
+    run = session.run
+    if getattr(run, "is_benchmark", False):
+        return "benchmark"
+    if getattr(run, "nesting_depth", 0) and run.nesting_depth > 0:
+        return "nested"
+    trigger = getattr(run, "trigger_type", None)
+    if trigger is not None and getattr(trigger, "name", "") == "SUB_AGENT":
+        return "sub_agent"
+    allow = os.environ.get("ROBOTHOR_RIP_1_AGENTS", "").strip()
+    if allow:
+        allowed = {a.strip() for a in allow.split(",") if a.strip()}
+        if run.agent_id not in allowed:
+            return "not_in_allowlist"
+    return None
+
+
 async def spawn_background_review(
     session: AgentSession,
     *,
@@ -357,6 +384,11 @@ async def spawn_background_review(
     failure modes.
     """
     if not is_rip_enabled(1):
+        return None
+
+    skip = _fork_skip_reason(session)
+    if skip is not None:
+        logger.debug("background-review fork skipped (%s) for run %s", skip, session.run.id)
         return None
 
     if decision is None:
