@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -32,6 +34,80 @@ from robothor.llm import ollama as llm_client
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
+
+# WS-6 vault auto-populate: high-precision patterns for verbatim reference data
+# worth preserving byte-for-byte. Deliberately conservative — credentials/api
+# keys are NOT auto-vaulted (too risky to harvest from arbitrary content); those
+# stay deliberate via the memory_vault_store tool.
+_ACCOUNT_ID_RE = re.compile(r"\b[A-Z]{2,}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?\d{1,2}[\s-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}"
+    r"(?:\s*(?:ext|x)\.?\s*\d+)?(?!\d)"
+)
+
+
+def _vault_populate_enabled() -> bool:
+    """Route verbatim numbers/IDs to the vault on ingest (WS-6). Default OFF."""
+    raw = os.environ.get("MEMORY_VAULT_POPULATE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _vault_caption(content: str, idx: int, value: str) -> str:
+    """Use the sentence containing the match as the (searchable) caption."""
+    start = max(content.rfind(".", 0, idx), content.rfind("\n", 0, idx)) + 1
+    ends = [e for e in (content.find(".", idx), content.find("\n", idx)) if e != -1]
+    end = min(ends) if ends else len(content)
+    sentence = content[start:end].strip()
+    if not sentence or len(sentence) > 120:
+        sentence = f"Reference value {value}"
+    return sentence[:120]
+
+
+def extract_vault_candidates(content: str, *, max_items: int = 5) -> list[dict[str, str]]:
+    """Pure: find verbatim reference values worth vaulting (account ids, phones)."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry_type, regex in (("account_id", _ACCOUNT_ID_RE), ("contact_info", _PHONE_RE)):
+        for m in regex.finditer(content or ""):
+            value = m.group(0).strip()
+            if entry_type == "contact_info" and len(re.sub(r"\D", "", value)) < 10:
+                continue  # require a full phone number
+            if value in seen:
+                continue
+            seen.add(value)
+            out.append(
+                {
+                    "caption": _vault_caption(content, m.start(), value),
+                    "value": value,
+                    "entry_type": entry_type,
+                    "sensitivity": "low",
+                }
+            )
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+async def populate_vault_from_content(
+    content: str, *, source: str = "", tenant_id: str = ""
+) -> list[int]:
+    """Store any verbatim reference values found in content. Best-effort."""
+    stored: list[int] = []
+    for c in extract_vault_candidates(content):
+        try:
+            vid = await store_vault_entry(
+                c["caption"],
+                c["value"],
+                entry_type=c["entry_type"],
+                sensitivity=c["sensitivity"],
+                source=source or "auto-ingest",
+                tenant_id=tenant_id,
+            )
+            stored.append(vid)
+        except Exception as e:  # noqa: BLE001 — auto-populate is best-effort
+            logger.debug("vault auto-populate skipped (%s): %s", c.get("entry_type"), e)
+    return stored
+
 
 VALID_ENTRY_TYPES = frozenset(
     {"contact_info", "account_id", "address", "bookmark", "credential", "api_key"}

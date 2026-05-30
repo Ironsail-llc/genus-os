@@ -80,6 +80,17 @@ def _consolidation_guard_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _intent_populate_enabled() -> bool:
+    """WS-6: run intent inference in nightly maintenance. Default OFF.
+
+    RIP 14 (intents) is enabled live but the store is empty — nothing calls
+    infer_intents_from_facts. When on, the nightly pass proposes standing
+    intents from recent facts so the recall leg has data to return.
+    """
+    raw = os.environ.get("MEMORY_INTENT_POPULATE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def _chain_depth(cur: Any, fact_id: int) -> int:
     """Depth of the supersession chain that has collapsed INTO ``fact_id``.
 
@@ -1178,6 +1189,26 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["access_log_cleanup"],
     )
 
+    # Step 13: Intent inference — propose standing intents from recent facts so
+    # the (already-enabled) intent store stops being empty. Gated + best-effort.
+    intents_proposed = 0
+    if _intent_populate_enabled():
+        t11 = time.monotonic()
+        try:
+            from robothor.memory.intents import infer_intents_from_facts
+
+            for tid in tenant_ids:
+                created = await infer_intents_from_facts(tenant_id=tid)
+                intents_proposed += len(created)
+        except Exception as e:
+            logger.warning("Intent inference failed: %s", e)
+        step_timings["intent_inference"] = time.monotonic() - t11
+        logger.info(
+            "Step 13 (intent inference): %d proposed (%.1fs)",
+            intents_proposed,
+            step_timings["intent_inference"],
+        )
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -1198,5 +1229,6 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "access_log_pruned": access_log_pruned,
         "insights": insight_result,
         "relations_inferred": len(inferred_relations),
+        "intents_proposed": intents_proposed,
         "step_timings": step_timings,
     }

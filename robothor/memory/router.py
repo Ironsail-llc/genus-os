@@ -51,7 +51,9 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "temporal",
         re.compile(
             r"\b(latest|most recent|last|current|currently|now|recently|today|"
-            r"this week|what did .* (decide|say|choose))\b",
+            r"this week|resolved|resolve|legitimate|confirmed|closed|settled|"
+            r"outcome of|status of|what did .* (decide|say|choose)|"
+            r"did .* (confirm|resolve|close|decide))\b",
             re.IGNORECASE,
         ),
     ),
@@ -86,7 +88,9 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
         "source": r.get("source") or "fact",
         "text": r.get("fact_text") or r.get("insight_text") or r.get("content") or "",
         "category": r.get("category", ""),
-        "created_at": r.get("created_at"),
+        # Episodes expose start_time/end_time, not created_at — fall back to them
+        # so the temporal re-sort ranks a fresh episode instead of sinking it.
+        "created_at": r.get("created_at") or r.get("end_time") or r.get("start_time"),
         "score": r.get("rrf_score") or r.get("similarity") or 0.0,
     }
 
