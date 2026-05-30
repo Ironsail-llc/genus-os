@@ -15,6 +15,7 @@ Dependencies:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -543,6 +544,51 @@ def _reranker_enabled_default() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _rank_blend_enabled() -> bool:
+    """Blend importance/recency/access into final ranking. Default on."""
+    raw = os.environ.get("MEMORY_RANK_BLEND", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _hnsw_ef_search() -> int:
+    """HNSW candidate budget per vector query (pgvector hnsw.ef_search).
+
+    Default 100 (up from the server default 40): with the partial active-row
+    index this widens recall headroom for the tenant post-filter cheaply.
+    Override via MEMORY_HNSW_EF_SEARCH.
+    """
+    raw = os.environ.get("MEMORY_HNSW_EF_SEARCH", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 100
+    except ValueError:
+        return 100
+
+
+def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Re-rank by a unified score: relevance-dominant + importance + recency + access.
+
+    Mirrors production agent-memory practice (similarity ~60-65%, the rest as
+    boosts). Relevance stays dominant so on-topic hits keep the top spots; the
+    other signals break near-ties (e.g. surface the most recent of two equally
+    relevant decisions). Auxiliary rows without these signals fall back to their
+    current rank.
+    """
+    n = len(results) or 1
+    for i, r in enumerate(results):
+        rel = r.get("similarity")
+        rel = (1.0 - i / n) if rel is None else float(rel)
+        imp = r.get("importance_score")
+        imp = 0.5 if imp is None else float(imp)
+        age_s = r.get("age_seconds")
+        recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / 72.0)
+        acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
+        r["_blend"] = 0.65 * rel + 0.2 * imp + 0.10 * recency + 0.05 * acc_norm
+    ranked = sorted(results, key=lambda x: x.get("_blend", 0.0), reverse=True)
+    for r in ranked:
+        r.pop("_blend", None)
+    return ranked[:limit]
+
+
 async def search_facts(
     query: str,
     limit: int = 10,
@@ -586,11 +632,17 @@ async def search_facts(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Vector search
+        # Widen the HNSW candidate budget for this txn so the active-row
+        # post-filter has headroom (pgvector 0.6 post-filters; see migration 073).
+        with contextlib.suppress(Exception):  # GUC may be unavailable on some builds
+            cur.execute("SET LOCAL hnsw.ef_search = %s", (_hnsw_ef_search(),))
+
+        # Vector search — also pull the ranking signals (importance/recency/access).
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at,
+                   metadata, created_at, importance_score, access_count,
+                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
             WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause}
@@ -605,7 +657,8 @@ async def search_facts(
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at,
+                   metadata, created_at, importance_score, access_count,
+                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
             FROM memory_facts
             WHERE tsv @@ plainto_tsquery('english', %s) AND tenant_id = %s
@@ -705,6 +758,10 @@ async def search_facts(
                 len(reranked),
                 int((time.time() - t0) * 1000),
             )
+            # Unified-score re-rank: relevance-dominant, with importance/recency/
+            # access as tie-breakers (surfaces the most recent of equally-relevant hits).
+            if _rank_blend_enabled():
+                reranked = _blend_rank(reranked, limit)
             if include_insights:
                 try:
                     insights = await search_insights(query, limit=3, tenant_id=tenant_id)
@@ -715,7 +772,7 @@ async def search_facts(
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)
 
-    result = candidates[:limit]
+    result = _blend_rank(candidates, limit) if _rank_blend_enabled() else candidates[:limit]
 
     # Append cross-domain insights if requested
     if include_insights:
