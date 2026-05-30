@@ -557,6 +557,33 @@ def _dedup_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _temporal_coherence_enabled() -> bool:
+    """Supersession-aware temporal ranking (R1). Default OFF (observe first).
+
+    When on, a `decision` fact that has been superseded — either explicitly
+    (`superseded_by` set by conflict resolution) or by inference (a later
+    decision sharing the same topic) — is demoted, and a fresh decision is
+    boosted. Fixes "agent acts on a stale decision": the latest decision wins
+    even when an older one is a closer lexical match. Gated so it can be
+    measured on the memory-eval suite before flipping on.
+    """
+    raw = os.environ.get("MEMORY_TEMPORAL_COHERENCE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _recency_key(r: dict[str, Any]) -> tuple[float, int]:
+    """Sortable "how recent" key: (created_at epoch, id).
+
+    For co-ingested facts (same batch → identical created_at), `id` (serial,
+    monotonic with insertion order) is the only signal of which came later —
+    so it is the tie-breaker for both the deterministic sort and supersession
+    inference.
+    """
+    ca = r.get("created_at")
+    ts = ca.timestamp() if hasattr(ca, "timestamp") else 0.0
+    return (ts, int(r.get("id") or 0))
+
+
 # Recency half-life: a 7-day half-life keeps a usable gradient across the
 # week+ window where most queries live (a 72h half-life flattened everything
 # older than a few days to ~0, so recency stopped differentiating).
@@ -603,6 +630,28 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
     single signal so on-topic hits keep the top. Near-duplicates are then
     collapsed so the first few results are distinct.
     """
+    coherence_on = _temporal_coherence_enabled()
+
+    # R1: read-time supersession inference. Among `decision` facts, a decision
+    # that shares a topic (>=2 entities) with a LATER decision is treated as
+    # superseded — the freshest decision on a topic is the current one. >=2
+    # shared entities avoids cross-linking unrelated decisions that merely
+    # mention the same person.
+    inferred_superseded: set[int] = set()
+    if coherence_on:
+        decisions = [r for r in results if (r.get("category") or "") == "decision"]
+        for r in decisions:
+            r_ents = set(r.get("entities") or [])
+            if len(r_ents) < 2:
+                continue
+            r_key = _recency_key(r)
+            for o in decisions:
+                if o is r:
+                    continue
+                if len(r_ents & set(o.get("entities") or [])) >= 2 and _recency_key(o) > r_key:
+                    inferred_superseded.add(id(r))
+                    break
+
     for i, r in enumerate(results):
         rel = r.get("similarity")
         rel = (1.0 - i / (len(results) or 1)) if rel is None else float(rel)
@@ -611,8 +660,16 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
         age_s = r.get("age_seconds")
         recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / _RECENCY_HALFLIFE_HOURS)
         acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
-        r["_blend"] = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
-    ranked = sorted(results, key=lambda x: x.get("_blend", 0.0), reverse=True)
+        blend = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
+        if coherence_on:
+            if r.get("superseded_by") is not None or id(r) in inferred_superseded:
+                blend *= 0.5  # demote known-stale / superseded decision
+            elif (r.get("category") or "") == "decision":
+                blend *= 1.0 + 0.30 * recency  # freshest decision floats up
+        r["_blend"] = blend
+    # Deterministic newest-wins tie-break: on equal _blend, prefer the later
+    # fact (created_at, id). Safe unflagged — only matters on exact ties.
+    ranked = sorted(results, key=lambda x: (x.get("_blend", 0.0), *_recency_key(x)), reverse=True)
     for r in ranked:
         r.pop("_blend", None)
     if _dedup_enabled():
@@ -671,7 +728,7 @@ async def search_facts(
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at, importance_score, access_count,
+                   metadata, created_at, importance_score, access_count, superseded_by,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
@@ -687,7 +744,7 @@ async def search_facts(
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at, importance_score, access_count,
+                   metadata, created_at, importance_score, access_count, superseded_by,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
             FROM memory_facts

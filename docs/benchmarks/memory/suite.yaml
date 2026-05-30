@@ -49,6 +49,38 @@ cases:
         category: decision
         entities: [Alice, Helios, SQLite]
 
+  # multi-step chain: the newest of three same-topic decisions must win
+  - id: temporal-decision-chain
+    kind: temporal
+    query: "What deployment target did Bob settle on for the Helios API?"
+    gold: "deploy the Helios API on Fly.io"
+    seed:
+      - fact_text: "Bob decided to deploy the Helios API on Heroku."
+        category: decision
+        entities: [Bob, Helios, Heroku]
+      - fact_text: "Bob then decided to deploy the Helios API on Render."
+        category: decision
+        entities: [Bob, Helios, Render]
+      - fact_text: "Bob finally decided to deploy the Helios API on Fly.io."
+        category: decision
+        entities: [Bob, Helios, Fly.io]
+
+  # reaffirmation: returning to an earlier choice — the latest decision wins
+  - id: temporal-reaffirm
+    kind: temporal
+    query: "Which CI provider is Helios using now?"
+    gold: "move Helios CI back to GitHub Actions"
+    seed:
+      - fact_text: "Alice decided to run Helios CI on GitHub Actions."
+        category: decision
+        entities: [Alice, Helios, GitHub Actions]
+      - fact_text: "Alice decided to move Helios CI to CircleCI."
+        category: decision
+        entities: [Alice, Helios, CircleCI]
+      - fact_text: "Alice decided to move Helios CI back to GitHub Actions."
+        category: decision
+        entities: [Alice, Helios, GitHub Actions]
+
   # --- verbatim: exact strings must survive retrieval (Vault target) ---
   - id: verbatim-support-line
     kind: verbatim
