@@ -23,6 +23,13 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 @_handler("search_memory")
 async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.engine.feature_flags import is_rip_enabled
+
+    # RIP 15: route through the query-classed memory router instead of the
+    # hard-coded full fan-out. Falls back below when the flag is off.
+    if is_rip_enabled(15):
+        return await _search_memory_routed(args, ctx)
+
     from robothor.memory.facts import search_facts
     from robothor.memory.outcomes import log_fact_access
 
@@ -60,6 +67,40 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             }
             for r in results
         ]
+    }
+
+
+async def _search_memory_routed(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """RIP 15 path — query-classed routing via robothor.memory.router."""
+    from robothor.memory.outcomes import log_fact_access
+    from robothor.memory.router import recall
+
+    out = await recall(
+        args.get("query", ""),
+        limit=args.get("limit", 10),
+        tenant_id=ctx.tenant_id,
+    )
+    results = out["results"]
+
+    # Outcome attribution: only fact-sourced rows feed the blame loop.
+    run_id = getattr(ctx, "run_id", None)
+    agent_id = getattr(ctx, "agent_id", None)
+    if run_id:
+        fact_ids = [r["id"] for r in results if r.get("source") == "fact" and r.get("id")]
+        if fact_ids:
+            await asyncio.to_thread(log_fact_access, str(run_id), fact_ids, agent_id, ctx.tenant_id)
+
+    return {
+        "query_class": out["query_class"],
+        "results": [
+            {
+                "fact": r.get("text", ""),
+                "category": r.get("category", ""),
+                "source": r.get("source", "fact"),
+                "score": round(r.get("score", 0) or 0, 4),
+            }
+            for r in results
+        ],
     }
 
 
