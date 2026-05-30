@@ -292,14 +292,25 @@ async def _seed_case(case: EvalCase, tenant_id: str) -> list[int]:
         return []
 
     if case.seed_mode == "ingest":
-        from robothor.memory.ingestion import ingest_content
+        # Exercise the real LLM extraction path (the resolution-capture question:
+        # does a raw confirmation turn become a discrete fact?), tenant-scoped so
+        # it never pollutes the operator's data. ingest_content is not tenant-
+        # aware, so go through extract_facts + store_facts_batch directly.
+        from robothor.memory.facts import extract_facts, store_facts_batch
 
         ids: list[int] = []
         for item in case.seed:  # noqa: PERF401 — awaits + guard, not a comprehension
             content = item.get("source_content") or item.get("fact_text", "")
-            stored = await ingest_content(content, source_type="eval", tenant_id=tenant_id)
-            if isinstance(stored, list):
-                ids.extend(int(x) for x in stored)
+            extracted = await extract_facts(content)
+            if extracted:
+                ids.extend(
+                    await store_facts_batch(
+                        extracted,
+                        source_content=content,
+                        source_type="eval",
+                        tenant_id=tenant_id,
+                    )
+                )
         return ids
 
     from robothor.memory.facts import store_facts_batch
