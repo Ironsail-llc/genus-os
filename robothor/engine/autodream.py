@@ -191,6 +191,17 @@ def _update_memory_block(results: dict[str, Any], mode: str) -> None:
         ]
         if results.get("importance_scores_updated"):
             lines.append(f"  Importance re-scored: {results['importance_scores_updated']}")
+        wc = results.get("working_context")
+        if wc:
+            lines.append(
+                f"  working_context refreshed: {wc.get('tasks', 0)} tasks, "
+                f"{wc.get('facts', 0)} facts, {wc.get('intents', 0)} intents"
+            )
+        pr = results.get("preferences")
+        if pr:
+            lines.append(
+                f"  preferences: +{pr.get('new', 0)} new, {pr.get('reinforced', 0)} reinforced"
+            )
         write_block("autodream_log", "\n".join(lines))
     except Exception as e:
         logger.debug("Failed to update autodream_log block: %s", e)
