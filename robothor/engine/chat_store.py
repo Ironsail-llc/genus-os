@@ -20,6 +20,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +539,7 @@ def search_chat_turns(
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        apply_hnsw_session(cur)
         cur.execute(
             """
             SELECT m.id, m.message, m.created_at,

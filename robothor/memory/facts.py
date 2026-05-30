@@ -15,7 +15,6 @@ Dependencies:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -32,6 +31,7 @@ from robothor.memory.drift import (
     compute_fact_hash,
     evaluate_drift,
 )
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
 
@@ -517,6 +517,7 @@ async def search_insights(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        apply_hnsw_session(cur)
         cur.execute(
             """
             SELECT id, insight_text, source_fact_ids, categories, entities,
@@ -548,20 +549,6 @@ def _rank_blend_enabled() -> bool:
     """Blend importance/recency/access into final ranking. Default on."""
     raw = os.environ.get("MEMORY_RANK_BLEND", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
-
-
-def _hnsw_ef_search() -> int:
-    """HNSW candidate budget per vector query (pgvector hnsw.ef_search).
-
-    Default 100 (up from the server default 40): with the partial active-row
-    index this widens recall headroom for the tenant post-filter cheaply.
-    Override via MEMORY_HNSW_EF_SEARCH.
-    """
-    raw = os.environ.get("MEMORY_HNSW_EF_SEARCH", "").strip()
-    try:
-        return max(1, int(raw)) if raw else 100
-    except ValueError:
-        return 100
 
 
 def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -634,8 +621,7 @@ async def search_facts(
 
         # Widen the HNSW candidate budget for this txn so the active-row
         # post-filter has headroom (pgvector 0.6 post-filters; see migration 073).
-        with contextlib.suppress(Exception):  # GUC may be unavailable on some builds
-            cur.execute("SET LOCAL hnsw.ef_search = %s", (_hnsw_ef_search(),))
+        apply_hnsw_session(cur)
 
         # Vector search — also pull the ranking signals (importance/recency/access).
         cur.execute(
