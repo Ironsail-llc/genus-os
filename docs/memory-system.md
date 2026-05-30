@@ -12,6 +12,8 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_insights` | LLM-discovered cross-domain connections |
 | `memory_episodes` | Time-bucketed event clusters (added 2026-04) |
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
+| `memory_vault` | Verbatim Knowledge Vault — exact reference data, never paraphrased (added 2026-05, RIP 12) |
+| `vault_access_log` | Audit trail for every Knowledge Vault value read (added 2026-05) |
 | `agent_memory_blocks` | Named text blocks (persona, user_profile, preferences, self_model, …) |
 | `agent_breadcrumbs` | 7-day cross-run scratchpad per agent (added 2026-04) |
 | `chat_messages` | Verbatim conversation turns with embeddings + 90-day TTL (added 2026-04) |
@@ -172,6 +174,39 @@ results = search_all_memory("standup decisions", limit=10)
 stats = run_maintenance()
 # {"archived": 3, "deleted": 15, "lifecycle": {"facts_scored": 5, "decay_updated": 200}}
 ```
+
+## Knowledge Vault (verbatim store, RIP 12)
+
+`memory_facts` is LLM-extracted, so values are paraphrased — fine for "Alice
+prefers Redis," unsafe for an account number or a credential. The Knowledge
+Vault (`robothor/memory/vault.py`) preserves values **byte-for-byte**. It is
+**not** the secrets vault (`robothor.vault` / `vault_secrets`); it is a
+searchable, tenant-scoped memory store.
+
+Safety invariants:
+
+- Only the **caption** is embedded — the value is never vectorized.
+- `memory_vault_search` returns captions + ids only, **never a value**; reading
+  a value requires `memory_vault_get`, which writes a `vault_access_log` row.
+- `high` sensitivity values are encrypted at rest (AES-256-GCM via the shared
+  `robothor.vault.crypto` master key); `low`/`medium` keep `value_exact`
+  plaintext. A DB `CHECK` enforces exactly one of `value_exact` / `value_enc`.
+
+```python
+from robothor.memory import vault
+
+# Store exact reference data (high → encrypted at rest)
+await vault.store_vault_entry("FakeVendorCo support line", "555-0142 ext 7",
+                              entry_type="contact_info", sensitivity="low")
+# Find by description (no value returned), then read the exact value (audited)
+hits = await vault.search_vault("vendor phone number")
+vault.get_vault_value(hits[0]["id"])  # {"value": "555-0142 ext 7", ...}
+```
+
+Tools: `memory_vault_store`, `memory_vault_search` (readonly), `memory_vault_get`.
+Gated by `ROBOTHOR_RIP_12_ENABLED` — tools stay dark and the table inert until
+the operator opts in (restart the engine after toggling). Global kill switch:
+`ROBOTHOR_DISABLE_ALL_RIPS=1`.
 
 ## Knowledge Graph
 
