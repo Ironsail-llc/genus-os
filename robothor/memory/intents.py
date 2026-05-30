@@ -27,6 +27,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ async def search_intents(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        apply_hnsw_session(cur)
         cur.execute(
             f"""
             SELECT id, title, description, horizon, status, priority, source,

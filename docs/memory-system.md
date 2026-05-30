@@ -23,6 +23,13 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `ingestion_watermarks` | Per-source progress and error tracking |
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
+Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
+superseded vectors out of the candidate budget. pgvector **0.8.2** is installed;
+every vector search applies shared session tuning via
+`robothor/memory/vector_tuning.py` `apply_hnsw_session(cur)` —
+`hnsw.ef_search=100` plus, when `MEMORY_HNSW_ITERATIVE=1`,
+`hnsw.iterative_scan=relaxed_order` (fetches past the `WHERE` filter until `LIMIT`
+is met — the robust fix for filtered-vector recall).
 
 ## Retrieval
 
