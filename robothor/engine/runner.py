@@ -28,6 +28,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import traceback
 from typing import TYPE_CHECKING, Any
@@ -93,6 +94,21 @@ def _fleet_wallclock_ceiling() -> int:
         return max(0, int(os.environ.get("ROBOTHOR_MAX_WALLCLOCK_SECONDS", "")))
     except ValueError:
         return _DEFAULT_FLEET_WALLCLOCK_CEILING
+
+
+def _normalize_model_id(model: str) -> str:
+    """Collapse a model id to a provider/format-agnostic core for comparison.
+
+    litellm reports `response.model` without the `openrouter/` prefix and often
+    with a trailing date or dashes-for-dots, so an exact string compare against
+    the manifest's `model_primary` would false-positive on a *healthy* run. We
+    take the last path segment, drop a trailing date, and strip separators so
+    `openrouter/anthropic/claude-opus-4.7` and `claude-opus-4-7-20260416`
+    compare equal while still distinguishing genuinely different models.
+    """
+    core = (model or "").strip().lower().rsplit("/", 1)[-1]
+    core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
+    return re.sub(r"[.\-_\s]", "", core)
 
 
 # Announce-mode runs that end with fewer characters than this are flagged
@@ -3395,7 +3411,13 @@ class AgentRunner:
         # codex/gpt-5.5 silently fell back to mimo for the whole fleet without a
         # single ERROR line (audit 2026-05-29). Treat them like other hard
         # provider failures so the PRIMARY-failed path fires.
-        is_provider_down = isinstance(e, (CodexProviderError, FileNotFoundError))
+        # CodexProviderError is precise. A bare FileNotFoundError only means
+        # "provider binary missing" for the codex CLI path — for any other model
+        # it could be an unrelated transient (a cred/CA/config file), so don't
+        # let it falsely mark a non-codex model broken.
+        is_provider_down = isinstance(e, CodexProviderError) or (
+            isinstance(e, FileNotFoundError) and is_codex_model(model)
+        )
         # Mark broken for auth, rate limit, provider failures, and timeouts
         if broken_models is not None and (
             status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout or is_provider_down
@@ -3678,7 +3700,9 @@ class AgentRunner:
             return
         primary = getattr(agent_config, "model_primary", "") or ""
         used = run.model_used or ""
-        if not primary or not used or used == primary:
+        if not primary or not used:
+            return
+        if _normalize_model_id(used) == _normalize_model_id(primary):
             return
 
         logger.error(

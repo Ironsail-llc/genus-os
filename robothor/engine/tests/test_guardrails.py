@@ -236,11 +236,17 @@ class TestInboundOnly:
         )
         assert r.allowed
 
-    def test_allows_reply_with_in_reply_to(self):
+    def test_blocks_in_reply_to_without_thread(self):
+        # in_reply_to alone doesn't force a real thread → still cold outreach.
         engine = GuardrailEngine(enabled_policies=["inbound_only"])
         r = engine.check_pre_execution(
             "gws_gmail_send", {"to": "x@example.com", "in_reply_to": "<msg@id>"}
         )
+        assert not r.allowed
+
+    def test_allows_gmail_reply_tool_with_thread(self):
+        engine = GuardrailEngine(enabled_policies=["inbound_only"])
+        r = engine.check_pre_execution("gws_gmail_reply", {"thread_id": "t123", "body": "ok"})
         assert r.allowed
 
     def test_ignores_non_send_tools(self):

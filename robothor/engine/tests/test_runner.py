@@ -1118,6 +1118,20 @@ class TestPrimaryModelReached:
             AgentRunner._check_primary_model_reached(run, cfg)
         assert "DEGRADED model" not in caplog.text
 
+    def test_no_false_positive_on_normalized_primary(self, caplog):
+        """litellm reports the primary without prefix/with a date — not degraded."""
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        # manifest primary vs what litellm returns for a successful primary run
+        run = self._make_run(model_used="claude-opus-4-7-20260416")
+        cfg = self._config("openrouter/anthropic/claude-opus-4.7")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+        assert run.outcome_notes is None
+
 
 class TestHandleModelErrorProviderDown:
     """_handle_model_error — provider-availability failures mark the model broken.

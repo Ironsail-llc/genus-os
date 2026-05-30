@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "&", "$(", "`", ">", "<", "\n")
 
 # Tools that send outbound email (subject to the inbound_only policy).
-_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "send_email", "send-email"})
+_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply", "send_email", "send-email"})
 
 # Every policy name the engine implements. Used to fail loud on an unknown
 # (typo'd / renamed / not-yet-implemented) policy instead of silently allowing.
@@ -442,23 +442,29 @@ class GuardrailEngine:
         """Allow email sends only as a reply within an existing thread.
 
         Prevents an ``inbound_only`` agent from initiating cold outbound mail: a
-        send is permitted only when it carries a ``thread_id`` or ``in_reply_to``
-        (i.e. it replies into a conversation the operator/contact started). This
-        policy was enabled in a manifest but had no handler, so it silently did
-        nothing (audit 2026-05-29).
+        send is permitted only when it carries a ``thread_id`` (i.e. it replies
+        into an existing Gmail thread). A bare ``in_reply_to`` is deliberately
+        NOT sufficient — without a ``thread_id`` Gmail starts a brand-new thread,
+        so it would let cold outreach masquerade as a reply. This policy was
+        enabled in a manifest but had no handler, so it silently did nothing
+        (audit 2026-05-29).
+
+        Residual limitation: a fabricated ``thread_id`` is not validated against
+        the inbound message store, so this blocks the common cold-send path but
+        is not a hard guarantee — full thread-provenance validation is a
+        follow-up.
         """
         if tool_name not in _EMAIL_SEND_TOOLS:
             return GuardrailResult()
         thread_id = str(tool_args.get("thread_id", "") or "").strip()
-        in_reply_to = str(tool_args.get("in_reply_to", "") or "").strip()
-        if thread_id or in_reply_to:
+        if thread_id:
             return GuardrailResult()
         return GuardrailResult(
             allowed=False,
             action="blocked",
             reason=(
                 "inbound_only: outbound email must reply within an existing thread "
-                "(set thread_id or in_reply_to); cold outreach is not allowed"
+                "(set thread_id); cold outreach is not allowed"
             ),
             guardrail_name="inbound_only",
         )
