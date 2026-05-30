@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -63,6 +64,80 @@ INSIGHT_SCHEMA = {
     },
     "required": ["insights"],
 }
+
+# WS-2: consolidation churn guard. Default OFF (observe). When on:
+#   - find_consolidation_candidates excludes source_type='consolidation' rows
+#     so a consolidated fact is never re-consolidated (the 150-deep chains and
+#     ~80%-inactive table came from consolidation re-eating its own output);
+#   - the consolidated fact inherits MAX(source importance) instead of the 0.5
+#     default (so it doesn't bury its high-importance sources);
+#   - a chain-depth cap stops any single supersession chain from running deep.
+_MAX_CHAIN_DEPTH = 3
+
+
+def _consolidation_guard_enabled() -> bool:
+    raw = os.environ.get("MEMORY_CONSOLIDATION_GUARD", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _chain_depth(cur: Any, fact_id: int) -> int:
+    """Depth of the supersession chain that has collapsed INTO ``fact_id``.
+
+    Walks ``superseded_by`` backwards: how many facts were transitively
+    superseded into this one. Used to refuse extending an already-deep chain.
+    """
+    cur.execute(
+        """
+        WITH RECURSIVE chain(id, depth) AS (
+            SELECT id, 0 FROM memory_facts WHERE id = %s
+            UNION ALL
+            SELECT m.id, c.depth + 1
+            FROM memory_facts m JOIN chain c ON m.superseded_by = c.id
+            WHERE c.depth < 200
+        )
+        SELECT COALESCE(MAX(depth), 0) FROM chain
+        """,
+        (fact_id,),
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> None:
+    """Supersede ``source_ids`` into the consolidated ``new_id``.
+
+    With the guard off this is the original loop (set is_active=false,
+    superseded_by=new_id). With the guard on it also (a) propagates the max
+    source importance onto the consolidated fact and (b) skips any source whose
+    chain is already at ``_MAX_CHAIN_DEPTH`` so chains stay bounded.
+    """
+    guard = _consolidation_guard_enabled()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if guard:
+            cur.execute(
+                "SELECT COALESCE(MAX(importance_score), 0.5) FROM memory_facts WHERE id = ANY(%s)",
+                (list(source_ids),),
+            )
+            row = cur.fetchone()
+            max_imp = float(row[0]) if row and row[0] is not None else 0.5
+            cur.execute(
+                "UPDATE memory_facts SET importance_score = GREATEST(importance_score, %s) "
+                "WHERE id = %s",
+                (max_imp, new_id),
+            )
+        for source_id in source_ids:
+            if guard and _chain_depth(cur, source_id) >= _MAX_CHAIN_DEPTH:
+                logger.debug("consolidation: skip supersede of deep-chain fact %s", source_id)
+                continue
+            cur.execute(
+                """
+                UPDATE memory_facts
+                SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
+                WHERE id = %s AND is_active = TRUE
+                """,
+                (new_id, source_id),
+            )
 
 
 def compute_decay_score(
@@ -174,6 +249,11 @@ async def find_consolidation_candidates(
         List of groups, where each group is a list of fact dicts.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
+    # WS-2: never feed a consolidation output back into consolidation — that is
+    # the loop that built the 150-deep chains and the ~80%-inactive table.
+    consolidation_filter = (
+        "AND source_type <> 'consolidation'" if _consolidation_guard_enabled() else ""
+    )
     fetch_limit = 100 if unconsolidated_only else 500
 
     with get_connection() as conn:
@@ -184,6 +264,7 @@ async def find_consolidation_candidates(
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
               {unconsolidated_filter}
+              {consolidation_filter}
             ORDER BY created_at DESC
             LIMIT {fetch_limit}
             """
@@ -207,13 +288,14 @@ async def find_consolidation_candidates(
             cur = conn.cursor(cursor_factory=RealDictCursor)
             apply_hnsw_session(cur)
             cur.execute(
-                """
+                f"""
                 SELECT id, fact_text, category, entities,
                        1 - (embedding <=> %s::vector) as similarity
                 FROM memory_facts
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
@@ -409,17 +491,7 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
                     source_content="[intra-day consolidation]",
                     source_type="consolidation",
                 )
-                with get_connection() as conn:
-                    cur = conn.cursor()
-                    for source_id in result["source_ids"]:
-                        cur.execute(
-                            """
-                            UPDATE memory_facts
-                            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                            WHERE id = %s AND is_active = TRUE
-                            """,
-                            (new_id, source_id),
-                        )
+                _apply_consolidation_supersession(new_id, result["source_ids"])
                 consolidation_groups += 1
     except Exception as e:
         logger.warning("Intra-day consolidation failed: %s", e)
@@ -938,18 +1010,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
                 source_content="[consolidated from similar facts]",
                 source_type="consolidation",
             )
-            # Supersede originals
-            with get_connection() as conn:
-                cur = conn.cursor()
-                for source_id in result["source_ids"]:
-                    cur.execute(
-                        """
-                        UPDATE memory_facts
-                        SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                        WHERE id = %s AND is_active = TRUE
-                        """,
-                        (new_id, source_id),
-                    )
+            # Supersede originals (guarded: importance propagation + chain cap)
+            _apply_consolidation_supersession(new_id, result["source_ids"])
             consolidation_groups += 1
         except Exception as e:
             logger.warning("Failed to store consolidated fact: %s", e)
