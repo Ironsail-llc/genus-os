@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/Ironsail-llc/genus-os/compare/v1.0.0...v1.1.0) (2026-05-29)
+
+### Features
+
+* **engine:** promote unfinished todo_write items to CRM subtasks ([#128](https://github.com/Ironsail-llc/genus-os/issues/128)) ([bc536b8](https://github.com/Ironsail-llc/genus-os/commit/bc536b886eeb01d2f3a3d75c05f5535e69c067d6)), closes [#126](https://github.com/Ironsail-llc/genus-os/issues/126)
+
 ## 1.0.0 (2026-05-28)
 
 ### Features

@@ -2369,11 +2369,20 @@ class AgentRunner:
 
             # ── [CHECKPOINT] Save state ──
             if checkpoint and checkpoint.should_checkpoint():
+                # Phase 5: pass the TodoList through so resume can rebuild it.
+                # Without this the checklist was silently dropped on resume.
+                todo_state: dict[str, Any] | None = None
+                if session.todo_list:
+                    try:
+                        todo_state = session.todo_list.to_dict()
+                    except Exception:
+                        todo_state = None
                 checkpoint.save(
                     step_number=session._step_counter,
                     messages=session.messages,
                     scratchpad=scratchpad.to_dict() if scratchpad else None,
                     plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
+                    todo_list=todo_state,
                 )
                 # Dispatch CHECKPOINT hook
                 if hook_registry:
@@ -3091,6 +3100,34 @@ class AgentRunner:
 
             # Restore scratchpad
             scratchpad_data = checkpoint_data.get("scratchpad")
+            todo_data: dict[str, Any] | None = None
+            if scratchpad_data and isinstance(scratchpad_data, dict):
+                # Phase 5: extract embedded TodoList before scratchpad rebuild.
+                todo_data = scratchpad_data.pop("_todo_list", None)
+
+            # Phase 5: rebuild the in-conversation TodoList from the saved
+            # snapshot. Without this, the checklist that drove the run was
+            # silently lost on resume — agents would lose visible progress
+            # tracking mid-run and the reminder cadence would reset.
+            if todo_data and isinstance(todo_data, dict) and session is not None:
+                try:
+                    from robothor.engine.todolist import TodoList
+
+                    restored = TodoList.from_dict(todo_data)
+                    session.todo_list = restored
+                    logger.info(
+                        "checkpoint.resume.todo run_id=%s items=%d",
+                        run_id,
+                        len(restored.items),
+                        extra={
+                            "event": "checkpoint.resume.todo",
+                            "run_id": run_id,
+                            "items_count": len(restored.items),
+                        },
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Failed to restore todo_list from checkpoint: %s", _sanitize(e))
+
             if scratchpad_data and isinstance(scratchpad_data, dict):
                 return Scratchpad.from_dict(scratchpad_data)
 
