@@ -25,6 +25,7 @@ from typing import Any
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
+from robothor.crm import hooks
 from robothor.crm.models import (
     company_to_dict,
     conversation_to_dict,
@@ -40,6 +41,7 @@ from robothor.crm.validation import (
     COMPANY_BLOCKLIST,
     normalize_email,
     scrub_null_string,
+    validate_budget,
     validate_person_input,
 )
 from robothor.db.connection import get_connection as get_connection
@@ -1033,8 +1035,6 @@ def create_task(
     Malformed budgets return an error dict instead of silently degrading the planner.
     """
     if autonomy_budget is not None:
-        from robothor.engine.autonomy import validate_budget
-
         ok, reason = validate_budget(autonomy_budget)
         if not ok:
             return {"error": reason}
@@ -1284,8 +1284,6 @@ def update_task(
         sets.append("blockers = %s::jsonb")
         vals.append(json.dumps(fields["blockers"]))
     if "autonomy_budget" in fields and fields["autonomy_budget"] is not None:
-        from robothor.engine.autonomy import validate_budget
-
         ok, reason = validate_budget(fields["autonomy_budget"])
         if not ok:
             return {"error": reason}
@@ -1805,10 +1803,9 @@ def get_or_create_agent_goal(
     if existing:
         return existing
 
-    # Late import to avoid circular dependency at module-load time.
-    from robothor.engine.goals import parse_goals_from_manifest
-
-    specs = parse_goals_from_manifest(manifest or {})
+    # Engine-side behavior reached through the sanctioned crm.hooks seam so the
+    # DAL stays import-clean of the engine (see robothor/crm/hooks.py).
+    specs = hooks.parse_goals_from_manifest(manifest or {})
     metric_targets = [
         {
             "id": s.id,
@@ -3098,11 +3095,10 @@ def create_tenant_with_user(
                 tenant_id,
                 details={"display_name": display_name, "telegram_user_id": telegram_user_id},
             )
-            # Seed memory blocks for new tenant
+            # Seed memory blocks for new tenant (via the crm.hooks seam so the
+            # DAL stays import-clean of the memory subsystem).
             try:
-                from robothor.memory.blocks import seed_blocks_for_tenant
-
-                seed_blocks_for_tenant(tenant_id)
+                hooks.seed_blocks_for_tenant(tenant_id)
             except Exception:
                 logger.warning("Failed to seed memory blocks for tenant %s", tenant_id)
             return tenant_id
