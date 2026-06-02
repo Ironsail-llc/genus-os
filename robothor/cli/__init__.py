@@ -11,6 +11,7 @@ Usage:
     robothor mcp            # Start the MCP server
     robothor version        # Show version
     robothor migrate        # Run database migrations
+    robothor auth           # Manage user accounts / identity
     robothor pipeline       # (coming in v0.2)
 """
 
@@ -347,6 +348,16 @@ def main(argv: list[str] | None = None) -> int:
     fed_remove = fed_sub.add_parser("remove", help="Disconnect from a peer")
     fed_remove.add_argument("connection", help="Connection ID")
 
+    # auth — user account / identity administration
+    auth_parser = subparsers.add_parser("auth", help="Manage user accounts and identity")
+    auth_sub = auth_parser.add_subparsers(dest="auth_command")
+    auth_bootstrap = auth_sub.add_parser(
+        "bootstrap", help="Seed the owner.yaml operator as the tenant 'owner' account"
+    )
+    auth_bootstrap.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
     # engine
     # run -- quick single-shot agent execution
     run_parser = subparsers.add_parser("run", help="Run agent with a message (non-interactive)")
@@ -487,6 +498,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.federation import cmd_federation
 
         return cmd_federation(args)
+    if args.command == "auth":
+        from robothor.cli.auth import cmd_auth
+
+        return cmd_auth(args)
     if args.command == "run":
         from robothor.cli.engine import cmd_run
 

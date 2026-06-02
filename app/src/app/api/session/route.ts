@@ -8,8 +8,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
-import { HELM_AGENT_ID } from "@/lib/config";
 
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 const BLOCK_NAME = "helm_state";
@@ -44,7 +44,7 @@ export async function GET() {
     }
     const res = await fetch(
       target.toString(),
-      { headers: { "X-Agent-Id": HELM_AGENT_ID } }
+      { headers: await bridgeAuthHeaders() }
     );
 
     if (!res.ok) {
@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "X-Agent-Id": HELM_AGENT_ID,
+          ...(await bridgeAuthHeaders()),
         },
         body: JSON.stringify({ content: state }),
       }
