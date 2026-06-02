@@ -64,6 +64,54 @@ class RBACMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Verify a bridge-issued session/service token and set request.state.auth.
+
+    Replaces the trusted ``X-Agent-Id``/``X-Tenant-Id`` derivation with a VERIFIED
+    identity. Behaviour is gated by ``GENUS_AUTH_ENFORCE`` (default off) so this
+    ships dark — Phase A only attaches identity when a valid token is present and
+    never blocks; Phase B flips enforcement on for user routes.
+
+    - valid token  → ``request.state.auth = AuthContext`` (tenant comes from the token).
+    - no/invalid token + enforce off → pass through (legacy X-Agent-Id path stays live).
+    - no/invalid token + enforce on  → 401, except public routes (/api/auth/*, /health, docs).
+    """
+
+    _PUBLIC_PREFIXES = ("/api/auth/", "/health", "/docs", "/openapi.json", "/redoc")
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        from robothor.auth.deps import token_from_request, verify_token
+        from robothor.auth.tokens import TokenError
+
+        request.state.auth = None
+        token = token_from_request(request)
+        if token:
+            try:
+                request.state.auth = verify_token(token)
+            except TokenError as e:
+                if _auth_enforced():
+                    return JSONResponse(status_code=401, content={"error": f"invalid token: {e}"})
+
+        if _auth_enforced() and request.state.auth is None:
+            path = request.url.path
+            if not any(path.startswith(p) for p in self._PUBLIC_PREFIXES):
+                log_event(
+                    "auth.denied",
+                    f"Unauthenticated {request.method} {path}",
+                    details={"method": request.method, "path": path},
+                    status="denied",
+                )
+                return JSONResponse(status_code=401, content={"error": "authentication required"})
+
+        return await call_next(request)
+
+
+def _auth_enforced() -> bool:
+    import os
+
+    return os.environ.get("GENUS_AUTH_ENFORCE", "").lower() in ("1", "true", "yes")
+
+
 class CorrelationMiddleware(BaseHTTPMiddleware):
     """Attach a unique X-Correlation-Id to every request/response."""
 
