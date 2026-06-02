@@ -90,7 +90,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 request.state.auth = verify_token(token)
             except TokenError as e:
                 if _auth_enforced():
-                    return JSONResponse(status_code=401, content={"error": f"invalid token: {e}"})
+                    # Log the verification detail server-side; never echo it to the
+                    # caller — the raw PyJWT message (expired vs bad-signature vs
+                    # issuer) is a token oracle for unauthenticated clients.
+                    log_event(
+                        "auth.denied",
+                        "invalid bridge token",
+                        details={
+                            "reason": str(e),
+                            "method": request.method,
+                            "path": request.url.path,
+                        },
+                        status="denied",
+                    )
+                    return JSONResponse(
+                        status_code=401, content={"error": "invalid or expired token"}
+                    )
 
         if _auth_enforced() and request.state.auth is None:
             path = request.url.path

@@ -164,7 +164,7 @@ def revoke_session(refresh_token_hash: str) -> bool:
             "WHERE refresh_token_hash = %s AND revoked_at IS NULL",
             (refresh_token_hash,),
         )
-        revoked = cur.rowcount > 0
+        revoked = bool(cur.rowcount > 0)
         conn.commit()
         return revoked
 

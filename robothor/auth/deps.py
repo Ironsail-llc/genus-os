@@ -81,4 +81,6 @@ def get_current_user(request: object) -> AuthContext:
     try:
         return verify_token(token)
     except TokenError as e:
-        raise HTTPException(status_code=401, detail=f"invalid token: {e}") from e
+        # Generic message only — the raw verification detail would be a token
+        # oracle for unauthenticated callers (the middleware audit-logs the reason).
+        raise HTTPException(status_code=401, detail="invalid or expired token") from e

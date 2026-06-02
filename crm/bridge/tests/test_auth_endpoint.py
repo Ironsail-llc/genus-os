@@ -82,3 +82,22 @@ async def test_shadow_mode_does_not_block_unauthenticated(test_client):
     # token (the route may still 5xx without a DB; what matters is auth passes through).
     r = await test_client.get("/health")
     assert r.status_code != 401
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_hides_token_error_detail(test_client, monkeypatch):
+    # With enforcement on, an invalid token returns a GENERIC 401 — the raw PyJWT
+    # message (expired vs bad-signature vs issuer) must not leak (token oracle).
+    monkeypatch.setenv("GENUS_AUTH_ENFORCE", "true")
+    r = await test_client.get(
+        "/api/conversations",
+        headers={"Authorization": "Bearer not.a.valid.token"},
+    )
+    assert r.status_code == 401
+    body = r.json()
+    assert body["error"] == "invalid or expired token"
+    # The generic message reveals nothing specific; none of PyJWT's distinguishing
+    # internal strings (which would form a token oracle) may appear.
+    blob = str(body).lower()
+    for leak in ("signature", "issuer", "claim", "verification", "segments", "decode"):
+        assert leak not in blob
