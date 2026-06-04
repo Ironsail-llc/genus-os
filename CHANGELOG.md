@@ -1,3 +1,13 @@
+## [1.1.1](https://github.com/Ironsail-llc/genus-os/compare/v1.1.0...v1.1.1) (2026-06-04)
+
+### Bug Fixes
+
+* **tasks:** consolidate + harden task-answer feature, integration suite & deps ([#149](https://github.com/Ironsail-llc/genus-os/issues/149)) ([7c59312](https://github.com/Ironsail-llc/genus-os/commit/7c5931271da25208691dd9d2d0db600f7e0e3b74)), closes [#128](https://github.com/Ironsail-llc/genus-os/issues/128) [#139](https://github.com/Ironsail-llc/genus-os/issues/139) [#140](https://github.com/Ironsail-llc/genus-os/issues/140) [#121](https://github.com/Ironsail-llc/genus-os/issues/121) [#147](https://github.com/Ironsail-llc/genus-os/issues/147) [#128](https://github.com/Ironsail-llc/genus-os/issues/128)
+
+### Tests
+
+* **crm:** integration suite + checkpoint TodoList persistence ([#140](https://github.com/Ironsail-llc/genus-os/issues/140)) ([1c4669d](https://github.com/Ironsail-llc/genus-os/commit/1c4669d2812bc686b23b3cb0317088ae206b60bd))
+
 ## [1.1.0](https://github.com/Ironsail-llc/genus-os/compare/v1.0.0...v1.1.0) (2026-05-29)
 
 ### Features
