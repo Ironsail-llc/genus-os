@@ -122,7 +122,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # pgvector image (Postgres 16 + the `vector` extension): infra/001_init.sql
+        # runs in a single BEGIN/COMMIT and does `CREATE EXTENSION vector`, so a
+        # stock postgres:16 would abort the whole init transaction. pgcrypto and
+        # uuid-ossp ship in contrib, already present in this image.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: robothor
           POSTGRES_PASSWORD: robothor
