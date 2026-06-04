@@ -830,7 +830,7 @@ class TestAnswerQuestion:
     @patch("robothor.crm.dal.send_notification")
     def test_answer_returns_error_dict_on_invalid_transition(self, _notify, _audit, mock_get_conn):
         """The task exists but advance_to is not a valid transition → error
-        dict (so the bridge can return 409, not 404). No UPDATE is issued."""
+        dict (so the bridge can return 422, not 404). No UPDATE is issued."""
         mock_conn, mock_cur = _make_mock_conn(
             fetchone_return={
                 "status": "TODO",

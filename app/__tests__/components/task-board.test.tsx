@@ -106,29 +106,29 @@ describe("TaskBoard", () => {
     const t = [
       {
         id: "11",
-        title: "DrFirst",
+        title: "Acme Vendor",
         status: "TODO" as const,
-        objective: "Confirm RxHistory pricing without scheduling a meeting",
+        objective: "Confirm widget pricing without scheduling a meeting",
       },
     ];
     render(<TaskBoard tasks={t} />);
     const objLine = screen.getByTestId("task-objective");
-    expect(objLine.textContent).toContain("Confirm RxHistory pricing");
+    expect(objLine.textContent).toContain("Confirm widget pricing");
   });
 
   it("renders next_action with the assigned agent badge", () => {
     const t = [
       {
         id: "12",
-        title: "DrFirst",
+        title: "Acme Vendor",
         status: "IN_PROGRESS" as const,
-        nextAction: "Email April for written quote",
+        nextAction: "Email Bob for written quote",
         nextActionAgent: "email-responder",
       },
     ];
     render(<TaskBoard tasks={t} />);
     const nextLine = screen.getByTestId("task-next-action");
-    expect(nextLine.textContent).toContain("Email April");
+    expect(nextLine.textContent).toContain("Email Bob");
     expect(nextLine.textContent).toContain("@email-responder");
   });
 
@@ -136,14 +136,14 @@ describe("TaskBoard", () => {
     const t = [
       {
         id: "13",
-        title: "DrFirst",
+        title: "Acme Vendor",
         status: "REVIEW" as const,
-        questionForOperator: "Drop DrFirst outreach? y/n",
+        questionForOperator: "Drop Acme Vendor outreach? y/n",
       },
     ];
     render(<TaskBoard tasks={t} />);
     expect(screen.getByTestId("question-block")).toBeDefined();
-    expect(screen.getByTestId("question-text").textContent).toContain("Drop DrFirst");
+    expect(screen.getByTestId("question-text").textContent).toContain("Drop Acme Vendor");
     expect(screen.getByTestId("answer-input")).toBeDefined();
     expect(screen.getByTestId("answer-button")).toBeDefined();
     // Override is hidden by default when a question is present.
@@ -168,7 +168,7 @@ describe("TaskBoard", () => {
     const t = [
       {
         id: "15",
-        title: "DrFirst",
+        title: "Acme Vendor",
         status: "REVIEW" as const,
         questionForOperator: "Drop?",
       },

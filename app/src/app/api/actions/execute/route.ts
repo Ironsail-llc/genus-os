@@ -140,6 +140,11 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
     path: (p) => `/api/tasks/${p.task_id}/reject`,
     bodyKeys: ["reason", "changeRequests"],
   },
+  answer_question: {
+    method: "POST",
+    path: (p) => `/api/tasks/${p.task_id}/answer`,
+    bodyKeys: ["answer", "advanceTo", "channel"],
+  },
   list_tenants: {
     method: "GET",
     path: (p) => `/api/tenants?activeOnly=${p.activeOnly ?? true}`,

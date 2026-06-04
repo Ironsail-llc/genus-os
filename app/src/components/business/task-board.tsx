@@ -91,13 +91,18 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
         const ok = result instanceof Promise ? await result : true;
         if (!ok) return;
       } else {
-        // Fallback for standalone usage: check res.ok and throw so a failed
-        // POST isn't silently swallowed (the throw skips the clear below, so
-        // the operator keeps their text to retry).
-        const res = await fetch(`/api/tasks/${taskId}/answer`, {
+        // Fallback for standalone usage: route through the same
+        // /api/actions/execute allowlist as every other task mutation (so the
+        // bridge gets X-Agent-Id + rate limiting). Check res.ok and throw so a
+        // failed POST isn't silently swallowed (the throw skips the clear
+        // below, so the operator keeps their text to retry).
+        const res = await fetch("/api/actions/execute", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answer: text, advanceTo, channel: "helm" }),
+          body: JSON.stringify({
+            tool: "answer_question",
+            params: { task_id: taskId, answer: text, advanceTo, channel: "helm" },
+          }),
         });
         if (!res.ok) throw new Error(`answer failed: ${res.status}`);
       }

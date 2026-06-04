@@ -259,10 +259,13 @@ export function useTasks(options: UseTasksOptions = {}) {
         )
       );
       try {
-        const res = await fetch(`/api/tasks/${taskId}/answer`, {
+        const res = await fetch("/api/actions/execute", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answer, advanceTo, channel: "helm" }),
+          body: JSON.stringify({
+            tool: "answer_question",
+            params: { task_id: taskId, answer, advanceTo, channel: "helm" },
+          }),
         });
         if (!res.ok) {
           setTasks(previousTasks);
