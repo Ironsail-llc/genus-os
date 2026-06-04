@@ -92,6 +92,46 @@ describe("POST /api/actions/execute", () => {
     expect(sent.extraField).toBeUndefined(); // Not in bodyKeys
   });
 
+  it("routes answer_question to the bridge answer endpoint with X-Agent-Id", async () => {
+    // Regression guard: the answer flow must go through the TOOL_ROUTES
+    // allowlist (so the bridge gets X-Agent-Id + rate limiting), not a direct
+    // POST to /api/tasks/{id}/answer. Without the answer_question entry this
+    // returns 400 "Unknown tool".
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ success: true, id: "42" }),
+    });
+
+    const res = await POST(
+      makeRequest({
+        tool: "answer_question",
+        params: {
+          task_id: "42",
+          answer: "yes, proceed",
+          advanceTo: "IN_PROGRESS",
+          channel: "helm",
+          extraField: "ignored",
+        },
+      })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/tasks/42/answer");
+    expect(opts.method).toBe("POST");
+    expect(opts.headers["X-Agent-Id"]).toBe("helm-user");
+    const sent = JSON.parse(opts.body);
+    expect(sent.answer).toBe("yes, proceed");
+    expect(sent.advanceTo).toBe("IN_PROGRESS");
+    expect(sent.channel).toBe("helm");
+    expect(sent.extraField).toBeUndefined(); // Not in bodyKeys
+  });
+
   it("forwards bridge errors", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

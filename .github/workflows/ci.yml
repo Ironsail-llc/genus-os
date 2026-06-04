@@ -39,7 +39,15 @@ jobs:
       # (affects all versions incl. latest 2.12.1). pyjwt is transitive via
       # litellm + redis; we never call it directly (no `import jwt`). Tracked
       # as Not Affected in SECURITY.md. Revisit if we add direct pyjwt usage.
-      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183
+      # CVE-2026-34993 / CVE-2026-47265: aiohttp advisories (CookieJar.load
+      # deserialization; per-request `cookies=` leak across cross-origin
+      # redirects), both fixed in aiohttp 3.14.0. We cannot upgrade — aiogram
+      # hard-caps aiohttp <3.14 in every release (incl. latest 3.28.2). We are
+      # Not Affected: no `CookieJar.load()` anywhere, and our sole direct
+      # aiohttp call posts JSON to an operator-configured URL with no `cookies=`
+      # param. Tracked as Not Affected in SECURITY.md. Revisit when aiogram
+      # lifts its aiohttp <3.14 cap.
+      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183 --ignore-vuln CVE-2026-34993 --ignore-vuln CVE-2026-47265
 
   lint:
     runs-on: ubuntu-latest
@@ -86,7 +94,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
       - run: pip install -e ".[dev,api,vision]" opencv-python-headless
-      - run: pytest tests/ robothor/engine/tests/ -m "not integration and not llm and not slow and not e2e" -v
+      - run: pytest tests/ robothor/engine/tests/ robothor/crm/tests/ -m "not integration and not llm and not slow and not e2e" -v
 
   test-bridge:
     runs-on: ubuntu-latest
@@ -103,7 +111,64 @@ jobs:
           crm/bridge/tests/test_task_coordination.py
           crm/bridge/tests/test_multi_tenancy.py
           crm/bridge/tests/test_agent_status.py
+          crm/bridge/tests/test_answer_endpoint.py
           -v
+
+  test-integration:
+    # Real-PostgreSQL task-lifecycle suite (tests/integration/test_task_lifecycle.py).
+    # Kept out of the default `test` job (which runs `-m "not integration"`); this
+    # lane stops broken task-system integration tests from shipping silently.
+    # NOTE: scoped to the task-lifecycle file for now. Other tests/integration/
+    # files (test_config_precedence.py, test_runner_db.py) are pre-existing and
+    # currently red (stale manifest API / agent_runs schema drift); widening this
+    # lane to the full `-m integration` set is a tracked follow-up.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector image (Postgres 16 + the `vector` extension): infra/001_init.sql
+        # runs in a single BEGIN/COMMIT and does `CREATE EXTENSION vector`, so a
+        # stock postgres:16 would abort the whole init transaction. pgcrypto and
+        # uuid-ossp ship in contrib, already present in this image.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: robothor
+          POSTGRES_PASSWORD: robothor
+          POSTGRES_DB: robothor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: robothor
+      ROBOTHOR_TEST_DB_DSN: "dbname=robothor_test user=robothor password=robothor host=localhost port=5432"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install -e ".[dev,api]"
+      - name: Apply schema to the test database
+        # Apply every migration sorted by basename (matching the runner's
+        # `sorted(files, key=p.name)`). psql continues past errors by default;
+        # some pre-consolidation crm/ migrations harmlessly conflict with the
+        # newer infra/001_init.sql base. The verify step below is the real gate.
+        run: |
+          for f in $(ls infra/migrations/*.sql crm/migrations/*.sql | sort -t/ -k3); do
+            psql "$ROBOTHOR_TEST_DB_DSN" -q -f "$f" > /dev/null 2>&1 || true
+          done
+      - name: Verify required schema is present
+        run: |
+          psql "$ROBOTHOR_TEST_DB_DSN" -tAc \
+            "SELECT 1 FROM information_schema.columns WHERE table_name='crm_tasks' AND column_name='question_resolved_at'" \
+            | grep -q 1
+          psql "$ROBOTHOR_TEST_DB_DSN" -tAc \
+            "SELECT 1 FROM information_schema.tables WHERE table_name IN ('crm_task_history','crm_agent_notifications') HAVING count(*)=2" \
+            | grep -q 1
+      - run: pytest tests/integration/test_task_lifecycle.py -m integration -v
 
   frontend:
     runs-on: ubuntu-latest

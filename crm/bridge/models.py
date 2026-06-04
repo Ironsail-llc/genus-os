@@ -272,6 +272,19 @@ class RejectTaskRequest(BaseModel):
     changeRequests: list[str] | None = None
 
 
+class AnswerQuestionRequest(BaseModel):
+    """Operator answer to a planner-set ``question_for_operator``.
+
+    Distinct from approve/reject: an answer carries free-text content, may
+    optionally advance the task status, and triggers a ``question_answered``
+    notification rather than ``review_approved``/``review_rejected``.
+    """
+
+    answer: str
+    advanceTo: str | None = None
+    channel: str = "helm"
+
+
 # ─── Notifications ──────────────────────────────────────────────────────
 
 

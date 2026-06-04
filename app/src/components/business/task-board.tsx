@@ -18,6 +18,12 @@ interface Task {
   slaDeadlineAt?: string;
   parentTaskId?: string;
   requiresHuman?: boolean;
+  // Phase 4 — planner-set fields surfaced for the operator.
+  objective?: string;
+  nextAction?: string;
+  nextActionAgent?: string;
+  questionForOperator?: string;
+  escalationCount?: number;
 }
 
 interface TaskBoardProps {
@@ -25,6 +31,11 @@ interface TaskBoardProps {
   onApprove?: (taskId: string, resolution: string) => void;
   onReject?: (taskId: string, reason: string) => void;
   onResolve?: (taskId: string, resolution: string) => void;
+  // advanceTo is constrained to the status union so this stays assignable
+  // from useTasks().answerQuestion (whose advanceTo is Task["status"]). The
+  // Promise<boolean> result lets the wired handler report POST success so the
+  // board can keep the operator's typed answer for retry on failure.
+  onAnswer?: (taskId: string, answer: string, advanceTo?: Task["status"]) => void | Promise<boolean>;
 }
 
 const statusColumns = ["TODO", "IN_PROGRESS", "REVIEW", "DONE"] as const;
@@ -58,10 +69,52 @@ function isSlaOverdue(slaDeadlineAt?: string): boolean {
   return new Date(slaDeadlineAt) < new Date();
 }
 
-export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardProps) {
+export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
   const [resolutionText, setResolutionText] = useState("");
+  const [answerText, setAnswerText] = useState<Record<string, string>>({});
+  const [overrideOpen, setOverrideOpen] = useState<Record<string, boolean>>({});
+
+  const handleAnswer = async (taskId: string, advanceTo?: Task["status"]) => {
+    const text = (answerText[taskId] || "").trim();
+    if (!text) return;
+    setActionPending(taskId);
+    try {
+      if (onAnswer) {
+        // Wired path: useTasks().answerQuestion applies the optimistic status
+        // flip (which unmounts this block) and rolls back on a failed POST.
+        // Await its success result so we only clear the typed answer below on
+        // success — on failure the rollback re-shows the question and the
+        // preserved text lets the operator retry. Mirrors the fallback below.
+        const result = onAnswer(taskId, text, advanceTo);
+        const ok = result instanceof Promise ? await result : true;
+        if (!ok) return;
+      } else {
+        // Fallback for standalone usage: route through the same
+        // /api/actions/execute allowlist as every other task mutation (so the
+        // bridge gets X-Agent-Id + rate limiting). Check res.ok and throw so a
+        // failed POST isn't silently swallowed (the throw skips the clear
+        // below, so the operator keeps their text to retry).
+        const res = await fetch("/api/actions/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tool: "answer_question",
+            params: { task_id: taskId, answer: text, advanceTo, channel: "helm" },
+          }),
+        });
+        if (!res.ok) throw new Error(`answer failed: ${res.status}`);
+      }
+      setAnswerText((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    } finally {
+      setActionPending(null);
+    }
+  };
 
   const handleApprove = async (taskId: string) => {
     setActionPending(taskId);
@@ -145,6 +198,15 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                         needs you
                       </Badge>
                     )}
+                    {task.escalationCount != null && task.escalationCount > 0 && (
+                      <Badge
+                        className="text-[10px] px-1 py-0 bg-amber-500/20 text-amber-400"
+                        data-testid="escalation-badge"
+                        title={`Escalated ${task.escalationCount}× since last operator answer`}
+                      >
+                        ↑{task.escalationCount}
+                      </Badge>
+                    )}
                     <CardTitle className="text-sm flex-1">{task.title}</CardTitle>
                   </div>
                 </CardHeader>
@@ -152,6 +214,22 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                   {task.body && (
                     <p className="text-xs text-muted-foreground line-clamp-2">
                       {task.body}
+                    </p>
+                  )}
+                  {/* Planner subsection — Phase 4 surface of objective/next_action/question. */}
+                  {task.objective && status !== "DONE" && (
+                    <p className="text-xs italic text-muted-foreground mt-1.5 truncate" data-testid="task-objective">
+                      Objective: {task.objective}
+                    </p>
+                  )}
+                  {task.nextAction && status !== "DONE" && (
+                    <p className="text-xs text-muted-foreground mt-1" data-testid="task-next-action">
+                      Next: {task.nextAction}
+                      {task.nextActionAgent && (
+                        <Badge variant="outline" className="ml-1 text-[10px] px-1 py-0">
+                          @{task.nextActionAgent}
+                        </Badge>
+                      )}
                     </p>
                   )}
                   {task.assignedToAgent && (
@@ -173,7 +251,51 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve }: TaskBoardPr
                       ))}
                     </div>
                   )}
-                  {status === "REVIEW" && (
+                  {/* Question + Answer UI — primary path on REVIEW when the planner asked something. */}
+                  {status === "REVIEW" && task.questionForOperator && (
+                    <div
+                      className="mt-2 rounded border border-amber-500/30 bg-amber-500/[0.05] p-2"
+                      data-testid="question-block"
+                    >
+                      <p className="text-xs font-medium text-amber-300/90 mb-1">Question</p>
+                      <p className="text-xs text-amber-100/90 mb-2" data-testid="question-text">
+                        {task.questionForOperator}
+                      </p>
+                      <textarea
+                        className="w-full h-16 text-xs rounded bg-background/40 border border-border/40 p-1.5"
+                        placeholder="Type your answer…"
+                        value={answerText[task.id] || ""}
+                        onChange={(e) =>
+                          setAnswerText((prev) => ({ ...prev, [task.id]: e.target.value }))
+                        }
+                        data-testid="answer-input"
+                      />
+                      <div className="flex gap-1.5 mt-1.5">
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs px-3 bg-amber-600 hover:bg-amber-700"
+                          disabled={actionPending === task.id || !(answerText[task.id] || "").trim()}
+                          onClick={() => handleAnswer(task.id, "IN_PROGRESS")}
+                          data-testid="answer-button"
+                        >
+                          Answer
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs px-2"
+                          onClick={() =>
+                            setOverrideOpen((prev) => ({ ...prev, [task.id]: !prev[task.id] }))
+                          }
+                          data-testid="override-toggle"
+                        >
+                          {overrideOpen[task.id] ? "Hide override" : "Override (approve/reject)"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {/* Approve/Reject — default for REVIEW without a question; hidden behind toggle when a question is present. */}
+                  {status === "REVIEW" && (!task.questionForOperator || overrideOpen[task.id]) && (
                     <div className="flex gap-1.5 mt-2" data-testid="review-actions">
                       <Button
                         size="sm"
