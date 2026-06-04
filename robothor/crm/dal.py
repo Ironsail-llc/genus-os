@@ -2468,7 +2468,7 @@ def answer_question(
                         body=answer,
                         task_id=task_id,
                         metadata={
-                            "kind": "question_answered",
+                            "event": "question_answered",
                             "channel": channel,
                             "advance_to": advance_to,
                         },
