@@ -11,9 +11,17 @@ interface TasksViewProps {
   isLoading: boolean;
   onApprove: (taskId: string, resolution: string) => void;
   onReject: (taskId: string, reason: string) => void;
+  onAnswer: (taskId: string, answer: string, advanceTo?: Task["status"]) => void | Promise<boolean>;
 }
 
-export function TasksView({ visible, tasks, isLoading, onApprove, onReject }: TasksViewProps) {
+export function TasksView({
+  visible,
+  tasks,
+  isLoading,
+  onApprove,
+  onReject,
+  onAnswer,
+}: TasksViewProps) {
   const [now] = useState(() => Date.now());
   const dayAgo = now - 86_400_000;
 
@@ -44,7 +52,7 @@ export function TasksView({ visible, tasks, isLoading, onApprove, onReject }: Ta
             Loading tasks...
           </div>
         ) : (
-          <TaskBoard tasks={tasks} onApprove={onApprove} onReject={onReject} />
+          <TaskBoard tasks={tasks} onApprove={onApprove} onReject={onReject} onAnswer={onAnswer} />
         )}
       </div>
     </div>

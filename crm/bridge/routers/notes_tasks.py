@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 # a TYPE_CHECKING block, FastAPI treats the body parameter as a query
 # parameter and every POST/PATCH returns 422. (Caught by CI 2026-05-11.)
 from models import (  # noqa: TC002
+    AnswerQuestionRequest,
     ApproveTaskRequest,
     CreateNoteRequest,
     CreateTaskRequest,
@@ -22,6 +23,7 @@ from models import (  # noqa: TC002
 )
 
 from robothor.crm.dal import (
+    answer_question,
     approve_task,
     create_note,
     create_task,
@@ -382,6 +384,55 @@ async def api_reject_task(
         )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
+
+
+@router.post("/tasks/{task_id}/answer")
+async def api_answer_task_question(
+    task_id: str,
+    body: AnswerQuestionRequest,
+    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """Operator answer to a planner-set question. Phase 4.
+
+    Distinct from approve/reject: clears `question_for_operator` and
+    `requires_human`, resets `escalation_count`, optionally advances status,
+    records a `kind=answer` history row, and notifies the assigned agent.
+    """
+    by = x_agent_id or "helm-user"
+    if not body.answer.strip():
+        return JSONResponse({"error": "answer is required"}, status_code=422)
+    result = answer_question(
+        task_id=task_id,
+        answer=body.answer,
+        by=by,
+        advance_to=body.advanceTo,
+        channel=body.channel,
+        tenant_id=tenant_id,
+    )
+    # answer_question shares the error-dict return contract of reject_task /
+    # update_task / approve_task: an invalid advance_to transition maps to 422,
+    # matching every sibling task endpoint. 404 is reserved for a genuinely
+    # missing task, so the client can still tell the two apart. (Empty answer
+    # is also 422 above, as request validation.)
+    if isinstance(result, dict) and "error" in result:
+        return JSONResponse(result, status_code=422)
+    # Task genuinely missing → 404.
+    if not result:
+        return JSONResponse({"error": "task not found"}, status_code=404)
+    publish(
+        "agent",
+        "task.answered",
+        {
+            "task_id": task_id,
+            "by": by,
+            "channel": body.channel,
+            "advance_to": body.advanceTo,
+            "tenant_id": tenant_id,
+        },
+        source="bridge",
+    )
+    return {"success": True, "id": task_id}
 
 
 @router.get("/tasks/{task_id}/history")

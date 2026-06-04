@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { TaskBoard } from "@/components/business/task-board";
 
 const mockTasks = [
@@ -98,5 +98,119 @@ describe("TaskBoard", () => {
     const rejectBtn = screen.getByTestId("reject-button");
     rejectBtn.click();
     expect(onReject).toHaveBeenCalledWith("3", "Rejected via Helm");
+  });
+
+  // ── Phase 4 — planner-field surface + structured answer endpoint ──
+
+  it("renders objective when present on non-DONE tasks", () => {
+    const t = [
+      {
+        id: "11",
+        title: "DrFirst",
+        status: "TODO" as const,
+        objective: "Confirm RxHistory pricing without scheduling a meeting",
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const objLine = screen.getByTestId("task-objective");
+    expect(objLine.textContent).toContain("Confirm RxHistory pricing");
+  });
+
+  it("renders next_action with the assigned agent badge", () => {
+    const t = [
+      {
+        id: "12",
+        title: "DrFirst",
+        status: "IN_PROGRESS" as const,
+        nextAction: "Email April for written quote",
+        nextActionAgent: "email-responder",
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const nextLine = screen.getByTestId("task-next-action");
+    expect(nextLine.textContent).toContain("Email April");
+    expect(nextLine.textContent).toContain("@email-responder");
+  });
+
+  it("shows the question block + answer UI on REVIEW with questionForOperator", () => {
+    const t = [
+      {
+        id: "13",
+        title: "DrFirst",
+        status: "REVIEW" as const,
+        questionForOperator: "Drop DrFirst outreach? y/n",
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.getByTestId("question-block")).toBeDefined();
+    expect(screen.getByTestId("question-text").textContent).toContain("Drop DrFirst");
+    expect(screen.getByTestId("answer-input")).toBeDefined();
+    expect(screen.getByTestId("answer-button")).toBeDefined();
+    // Override is hidden by default when a question is present.
+    expect(screen.queryByTestId("review-actions")).toBeNull();
+  });
+
+  it("falls back to approve/reject when no question is set on a REVIEW task", () => {
+    const t = [
+      {
+        id: "14",
+        title: "Normal review",
+        status: "REVIEW" as const,
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.getByTestId("approve-button")).toBeDefined();
+    expect(screen.queryByTestId("question-block")).toBeNull();
+  });
+
+  it("calls onAnswer when the operator submits an answer", async () => {
+    const onAnswer = vi.fn();
+    const t = [
+      {
+        id: "15",
+        title: "DrFirst",
+        status: "REVIEW" as const,
+        questionForOperator: "Drop?",
+      },
+    ];
+    render(<TaskBoard tasks={t} onAnswer={onAnswer} />);
+    const input = screen.getByTestId("answer-input") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "yes, drop them" } });
+    const btn = screen.getByTestId("answer-button");
+    btn.click();
+    expect(onAnswer).toHaveBeenCalledWith("15", "yes, drop them", "IN_PROGRESS");
+  });
+
+  it("renders an escalation badge when escalationCount > 0", () => {
+    const t = [
+      { id: "17", title: "Stalled", status: "REVIEW" as const, escalationCount: 3 },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const badge = screen.getByTestId("escalation-badge");
+    expect(badge.textContent).toContain("3");
+  });
+
+  it("does not render an escalation badge when escalationCount is 0 or absent", () => {
+    const t = [
+      { id: "18", title: "Zero", status: "REVIEW" as const, escalationCount: 0 },
+      { id: "19", title: "Absent", status: "TODO" as const },
+    ];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.queryByTestId("escalation-badge")).toBeNull();
+  });
+
+  it("reveals override approve/reject when the operator toggles it", () => {
+    const t = [
+      {
+        id: "16",
+        title: "Q-bearing",
+        status: "REVIEW" as const,
+        questionForOperator: "Drop?",
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.queryByTestId("review-actions")).toBeNull();
+    fireEvent.click(screen.getByTestId("override-toggle"));
+    expect(screen.getByTestId("review-actions")).toBeDefined();
   });
 });

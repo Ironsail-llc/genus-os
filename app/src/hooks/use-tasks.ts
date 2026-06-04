@@ -21,6 +21,11 @@ export interface Task {
   startedAt?: string;
   updatedAt?: string;
   createdAt?: string;
+  // Phase 4 — planner-set fields surfaced for the operator.
+  objective?: string;
+  nextAction?: string;
+  nextActionAgent?: string;
+  questionForOperator?: string;
 }
 
 interface UseTasksOptions {
@@ -95,7 +100,7 @@ export function useTasks(options: UseTasksOptions = {}) {
     const latest = events[0];
     if (
       latest.id !== lastEventIdRef.current &&
-      ["task.created", "task.updated", "task.resolved"].includes(latest.type)
+      ["task.created", "task.updated", "task.resolved", "task.answered"].includes(latest.type)
     ) {
       lastEventIdRef.current = latest.id;
       fetchTasks();
@@ -232,5 +237,54 @@ export function useTasks(options: UseTasksOptions = {}) {
     [tasks]
   );
 
-  return { tasks, isLoading, refetch: fetchTasks, updateTaskStatus, approveTask, rejectTask, resolveTask };
+  // Phase 4 — answer a planner-set question_for_operator. Clears the
+  // question, resets escalation_count, optionally advances status. The
+  // status flip is applied optimistically (snappy board); returns whether
+  // the POST succeeded so the caller can preserve the operator's typed
+  // answer for retry when it didn't (state is rolled back here either way).
+  const answerQuestion = useCallback(
+    async (taskId: string, answer: string, advanceTo?: Task["status"]): Promise<boolean> => {
+      const previousTasks = tasks;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                questionForOperator: undefined,
+                requiresHuman: false,
+                escalationCount: 0,
+                status: advanceTo ?? t.status,
+              }
+            : t
+        )
+      );
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer, advanceTo, channel: "helm" }),
+        });
+        if (!res.ok) {
+          setTasks(previousTasks);
+          return false;
+        }
+        return true;
+      } catch {
+        setTasks(previousTasks);
+        return false;
+      }
+    },
+    [tasks]
+  );
+
+  return {
+    tasks,
+    isLoading,
+    refetch: fetchTasks,
+    updateTaskStatus,
+    approveTask,
+    rejectTask,
+    resolveTask,
+    answerQuestion,
+  };
 }
