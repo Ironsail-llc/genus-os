@@ -39,7 +39,15 @@ jobs:
       # (affects all versions incl. latest 2.12.1). pyjwt is transitive via
       # litellm + redis; we never call it directly (no `import jwt`). Tracked
       # as Not Affected in SECURITY.md. Revisit if we add direct pyjwt usage.
-      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183
+      # CVE-2026-34993 / CVE-2026-47265: aiohttp advisories (CookieJar.load
+      # deserialization; per-request `cookies=` leak across cross-origin
+      # redirects), both fixed in aiohttp 3.14.0. We cannot upgrade — aiogram
+      # hard-caps aiohttp <3.14 in every release (incl. latest 3.28.2). We are
+      # Not Affected: no `CookieJar.load()` anywhere, and our sole direct
+      # aiohttp call posts JSON to an operator-configured URL with no `cookies=`
+      # param. Tracked as Not Affected in SECURITY.md. Revisit when aiogram
+      # lifts its aiohttp <3.14 cap.
+      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183 --ignore-vuln CVE-2026-34993 --ignore-vuln CVE-2026-47265
 
   lint:
     runs-on: ubuntu-latest
