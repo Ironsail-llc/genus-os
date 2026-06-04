@@ -114,7 +114,8 @@ def promote_todo_to_subtask(
 
     Skips (``PromotionOutcome(None, False)``) when:
       - `parent` already carries the ``promoted_todo`` tag (cycle guard).
-      - `item.status` is `completed` (nothing to promote).
+      - `item.status` is not `pending`/`in_progress` (only unfinished work is
+        promotable — `completed` and any future terminal state are skipped).
       - An existing subtask carrying the same hash already exists → returns
         ``PromotionOutcome(existing_id, False)`` (idempotency).
       - `dal.create_task` returns a validation-error dict.
@@ -128,7 +129,10 @@ def promote_todo_to_subtask(
     content = (getattr(item, "content", "") or "").strip()
     if not content:
         return PromotionOutcome(None, False)
-    if status == "completed":
+    # Allow-list: only unfinished work is promotable. Skipping anything that
+    # isn't pending/in_progress (rather than skipping only "completed") keeps
+    # this safe if TodoItem ever grows a terminal state like "cancelled".
+    if status not in ("pending", "in_progress"):
         return PromotionOutcome(None, False)
 
     parent_id = str(parent.get("id") or "")

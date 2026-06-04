@@ -2,8 +2,9 @@
 
 Distinct from approve/reject: an answer carries free-text content, may
 optionally advance the task status (subject to VALID_TRANSITIONS), and
-fires a `question_answered` notification rather than `review_approved`
-or `review_rejected`. Backs the Helm Task Board's typed-answer UI.
+publishes a `task.answered` event plus an informational notification
+(metadata kind `question_answered`) to the assigned agent. Backs the Helm
+Task Board's typed-answer UI.
 """
 
 from __future__ import annotations

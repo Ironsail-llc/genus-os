@@ -2455,14 +2455,23 @@ def answer_question(
                 # no assignee — an empty to_agent is a notification nobody reads.
                 assigned_agent = row.get("assigned_to_agent")
                 if assigned_agent:
+                    # Use "info" — an allowed notification_type per the
+                    # crm_agent_notifications check constraint. ("question_answered"
+                    # is not in the allowlist and would raise a constraint
+                    # violation, silently dropping the notification.) The subject
+                    # and metadata carry the "answered" semantics.
                     send_notification(
                         from_agent=by,
                         to_agent=assigned_agent,
-                        notification_type="question_answered",
+                        notification_type="info",
                         subject=f"Question answered: {task_id}",
                         body=answer,
                         task_id=task_id,
-                        metadata={"channel": channel, "advance_to": advance_to},
+                        metadata={
+                            "kind": "question_answered",
+                            "channel": channel,
+                            "advance_to": advance_to,
+                        },
                         tenant_id=tenant_id,
                     )
             return ok

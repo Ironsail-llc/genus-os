@@ -50,31 +50,31 @@ class TestComputeItemHash:
     def test_hash_is_sixteen_chars(self):
         from robothor.engine.todo_promotion import compute_item_hash
 
-        h = compute_item_hash("parent-uuid-1234", "Email April for the quote")
+        h = compute_item_hash("parent-uuid-1234", "Email Bob for the quote")
         assert isinstance(h, str)
         assert len(h) == 16
 
     def test_hash_is_deterministic(self):
         from robothor.engine.todo_promotion import compute_item_hash
 
-        a = compute_item_hash("parent-uuid-1234", "Email April for the quote")
-        b = compute_item_hash("parent-uuid-1234", "Email April for the quote")
+        a = compute_item_hash("parent-uuid-1234", "Email Bob for the quote")
+        b = compute_item_hash("parent-uuid-1234", "Email Bob for the quote")
         assert a == b
 
     def test_hash_normalizes_whitespace_and_case(self):
         """Spurious whitespace + case shouldn't create a duplicate subtask."""
         from robothor.engine.todo_promotion import compute_item_hash
 
-        a = compute_item_hash("parent-1", "Email April")
-        b = compute_item_hash("parent-1", "  email april  ")
+        a = compute_item_hash("parent-1", "Email Bob")
+        b = compute_item_hash("parent-1", "  email bob  ")
         assert a == b
 
     def test_hash_differs_across_parents(self):
         """Same item wording under different parents must hash differently."""
         from robothor.engine.todo_promotion import compute_item_hash
 
-        a = compute_item_hash("parent-A", "Email April")
-        b = compute_item_hash("parent-B", "Email April")
+        a = compute_item_hash("parent-A", "Email Bob")
+        b = compute_item_hash("parent-B", "Email Bob")
         assert a != b
 
     def test_hash_matches_sha256_first_16(self):
@@ -121,7 +121,7 @@ class TestPromoteTodoToSubtask:
 
         promote_todo_to_subtask(
             parent=_make_parent(),
-            item=_make_item("Email April for the quote"),
+            item=_make_item("Email Bob for the quote"),
             agent_id="worker",
             run_id="run-1",
             tenant_id="default",
@@ -176,7 +176,7 @@ class TestPromoteTodoToSubtask:
 
         result = promote_todo_to_subtask(
             parent=_make_parent(),
-            item=_make_item("Email April"),
+            item=_make_item("Email Bob"),
             agent_id="worker",
             run_id="run-1",
             tenant_id="default",
@@ -284,13 +284,13 @@ class TestPromoteTodoToSubtask:
 
         promote_todo_to_subtask(
             parent=_make_parent(task_id="parent-9"),
-            item=_make_item("Email April for the quote"),
+            item=_make_item("Email Bob for the quote"),
             agent_id="worker",
             run_id="run-1",
             tenant_id="default",
         )
 
-        content_hash = compute_item_hash("parent-9", "Email April for the quote")
+        content_hash = compute_item_hash("parent-9", "Email Bob for the quote")
         expected_marker = build_dedup_marker(_DEDUP_KEY_NAME, content_hash)
         body = mock_dal.create_task.call_args.kwargs["body"]
         assert expected_marker in body

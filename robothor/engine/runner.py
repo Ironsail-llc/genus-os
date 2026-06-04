@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -3637,14 +3638,29 @@ class AgentRunner:
                 todos = getattr(session, "todo_list", None) if session else None
                 parent_task_id = spawn_context.parent_task_id if spawn_context else None
                 if todos and parent_task_id:
-                    _escalate_unfinished_todos(
-                        todos=todos,
-                        parent_task_id=parent_task_id,
-                        agent_id=run.agent_id,
-                        tenant_id=getattr(run, "tenant_id", "") or "",
-                        agent_config=agent_config,
-                        run_id=getattr(run, "id", None),
-                    )
+                    esc_kwargs: dict[str, Any] = {
+                        "todos": todos,
+                        "parent_task_id": parent_task_id,
+                        "agent_id": run.agent_id,
+                        "tenant_id": getattr(run, "tenant_id", "") or "",
+                        "agent_config": agent_config,
+                        "run_id": getattr(run, "id", None),
+                    }
+                    # Escalation does up to ~15 blocking psycopg2 round-trips
+                    # (get_task + set_next_action + update_task + per-item
+                    # promotion). Offload to a worker thread so it never blocks
+                    # the event loop — same spawn-or-run-sync pattern as
+                    # _persist_run below. Sync fallback for CLI/tests (no loop).
+                    try:
+                        asyncio.get_running_loop()
+                        from robothor.engine.task_registry import get_task_registry
+
+                        get_task_registry().spawn(
+                            self._escalate_unfinished_todos_bg(esc_kwargs),
+                            name=f"todo-escalate:{run.id}",
+                        )
+                    except RuntimeError:
+                        _escalate_unfinished_todos(**esc_kwargs)
             except Exception as e:
                 logger.warning("todo escalation error: %s", _sanitize(e))
 
@@ -3717,6 +3733,20 @@ class AgentRunner:
         """Persist run state and steps to the database in a background thread."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._persist_run_sync, run)
+
+    async def _escalate_unfinished_todos_bg(self, kwargs: dict[str, Any]) -> None:
+        """Run the blocking todo escalation/promotion off the event loop.
+
+        Best-effort: the escalation is non-critical (the next heartbeat re-plans
+        from the parent task anyway), so failures are logged, not raised.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, functools.partial(_escalate_unfinished_todos, **kwargs)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("todo escalation (bg) error: %s", _sanitize(e))
 
     @staticmethod
     def _assess_outcome(run: AgentRun) -> None:
