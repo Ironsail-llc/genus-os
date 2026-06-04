@@ -73,6 +73,7 @@ class StepType(StrEnum):
     ERROR_RECOVERY = "error_recovery"
     DEEP_REASON = "deep_reason"
     COMPACTION = "compaction"
+    WARMUP_PHASE = "warmup_phase"
 
 
 class DeliveryMode(StrEnum):
@@ -118,6 +119,17 @@ class HeartbeatConfig:
     # only if no completed LLM response / tool call / stream content
     # arrives for this many seconds — i.e. a truly wedged provider.
     stall_timeout_seconds: int = 0
+    # Pre-output stall guard, off by default. Trips when more than this
+    # many seconds have elapsed AND zero llm_response steps / streaming
+    # deltas have been seen — i.e. setup completed but the model never
+    # started talking. Distinct from stall_timeout_seconds, which only
+    # fires after at least one progress signal. Designed to catch the
+    # heartbeat wedge pattern (session_started → 1800s of silence →
+    # 30-min reaper) without re-introducing the mid-thought-garbage
+    # regression: by definition, no output has been produced yet, so the
+    # save-gate refuses to persist it. Conservative defaults: 0 = off,
+    # 90-180s recommended for chatty agents.
+    early_stall_timeout_seconds: int = 0
 
     # ── Cross-run persistent journal (multi-session research agents) ──
     journal_file: str = ""  # workspace-relative path to cross-run journal JSON
@@ -178,6 +190,7 @@ class WorkerConfig:
     safety_cap: int = 80
     timeout_seconds: int = 0
     stall_timeout_seconds: int = 0
+    early_stall_timeout_seconds: int = 0
 
     # Delivery (typically announce for drain so operator sees completions)
     delivery_mode: DeliveryMode = DeliveryMode.ANNOUNCE
@@ -293,6 +306,9 @@ class AgentConfig:
     # (completed LLM response / tool / stream bytes) has occurred for
     # this many seconds. Not a "your run took too long" kill.
     stall_timeout_seconds: int = 0
+    # Pre-output stall guard. Trips when elapsed > threshold AND no
+    # llm_response/streaming-delta has been seen. Off by default (0).
+    early_stall_timeout_seconds: int = 0
 
     # ── Cross-run persistent journal (multi-session research agents) ──
     journal_file: str = ""  # workspace-relative path to cross-run journal JSON
@@ -360,6 +376,10 @@ class AgentConfig:
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
     sandbox: str = "local"  # "local" or "docker"
+    # When True, runtime guards refuse every tool outside
+    # _BENCHMARK_READONLY_TOOLS (see robothor/engine/tools/handlers/benchmark.py).
+    # Set by _benchmark_run on the child_config it passes to runner.execute().
+    is_benchmark: bool = False
     eager_tool_compression: bool = False  # disabled: infinite loop bug when read_file re-offloads
     tool_offload_threshold: int = 0  # disabled: 0 means no offloading
 
@@ -468,6 +488,11 @@ class AgentRun:
     # Sub-agent tracking
     parent_run_id: str | None = None
     nesting_depth: int = 0
+
+    # Benchmark sandbox marker — copied from agent_config.is_benchmark at run
+    # start. Side-effect tool wrappers (gws CLI, in-runner allow-list guard)
+    # check this flag and refuse mutations when True.
+    is_benchmark: bool = False
 
     # Hierarchical tenant access (resolved at run start)
     accessible_tenant_ids: tuple[str, ...] = ()

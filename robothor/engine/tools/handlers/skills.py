@@ -139,6 +139,67 @@ async def _list_skills(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     }
 
 
+@_handler("skill_view")
+async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Return the full body of one skill on demand (Rip 3).
+
+    Pair with the lean ``build_skill_catalog`` that emits only
+    name + truncated description in the system prompt. The agent
+    sees the catalog cheaply, then calls ``skill_view(name=...)``
+    when it actually needs the procedure body. Bumps the usage
+    counter so the curator (Rip 5) can rank stale skills.
+    """
+    from robothor.engine.skills import (
+        get_skill_content,
+        increment_usage,
+        load_skills,
+        read_skill_meta,
+    )
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+
+    content = get_skill_content(name)
+    if content is None:
+        return {"error": f"Skill '{name}' not found"}
+
+    skills = load_skills()
+    defn = skills[name]
+    meta = read_skill_meta(name) or {}
+
+    # Side effect: bump the usage counter so the curator can
+    # distinguish hot skills (don't archive) from cold ones
+    # (candidate for consolidation).
+    try:
+        increment_usage(name)
+    except Exception as exc:  # noqa: BLE001 — counter is best-effort
+        logger.debug("skill_view increment_usage failed for %s: %s", name, exc)
+
+    return {
+        "name": defn.name,
+        "description": defn.description,
+        "content": content,
+        "tags": list(defn.tags),
+        "parameters": [
+            {
+                "name": p.name,
+                "type": p.type,
+                "description": p.description,
+                "required": p.required,
+                **({"default": p.default} if p.default is not None else {}),
+            }
+            for p in defn.parameters
+        ],
+        "trigger_phrases": list(defn.trigger_phrases),
+        "tools_required": list(defn.tools_required),
+        "output_format": defn.output_format,
+        "write_origin": meta.get("write_origin", "foreground"),
+        "is_agent_created": meta.get("is_agent_created", False),
+        "usage_count": meta.get("usage_count", 0),
+    }
+
+
 @_handler("create_skill")
 async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Create a new reusable skill from a procedure."""
@@ -161,6 +222,26 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     description = args.get("description", "").strip()
     if not description:
         return {"error": "description is required"}
+
+    # Rip 2: class-level umbrella guardrail. Off by default; flipped on
+    # via ROBOTHOR_RIP_2_ENABLED. Rejects names that look like one-off
+    # session artifacts (PR numbers, fix-/debug-/audit- prefixes, single
+    # library names, dates, error strings) — the failure mode that
+    # produced Nightwatch's duplicate alerts.py PR spam.
+    from robothor.engine.feature_flags import is_rip_enabled
+    from robothor.engine.skills import class_level_check
+
+    if is_rip_enabled(2):
+        reason = class_level_check(name, description)
+        if reason:
+            return {
+                "error": (
+                    f"Skill name '{name}' rejected: {reason}. "
+                    "Re-target as a CLASS-LEVEL umbrella (broader category, durable "
+                    "across sessions) or PATCH an existing skill via update_skill."
+                ),
+                "rejected_by": "class_level_check",
+            }
 
     content = args.get("content", "").strip()
     if not content:
@@ -216,10 +297,37 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         created_by=ctx.agent_id,
     )
     meta["content_hash"] = _content_hash(content)
+
+    # Rip 4: stamp the write origin so the curator (Rip 5) can tell
+    # autonomous-fork creates from user-directed creates. Foreground
+    # writes (default origin) stay user-owned and are never auto-
+    # consolidated; background-review-fork writes are explicitly
+    # opt-in to curator management.
+    from robothor.engine.skill_provenance import (
+        BACKGROUND_REVIEW,
+        get_current_write_origin,
+    )
+
+    origin = get_current_write_origin()
+    meta["write_origin"] = origin
+    meta["is_agent_created"] = origin == BACKGROUND_REVIEW
+
     write_skill_meta(name, meta)
 
-    logger.info("Skill '%s' created by agent '%s' at %s", name, ctx.agent_id, path)
-    return {"created": True, "name": name, "path": str(path)}
+    logger.info(
+        "Skill '%s' created by agent '%s' (origin=%s) at %s",
+        name,
+        ctx.agent_id,
+        origin,
+        path,
+    )
+    return {
+        "created": True,
+        "name": name,
+        "path": str(path),
+        "write_origin": origin,
+        "is_agent_created": meta["is_agent_created"],
+    }
 
 
 @_handler("update_skill")

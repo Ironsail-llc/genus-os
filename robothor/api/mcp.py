@@ -41,8 +41,27 @@ import httpx
 
 # ─── Service URL Resolution ──────────────────────────────────────────
 
-BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://localhost:9100")
-VISION_URL = os.environ.get("VISION_SERVICE_URL", "http://localhost:8600")
+
+def _default_bridge_url() -> str:
+    try:
+        from robothor.config import get_config
+
+        return get_config().bridge_url
+    except Exception:
+        return "http://127.0.0.1:9100"
+
+
+def _default_vision_url() -> str:
+    try:
+        from robothor.config import get_config
+
+        return get_config().vision_url
+    except Exception:
+        return "http://127.0.0.1:8600"
+
+
+BRIDGE_URL = os.environ.get("BRIDGE_URL") or _default_bridge_url()
+VISION_URL = os.environ.get("VISION_SERVICE_URL") or _default_vision_url()
 
 
 def _svc_url(service: str, path: str = "") -> str:
@@ -1244,6 +1263,16 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             parent_task_id=arguments.get("parentTaskId"),
             requires_human=arguments.get("requiresHuman", False),
         )
+        # Phase-1 contract: create_task returns {"error": reason} on
+        # validation failure (e.g. malformed autonomy_budget). The dict is
+        # truthy, so a bare `if task_id:` would wrap it as a success
+        # response: {"id": {"error": ...}, "title": "..."}. The MCP tool
+        # doesn't pass autonomy_budget today, so this branch is currently
+        # unreachable — fix proactively so the next contributor who wires
+        # the param doesn't walk into the bridge POST bug we just fixed
+        # (mirror of crm/bridge/routers/notes_tasks.py).
+        if isinstance(task_id, dict) and "error" in task_id:
+            return task_id
         return (
             {"id": task_id, "title": arguments.get("title", "")}
             if task_id

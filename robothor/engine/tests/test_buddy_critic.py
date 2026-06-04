@@ -562,7 +562,7 @@ class TestAggregateFindings:
     @patch("robothor.engine.buddy_critic._recent_buddy_reviews")
     @patch("robothor.engine.buddy_critic.detect_goal_breach")
     @patch("robothor.engine.buddy_critic.compute_goal_metrics")
-    @patch("robothor.engine.buddy_critic.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy_critic.compose_goals")
     @patch("robothor.engine.buddy_critic._load_manifests")
     def test_emits_finding_only_above_threshold(
         self,
@@ -614,7 +614,7 @@ class TestAggregateFindings:
     @patch("robothor.engine.buddy_critic._recent_buddy_reviews")
     @patch("robothor.engine.buddy_critic.detect_goal_breach")
     @patch("robothor.engine.buddy_critic.compute_goal_metrics")
-    @patch("robothor.engine.buddy_critic.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy_critic.compose_goals")
     @patch("robothor.engine.buddy_critic._load_manifests")
     def test_skips_meta_agents(
         self,
@@ -659,7 +659,7 @@ class TestAggregateFindings:
     @patch("robothor.engine.buddy_critic._recent_buddy_reviews")
     @patch("robothor.engine.buddy_critic.detect_goal_breach")
     @patch("robothor.engine.buddy_critic.compute_goal_metrics")
-    @patch("robothor.engine.buddy_critic.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy_critic.compose_goals")
     @patch("robothor.engine.buddy_critic._load_manifests")
     def test_attaches_matching_dimension_reviews(
         self,

@@ -17,9 +17,12 @@ agent execution).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
+import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -47,6 +50,10 @@ class PlanResult:
     next_action_agent: str | None
     question_for_operator: str | None
     rationale: str
+    # The action_type passed to classify_action, preserved so apply_plan
+    # can emit it on planner.action.refused. None on branches that didn't
+    # consult the autonomy classifier (objective veto, no_pattern, wait).
+    action_type: str | None = None
 
 
 # ─── Body parsing helpers ──────────────────────────────────────────────
@@ -232,6 +239,7 @@ def plan_thread(
                     f"{thread.title}: autonomy budget refused chase — what next?"
                 ),
                 rationale="autonomy_refuse",
+                action_type=action_type,
             )
 
     # No recognized pattern — surface a concrete question asking what to do.
@@ -260,6 +268,36 @@ def _sender_name(body: str) -> str:
 # ─── Apply (DB writes) ────────────────────────────────────────────────
 
 
+def _record_action_metric(action: str, tenant_id: str) -> None:
+    """Best-effort Prometheus increment. Observability must never break the lifecycle."""
+    with contextlib.suppress(Exception):
+        from robothor.engine.metrics import PLANNER_ACTIONS_TOTAL
+
+        PLANNER_ACTIONS_TOTAL.labels(action=action, tenant=tenant_id).inc()
+
+
+def _log_refusal(plan: PlanResult) -> None:
+    """Emit ``planner.action.refused`` WARNING when the autonomy classifier
+    refuses the only path forward. The planner converts the verdict to ``ask``
+    so the operator is unblocked, but the structured event is the signal
+    dashboards key off — a steady drumbeat means the budget is too strict.
+    Wrapped in suppress for the same reason as the metric emit.
+    """
+    with contextlib.suppress(Exception):
+        logger.warning(
+            "planner.action.refused task=%s action_type=%s rationale=%s",
+            plan.task_id,
+            plan.action_type,
+            plan.rationale,
+            extra={
+                "event": "planner.action.refused",
+                "task_id": plan.task_id,
+                "rationale": plan.rationale,
+                "action_type": plan.action_type,
+            },
+        )
+
+
 def apply_plan(
     plan: PlanResult,
     tenant_id: str = DEFAULT_TENANT,
@@ -283,6 +321,10 @@ def apply_plan(
         return True
     # Lazy import so tests can patch robothor.crm.dal.*
     from robothor.crm import dal
+
+    _record_action_metric(plan.action, tenant_id)
+    if plan.rationale == "autonomy_refuse":
+        _log_refusal(plan)
 
     if plan.action == "execute":
         if not plan.next_action:
@@ -359,19 +401,22 @@ LIMIT %s
 
 
 def _load_planner_candidates(tenant_id: str, max_threads: int) -> list[dict[str, Any]]:
-    """Fetch threads that need re-planning. Safe to fail → returns []."""
+    """Fetch threads that need re-planning.
+
+    Propagates on DB failure rather than swallowing it. ``plan_all_stalled``
+    catches the exception, records ``error=repr(exc)`` on the
+    ``planner.run_complete`` event, and still returns cleanly. Returning ``[]``
+    here would make a real outage indistinguishable from "no work this beat" on
+    the dashboards — the exact ambiguity the run-complete event exists to break.
+    """
     from robothor.db.connection import get_connection
 
-    try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SET LOCAL statement_timeout = '3s'")
-            cur.execute(_CANDIDATE_SQL, (tenant_id, max_threads))
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
-    except Exception as e:
-        logger.debug("Planner candidate query failed: %s", e)
-        return []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '3s'")
+        cur.execute(_CANDIDATE_SQL, (tenant_id, max_threads))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 def _load_history(task_id: str, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -418,46 +463,93 @@ def plan_all_stalled(
 ) -> list[PlanResult]:
     """Run the planner across all stalled threads and apply the results.
 
-    Gated by ROBOTHOR_PLANNER_ENABLED=1 — off (default) → no-op, returns [].
+    Default-on as of Phase 2: env var ``ROBOTHOR_PLANNER_ENABLED=0`` opts out.
     Set ``dry_run=True`` to see what the planner would do without writing
     anything to the DB. Never raises; swallows errors so the warmup hook
     stays safe.
+
+    Every beat — including beats where ``_load_planner_candidates`` raises —
+    emits one ``planner.run_complete`` INFO log and observes
+    ``PLANNER_RUN_DURATION``. On candidate-load failure the event carries
+    ``candidates_count=0``, ``actions={}``, and ``error=repr(exception)`` so
+    Grafana can distinguish a DB outage from a quiet planner. The env=0
+    opt-out path is the only branch that skips the emit (per the doc's
+    "Disabling" section). Per-plan ``planner.action.refused`` WARNING lines
+    fire when verdict="refuse".
     """
-    if not dry_run and os.environ.get("ROBOTHOR_PLANNER_ENABLED") != "1":
+    if not dry_run and os.environ.get("ROBOTHOR_PLANNER_ENABLED", "1") == "0":
         return []
+
+    start = time.monotonic()
+    candidates: list[dict[str, Any]] = []
+    plans: list[PlanResult] = []
+    load_error: str | None = None
 
     try:
-        candidates = _load_planner_candidates(tenant_id, max_threads)
-    except Exception as e:
-        logger.debug("plan_all_stalled load failed: %s", e)
-        return []
-
-    defaults = load_tenant_defaults(tenant_id)
-    plans: list[PlanResult] = []
-    for row in candidates:
         try:
-            thread = _row_to_thread(row)
-            history = _load_history(thread.id, tenant_id)
-            objective = row.get("objective") or row.get("title") or ""
-            autonomy = row.get("autonomy_budget") or {}
-            if isinstance(autonomy, dict) and autonomy:
-                merged = dict(defaults)
-                merged.update(autonomy)
-                autonomy = merged
-            else:
-                autonomy = defaults
-            plan = plan_thread(
-                thread=thread,
-                body=row.get("body") or "",
-                history=history,
-                autonomy=autonomy,
-                objective=objective,
-                question_for_operator=row.get("question_for_operator"),
-                next_action=row.get("next_action"),
-                last_planned_at=row.get("last_planned_at"),
-            )
-            apply_plan(plan, tenant_id=tenant_id, dry_run=dry_run)
-            plans.append(plan)
+            candidates = _load_planner_candidates(tenant_id, max_threads)
         except Exception as e:
-            logger.debug("plan_thread failed for %s: %s", row.get("id"), e)
-    return plans
+            logger.debug("plan_all_stalled load failed: %s", e)
+            load_error = repr(e)
+            return plans
+
+        defaults = load_tenant_defaults(tenant_id)
+        for row in candidates:
+            try:
+                thread = _row_to_thread(row)
+                history = _load_history(thread.id, tenant_id)
+                objective = row.get("objective") or row.get("title") or ""
+                autonomy = row.get("autonomy_budget") or {}
+                if isinstance(autonomy, dict) and autonomy:
+                    merged = dict(defaults)
+                    merged.update(autonomy)
+                    autonomy = merged
+                else:
+                    autonomy = defaults
+                plan = plan_thread(
+                    thread=thread,
+                    body=row.get("body") or "",
+                    history=history,
+                    autonomy=autonomy,
+                    objective=objective,
+                    question_for_operator=row.get("question_for_operator"),
+                    next_action=row.get("next_action"),
+                    last_planned_at=row.get("last_planned_at"),
+                )
+                apply_plan(plan, tenant_id=tenant_id, dry_run=dry_run)
+                plans.append(plan)
+            except Exception as e:
+                logger.debug("plan_thread failed for %s: %s", row.get("id"), e)
+
+        return plans
+    finally:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        action_counts = dict(Counter(p.action for p in plans))
+        # Observability is best-effort: a logging-handler fault must not turn a
+        # successful beat into a raised exception out of this finally (the
+        # function's contract is "never raises"). The duration metric gets its
+        # own suppress so a log failure doesn't also drop the timing sample.
+        with contextlib.suppress(Exception):
+            extra: dict[str, Any] = {
+                "event": "planner.run_complete",
+                "tenant_id": tenant_id,
+                "candidates_count": len(candidates),
+                "actions": action_counts,
+                "elapsed_ms": elapsed_ms,
+                "dry_run": dry_run,
+            }
+            if load_error is not None:
+                extra["error"] = load_error
+            logger.info(
+                "planner.run_complete tenant=%s candidates=%d actions=%s elapsed_ms=%d error=%s",
+                tenant_id,
+                len(candidates),
+                action_counts,
+                elapsed_ms,
+                load_error,
+                extra=extra,
+            )
+        with contextlib.suppress(Exception):
+            from robothor.engine.metrics import PLANNER_RUN_DURATION
+
+            PLANNER_RUN_DURATION.labels(tenant=tenant_id).observe(elapsed_ms / 1000.0)

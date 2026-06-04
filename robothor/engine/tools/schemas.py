@@ -1630,6 +1630,78 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["benchmark_run_fleet"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_run_fleet",
+            "description": (
+                "Run benchmark suites for every agent that has one in docs/benchmarks/. "
+                "Single tool call covers the entire fleet. Used by the daily benchmark cron."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tag": {
+                        "type": "string",
+                        "description": "Run label (default: cron-YYYY-MM-DD)",
+                    },
+                    "triggered_by": {
+                        "type": "string",
+                        "description": "Trigger source (default: 'cron')",
+                    },
+                    "skip": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Agent IDs to skip",
+                    },
+                    "only": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Restrict to these agent IDs (default: all)",
+                    },
+                },
+            },
+        },
+    }
+    schemas["benchmark_run_for_agent"] = {
+        "type": "function",
+        "function": {
+            "name": "benchmark_run_for_agent",
+            "description": (
+                "Run an agent's on-disk benchmark suite (docs/benchmarks/<agent>/suite.yaml) "
+                "in one call. Loads the suite, runs every task as a sub-agent, scores them, "
+                "and writes a row to the benchmark_results table. This is the canonical entry "
+                "point for the daily benchmark cron and the Auto Researcher before/after gate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent to benchmark",
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Unique label for this run (e.g. 'cron-2026-05-06', 'auto-researcher:before:exp-id')",
+                    },
+                    "triggered_by": {
+                        "type": "string",
+                        "description": "How this run was triggered: 'cron' | 'manual' | 'auto-researcher:before' | 'auto-researcher:after'",
+                    },
+                    "experiment_id": {
+                        "type": "string",
+                        "description": "Optional link to docs/experiments/<id>.yaml",
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of task IDs to run (default: all)",
+                    },
+                },
+                "required": ["agent_id", "tag"],
+            },
+        },
+    }
     schemas["benchmark_compare"] = {
         "type": "function",
         "function": {
@@ -2069,6 +2141,150 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Long-running goal tracking ──
+
+    schemas["create_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "create_goal",
+            "description": (
+                "Create an active long-running session goal. Refuses to overwrite an "
+                "existing active goal in the same scope. Workspace goals (no agent_id) "
+                "auto-inject only into the main agent; agent-scoped goals inject only "
+                "into the named agent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "Concrete objective the agent should keep pursuing.",
+                    },
+                    "success_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit completion contract.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
+                "required": ["objective"],
+            },
+        },
+    }
+    schemas["get_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "get_goal",
+            "description": (
+                "Return the active long-running session goal for the current scope, "
+                "including objective, evidence count, and remaining completion "
+                "requirements."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
+            },
+        },
+    }
+    schemas["update_goal"] = {
+        "type": "function",
+        "function": {
+            "name": "update_goal",
+            "description": (
+                "Record typed evidence on a long-running session goal or mark it "
+                "complete. Completion requires at least one validated 'test_run' AND "
+                "one validated 'commit' evidence item. The reference field is verified "
+                "per kind: pytest summary or UUID for test_run; git SHA validated via "
+                "git cat-file for commit; https URL for ci_run."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "complete"],
+                        "description": "Set to complete only when the goal is truly finished.",
+                    },
+                    "edit_op": {
+                        "type": "string",
+                        "enum": ["objective", "criterion", "metric_target"],
+                        "description": (
+                            "Edit operation: 'objective' (with objective=<text>), "
+                            "'criterion' (with text=<text>), or 'metric_target' "
+                            "(with metric, target, optional weight/window_days/category)."
+                        ),
+                    },
+                    "objective": {
+                        "type": "string",
+                        "description": "New objective text when edit_op='objective'.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Criterion text when edit_op='criterion'.",
+                    },
+                    "metric": {
+                        "type": "string",
+                        "description": (
+                            "Metric name when edit_op='metric_target' (e.g. "
+                            "benchmark_pass_rate, error_rate)."
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Target comparator when edit_op='metric_target' (e.g. '>=0.85')."
+                        ),
+                    },
+                    "weight": {
+                        "type": "number",
+                        "description": "Goal weight (default 1.0).",
+                    },
+                    "window_days": {
+                        "type": "integer",
+                        "description": "Rolling window in days (default 7).",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["reach", "quality", "efficiency", "correctness"],
+                        "description": "Category for metric_target (default 'correctness').",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["test_run", "commit", "ci_run", "note"],
+                        "description": "Evidence kind. Only test_run + commit satisfy completion.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Short evidence summary.",
+                    },
+                    "reference": {
+                        "type": "string",
+                        "description": (
+                            "Verifiable reference: pytest:passed:N or run UUID for "
+                            "test_run; 7+ hex SHA for commit; https URL for ci_run."
+                        ),
+                    },
+                    "completion_note": {
+                        "type": "string",
+                        "description": "Required when status is complete.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional target agent. Defaults to the current agent.",
+                    },
+                },
+            },
+        },
+    }
+
     # ── Identity mapping tools ──
 
     schemas["link_identity"] = {
@@ -2501,6 +2717,105 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "healthy rate and does nothing."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["get_fleet_achievement_score"] = {
+        "type": "function",
+        "function": {
+            "name": "get_fleet_achievement_score",
+            "description": (
+                "Aggregate fleet quality signal: today's average "
+                "achievement_score across all agents with declared goals, "
+                "the prior-week average, the week-over-week delta, and the "
+                "buddy-grader 14-day hold rate (% of verified fixes that "
+                "held for 7 days). Pure read-only — Buddy populates the "
+                "underlying tables daily. Use this for the heartbeat fleet "
+                "quality line; surface it when |delta| > 5 points or when "
+                "hold rate drops."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["get_agent_performance_summary"] = {
+        "type": "function",
+        "function": {
+            "name": "get_agent_performance_summary",
+            "description": (
+                "Per-agent grade card from the latest benchmark_results row. "
+                "Returns each agent's job pass_rate (0.0-1.0), pass/fail counts, "
+                "trend vs prior run, failing case IDs, and category breakdown. "
+                "This is the canonical 'did the agent do its job?' read — used by "
+                "the morning briefing Agent Performance section, the /goals "
+                "Telegram command, and the end-of-day summary."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional — filter to a single agent",
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "description": "Exclude rows older than this (default 48)",
+                    },
+                },
+            },
+        },
+    }
+    schemas["list_agent_reviews"] = {
+        "type": "function",
+        "function": {
+            "name": "list_agent_reviews",
+            "description": (
+                "List recent Buddy reviews of agent runs. Each review is "
+                "evidence-grounded against a specific run_id. Returns rating "
+                "(1-5), feedback excerpt, and action_items count. Use this "
+                "before planning fleet-level optimization to ground "
+                "recommendations in observed evidence rather than priors. "
+                "Fetch full feedback via get_agent_review."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Filter to one agent. Omit to scan the fleet.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max reviews to return. Default 20.",
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "description": "Lookback window in hours. Default 168 (7d).",
+                    },
+                },
+            },
+        },
+    }
+
+    schemas["get_agent_review"] = {
+        "type": "function",
+        "function": {
+            "name": "get_agent_review",
+            "description": (
+                "Fetch one Buddy review by id with full feedback text and "
+                "action items array. Use after list_agent_reviews when an "
+                "excerpt is interesting enough to read in full."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "review_id": {
+                        "type": "string",
+                        "description": "UUID of the review (from list_agent_reviews).",
+                    },
+                },
+                "required": ["review_id"],
+            },
         },
     }
 

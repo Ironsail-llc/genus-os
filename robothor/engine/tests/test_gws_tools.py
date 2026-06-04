@@ -151,7 +151,8 @@ class TestGwsGmailSearch:
             assert "messages" in result
 
             cmd = mock_run.call_args[0][0]
-            assert cmd[:4] == ["gws", "gmail", "users", "messages"]
+            assert cmd[0].endswith("gws")
+            assert cmd[1:4] == ["gmail", "users", "messages"]
             params = json.loads(cmd[cmd.index("--params") + 1])
             assert params["q"] == "is:unread"
             assert params["userId"] == "me"

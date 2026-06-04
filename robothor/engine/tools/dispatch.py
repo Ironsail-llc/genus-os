@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,6 +13,42 @@ if TYPE_CHECKING:
     from robothor.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+# ── Per-task tool whitelist (Rip 1 background-review fork) ──────────
+# When set, _execute_tool denies any tool call whose name is not in
+# the whitelist before either adapter routing or handler dispatch
+# happens. ContextVar gives async-safe per-task isolation — the
+# whitelist set in a forked review task does NOT leak into the parent
+# task or sibling forks.
+#
+# Default None means "no restriction" — foreground agent behaviour is
+# unchanged. Use set_tool_whitelist() to install, and pass the
+# returned Token to clear_tool_whitelist() in a finally block.
+_thread_tool_whitelist: ContextVar[frozenset[str] | None] = ContextVar(
+    "_thread_tool_whitelist", default=None
+)
+
+
+def set_tool_whitelist(allowed: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Install a per-task tool whitelist; returns reset token.
+
+    Tool calls outside ``allowed`` will return a structured "denied"
+    error from ``_execute_tool``. The whitelist applies only within
+    the current asyncio Task (and any tasks it explicitly spawns
+    that inherit context).
+    """
+    return _thread_tool_whitelist.set(allowed)
+
+
+def clear_tool_whitelist(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior whitelist state. Pair every set with one clear."""
+    _thread_tool_whitelist.reset(token)
+
+
+def get_tool_whitelist() -> frozenset[str] | None:
+    """Inspect the currently-installed whitelist, if any."""
+    return _thread_tool_whitelist.get()
 
 
 @dataclass(frozen=True)
@@ -28,6 +65,11 @@ class ToolContext:
     # filed/updated tasks to this identity instead of agent_id. Used by
     # the scout beat (runs as agent_id='main' but files as 'scout').
     task_author_override: str = ""
+    # Benchmark sandbox marker — copied from AgentRun.is_benchmark when the
+    # runner builds the ctx. Side-effecting tool handlers (notably the gws
+    # CLI wrapper which sits outside the runner's allow-list guard) check
+    # this to short-circuit mutations.
+    is_benchmark: bool = False
 
 
 def get_db() -> Any:
@@ -65,6 +107,7 @@ def _collect_handlers() -> dict[str, Any]:
         filesystem,
         git,
         github_api,
+        goal,
         gws,
         identity,
         jira,
@@ -98,6 +141,7 @@ def _collect_handlers() -> dict[str, Any]:
         desktop,
         experiment,
         benchmark,
+        goal,
         git,
         gws,
         vault,
@@ -176,6 +220,7 @@ async def _execute_tool(
     user_role: str = "",
     accessible_tenant_ids: tuple[str, ...] = (),
     task_author_override: str = "",
+    is_benchmark: bool = False,
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -192,6 +237,17 @@ async def _execute_tool(
                 name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
             )
             return {"error": denied}
+
+    # ── Per-task tool whitelist (Rip 1) ──
+    # If a parent forked us with a restricted toolset (e.g. the
+    # background-review fork that may only touch memory + skills),
+    # bounce anything outside that set with a structured error before
+    # the handler ever sees it.
+    whitelist = _thread_tool_whitelist.get()
+    if whitelist is not None and name not in whitelist:
+        msg = f"Tool '{name}' denied by per-task whitelist"
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=msg)
+        return {"error": msg, "denied_by_whitelist": True}
 
     from robothor.engine.tools import get_registry
 
@@ -220,13 +276,24 @@ async def _execute_tool(
         user_role=user_role,
         accessible_tenant_ids=accessible_tenant_ids,
         task_author_override=task_author_override,
+        is_benchmark=is_benchmark,
     )
     handlers = _get_handlers()
     handler = handlers.get(name)
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
 
-    result = cast("dict[str, Any]", await handler(args, ctx))
+    # Wrap handler invocation: an unhandled exception here used to propagate
+    # out of the runner, leaving agent_runs rows in 'running' state until the
+    # 30-min reaper fired. Returning a structured error lets the LLM decide
+    # whether to retry, skip, or surface to the operator.
+    try:
+        result = cast("dict[str, Any]", await handler(args, ctx))
+    except Exception as e:
+        logger.exception("Tool %s raised unhandled exception", name)
+        err_msg = f"{type(e).__name__}: {e}"
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
+        return {"error": err_msg, "tool_crashed": True}
     if isinstance(result, dict) and "error" in result:
         _audit_tool_call(
             name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]

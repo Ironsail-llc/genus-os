@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.constants import SPAWN_TOOLS, TODO_TOOLS
+from robothor.engine.tools.constants import GOAL_TOOLS, SPAWN_TOOLS, TODO_TOOLS
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.schemas import get_engine_schemas
 
@@ -143,6 +143,7 @@ class ToolRegistry:
     def _get_filtered_names(self, config: AgentConfig) -> list[str]:
         if config.tools_allowed:
             names = [n for n in config.tools_allowed if n in self._schemas]
+            names.extend(n for n in GOAL_TOOLS if n in self._schemas and n not in names)
         else:
             names = list(self._schemas.keys())
 
@@ -180,6 +181,7 @@ class ToolRegistry:
         accessible_tenant_ids: tuple[str, ...] = (),
         timeout: int = 120,
         task_author_override: str = "",
+        is_benchmark: bool = False,
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -187,6 +189,8 @@ class ToolRegistry:
             timeout: Per-tool timeout in seconds. 0 = unlimited.
             accessible_tenant_ids: Tenant IDs this run may access
                 (resolved from user role + tenant hierarchy).
+            is_benchmark: When True, side-effect tool wrappers refuse
+                mutations (see ToolContext.is_benchmark).
         """
         try:
             if timeout > 0:
@@ -201,6 +205,7 @@ class ToolRegistry:
                         user_role=user_role,
                         accessible_tenant_ids=accessible_tenant_ids,
                         task_author_override=task_author_override,
+                        is_benchmark=is_benchmark,
                     )
             else:
                 return await _execute_tool(
@@ -213,6 +218,7 @@ class ToolRegistry:
                     user_role=user_role,
                     accessible_tenant_ids=accessible_tenant_ids,
                     task_author_override=task_author_override,
+                    is_benchmark=is_benchmark,
                 )
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)

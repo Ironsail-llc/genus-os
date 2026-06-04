@@ -7,6 +7,13 @@ triggers:
   - type: hook
     stream: vision
     event_type: vision.person_unknown
+  # Safety-net cron so the domain keeps working if the vision hook
+  # stops firing (e.g. motion publisher crash). Mirrors email-pipeline
+  # and calendar-pipeline. Added 2026-05-28 when vision-monitor's
+  # own agent cron was removed in fleet consolidation.
+  - type: cron
+    cron: "12 6-22/6 * * *"
+    timezone: America/New_York
 
 timeout_seconds: 300
 

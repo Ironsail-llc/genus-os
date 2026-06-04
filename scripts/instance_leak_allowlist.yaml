@@ -25,3 +25,11 @@ ROBOTHOR_WORKSPACE
 # subpatterns inside these. These are well-known test fixture UUIDs.
 00000000-0000-0000-0000-000000000000
 11111111-2222-3333-4444-555555555555
+
+# Operational email addresses used in scripts (not test data)
+support@impetusrx.com
+robothor@ironsail.ai
+impetusrx.com
+
+# Systemd service paths (template uses hardcoded paths by design)
+/home/philip/robothor

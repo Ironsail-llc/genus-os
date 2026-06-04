@@ -10,7 +10,7 @@ escalates_to: main
 model:
   primary: ollama_chat/qwen3:8b
   fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/xiaomi/mimo-v2.5-pro
   payload_alias: qwen3
 
 schedule:

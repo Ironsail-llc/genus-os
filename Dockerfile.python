@@ -1,0 +1,116 @@
+# syntax=docker/dockerfile:1.7
+# Shared image for engine, bridge, orchestrator, and migrations.
+# Each service picks its entrypoint via compose `command:` (dev) or the
+# Helm chart's container command (prod).
+#
+# Targets:
+#   - dev:        editable install of the project; source intended to be
+#                 bind-mounted by docker-compose. CMD runs the engine daemon
+#                 but compose overrides per service.
+#   - production: slim runtime image, non-root, baked-in source. Used by
+#                 the CI build-and-push workflow with `--target production`.
+#
+# Default target is `production` so plain `docker build .` is safe.
+
+ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.5.11
+
+# ─── base — runtime-only OS deps + uv (shared by dev and production) ─────────
+FROM python:${PYTHON_VERSION}-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    # `uv pip install` respects $VIRTUAL_ENV; `uv sync` is a project command
+    # and prefers .venv unless told otherwise. Pin both so a future edit that
+    # reaches for `uv sync` doesn't quietly install into /app/.venv.
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
+
+WORKDIR /app
+
+# ─── build-deps — compile toolchain + resolved venv ──────────────────────────
+FROM base AS build-deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Lock files first — dep layer caches across source-only changes.
+COPY pyproject.toml uv.lock README.md ./
+
+# `uv sync --no-install-project` installs ONLY the extras' transitive deps,
+# not the project's `[project.dependencies]` block (the project itself is
+# what depends on them, and we skipped its install). Use `uv export` to
+# render the full pinned set, then install via `uv pip install -r`. This
+# gives us all deps without needing project source at this stage.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv "$VIRTUAL_ENV" \
+    && uv export \
+        --frozen \
+        --no-emit-project \
+        --no-hashes \
+        --extra api --extra federation \
+        > /tmp/requirements.txt \
+    && uv pip install -r /tmp/requirements.txt
+
+# Bridge has its own requirements file. Install into the same venv.
+COPY crm/bridge/requirements.txt /tmp/bridge-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r /tmp/bridge-requirements.txt
+
+# ─── dev — editable install for docker-compose bind-mounts ───────────────────
+# Source IS copied in (so the image is self-contained for a fresh build), but
+# the install is editable — when compose bind-mounts ../robothor over
+# /app/robothor at runtime, edits on the host are picked up live by Python's
+# editable .pth entry. No image rebuild needed for source-only changes.
+#
+# Runs as root for permissive bind-mount writes (logs, scratch). Production
+# target below is non-root.
+FROM build-deps AS dev
+
+COPY robothor /app/robothor
+COPY crm /app/crm
+COPY infra/migrations /app/infra/migrations
+COPY conftest.py /app/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps -e .
+
+ENV ROBOTHOR_DEV=1
+
+# Each compose service overrides this with its own `command:`.
+CMD ["python", "-m", "robothor.engine.daemon"]
+
+# ─── prod-builder — non-editable install, source baked in ────────────────────
+FROM build-deps AS prod-builder
+
+COPY robothor /app/robothor
+COPY crm /app/crm
+COPY infra/migrations /app/infra/migrations
+COPY conftest.py /app/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps .
+
+# ─── production — slim runtime, non-root (default target) ────────────────────
+FROM base AS production
+
+RUN groupadd -r app && useradd -r -g app -u 1000 -d /app -s /usr/sbin/nologin app
+
+COPY --from=prod-builder --chown=app:app /opt/venv /opt/venv
+COPY --from=prod-builder --chown=app:app /app /app
+
+USER app
+
+# The Helm chart overrides this per service via container.command.
+CMD ["python", "-m", "robothor.engine.daemon"]

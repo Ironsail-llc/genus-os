@@ -100,11 +100,13 @@ def build_warmth_preamble(
     config: AgentConfig,
     workspace: Path,
     tenant_id: str = DEFAULT_TENANT,
-) -> str:
+) -> tuple[str, dict[str, float]]:
     """Build a warmth preamble string for an agent run.
 
-    Returns up to MAX_WARMTH_CHARS of pre-loaded context. Empty string
-    if no warmup config or all sections fail.
+    Returns (preamble, section_timings) where preamble is up to
+    MAX_WARMTH_CHARS of pre-loaded context (empty string if none) and
+    section_timings is a dict mapping section name -> elapsed seconds.
+    The caller can record per-section warmup_phase steps using this data.
     """
     sections: list[str] = []
     total_start = time.monotonic()
@@ -163,6 +165,20 @@ def build_warmth_preamble(
     _run_section("preferences", _preferences)
     _run_section("agent_hooks", lambda: _run_agent_context_hooks(config))
 
+    def _agent_goal() -> str | None:
+        # Late import: session_goal + goals import robothor.crm.dal which
+        # transitively touches DB drivers. Keep warmup lightweight when unused.
+        from robothor.engine.session_goal import build_agent_goal_context
+
+        ctx = build_agent_goal_context(
+            tenant_id=tenant_id,
+            agent_id=config.id,
+            manifest_path=getattr(config, "manifest_path", None),
+        )
+        return ctx or None
+
+    _run_section("agent_goal", _agent_goal)
+
     total_elapsed = time.monotonic() - total_start
     if total_elapsed > 5.0:
         breakdown = " ".join(
@@ -176,13 +192,13 @@ def build_warmth_preamble(
         )
 
     if not sections:
-        return ""
+        return "", _section_timings
 
     preamble = "\n\n".join(sections)
     if len(preamble) > MAX_WARMTH_CHARS:
         preamble = preamble[:MAX_WARMTH_CHARS] + "\n[warmup truncated]"
 
-    return preamble
+    return preamble, _section_timings
 
 
 def _build_history_section(agent_id: str) -> str:
@@ -311,7 +327,7 @@ def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
         )
         if not rows:
             return "--- OPEN TASKS ---\nNothing open."
-        grouped: dict[str, list[dict]] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for t in rows:
             key = t.get("assigned_to_agent") or "unassigned"
             grouped.setdefault(key, []).append(t)
@@ -454,6 +470,16 @@ def build_interactive_preamble(
         fleet_section = _recent_fleet_surfaces(tenant_id=tenant_id)
         if fleet_section:
             sections.append(fleet_section)
+
+    # Unified agent goal — every agent sees its own (no owner-only scoping).
+    try:
+        from robothor.engine.session_goal import build_agent_goal_context
+
+        goal_section = build_agent_goal_context(tenant_id=tenant_id, agent_id=agent_id)
+        if goal_section:
+            sections.append(goal_section)
+    except Exception as e:
+        logger.debug("Interactive warmup agent_goal failed: %s", e)
 
     if not sections:
         return ""

@@ -21,6 +21,8 @@ from typing import Any
 
 import litellm
 
+from robothor.engine.codex_provider import acompletion as codex_acompletion
+from robothor.engine.codex_provider import is_codex_model
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.retry import retry_async
 
@@ -90,7 +92,8 @@ async def llm_call(
     async def _attempt() -> Any:
         t0 = _time.monotonic()
         try:
-            resp = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=timeout)
+            call = codex_acompletion if is_codex_model(model) else litellm.acompletion
+            resp = await asyncio.wait_for(call(**kwargs), timeout=timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -161,7 +164,8 @@ async def llm_call_with_fallback(
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
 
-            resp = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=per_model_timeout)
+            call = codex_acompletion if is_codex_model(model) else litellm.acompletion
+            resp = await asyncio.wait_for(call(**kwargs), timeout=per_model_timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -240,7 +244,15 @@ async def llm_call_streaming(
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
 
-            async def _consume_stream(_kw: dict[str, Any] = kwargs) -> list[Any]:
+            async def _consume_stream(
+                _kw: dict[str, Any] = kwargs,
+                _model: str = model,
+            ) -> list[Any]:
+                if is_codex_model(_model):
+                    resp = await codex_acompletion(**_kw)
+                    if on_chunk is not None:
+                        await on_chunk(resp)
+                    return [resp]
                 s = await litellm.acompletion(**_kw)
                 collected: list[Any] = []
                 async for chunk in s:

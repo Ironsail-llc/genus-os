@@ -14,8 +14,10 @@ import json
 import logging
 import os
 import re as _re
+import shutil
 import statistics
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -232,6 +234,75 @@ def _calc_improvement(baseline: float, current: float, direction: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot helpers for untracked-file revert support
+# ---------------------------------------------------------------------------
+
+# Directory used to store per-experiment snapshots of search-space files.
+# Each experiment gets a subdirectory: /tmp/robothor_exp_snapshots/<experiment_id>/
+_SNAPSHOT_BASE = Path(tempfile.gettempdir()) / "robothor_exp_snapshots"
+
+
+def _snapshot_search_space(experiment_id: str, search_space: str, workspace: str) -> str | None:
+    """Copy all search_space files to a temp snapshot dir before iteration.
+
+    Returns the snapshot directory path on success, or None if nothing to snapshot.
+    Called at experiment_create time so revert can always restore original state
+    even for files not tracked by git.
+    """
+    files = _parse_search_space(search_space)
+    if not files:
+        return None
+
+    snap_dir = _SNAPSHOT_BASE / experiment_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+
+    ws = Path(workspace)
+    for rel_path in files:
+        src = ws / rel_path
+        if src.exists():
+            dst = snap_dir / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    return str(snap_dir)
+
+
+def _restore_snapshot(experiment_id: str, search_space: str, workspace: str) -> str:
+    """Restore search_space files from snapshot dir.
+
+    Returns a status message describing what was restored or why it failed.
+    Called as fallback when revert_command fails or is absent.
+    """
+    files = _parse_search_space(search_space)
+    if not files:
+        return "No search_space files to restore."
+
+    snap_dir = _SNAPSHOT_BASE / experiment_id
+    if not snap_dir.exists():
+        return f"Snapshot dir not found: {snap_dir}. Cannot restore."
+
+    ws = Path(workspace)
+    restored = []
+    skipped = []
+    for rel_path in files:
+        src = snap_dir / rel_path
+        if src.exists():
+            dst = ws / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            restored.append(rel_path)
+        else:
+            skipped.append(rel_path)
+
+    parts = []
+    if restored:
+        parts.append(f"Restored: {', '.join(restored)}")
+    if skipped:
+        parts.append(f"No snapshot for: {', '.join(skipped)}")
+    return "; ".join(parts) if parts else "Nothing restored."
+
+
+# ---------------------------------------------------------------------------
 # Experiment guardrail checks
 # ---------------------------------------------------------------------------
 
@@ -438,9 +509,50 @@ async def _experiment_create(args: dict[str, Any], ctx: ToolContext) -> dict[str
             "tags": args.get("tags", ["autoresearch"]),
         }
 
-    # Handle benchmark mode
-    mode = args.get("mode") or config.get("mode", "metric")
+    # ── 2026-05-06 ABSOLUTE RULE ─────────────────────────────────────
+    # Auto Researcher only optimizes benchmark_pass_rate. Metric mode is
+    # blocked unless the caller explicitly opts in with operator_override=
+    # "<reason>". See plan in-this-case-what-cozy-bunny.md.
+    mode = args.get("mode") or config.get("mode", "benchmark")  # default flipped
     config["mode"] = mode
+
+    operator_override = (args.get("operator_override") or "").strip()
+    # Session-goal metrics ARE the operator's mandate, so they're exempt
+    # from the operator_override requirement when running in metric mode.
+    # Forbidden-token filter still applies below.
+    session_goal_metrics = ("session_goal_alignment_score", "session_goal_progress")
+    metric_name = (config.get("metric_name") or "").strip()
+    is_session_goal_metric = metric_name in session_goal_metrics
+    if mode != "benchmark" and not operator_override and not is_session_goal_metric:
+        return {
+            "error": (
+                "Only benchmark-mode experiments are allowed (target: benchmark_pass_rate). "
+                "Cost / token / latency / output_length optimization is forbidden by operator "
+                "directive 2026-05-06. To run a metric-mode experiment with operator approval, "
+                "set operator_override='<reason>'. Session-goal-driven metrics (e.g. "
+                "session_goal_alignment_score) are exempt — they ARE the operator's mandate."
+            ),
+            "operator_override_required": True,
+        }
+    forbidden_metric_terms = (
+        "cost",
+        "tokens",
+        "token",
+        "latency",
+        "duration",
+        "p95",
+        "output_length",
+        "output_chars",
+    )
+    metric_name_lower = (config.get("metric_name") or "").lower()
+    if mode == "benchmark" and any(term in metric_name_lower for term in forbidden_metric_terms):
+        return {
+            "error": (
+                f"metric_name '{config.get('metric_name')}' contains a forbidden term "
+                f"({', '.join(forbidden_metric_terms)}). Benchmark experiments must target "
+                "the agent's job — rename the metric or pick a different framing."
+            )
+        }
 
     if mode == "benchmark":
         # Benchmark mode: metric comes from benchmark suite aggregate score
@@ -495,6 +607,17 @@ async def _experiment_create(args: dict[str, Any], ctx: ToolContext) -> dict[str
         lock_error = _acquire_file_locks(experiment_id, search_space)
         if lock_error:
             return {"error": lock_error}
+
+    # Snapshot search-space files for untracked-file revert support
+    # (git checkout -- <file> fails on untracked files; snapshot-restore is the fallback)
+    workspace_str = ctx.workspace or os.environ.get(
+        "ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")
+    )
+    if search_space:
+        try:
+            _snapshot_search_space(experiment_id, search_space, workspace_str)
+        except Exception as _snap_err:
+            logger.warning("Snapshot failed for %s (non-fatal): %s", experiment_id, _snap_err)
 
     _save_state(experiment_id, state)
 
@@ -622,6 +745,48 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
     improvement = _calc_improvement(metric_before, metric_after, state["direction"])
     cost_usd = float(args.get("cost_usd", 0))
 
+    # ── 2026-05-06: benchmark-mode regression guard ───────────────────
+    # When the experiment is benchmark-driven and the agent claims to keep
+    # a change, force-revert if any case that was passing in iteration 1
+    # (baseline) is now failing in the latest iteration. Aggregate-level
+    # gains can mask per-case regressions; we explicitly forbid that.
+    forced_revert_reason: str | None = None
+    if verdict == "keep" and config.get("mode") == "benchmark":
+        try:
+            from robothor.engine.tools.handlers.benchmark import (
+                _load_block as _load_bench_block,
+            )
+            from robothor.engine.tools.handlers.benchmark import (
+                _run_block as _bench_run_block,
+            )
+
+            suite_id = config.get("benchmark_suite_id", "")
+            current_iter = state["total_iterations"] + 1
+            baseline_tag = f"exp-{experiment_id}-iter-1"
+            current_tag = f"exp-{experiment_id}-iter-{current_iter}"
+            baseline_run = _load_bench_block(_bench_run_block(suite_id, baseline_tag))
+            current_run = _load_bench_block(_bench_run_block(suite_id, current_tag))
+            if baseline_run and current_run:
+                base_results = {r["task_id"]: r for r in baseline_run.get("task_results", [])}
+                cur_results = {r["task_id"]: r for r in current_run.get("task_results", [])}
+                regressed_cases: list[str] = []
+                for tid, b in base_results.items():
+                    base_score = float(b.get("score", 0))
+                    cur = cur_results.get(tid)
+                    cur_score = float(cur.get("score", 0)) if cur else 0.0
+                    if base_score >= 0.7 and cur_score < 0.7:
+                        regressed_cases.append(tid)
+                if regressed_cases:
+                    verdict = "revert"
+                    forced_revert_reason = (
+                        f"benchmark regression guard tripped: "
+                        f"{', '.join(regressed_cases)} were passing at baseline "
+                        f"and are now failing — see plan 2026-05-06"
+                    )
+                    iteration_will_revert_msg = forced_revert_reason  # noqa: F841 (informational)
+        except Exception as exc:  # pragma: no cover (best-effort guard)
+            logger.warning("Regression guard could not run for %s: %s", experiment_id, exc)
+
     # Build iteration record
     iteration_number = state["total_iterations"] + 1
     iteration: dict[str, Any] = {
@@ -670,22 +835,57 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
 
     # Execute revert command if verdict is revert
     revert_output = None
-    if verdict == "revert" and config.get("revert_command"):
+    if verdict == "revert":
         workspace = ctx.workspace or os.environ.get(
             "ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")
         )
-        try:
-            result = subprocess.run(
-                config["revert_command"],
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=workspace,
-            )
-            revert_output = result.stdout.strip() or result.stderr.strip()
-        except Exception as e:
-            revert_output = f"Revert command failed: {e}"
+        revert_cmd = config.get("revert_command")
+        if revert_cmd:
+            try:
+                result = subprocess.run(
+                    revert_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=workspace,
+                )
+                revert_output = result.stdout.strip() or result.stderr.strip()
+                # If revert_command failed (non-zero exit or error output containing
+                # "error" / "pathspec" / "did not match"), fall back to snapshot restore.
+                if result.returncode != 0 or any(
+                    kw in (revert_output or "").lower()
+                    for kw in ("error", "pathspec", "did not match", "fatal")
+                ):
+                    logger.warning(
+                        "revert_command failed for %s (rc=%d, out=%r); falling back to snapshot restore",
+                        experiment_id,
+                        result.returncode,
+                        revert_output,
+                    )
+                    search_space = config.get("search_space", "")
+                    if search_space:
+                        snap_result = _restore_snapshot(experiment_id, search_space, workspace)
+                        revert_output = f"revert_command failed ({revert_output}); snapshot restore: {snap_result}"
+            except Exception as e:
+                revert_output = f"Revert command failed: {e}"
+                # Fall back to snapshot restore
+                search_space = config.get("search_space", "")
+                if search_space:
+                    try:
+                        snap_result = _restore_snapshot(experiment_id, search_space, workspace)
+                        revert_output += f"; snapshot restore: {snap_result}"
+                    except Exception as snap_err:
+                        revert_output += f"; snapshot restore also failed: {snap_err}"
+        else:
+            # No revert_command — restore from snapshot directly
+            search_space = config.get("search_space", "")
+            if search_space:
+                workspace_str = workspace
+                try:
+                    revert_output = _restore_snapshot(experiment_id, search_space, workspace_str)
+                except Exception as snap_err:
+                    revert_output = f"Snapshot restore failed: {snap_err}"
 
     # Check termination conditions
     termination_reason = None
@@ -750,7 +950,78 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
             f"after {iteration_number} iterations"
         )
 
+    # Live-goal verification: when a benchmark experiment terminates with a
+    # positive cumulative improvement, enqueue a 7-day follow-up for
+    # buddy-grader to confirm the target agent's real goal metric moved.
+    # Benchmark wins can overfit the scorer; this is the ground-truth check.
+    if (
+        verdict == "keep"
+        and state["status"] == "completed"
+        and config.get("mode") == "benchmark"
+        and config.get("benchmark_agent_id")
+        and state.get("cumulative_improvement_pct", 0) > 0
+    ):
+        _enqueue_live_goal_verification(experiment_id, state, iteration_number)
+
     return response
+
+
+def _enqueue_live_goal_verification(
+    experiment_id: str, state: dict[str, Any], iteration_number: int
+) -> None:
+    """Schedule a 7-day live-goal check for a shipped benchmark win.
+
+    Snapshots the target agent's current goal metrics into the task body so the
+    grader can compute a before/after delta without needing to reconstruct the
+    pre-ship window. Failures are swallowed — a missing verification task is a
+    warning, not a reason to fail the experiment commit.
+    """
+    try:
+        from datetime import timedelta
+
+        from robothor.crm.dal import create_task
+        from robothor.engine.goals import compute_goal_metrics
+
+        config = state["config"]
+        agent_id = config["benchmark_agent_id"]
+        snapshot = compute_goal_metrics(agent_id, window_days=7)
+        follow_up_at = datetime.now(UTC) + timedelta(days=7)
+
+        body = (
+            f"Benchmark experiment '{experiment_id}' closed with "
+            f"{state['cumulative_improvement_pct']:+.2f}% vs baseline "
+            f"({state['baseline_value']} -> {state['current_best_value']}, "
+            f"{iteration_number} iterations).\n\n"
+            "Verify that the agent's LIVE goal metrics moved in the same direction "
+            "over the 7 days since the ship.\n\n"
+            "## Pre-ship goal metrics snapshot (7-day window before ship)\n"
+            "```json\n"
+            f"{json.dumps(snapshot, indent=2, default=str)}\n"
+            "```\n\n"
+            "Procedure:\n"
+            "1. Call compute_goal_metrics(agent_id, window_days=7) now.\n"
+            "2. Compare against the snapshot above.\n"
+            "3. Append one line to autoagent_learnings: "
+            "`YYYY-MM-DD | {agent_id} | {experiment_id}: benchmark +X% → live {metric} "
+            "Δ {pre → post}`.\n"
+            "4. If live metrics regressed or are flat, file a follow-up task tagged "
+            "`benchmark-overfit` so auto-agent re-evaluates the harness change."
+        )
+        create_task(
+            title=f"Verify live-goal impact: {agent_id} after {experiment_id}",
+            body=body,
+            assigned_to_agent="auto-agent",
+            created_by_agent="experiment_commit",
+            priority="normal",
+            tags=["live-goal-verify", agent_id, experiment_id],
+            follow_up_at=follow_up_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not enqueue live-goal verification for %s: %s",
+            experiment_id,
+            exc,
+        )
 
 
 @_handler("experiment_status")

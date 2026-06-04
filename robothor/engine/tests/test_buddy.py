@@ -75,7 +75,7 @@ class TestAgentScore:
 
 class TestComputeAgentScore:
     @patch("robothor.engine.buddy.compute_achievement_score")
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compose_goals")
     def test_scales_score_to_0_100(self, mock_parse, mock_compute):
         from robothor.engine.buddy import BuddyEngine
 
@@ -99,7 +99,31 @@ class TestComputeAgentScore:
         assert result.breached_goals == 1
         assert result.stat_date == date(2026, 4, 18)
 
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compute_achievement_score")
+    @patch("robothor.engine.buddy.compose_goals")
+    def test_handles_none_score(self, mock_parse, mock_compute):
+        """When every goal is unmeasured, compute_achievement_score returns
+        score=None — compute_agent_score must not crash on the int() cast."""
+        from robothor.engine.buddy import BuddyEngine
+
+        mock_parse.return_value = [object()]
+        mock_compute.return_value = {
+            "score": None,
+            "rating": None,
+            "satisfied_goals": [],
+            "breached_goals": [],
+            "unmeasured_goals": ["g1"],
+            "per_goal": [],
+        }
+        result = BuddyEngine().compute_agent_score(
+            "unmeasured-agent",
+            manifest={"id": "unmeasured-agent", "goals": {"quality": [{"id": "g"}]}},
+            target_date=date(2026, 4, 18),
+        )
+        assert result.achievement_score == 0
+        assert result.rating == 1
+
+    @patch("robothor.engine.buddy.compose_goals")
     def test_no_goals_returns_zero(self, mock_parse):
         from robothor.engine.buddy import BuddyEngine
 
@@ -124,7 +148,7 @@ class TestComputeAgentScore:
 
 class TestComputeFleetScores:
     @patch("robothor.engine.buddy.compute_achievement_score")
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compose_goals")
     @patch("robothor.engine.buddy._load_manifests")
     def test_ranks_by_score_descending(self, mock_load, mock_parse, mock_compute):
         from robothor.engine.buddy import BuddyEngine
@@ -134,7 +158,7 @@ class TestComputeFleetScores:
             ("high", {"id": "high"}),
             ("mid", {"id": "mid"}),
         ]
-        mock_parse.side_effect = lambda m: [object()]  # each agent has a goal
+        mock_parse.side_effect = lambda **_: [object()]  # each agent has a goal
 
         def fake_compute(agent_id, goals, tenant_id=None):
             scores = {"low": 0.2, "mid": 0.5, "high": 0.9}
@@ -153,7 +177,7 @@ class TestComputeFleetScores:
         assert [s.rank for s in scores] == [1, 2, 3]
         assert [s.achievement_score for s in scores] == [90, 50, 20]
 
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compose_goals")
     @patch("robothor.engine.buddy._load_manifests")
     def test_agents_without_goals_excluded(self, mock_load, mock_parse):
         from robothor.engine.buddy import BuddyEngine
@@ -168,7 +192,7 @@ class TestComputeFleetScores:
 class TestComputeDailyStats:
     @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=42)
     @patch("robothor.engine.buddy.compute_achievement_score")
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compose_goals")
     @patch("robothor.engine.buddy._load_manifests")
     def test_fleet_average(self, mock_load, mock_parse, mock_compute, _mock_tasks):
         from robothor.engine.buddy import BuddyEngine
@@ -198,7 +222,7 @@ class TestComputeDailyStats:
 
     @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=5)
     @patch("robothor.engine.buddy.compute_achievement_score")
-    @patch("robothor.engine.buddy.parse_goals_from_manifest")
+    @patch("robothor.engine.buddy.compose_goals")
     @patch("robothor.engine.buddy._load_manifests")
     def test_single_agent_slice(self, mock_load, mock_parse, mock_compute, _mock_tasks):
         from robothor.engine.buddy import BuddyEngine

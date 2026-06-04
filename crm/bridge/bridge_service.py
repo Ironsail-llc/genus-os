@@ -144,4 +144,8 @@ app.include_router(audit_router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=9100)
+    uvicorn.run(
+        app,
+        host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"),
+        port=int(os.environ.get("ROBOTHOR_BRIDGE_PORT", "9100")),
+    )

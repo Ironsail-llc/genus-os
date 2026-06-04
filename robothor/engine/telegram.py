@@ -15,9 +15,12 @@ import asyncio
 import contextlib
 import html
 import logging
+import os
 import re
+import subprocess
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -141,10 +144,11 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
+    "GPT-5.5 (subscription)": "codex/gpt-5.5",
+    "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
-    "MiMo-V2-Pro": "openrouter/xiaomi/mimo-v2-pro",
-    "Gemini 2.5 Pro": "gemini/gemini-2.5-pro",
-    "Gemini 2.5 Flash": "gemini/gemini-2.5-flash",
+    "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
+    "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
 }
 
 # Reverse lookup: model id → display name
@@ -193,6 +197,43 @@ async def _extract_pdf_text(raw_bytes: bytes) -> str:
         return "[PDF file — install pypdf for text extraction]"
     except Exception as e:
         return f"[PDF text extraction failed: {e}]"
+
+
+async def _analyze_photo_bytes(
+    raw_bytes: bytes,
+    prompt: str = "Describe what you see in this image in detail. Read and transcribe ALL visible text exactly. Note any URLs, names, numbers, UI elements, or content shown.",
+) -> str:
+    """Send raw image bytes to llama3.2-vision via Ollama for VLM analysis."""
+    import base64
+    import os
+
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    img_b64 = base64.b64encode(raw_bytes).decode("utf-8")
+    payload = {
+        "model": "llama3.2-vision:11b",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Robothor's vision system. Your ONLY job is to describe what is visible in images. "
+                    "You MUST always describe image content — never refuse, never say you cannot access websites or URLs. "
+                    "If you see a URL in an image, READ and REPORT the text — do not try to visit it. "
+                    "Transcribe ALL visible text exactly as shown. Report people, UI elements, screenshots, diagrams, "
+                    "app names, domain names, error messages, and any other visible content. Be literal and precise."
+                ),
+            },
+            {"role": "user", "content": prompt, "images": [img_b64]},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 1024, "num_gpu": 999},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{ollama_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]  # type: ignore[no-any-return]
+    except Exception as e:
+        return f"[Vision analysis failed: {e}]"
 
 
 class TelegramBot:
@@ -254,6 +295,8 @@ class TelegramBot:
                 "/deep — Deep reasoning via RLM ($0.50-$2.00)\n"
                 "/plan — Plan before executing (review + approve)\n"
                 "/model — Switch AI model\n"
+                "/goal — Show or update the active session goal\n"
+                "/goals — Show each agent's benchmark grade\n"
                 "/clear — Clear conversation history\n"
                 "/context — Context window stats\n"
                 "/reset — Reset model + history\n"
@@ -281,6 +324,10 @@ class TelegramBot:
                 f"{status_line}\n\nTap to switch:",
                 reply_markup=kb,
             )
+
+        @self.dp.message(Command("goal"))
+        async def cmd_goal(message: Message) -> None:
+            await self._handle_goal_command(message)
 
         @self.dp.message(Command("clear"))
         async def cmd_clear(message: Message) -> None:
@@ -329,6 +376,14 @@ class TelegramBot:
                 await message.answer("Stopped.")
             else:
                 await message.answer("Nothing running.")
+
+        @self.dp.message(Command("restart"))
+        async def cmd_restart(message: Message) -> None:
+            await self._handle_restart_command(message, "robothor-engine.service")
+
+        @self.dp.message(Command("restart_delphi"))
+        async def cmd_restart_delphi(message: Message) -> None:
+            await self._handle_restart_command(message, "robothor-delphi-engine.service")
 
         @self.dp.message(Command("context"))
         async def cmd_context(message: Message) -> None:
@@ -548,6 +603,63 @@ class TelegramBot:
             except Exception as e:
                 await message.answer(f"Buddy unavailable: {html.escape(str(e))}")
 
+        @self.dp.message(Command("goals"))
+        async def cmd_goals(message: Message) -> None:
+            """Show each agent's job grade — pass rate on its benchmark suite."""
+            try:
+                from robothor.constants import DEFAULT_TENANT
+                from robothor.db.connection import get_connection
+
+                tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", DEFAULT_TENANT)
+                with get_connection() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT ON (agent_id)
+                          agent_id, suite_id, run_at, total_cases, passed,
+                          pass_rate, failures
+                        FROM benchmark_results
+                        WHERE tenant_id = %s
+                          AND run_at >= NOW() - INTERVAL '48 hours'
+                        ORDER BY agent_id, run_at DESC
+                        """,
+                        (tenant_id,),
+                    )
+                    rows = cur.fetchall()
+
+                if not rows:
+                    await message.answer(
+                        "<b>Agent Performance</b>\n\nBenchmark cron hasn't run yet — "
+                        "check back after 4 AM ET tomorrow, or trigger benchmark-runner manually."
+                    )
+                    return
+
+                # Sort worst → best for prominence
+                rows = sorted(rows, key=lambda r: r[5])
+                lines = ["<b>Agent Performance — job pass rate</b>", ""]
+                for r in rows:
+                    agent_id, _suite_id, _run_at, total, passed, pass_rate, failures = r
+                    pct = int(round(float(pass_rate) * 100))
+                    failures_payload = failures or []
+                    if isinstance(failures_payload, str):
+                        import json as _json
+
+                        failures_payload = _json.loads(failures_payload)
+                    failing_ids = [f.get("case_id") for f in failures_payload if f.get("case_id")][
+                        :3
+                    ]
+                    tail = f"  ↳ failing: {', '.join(failing_ids)}" if failing_ids else ""
+                    lines.append(f"  {agent_id:<22s}{passed}/{total} ({pct}%)")
+                    if tail:
+                        lines.append(tail)
+                lines.append("")
+                lines.append(
+                    "<i>Each line is the agent's grade on its docs/benchmarks/&lt;agent&gt;/suite.yaml. "
+                    "Cost is observed, never optimized.</i>"
+                )
+                await message.answer("\n".join(lines))
+            except Exception as e:
+                await message.answer(f"Goals unavailable: {html.escape(str(e))}")
+
         # ── Inline keyboard callbacks ──
 
         @self.dp.callback_query(F.data.startswith("plan:"))
@@ -704,6 +816,137 @@ class TelegramBot:
                 if msg and hasattr(msg, "edit_reply_markup"):
                     await msg.edit_reply_markup(reply_markup=None)
 
+        # ── Delphi proposal approval callbacks ──
+        # callback_data shape: ``dp:a:<32-hex>`` (approve) or ``dp:r:<32-hex>``
+        # (reject). The Delphi engine runs a separate daemon (port 18801) but
+        # uses the same engine codebase, so this handler ships in the shared
+        # telegram.py and only fires when a Delphi proposal is in flight.
+        @self.dp.callback_query(F.data.startswith("dp:"))
+        async def on_delphi_proposal_decision(callback: CallbackQuery) -> None:
+            import asyncio as _asyncio
+            import hashlib as _hashlib
+            import hmac as _hmac
+            import os as _os
+            import uuid as _uuid
+
+            msg = callback.message
+            if not msg or not hasattr(msg, "chat"):
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+            if str(msg.chat.id) != str(self.config.default_chat_id):
+                logger.warning(
+                    "Unauthorized delphi-proposal callback from chat_id=%s user_id=%s",
+                    msg.chat.id,
+                    callback.from_user.id if callback.from_user else "unknown",
+                )
+                await callback.answer("Unauthorized", show_alert=True)
+                return
+
+            if not callback.data:
+                await callback.answer("Invalid callback data")
+                return
+            parts = callback.data.split(":", 2)
+            if len(parts) != 3 or parts[0] != "dp":
+                await callback.answer("Invalid callback data")
+                return
+            action_short = parts[1]
+            short_hex = parts[2]
+            if action_short == "a":
+                action = "approve"
+            elif action_short == "r":
+                action = "reject"
+            else:
+                await callback.answer("Invalid action")
+                return
+            try:
+                proposal_uuid = str(_uuid.UUID(short_hex))
+            except (TypeError, ValueError):
+                await callback.answer("Invalid proposal id")
+                return
+
+            # Compute the HMAC token here, in the engine process — the secret
+            # is not exposed to agents or callback_data.
+            secret = _os.environ.get("DELPHI_PROPOSAL_HMAC_SECRET", "")
+            if not secret:
+                logger.error(
+                    "DELPHI_PROPOSAL_HMAC_SECRET unset — cannot dispatch %s",
+                    proposal_uuid,
+                )
+                await callback.answer(
+                    "Engine misconfigured (no HMAC secret)",
+                    show_alert=True,
+                )
+                return
+            token = _hmac.new(
+                secret.encode("utf-8"),
+                f"{proposal_uuid}:{action}".encode(),
+                _hashlib.sha256,
+            ).hexdigest()
+
+            # Run the apply script as a subprocess. Async-safe: we use
+            # asyncio.create_subprocess_exec so we don't block the event loop.
+            # The script lives in scripts/, ROBOTHOR_TENANT_ID is forced to
+            # 'delphi' inside the script's preamble.
+            workspace_root = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+            script_path = f"{workspace_root}/scripts/delphi_apply_proposal.py"
+            python_path = f"{workspace_root}/venv/bin/python"
+            try:
+                proc = await _asyncio.create_subprocess_exec(
+                    python_path,
+                    script_path,
+                    "--proposal-id",
+                    proposal_uuid,
+                    "--action",
+                    action,
+                    "--token",
+                    token,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                    env={**_os.environ, "DELPHI_PROPOSAL_HMAC_SECRET": secret},
+                )
+                stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=15)
+                rc = proc.returncode
+            except TimeoutError:
+                logger.error("delphi_apply_proposal.py timed out for %s", proposal_uuid)
+                await callback.answer("Apply timed out", show_alert=True)
+                return
+            except Exception:
+                logger.exception("Failed to invoke delphi_apply_proposal.py")
+                await callback.answer("Apply failed (see logs)", show_alert=True)
+                return
+
+            if rc == 0:
+                verb = "Applied" if action == "approve" else "Rejected"
+                await callback.answer(verb)
+                with contextlib.suppress(Exception):
+                    if msg and hasattr(msg, "edit_reply_markup"):
+                        await msg.edit_reply_markup(reply_markup=None)
+                with contextlib.suppress(Exception):
+                    # Append a small footer to the message so the operator
+                    # has a record without scrolling away.
+                    if msg and hasattr(msg, "edit_text") and getattr(msg, "text", None):
+                        new_text = (getattr(msg, "text", "") or "") + f"\n\n_{verb} ✓_"
+                        await msg.edit_text(new_text, parse_mode="Markdown")
+            else:
+                err = (stderr or b"").decode("utf-8", errors="replace")[:200]
+                logger.warning(
+                    "delphi_apply_proposal rc=%s stderr=%s",
+                    rc,
+                    err.strip(),
+                )
+                # Common rc codes (see delphi_apply_proposal.py): 3=bad token,
+                # 4=not found, 5=not pending, 6=expired, 7=dispatch error.
+                msg_map = {
+                    3: "HMAC mismatch (engine bug?)",
+                    4: "Proposal not found",
+                    5: "Already decided",
+                    6: "Expired",
+                    7: "Apply failed",
+                }
+                await callback.answer(
+                    msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True
+                )
+
         # ── File/document/photo messages ──
 
         @self.dp.message(F.document | F.photo)
@@ -773,14 +1016,32 @@ class TelegramBot:
                 # Get highest resolution photo
                 photo: PhotoSize = message.photo[-1]
                 file_desc = "[Photo attached]"
+                file_name = f"photo_{photo.file_unique_id}.jpg"
                 try:
                     file = await self.bot.get_file(photo.file_id)
                     if file.file_path:
-                        file_name = f"photo_{photo.file_unique_id}.jpg"
-                        file_content = f"[Image: {photo.width}x{photo.height}px — text extraction not available for photos]"
+                        from io import BytesIO
+
+                        buf = BytesIO()
+                        await self.bot.download_file(file.file_path, buf)
+                        raw_bytes = buf.getvalue()
+                        # Use VLM to analyze the image
+                        vlm_prompt = (
+                            caption
+                            or "Describe what you see in this image in detail. Note any text, people, objects, URLs, or notable details."
+                        )
+                        vision_desc = await _analyze_photo_bytes(raw_bytes, vlm_prompt)
+                        file_content = f"[Image: {photo.width}x{photo.height}px]\n\nVision analysis:\n{vision_desc}"
+                        # Caption already consumed as prompt — clear it to avoid duplication
+                        if caption:
+                            caption = ""
+                    else:
+                        file_content = (
+                            f"[Image: {photo.width}x{photo.height}px — could not download]"
+                        )
                 except Exception as e:
                     logger.warning("Failed to process photo: %s", e)
-                    file_content = "[Failed to process photo]"
+                    file_content = f"[Failed to process photo: {e}]"
 
             # Build the user message with file context
             parts = []
@@ -1213,7 +1474,7 @@ class TelegramBot:
                     async def _persist_and_map(
                         session_key: str = session_key,
                         user_text: str = user_text,
-                        output_text: str = run.output_text,
+                        output_text: str | None = run.output_text,
                         model: Any = model,
                         tenant_id: str = _tenant,
                         user_extras: dict[str, Any] | None = user_extras,
@@ -1230,7 +1491,7 @@ class TelegramBot:
                         inserted = await save_exchange_async(
                             session_key,
                             user_text,
-                            output_text,
+                            output_text or "",
                             channel="telegram",
                             model_override=model,
                             tenant_id=tenant_id,
@@ -1996,7 +2257,7 @@ class TelegramBot:
             }
 
         telegram_user_id = str(message.from_user.id)
-        user_info = lookup_user(telegram_user_id)
+        user_info = lookup_user(telegram_user_id, tenant_id=self.config.tenant_id)
 
         if user_info is not None:
             self._chat_user_info[chat_id] = user_info
@@ -2029,6 +2290,317 @@ class TelegramBot:
         """Get the resolved tenant_id for a chat, falling back to config."""
         info = self._chat_user_info.get(chat_id)
         return info["tenant_id"] if info else self.config.tenant_id
+
+    async def _handle_restart_command(self, message: Message, unit_name: str) -> None:
+        """Acknowledge in chat, then detach a `systemctl restart` via systemd-run.
+
+        Owner-only (gate on default_chat_id). Uses ``systemd-run --no-block
+        --collect`` so the restart request runs in a transient unit *outside*
+        our cgroup — systemd-killing our own main process (for
+        robothor-engine.service) does not kill the queued restart.
+
+        For a healthy engine this is a clean reboot; it is not a recovery
+        path for a crash-looping engine (Telegram polling has to be up to
+        receive the command). The real escape hatch for a dead engine is
+        still SSH + ``sudo systemctl restart``.
+        """
+        import shutil
+        import subprocess
+
+        chat_id = str(message.chat.id)
+        if chat_id != str(self.config.default_chat_id):
+            logger.warning(
+                "Unauthorized /restart attempt from chat_id=%s user_id=%s",
+                chat_id,
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Unauthorized.")
+            return
+
+        if not shutil.which("systemd-run"):
+            await message.answer("systemd-run not available on this host.")
+            return
+
+        await message.answer(f"Restarting {unit_name}…")
+
+        transient_unit = f"{unit_name.replace('.service', '')}-restart-request"
+        try:
+            subprocess.Popen(
+                [
+                    "sudo",
+                    "-n",
+                    "systemd-run",
+                    "--no-block",
+                    "--collect",
+                    f"--unit={transient_unit}",
+                    "--description=Deferred engine restart from Telegram /restart",
+                    "/bin/sh",
+                    "-c",
+                    f"sleep 2 && systemctl restart {unit_name}",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:
+            logger.exception("Failed to queue restart of %s", unit_name)
+            await message.answer(f"Failed to queue restart: {e}")
+
+    async def _handle_goal_command(self, message: Message) -> None:
+        """Manage the operator's long-running session goal from Telegram.
+
+        Backed by a crm_task with the session_goal tag. Evidence is typed:
+          - test_run  reference must match pytest:passed:N or be a UUID
+          - commit    reference must be a git SHA (validated via git cat-file)
+          - ci_run    reference must be an https:// URL
+          - note      free-form (does not satisfy completion guard)
+
+        Shortcuts:
+          /goal evidence-commit HEAD          — resolves HEAD via `git rev-parse`
+          /goal evidence-test pytest:passed:N — short alias for `evidence test_run …`
+        """
+        from robothor.engine.session_goal import (
+            add_criterion,
+            add_evidence,
+            complete_goal,
+            create_active_goal,
+            edit_objective,
+            get_active_goal,
+            regenerate_goal_md_cache,
+            set_metric_target,
+        )
+
+        text = (message.text or "").strip()
+        arg = text.removeprefix("/goal").strip()
+        agent_id = self.config.default_chat_agent
+        tenant_id = self.config.tenant_id
+        workspace = self.config.workspace
+
+        try:
+            if not arg or arg == "status":
+                goal = get_active_goal(tenant_id=tenant_id, agent_id=agent_id)
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            command, _, rest = arg.partition(" ")
+            command = command.lower()
+            rest = rest.strip()
+
+            if command == "set":
+                if not rest:
+                    await message.answer(
+                        "Usage: <code>/goal set &lt;objective&gt;</code>\n"
+                        "An active goal must be completed (<code>/goal done &lt;note&gt;</code>) "
+                        "before a new one can be created."
+                    )
+                    return
+                try:
+                    goal = create_active_goal(
+                        tenant_id=tenant_id, objective=rest, agent_id=agent_id
+                    )
+                except ValueError as exc:
+                    if "active goal already exists" not in str(exc):
+                        raise
+                    await message.answer(
+                        "An active goal already exists. Complete it first with "
+                        "<code>/goal done &lt;note&gt;</code>."
+                    )
+                    return
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence":
+                kind, _, summary = rest.partition(" ")
+                kind = kind.strip().lower()
+                summary, _, reference = summary.strip().partition("--ref=")
+                summary = summary.strip()
+                reference = reference.strip()
+                if kind not in {"test_run", "commit", "ci_run", "note"}:
+                    await message.answer(
+                        "Usage: <code>/goal evidence &lt;kind&gt; &lt;summary&gt; "
+                        "[--ref=&lt;reference&gt;]</code>\n"
+                        "kind must be one of: test_run, commit, ci_run, note"
+                    )
+                    return
+                if not summary:
+                    await message.answer("Evidence summary is required.")
+                    return
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind=kind,
+                    summary=summary,
+                    reference=reference,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence-commit":
+                # `/goal evidence-commit HEAD` or `/goal evidence-commit <sha>`
+                ref = (rest or "HEAD").strip()
+                if ref.upper() == "HEAD":
+                    try:
+                        result = subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=str(workspace),
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if result.returncode != 0:
+                            await message.answer(
+                                f"git rev-parse HEAD failed: {html.escape(result.stderr.strip())}"
+                            )
+                            return
+                        ref = result.stdout.strip()
+                    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                        await message.answer(f"git unavailable: {exc}")
+                        return
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind="commit",
+                    summary=f"committed {ref[:12]}",
+                    reference=ref,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "evidence-test":
+                ref = rest.strip() or "pytest:passed:0"
+                summary = f"recorded {ref}"
+                goal = add_evidence(
+                    tenant_id=tenant_id,
+                    kind="test_run",
+                    summary=summary,
+                    reference=ref,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command in {"done", "complete"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal done &lt;completion note&gt;</code>")
+                    return
+                goal = complete_goal(
+                    tenant_id=tenant_id,
+                    note=rest,
+                    agent_id=agent_id,
+                    workspace=workspace,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command in {"edit-objective", "edit"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal edit-objective &lt;text&gt;</code>")
+                    return
+                goal = edit_objective(tenant_id=tenant_id, agent_id=agent_id, objective=rest)
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command in {"add-criterion", "add-crit"}:
+                if not rest:
+                    await message.answer("Usage: <code>/goal add-criterion &lt;text&gt;</code>")
+                    return
+                goal = add_criterion(tenant_id=tenant_id, agent_id=agent_id, text=rest)
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            if command == "set-target":
+                # Format: /goal set-target <metric> <op><value>
+                # e.g.    /goal set-target error_rate <0.02
+                parts = rest.split(maxsplit=1)
+                if len(parts) != 2:
+                    await message.answer(
+                        "Usage: <code>/goal set-target &lt;metric&gt; "
+                        "&lt;op&gt;&lt;value&gt;</code>"
+                    )
+                    return
+                metric, target = parts[0].strip(), parts[1].strip()
+                goal = set_metric_target(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    metric=metric,
+                    target=target,
+                )
+                regenerate_goal_md_cache(
+                    tenant_id=tenant_id, workspace=workspace, agent_id=agent_id
+                )
+                await message.answer(self._format_goal_status(goal, agent_id=agent_id))
+                return
+
+            await message.answer(
+                "<b>Goal commands</b>\n\n"
+                "/goal — show active goal\n"
+                "/goal set &lt;objective&gt; — create if none exists\n"
+                "/goal edit-objective &lt;text&gt; — replace objective in place\n"
+                "/goal add-criterion &lt;text&gt; — append a success criterion\n"
+                "/goal set-target &lt;metric&gt; &lt;op&gt;&lt;value&gt; — add/replace metric target\n"
+                "/goal evidence &lt;kind&gt; &lt;summary&gt; [--ref=&lt;ref&gt;] — record evidence\n"
+                "  kinds: test_run, commit, ci_run, note\n"
+                "/goal evidence-commit &lt;sha|HEAD&gt; — shortcut, validates SHA\n"
+                "/goal evidence-test pytest:passed:N — shortcut for test_run\n"
+                "/goal done &lt;note&gt; — complete after one valid test_run AND one valid commit"
+            )
+        except Exception as e:
+            logger.exception("Telegram /goal failed")
+            await message.answer(f"Goal unavailable: {html.escape(str(e))}")
+
+    def _format_goal_status(self, goal: Any, *, agent_id: str) -> str:
+        """Format a session goal for Telegram HTML."""
+        from robothor.engine.session_goal import summarize_goal
+
+        if goal is None:
+            return (
+                f"<b>Active goal</b> — {html.escape(agent_id)}\n\n"
+                "No active goal.\n"
+                "Set one with <code>/goal set &lt;objective&gt;</code>."
+            )
+
+        data = summarize_goal(goal, workspace=self.config.workspace)
+        lines = [
+            f"<b>Active goal</b> — {html.escape(agent_id)}",
+            f"Status: <code>{html.escape(str(data['status']))}</code>",
+            f"Objective: {html.escape(str(data['objective']))}",
+            f"Evidence: {data['valid_evidence_count']}/{data['evidence_count']} validated",
+        ]
+
+        missing = data.get("missing_completion_requirements") or []
+        if missing:
+            lines.append("")
+            lines.append("<b>Missing before completion</b>:")
+            lines.extend(f"- {html.escape(str(item))}" for item in missing)
+        else:
+            lines.append("")
+            lines.append("Ready for completion.")
+        return "\n".join(lines)
 
     def _session_key(self, chat_id: str) -> str:
         """Return a DB session key for a Telegram chat.
@@ -2215,6 +2787,8 @@ class TelegramBot:
                 BotCommand(command="deep", description="Deep reasoning via RLM"),
                 BotCommand(command="plan", description="Plan before executing"),
                 BotCommand(command="model", description="Switch AI model"),
+                BotCommand(command="goal", description="Show or update the active session goal"),
+                BotCommand(command="goals", description="Agent benchmark grades"),
                 BotCommand(command="clear", description="Clear conversation history"),
                 BotCommand(command="context", description="Context window stats"),
                 BotCommand(command="status", description="Engine health"),
@@ -2222,6 +2796,10 @@ class TelegramBot:
                 BotCommand(command="buddy", description="Full buddy profile"),
                 BotCommand(command="reset", description="Reset model + history"),
                 BotCommand(command="stop", description="Cancel current response"),
+                BotCommand(command="restart", description="Restart the engine (owner only)"),
+                BotCommand(
+                    command="restart_delphi", description="Restart the Delphi engine (owner only)"
+                ),
                 BotCommand(command="help", description="Show commands"),
             ]
             # Set for both default and private-chat scopes so DMs see the full menu

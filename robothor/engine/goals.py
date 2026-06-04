@@ -165,7 +165,246 @@ def _goal_from_dict(entry: dict[str, Any], *, category: str) -> GoalSpec:
     )
 
 
+# ─── Unified goal composition (manifest + per-agent task) ────────────
+
+
+SESSION_GOAL_ALIGNMENT_ID = "session-goal-alignment"
+SESSION_GOAL_PROGRESS_ID = "session-goal-progress"
+SESSION_GOAL_ALIGNMENT_METRIC = "session_goal_alignment_score"
+SESSION_GOAL_PROGRESS_METRIC = "session_goal_progress"
+SESSION_GOAL_SYNTHETIC_WEIGHT = 5.0
+
+
+def _load_active_goal_for_agent(agent_id: str, tenant_id: str) -> dict[str, Any] | None:
+    """Indirection so tests can patch the DB lookup cleanly."""
+    try:
+        from robothor.crm.dal import get_active_session_goal
+    except Exception:
+        return None
+    try:
+        return get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)
+    except Exception as exc:
+        logger.debug("compose_goals: load failed for %s: %s", agent_id, exc)
+        return None
+
+
+def _metric_target_to_spec(target: dict[str, Any]) -> GoalSpec | None:
+    if not isinstance(target, dict):
+        return None
+    metric = str(target.get("metric") or "").strip()
+    if not metric:
+        return None
+    extras = {
+        k: v
+        for k, v in target.items()
+        if k not in {"id", "category", "metric", "target", "weight", "window_days"}
+    }
+    return GoalSpec(
+        id=str(target.get("id") or "").strip() or metric,
+        category=str(target.get("category") or "correctness"),
+        metric=metric,
+        target=str(target.get("target") or ""),
+        weight=float(target.get("weight", 1.0)),
+        window_days=int(target.get("window_days", 7)),
+        extras=extras,
+    )
+
+
+def compose_goals(
+    *,
+    agent_id: str,
+    manifest: dict[str, Any] | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[GoalSpec]:
+    """Return the merged GoalSpec list for an agent.
+
+    Resolution rules:
+      1. Look up the unified per-agent goal task (`session_goal` +
+         `agent:<agent_id>` tag).
+      2. If the task has populated ``metric_targets``, use those (task is
+         source of truth — manifest goals are seeds only).
+      3. If the task is missing OR has empty ``metric_targets``, fall back
+         to ``parse_goals_from_manifest(manifest)``.
+      4. If the task carries a non-empty ``objective``, prepend two
+         synthetic GoalSpecs: ``session-goal-alignment`` (buddy-judged
+         alignment) and, if ``success_criteria`` is non-empty, also
+         ``session-goal-progress`` (validated evidence / criteria count).
+    """
+    row = _load_active_goal_for_agent(agent_id, tenant_id)
+    meta: dict[str, Any] = {}
+    if row:
+        raw_meta = row.get("session_goal_meta") or {}
+        if isinstance(raw_meta, dict):
+            meta = raw_meta
+
+    metric_targets_raw = meta.get("metric_targets") if meta else None
+    target_specs: list[GoalSpec] = []
+    if isinstance(metric_targets_raw, list) and metric_targets_raw:
+        for t in metric_targets_raw:
+            spec = _metric_target_to_spec(t)
+            if spec:
+                target_specs.append(spec)
+    else:
+        target_specs = parse_goals_from_manifest(manifest or {})
+
+    objective = (meta.get("objective") or "").strip() if meta else ""
+    criteria = meta.get("success_criteria") if meta else None
+    alignment_target = str(meta.get("alignment_target") or ">=0.7").strip() or ">=0.7"
+
+    synthetic: list[GoalSpec] = []
+    if objective:
+        synthetic.append(
+            GoalSpec(
+                id=SESSION_GOAL_ALIGNMENT_ID,
+                category="quality",
+                metric=SESSION_GOAL_ALIGNMENT_METRIC,
+                target=alignment_target,
+                weight=SESSION_GOAL_SYNTHETIC_WEIGHT,
+                window_days=7,
+                extras={"source": "session_goal"},
+            )
+        )
+        if criteria:
+            synthetic.append(
+                GoalSpec(
+                    id=SESSION_GOAL_PROGRESS_ID,
+                    category="correctness",
+                    metric=SESSION_GOAL_PROGRESS_METRIC,
+                    target=">=1.0",
+                    weight=2.0,
+                    window_days=7,
+                    extras={"source": "session_goal"},
+                )
+            )
+    return synthetic + target_specs
+
+
 # ─── Metric computation ───────────────────────────────────────────────
+
+
+def _get_benchmark_pass_rate(
+    agent_id: str,
+    window_days: int = 7,
+    tenant_id: str = DEFAULT_TENANT,
+    as_of: datetime | None = None,
+) -> float | None:
+    """Return the most recent benchmark pass rate for an agent within the window.
+
+    The pass rate is computed as ``passed / total_cases`` from the latest
+    `benchmark_results` row — a *true* pass rate, not the `pass_rate` column,
+    which actually stores the partial-credit aggregate score (a task only
+    needs a 0.70 partial score to be "passed"). Scoring the >=0.85 goal
+    against that aggregate checked the wrong scale; passed/total_cases is the
+    honest "did the agent do its job?" metric. Both columns have always been
+    written correctly, so this is consistent across all historical rows.
+
+    Returns a value in [0.0, 1.0] from a row whose run_at falls within
+    [as_of - window_days, as_of]. Returns None if no row exists or the row
+    has zero cases (no data, not a 0% pass rate).
+    """
+    try:
+        from robothor.crm.dal import get_connection
+    except Exception:
+        return None
+    end = as_of or datetime.now(UTC)
+    start = end - timedelta(days=window_days)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT passed, total_cases
+                FROM benchmark_results
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND run_at >= %s
+                  AND run_at <= %s
+                ORDER BY run_at DESC
+                LIMIT 1
+                """,
+                (agent_id, tenant_id, start, end),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            passed, total_cases = row[0], row[1]
+            if not total_cases:  # None or 0 — no data, not a 0% pass rate
+                return None
+            return round(float(passed) / float(total_cases), 4)
+    except Exception as exc:
+        logger.debug("benchmark_pass_rate lookup failed for %s: %s", agent_id, exc)
+        return None
+
+
+def _get_session_goal_alignment_score(
+    agent_id: str,
+    window_days: int = 7,
+    tenant_id: str = DEFAULT_TENANT,
+    as_of: datetime | None = None,
+) -> float | None:
+    """Return the rolling-average session-goal alignment score (0.0-1.0).
+
+    Reads agent_reviews where ``categories.dimension =
+    'session_goal_alignment'``. Buddy persists each alignment as a 1-5
+    rating (mapping 0.0-1.0 → 1-5); this function reverses the map.
+    Returns None when no alignment review row exists in the window.
+    """
+    try:
+        from robothor.crm.dal import get_connection
+    except Exception:
+        return None
+    end = as_of or datetime.now(UTC)
+    start = end - timedelta(days=window_days)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT AVG(rating::float)
+                FROM agent_reviews
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND created_at >= %s
+                  AND created_at <= %s
+                  AND categories ->> 'dimension' = 'session_goal_alignment'
+                """,
+                (agent_id, tenant_id, start, end),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return None
+            avg_rating = float(row[0])
+            score = max(0.0, min(1.0, (avg_rating - 1.0) / 4.0))
+            return round(score, 4)
+    except Exception as exc:
+        logger.debug("session_goal_alignment lookup failed for %s: %s", agent_id, exc)
+        return None
+
+
+def _get_session_goal_progress(
+    agent_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+) -> float | None:
+    """Return validated_evidence / len(success_criteria) for this agent's goal.
+
+    Returns None when there is no active goal, no metadata, no criteria,
+    or criteria is empty — so agents without real success criteria don't
+    false-trigger as 0.0 (which would breach >=1.0).
+    """
+    row = _load_active_goal_for_agent(agent_id, tenant_id)
+    if not row:
+        return None
+    meta = row.get("session_goal_meta") or {}
+    if not isinstance(meta, dict):
+        return None
+    criteria = meta.get("success_criteria") or []
+    evidence = meta.get("evidence") or []
+    if not isinstance(criteria, list) or not isinstance(evidence, list):
+        return None
+    if not criteria:
+        return None
+    valid_count = sum(1 for e in evidence if isinstance(e, dict) and e.get("valid"))
+    return round(valid_count / len(criteria), 4)
 
 
 def compute_goal_metrics(
@@ -187,6 +426,25 @@ def compute_goal_metrics(
     if total > 0:
         timeouts = stats.get("timeouts") or 0
         metrics["timeout_rate"] = round(timeouts / total, 4)
+
+    # Canonical "did the agent do its job?" metric. Populated from
+    # benchmark_results table; None when no recent benchmark run exists.
+    pass_rate = _get_benchmark_pass_rate(
+        agent_id, window_days=window_days, tenant_id=tenant_id, as_of=as_of
+    )
+    if pass_rate is not None:
+        metrics["benchmark_pass_rate"] = round(pass_rate, 4)
+
+    # Operator-facing: "is this agent doing what I asked of it?" (buddy-judged)
+    alignment = _get_session_goal_alignment_score(
+        agent_id, window_days=window_days, tenant_id=tenant_id, as_of=as_of
+    )
+    if alignment is not None:
+        metrics[SESSION_GOAL_ALIGNMENT_METRIC] = alignment
+
+    progress = _get_session_goal_progress(agent_id, tenant_id=tenant_id)
+    if progress is not None:
+        metrics[SESSION_GOAL_PROGRESS_METRIC] = progress
 
     return metrics
 
@@ -234,6 +492,10 @@ def detect_goal_breach(
             continue
 
         # Count consecutive breach days, walking back from the most recent.
+        # Days where the metric has no value (None) are skipped — they're
+        # neither satisfaction nor breach, just "not measured yet." This
+        # prevents new metrics like benchmark_pass_rate from false-triggering
+        # before the first measurement lands.
         consecutive = 0
         actual_latest: float | None = None
         for snapshot in reversed(history):
@@ -243,6 +505,8 @@ def detect_goal_breach(
                     actual_latest = float(val)
                 except (TypeError, ValueError):
                     actual_latest = None
+            if val is None:
+                continue  # not measured this day
             if _evaluate_target(val, goal.target):
                 break  # goal satisfied — streak ends
             consecutive += 1
@@ -397,7 +661,7 @@ def sweep_all_goals(
         agent_id = manifest.get("id")
         if not agent_id:
             continue
-        goals = parse_goals_from_manifest(manifest)
+        goals = compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=tenant_id)
         if not goals:
             continue
         breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
@@ -434,9 +698,33 @@ def compute_achievement_score(
     per_goal: list[dict[str, Any]] = []
     satisfied_ids: list[str] = []
     breached_ids: list[str] = []
+    unmeasured_ids: list[str] = []
 
     for goal in goals:
         metric_value = snapshots[goal.window_days].get(goal.metric)
+
+        # None = "not measured this window" = neutral, NOT a breach. Mirrors
+        # detect_goal_breach's `if val is None: continue` and the
+        # compute_goal_metrics contract that omits absent metrics. Such a goal
+        # is excluded from total_weight entirely — it neither helps nor hurts
+        # the score — and surfaced in `unmeasured_goals` for visibility
+        # instead of being mislabeled a breach. Check `is None`, not
+        # falsiness: a genuine 0.0 metric is measured and must still count.
+        if metric_value is None:
+            unmeasured_ids.append(goal.id)
+            per_goal.append(
+                {
+                    "id": goal.id,
+                    "category": goal.category,
+                    "metric": goal.metric,
+                    "target": goal.target,
+                    "actual": None,
+                    "satisfied": None,
+                    "weight": goal.weight,
+                }
+            )
+            continue
+
         is_satisfied = _evaluate_target(metric_value, goal.target)
         total_weight += goal.weight
         if is_satisfied:
@@ -456,24 +744,34 @@ def compute_achievement_score(
             }
         )
 
-    score = (weighted_satisfied / total_weight) if total_weight > 0 else 0.0
-    # Map [0, 1] → rating [1, 5]
-    if score >= 0.95:
-        rating = 5
-    elif score >= 0.80:
-        rating = 4
-    elif score >= 0.60:
-        rating = 3
-    elif score >= 0.40:
-        rating = 2
+    # Edge case: every goal is unmeasured. There is no evidence either way, so
+    # a numeric score would be a fabrication — return None. 0.0 is what caused
+    # the false fleet-score crash (indistinguishable from "all goals breached").
+    score: float | None
+    rating: int | None
+    if total_weight > 0:
+        score = round(weighted_satisfied / total_weight, 4)
+        # Map [0, 1] → rating [1, 5]
+        if score >= 0.95:
+            rating = 5
+        elif score >= 0.80:
+            rating = 4
+        elif score >= 0.60:
+            rating = 3
+        elif score >= 0.40:
+            rating = 2
+        else:
+            rating = 1
     else:
-        rating = 1
+        score = None
+        rating = None
 
     return {
-        "score": round(score, 4),
+        "score": score,
         "rating": rating,
         "satisfied_goals": satisfied_ids,
         "breached_goals": breached_ids,
+        "unmeasured_goals": unmeasured_ids,
         "per_goal": per_goal,
     }
 
@@ -491,20 +789,29 @@ def run_nightly_auto_review(
         agent_id = manifest.get("id")
         if not agent_id:
             continue
-        goals = parse_goals_from_manifest(manifest)
+        goals = compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=tenant_id)
         if not goals:
             continue
 
         achievement = compute_achievement_score(agent_id, goals, tenant_id=tenant_id)
         breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
 
-        # Build feedback text + action items from breaches.
-        feedback_lines = [
-            f"Goal achievement: {achievement['score']:.2f} "
-            f"({len(achievement['satisfied_goals'])}/"
-            f"{len(achievement['satisfied_goals']) + len(achievement['breached_goals'])}"
-            " goals satisfied)."
-        ]
+        # Build feedback text + action items from breaches. ``score`` is None
+        # when every goal is unmeasured this window — emit an honest "not
+        # measured" line rather than crashing the f-string format.
+        score = achievement["score"]
+        if score is None:
+            feedback_lines = [
+                "Goal achievement: not measured "
+                f"({len(achievement.get('unmeasured_goals', []))} goal(s) have "
+                "no data this window)."
+            ]
+        else:
+            total_goals = len(achievement["satisfied_goals"]) + len(achievement["breached_goals"])
+            feedback_lines = [
+                f"Goal achievement: {score:.2f} "
+                f"({len(achievement['satisfied_goals'])}/{total_goals} goals satisfied)."
+            ]
         if achievement["breached_goals"]:
             feedback_lines.append("Breached: " + ", ".join(achievement["breached_goals"]) + ".")
 
@@ -529,7 +836,9 @@ def run_nightly_auto_review(
 
         review_id = register_review(
             agent_id=agent_id,
-            rating=achievement["rating"],
+            # rating is None when score is None — create_review clamps to
+            # 1-5 and would crash on None; 3 (neutral) is the honest default.
+            rating=achievement["rating"] or 3,
             categories=categories,
             feedback="\n".join(feedback_lines),
             action_items=action_items,
@@ -578,9 +887,10 @@ def _main() -> None:
     if args.cmd == "nightly-review":
         results = run_nightly_auto_review(manifests)
         for r in results:
+            score_str = "  n/a" if r["score"] is None else f"{r['score']:.2f}"
+            rating_str = "-" if r["rating"] is None else str(r["rating"])
             print(
-                f"{r['agent_id']:22} rating={r['rating']} "
-                f"score={r['score']:.2f} breaches={r['breaches']}"
+                f"{r['agent_id']:22} rating={rating_str} score={score_str} breaches={r['breaches']}"
             )
         return
 
@@ -593,7 +903,7 @@ def _main() -> None:
                 continue
             if args.agent and agent_id != args.agent:
                 continue
-            goals = parse_goals_from_manifest(m)
+            goals = compose_goals(agent_id=agent_id, manifest=m)
             if not goals:
                 continue
             achievement = compute_achievement_score(agent_id, goals)

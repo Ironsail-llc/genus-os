@@ -135,6 +135,57 @@ class TestRenderDevopsReport:
         assert "Bottlenecks:" in plain
 
     @pytest.mark.asyncio
+    async def test_data_quality_panel_hidden_when_clean(self):
+        """Report Quality panel must not appear when there are no anomalies."""
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        result = await _render_devops_report({"report_data": SAMPLE_DATA}, _CTX)
+        # Sentinel string from the rendered <h2> only appears when the block fires
+        assert "unresolved handle(s)" not in result["html"]
+        assert "engineer(s) on roster" not in result["html"]
+
+    @pytest.mark.asyncio
+    async def test_data_quality_panel_shows_when_unresolved(self):
+        """Report Quality panel must surface unresolved handles."""
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        data = dict(SAMPLE_DATA)
+        data["data_quality"] = {
+            "unresolved_handles": [
+                {
+                    "channel": "github",
+                    "identifier": "newhire-dev",
+                    "occurrences": 4,
+                    "sources": ["impetus-one/pr_stats_current_week/authors"],
+                }
+            ],
+            "missing_from_roster": [],
+        }
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        assert "newhire-dev" in result["html"]
+        assert "unresolved handle" in result["html"]
+
+    @pytest.mark.asyncio
+    async def test_data_quality_panel_shows_missing_roster(self):
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        data = dict(SAMPLE_DATA)
+        data["data_quality"] = {
+            "unresolved_handles": [],
+            "missing_from_roster": [
+                {
+                    "person_id": "p2",
+                    "name": "Bob Smith",
+                    "job_title": "Engineer",
+                    "reason": "no activity this period",
+                }
+            ],
+        }
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        assert "Report Quality" in result["html"]
+        assert "Bob Smith" in result["html"]
+
+    @pytest.mark.asyncio
     async def test_accepts_json_string(self):
         import json
 

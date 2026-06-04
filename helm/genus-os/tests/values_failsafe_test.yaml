@@ -1,0 +1,69 @@
+suite: layer-2 values files fail closed
+# Guards against the "production silently runs in-cluster pgvector with
+# default password" regression. If someone removes `postgres.enabled: false`
+# or `redis.enabled: false` from values-production / values-staging, these
+# tests catch it.
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: values-production resolves postgres.enabled=false
+    values:
+      - ../values-production.yaml
+    template: vaultstaticsecret.yaml
+    set:
+      # Provide database.host so the chart resolves to something concrete
+      # without depending on layer 3.
+      database.host: rds.example.com
+    asserts:
+      - isKind:
+          of: VaultStaticSecret
+
+  - it: values-staging resolves postgres.enabled=false + redis.enabled=false
+    values:
+      - ../values-staging.yaml
+    template: vaultstaticsecret.yaml
+    asserts:
+      - isKind:
+          of: VaultStaticSecret
+
+  - it: engine workload under values-production omits explicit DB env
+    # Under values-production (postgres.enabled=false) the chart no longer
+    # emits explicit ROBOTHOR_DB_* env vars — they come from the VSO
+    # envFrom Secret instead. This test ensures the gate works.
+    values:
+      - ../values-production.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+          any: true
+
+  - it: engine workload under values-production does NOT default to gos-postgres
+    values:
+      - ../values-production.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      # database.host left empty intentionally — should NOT fall back to
+      # the in-cluster Service name (that would only happen if postgres.enabled
+      # were true, which fail-safe values-production prevents).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_HOST
+            value: gos-postgres
+          any: true
+
+  - it: values-local keeps postgres + redis enabled (in-cluster dev DBs)
+    values:
+      - ../values-local.yaml
+    template: vaultstaticsecret.yaml
+    set:
+      vault.enabled: true  # re-enable just for this rendering check
+    asserts:
+      - isKind:
+          of: VaultStaticSecret

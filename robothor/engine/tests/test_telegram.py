@@ -365,6 +365,171 @@ class TestModelPickerRegistry:
         assert "Qwen 3.5 122B" not in AVAILABLE_MODELS
 
 
+class TestGoalCommand:
+    """Tests for Telegram /goal control surface — DAL-backed.
+
+    The DAL layer is mocked via the session_goal module; we assert on what the
+    handler tells the user, not on side effects (which are exercised by the
+    Phase 1 DAL tests and the Phase 5 tool tests).
+    """
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.session_goal.regenerate_goal_md_cache")
+    @patch("robothor.engine.session_goal.dal.create_session_goal")
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    async def test_goal_set_creates_when_none_active(self, mock_get, mock_create, _cache, bot):
+        mock_get.return_value = None
+        mock_create.return_value = "task-1"
+        msg = MagicMock()
+        msg.text = "/goal set Keep improving the main agent"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+
+        assert msg.answer.call_count == 1
+        assert "Keep improving" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    async def test_goal_set_refuses_duplicate(self, mock_get, bot):
+        mock_get.return_value = {
+            "id": "task-existing",
+            "objective": "existing",
+            "tags": ["session_goal"],
+            "status": "TODO",
+            "session_goal_meta": {
+                "success_criteria": ["c1"],
+                "evidence": [],
+                "completion_note": "",
+            },
+        }
+        msg = MagicMock()
+        msg.text = "/goal set Replace without intent"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+        assert "already exists" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.session_goal.regenerate_goal_md_cache")
+    @patch("robothor.engine.session_goal.dal.add_session_goal_evidence")
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    async def test_goal_evidence_rejects_unknown_kind(self, mock_get, mock_add, _cache, bot):
+        mock_get.return_value = {
+            "id": "task-1",
+            "objective": "x",
+            "tags": ["session_goal"],
+            "status": "TODO",
+            "session_goal_meta": {"success_criteria": [], "evidence": [], "completion_note": ""},
+        }
+        mock_add.return_value = True
+        msg = MagicMock()
+        msg.text = "/goal evidence implementation did stuff"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+        assert "kind must be one of" in msg.answer.call_args.args[0]
+        mock_add.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.session_goal.regenerate_goal_md_cache")
+    @patch("robothor.engine.session_goal.dal.complete_session_goal")
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    async def test_goal_done_blocked_without_evidence(self, mock_get, mock_complete, _cache, bot):
+        mock_get.return_value = {
+            "id": "task-1",
+            "objective": "x",
+            "tags": ["session_goal"],
+            "status": "TODO",
+            "session_goal_meta": {"success_criteria": ["c"], "evidence": [], "completion_note": ""},
+        }
+        msg = MagicMock()
+        msg.text = "/goal done shipped"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+        assert (
+            "Goal unavailable" in msg.answer.call_args.args[0]
+            or "not ready to complete" in msg.answer.call_args.args[0]
+        )
+        mock_complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.session_goal.regenerate_goal_md_cache")
+    @patch("robothor.engine.session_goal.dal.add_session_goal_evidence")
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    @patch("robothor.engine.session_goal.subprocess.run")
+    async def test_evidence_test_shortcut_records_test_run(
+        self, mock_run, mock_get, mock_add, _cache, bot
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_get.return_value = {
+            "id": "task-1",
+            "objective": "x",
+            "tags": ["session_goal"],
+            "status": "TODO",
+            "session_goal_meta": {"success_criteria": [], "evidence": [], "completion_note": ""},
+        }
+        mock_add.return_value = True
+        msg = MagicMock()
+        msg.text = "/goal evidence-test pytest:passed:42"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+        kwargs = mock_add.call_args.kwargs
+        assert kwargs["kind"] == "test_run"
+        assert kwargs["reference"] == "pytest:passed:42"
+        assert kwargs["valid"] is True
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.telegram.subprocess.run")
+    @patch("robothor.engine.session_goal.regenerate_goal_md_cache")
+    @patch("robothor.engine.session_goal.dal.add_session_goal_evidence")
+    @patch("robothor.engine.session_goal.dal.get_active_session_goal")
+    @patch("robothor.engine.session_goal.subprocess.run")
+    async def test_evidence_commit_shortcut_resolves_head(
+        self, mock_sg_run, mock_get, mock_add, _cache, mock_tg_run, bot
+    ):
+        # session_goal.subprocess.run validates the SHA via cat-file.
+        mock_sg_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        # telegram.subprocess.run is the rev-parse HEAD call.
+        mock_tg_run.return_value = MagicMock(returncode=0, stdout="abcdef1234567890\n", stderr="")
+        mock_get.return_value = {
+            "id": "task-1",
+            "objective": "x",
+            "tags": ["session_goal"],
+            "status": "TODO",
+            "session_goal_meta": {"success_criteria": [], "evidence": [], "completion_note": ""},
+        }
+        mock_add.return_value = True
+        msg = MagicMock()
+        msg.text = "/goal evidence-commit HEAD"
+        msg.answer = AsyncMock()
+
+        await bot._handle_goal_command(msg)
+        kwargs = mock_add.call_args.kwargs
+        assert kwargs["kind"] == "commit"
+        assert kwargs["reference"] == "abcdef1234567890"
+
+
+class TestGoalsBotCommand:
+    """The /goals (plural) command lists agent benchmark grades."""
+
+    def test_help_text_lists_both_goal_and_goals(self, bot):
+        # Quick sanity: handler closures register on the dispatcher; the help
+        # response is built inside cmd_help. We just verify the source text
+        # exposes both commands so users see them.
+        from pathlib import Path
+
+        import robothor.engine.telegram as tg_mod
+
+        with Path(tg_mod.__file__).open(encoding="utf-8") as f:
+            src = f.read()
+        assert "/goal — Show or update the active session goal" in src
+        assert "/goals — Show each agent's benchmark grade" in src
+        assert 'BotCommand(command="goals"' in src
+
+
 class TestStreamingToolVisibility:
     """Tests for tool and status visibility during Telegram streaming."""
 

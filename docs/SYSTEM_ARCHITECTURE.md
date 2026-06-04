@@ -412,6 +412,59 @@ create_task ──▶ worker run (todo_write)
 | `ROBOTHOR_PLANNER_ENABLED` | `0` (off) | The Stage 4 forward planner. Off → stage-3 bare-flag stall2 behavior. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | `1` (on) | Stage 5 escalation at run end. Only fires when both `parent_task_id` is set AND items remain unfinished. |
 
+### Agent Goals — unified persistent objective per agent
+
+The system has **one goal per agent**, persistent across runs, editable at runtime. It absorbs three previously-separate concepts: the operator's session objective, the agent's manifest metric targets, and the typed-evidence completion guard. The same goal task drives prompt injection, the buddy → auto-researcher → auto-agent self-improvement loop, the thread pool / forward planner, and Stage 5 todo escalation.
+
+**Storage.** Each agent has a single `crm_tasks` row tagged `[session_goal, agent:<agent_id>, thread]`. The full payload lives in the `session_goal_meta` JSONB column:
+
+```
+{
+  "objective":         "<operator-set>",
+  "success_criteria":  ["…", "…"],
+  "metric_targets":    [{id, category, metric, target, weight, window_days, extras}, …],
+  "evidence":          [{kind, summary, reference, recorded_at, valid}, …],
+  "completion_note":   "<text>",
+  "alignment_target":  ">=0.7"        // buddy-judged session_goal_alignment
+}
+```
+
+Migrations: `065_session_goal_meta.sql` (column), `066_session_goal_meta_v2.sql` (v2 shape doc). `brain/GOAL.md` is a denormalized read-cache regenerated on every mutation; hand-edits are advisory only.
+
+**Manifest goals are SEED, not source of truth.** `docs/agents/<agent>.yaml` `goals:` blocks supply the initial `metric_targets` when an agent's goal task is first created (via `scripts/seed_agent_goals.py` or lazily on first read). After seeding, the unified task is canonical and edits go through the CLI/Telegram/tools — manifest changes are advisory.
+
+**Composition.** `robothor/engine/goals.py::compose_goals(agent_id, manifest, tenant_id)` returns the merged `GoalSpec` list every consumer reads from:
+- The unified task's `metric_targets` (if any), else falls back to the manifest's `goals:` block.
+- A synthetic `session-goal-alignment` GoalSpec (metric `session_goal_alignment_score`, target from the task's `alignment_target`, weight 5.0) when an objective is set.
+- A synthetic `session-goal-progress` GoalSpec (validated_evidence / criteria_count, target `>=1.0`) when criteria exist.
+
+`buddy.py`, `buddy_critic.py::aggregate_findings`, the nightly self-improvement sweep, and the audit CLI all switched to `compose_goals` — the manifest-only path is gone.
+
+**Buddy alignment dimension.** When `build_evidence` finds an active goal for the run's agent, it includes `objective` + `success_criteria` in the LLM review prompt. The LLM rates `session_goal_alignment` 0.0-1.0 alongside its primary dimension. `persist_review` writes a second `agent_reviews` row with `categories.dimension = 'session_goal_alignment'` and `rating` mapped 1-5 from the alignment score. `_get_session_goal_alignment_score` reverses the map for `compute_goal_metrics`.
+
+**Self-improvement loop.** The synthetic alignment goal flows through the existing pipeline:
+- `detect_goal_breach` flags it when alignment drops below target.
+- `aggregate_findings` opens a CRM task tagged `[nightwatch, self-improve, <agent>, session_goal_alignment]`.
+- `auto-researcher` can target `session_goal_alignment_score` and `session_goal_progress` without `operator_override` — they ARE the operator's mandate (whitelist in `experiment.py`).
+- `auto-agent` ships PRs against the breach.
+
+**Per-agent prompt injection.** `robothor/engine/warmup.py` adds an `agent_goal` warmup phase that calls `session_goal::build_agent_goal_context(tenant_id, agent_id)`. Every agent sees its own goal block — objective, criteria, metric_targets, current grades, alignment score. Recorded as `warmup_section:agent_goal` in `agent_run_steps` for telemetry. No more owner-only scoping; the v2 model gives every agent its own goal.
+
+**Real completion guard.** `complete_goal` refuses to mark the task DONE unless evidence includes:
+- ≥1 valid `test_run` evidence — reference matching `pytest:(passed|failed):N` or a UUID, AND
+- ≥1 valid `commit` evidence — reference is a 7+ char SHA validated via `git cat-file -e`.
+
+Other kinds: `ci_run` (https URL) and `note` (free-form, never satisfies completion).
+
+**Composition with the thread pool.** Because goal tasks carry the `thread` tag automatically, they appear in the thread pool (Stage 1), get planner next-actions written (Stage 4), participate in autonomy budgeting, and Stage 5 todo escalation already wires unfinished worker todos onto the goal task whenever a child run is spawned with `parent_task_id` pointing at it.
+
+**Surfaces.**
+- CLI: `robothor goal --agent <id> {set, status, evidence, complete, edit-objective, add-criterion, set-target, remove-target}`. Workspace resolves via `ROBOTHOR_WORKSPACE`.
+- Telegram: `/goal {set, evidence <kind>, evidence-test pytest:passed:N, evidence-commit HEAD, edit-objective, add-criterion, set-target, done}`. `/goals` (plural) lists fleet benchmark grades.
+- Tools: `create_goal`, `get_goal`, `update_goal` — `update_goal` accepts `edit_op ∈ {objective, criterion, metric_target}` plus the existing evidence/completion paths.
+
+**Seeding.** `scripts/seed_agent_goals.py` walks `docs/agents/*.yaml` and ensures every real agent (skipping `_defaults.yaml`, `schema.yaml`, `corrective-actions.yaml`) has a goal task. Idempotent — agents that already have a task are left alone.
+
 **Activation:**
 ```
 sudo systemctl edit robothor-engine

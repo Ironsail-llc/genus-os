@@ -19,11 +19,12 @@ When `web_fetch` returns 403 Forbidden (bot detection) on a URL.
 4. Call `browser(action="stop")` to close the browser session
 5. Parse the article content from the snapshot (look for heading + paragraph text)
 
-## Known blocked domains
+## Known blocked domains (browser also fails)
 - cnbc.com
+- goodrx.com — aggressive Cloudflare/WAF, blocks both `web_fetch` and headless Chromium. Use `web_search` index instead.
 - Likely: wsj.com, bloomberg.com, reuters.com, nytimes.com (news sites with anti-bot measures)
 
 ## Notes
-- The browser tool uses a real Chromium session with proper headers, so it bypasses bot detection
+- The browser tool uses a real Chromium session with proper headers, so it bypasses most bot detection
 - Do NOT retry `web_fetch` — it will fail again on the same domain
-- If the browser also fails, the content may be behind a paywall requiring login
+- If the browser also fails, the content may be behind a paywall requiring login, or the site has aggressive anti-bot (WAF). Fall back to `web_search` for indexed content.

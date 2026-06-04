@@ -14,6 +14,7 @@ from robothor.engine.tools.handlers import (  # noqa: F401
     filesystem,
     git,
     github_api,
+    goal,
     gws,
     identity,
     jira,

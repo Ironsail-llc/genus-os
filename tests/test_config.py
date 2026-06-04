@@ -55,6 +55,33 @@ class TestDatabaseConfig:
         with pytest.raises(AttributeError):
             db.host = "other"  # type: ignore[misc]
 
+    def test_url_tcp(self):
+        db = DatabaseConfig(host="example.com", port=5433, name="rt", user="u")
+        assert db.url == "postgresql://u@example.com:5433/rt"
+
+    def test_url_tcp_with_password(self):
+        db = DatabaseConfig(host="db", port=5432, name="rt", user="u", password="s3cret")
+        assert db.url == "postgresql://u:s3cret@db:5432/rt"
+
+    def test_url_unix_socket(self):
+        # Peer auth via socket — use query params, not the ambiguous user@/db form.
+        db = DatabaseConfig(host="", name="rt", user="u")
+        assert db.url == "postgresql:///rt?user=u"
+
+    def test_url_unix_socket_no_user(self):
+        db = DatabaseConfig(host="", name="rt", user="")
+        assert db.url == "postgresql:///rt"
+
+    def test_url_socket_directory_host(self):
+        # Some systemd envs pass the socket dir as host (e.g. /var/run/postgresql).
+        # A path in the authority is invalid libpq — it must be a query param.
+        db = DatabaseConfig(host="/var/run/postgresql", name="rt", user="u")
+        assert db.url == "postgresql:///rt?user=u&host=/var/run/postgresql"
+
+    def test_url_password_urlencodes(self):
+        db = DatabaseConfig(host="db", name="rt", user="u", password="p@s s/word")
+        assert db.url == "postgresql://u:p%40s%20s%2Fword@db:5432/rt"
+
 
 class TestRedisConfig:
     def test_url_no_password(self):
@@ -62,8 +89,8 @@ class TestRedisConfig:
         assert r.url == "redis://127.0.0.1:6379/0"
 
     def test_url_with_password(self):
-        r = RedisConfig(password="pass123")
-        assert r.url == "redis://:pass123@127.0.0.1:6379/0"
+        r = RedisConfig(password="pass123", host="localhost")
+        assert r.url == "redis://:pass123@localhost:6379/0"
 
 
 class TestOllamaConfig:
@@ -124,6 +151,39 @@ class TestGetConfig:
         monkeypatch.setenv("ROBOTHOR_BRIDGE_PORT", "9200")
         cfg = get_config()
         assert cfg.bridge_port == 9200
+
+    def test_database_url_exported(self, monkeypatch):
+        """get_config() must export DATABASE_URL so subprocesses (psql in
+        experiment_measure metric commands) can reach the DB."""
+        import os
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_DB_HOST", "example.com")
+        monkeypatch.setenv("ROBOTHOR_DB_PORT", "5433")
+        monkeypatch.setenv("ROBOTHOR_DB_NAME", "rt")
+        monkeypatch.setenv("ROBOTHOR_DB_USER", "u")
+        get_config()
+        assert os.environ.get("DATABASE_URL") == "postgresql://u@example.com:5433/rt"
+
+    def test_database_url_socket_form(self, monkeypatch):
+        """Socket-auth export uses the query-param form psql understands."""
+        import os
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_DB_HOST", "")
+        monkeypatch.setenv("ROBOTHOR_DB_NAME", "rt")
+        monkeypatch.setenv("ROBOTHOR_DB_USER", "u")
+        get_config()
+        assert os.environ.get("DATABASE_URL") == "postgresql:///rt?user=u"
+
+    def test_database_url_respects_override(self, monkeypatch):
+        """An explicit DATABASE_URL override is preserved (e.g. pointing at a replica)."""
+        import os
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://replica@example.com/rt")
+        monkeypatch.setenv("ROBOTHOR_DB_HOST", "example.com")
+        get_config()
+        assert os.environ["DATABASE_URL"] == "postgresql://replica@example.com/rt"
 
     def test_env_override_workspace(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", "/opt/robothor")

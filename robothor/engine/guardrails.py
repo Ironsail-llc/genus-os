@@ -60,6 +60,11 @@ POLICY_DESCRIPTIONS: dict[str, str] = {
         "the engine auto-marks that task IN_PROGRESS at run-end so the next heartbeat will not re-pick it. "
         "To fully close, call update_task(status=DONE) or resolve_task explicitly."
     ),
+    "no_recent_changelog_reversal": (
+        "For writes to docs/agents/*.yaml, any top-level field touched in a changelog entry "
+        "dated within the last 14 days cannot be modified again. Prevents thrash where a "
+        "parameter ping-pongs between values without converging."
+    ),
     "recurring_meeting_proposal_required": (
         "Creating a calendar invite with ≥3 external attendees, >7 days in the future, or recurring cadence "
         "is blocked unless a prior step in this run proposed the time via email, or attendee_confirmed=true."
@@ -251,6 +256,8 @@ class GuardrailEngine:
             return self._check_human_approval(tool_name, tool_args, agent_id)
         if policy == "recurring_meeting_proposal_required":
             return self._check_recurring_meeting_proposal(tool_name, tool_args, prior_steps)
+        if policy == "no_recent_changelog_reversal":
+            return self._check_changelog_reversal(tool_name, tool_args)
         return GuardrailResult()
 
     def _run_post_policy(
@@ -391,6 +398,98 @@ class GuardrailEngine:
             action="blocked",
             reason=f"write_file path not allowed: {path}",
             guardrail_name="write_path_restrict",
+        )
+
+    def _check_changelog_reversal(
+        self, tool_name: str, tool_args: dict[str, Any]
+    ) -> GuardrailResult:
+        """Block writes to agent manifests that re-edit a field touched in the
+        last 14 days per the manifest's own ``changelog:`` block.
+
+        Rationale: the AutoAgent changelog has shown visible thrash
+        (``max_iterations`` moved 30→20→100→30 in two weeks, never settling).
+        One edit per top-level field per 14-day window forces a learn/measure
+        pause before the next adjustment. The check is conservative — it does
+        not try to detect exact reversions, just repeated touches.
+
+        Only engages on writes to ``docs/agents/*.yaml``. Any read / parse
+        failure opens the gate (fail-safe for legitimate edits).
+        """
+        if tool_name != "write_file":
+            return GuardrailResult()
+        path = str(tool_args.get("path", ""))
+        ws = self.workspace.rstrip("/") + "/" if self.workspace else ""
+        rel_path = path[len(ws) :] if ws and path.startswith(ws) else path
+        if not fnmatch.fnmatch(rel_path, "docs/agents/*.yaml"):
+            return GuardrailResult()
+
+        from datetime import datetime, timedelta
+        from pathlib import Path
+
+        import yaml as _yaml
+
+        abs_path = Path(path) if Path(path).is_absolute() else Path(ws + rel_path if ws else path)
+        if not abs_path.exists():
+            return GuardrailResult()
+
+        try:
+            old_text = abs_path.read_text()
+            old_data = _yaml.safe_load(old_text) or {}
+            new_data = _yaml.safe_load(str(tool_args.get("content", ""))) or {}
+        except (OSError, _yaml.YAMLError):
+            return GuardrailResult()
+
+        changelog = old_data.get("changelog") or []
+        if not isinstance(changelog, list):
+            return GuardrailResult()
+
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=14)
+        top_level_fields = set(old_data.keys()) | set(new_data.keys())
+        touched: set[str] = set()
+        for entry in changelog:
+            if not isinstance(entry, dict):
+                continue
+            date_str = str(entry.get("date", ""))
+            try:
+                entry_date = datetime.fromisoformat(date_str)
+            except ValueError:
+                continue
+            if entry_date < cutoff:
+                continue
+            change_text = str(entry.get("change", ""))
+            # Heuristic: a token is "touched" when it appears in the change text
+            # and also matches a current top-level manifest key.
+            for field_name in top_level_fields:
+                if field_name == "changelog":
+                    continue
+                if re.search(rf"\b{re.escape(field_name)}\b", change_text):
+                    touched.add(field_name)
+
+        if not touched:
+            return GuardrailResult()
+
+        # Identify top-level fields that changed between old and new.
+        changed: list[str] = []
+        for field_name in top_level_fields:
+            if field_name == "changelog":
+                continue
+            if old_data.get(field_name) != new_data.get(field_name):
+                changed.append(field_name)
+
+        conflicting = sorted(set(changed) & touched)
+        if not conflicting:
+            return GuardrailResult()
+
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=(
+                f"Changelog reversal blocked: fields {conflicting} were touched "
+                f"in {rel_path}'s changelog within the last 14 days. "
+                "Wait for the current change to soak, or update the changelog "
+                "entry in place rather than adding a new reversal."
+            ),
+            guardrail_name="no_recent_changelog_reversal",
         )
 
     def _check_desktop_safety(self, tool_name: str, tool_args: dict[str, Any]) -> GuardrailResult:

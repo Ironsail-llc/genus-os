@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -466,16 +467,65 @@ def _find_duplicate_event(
     return None
 
 
+_GWS_BINARY: str | None = None
+
+
+def _resolve_gws_binary() -> str:
+    """Resolve the actual gws binary, bypassing the Node.js wrapper.
+
+    The ``gws`` symlink (``/usr/bin/gws -> run-gws.js``) launches a Node.js
+    shim that calls ``process.cwd()`` before invoking the real Rust binary.
+    When the engine daemon has a deleted CWD, this crashes with
+    ``ENOENT: no such file or directory, uv_cwd``.
+
+    Resolving to the Rust binary directly avoids the Node.js layer entirely.
+    """
+    global _GWS_BINARY
+    if _GWS_BINARY is not None:
+        return _GWS_BINARY
+
+    # Primary: the real Rust binary extracted by the npm installer
+    real_bin = "/usr/lib/node_modules/@googleworkspace/cli/node_modules/.bin_real/gws"
+    if Path(real_bin).is_file() and os.access(real_bin, os.X_OK):
+        _GWS_BINARY = real_bin
+        logger.debug("gws: using direct binary at %s", real_bin)
+        return _GWS_BINARY
+
+    # Fallback: resolve via shutil (follows symlinks)
+    import shutil
+
+    resolved = shutil.which("gws")
+    if resolved:
+        real_resolved = os.path.realpath(resolved)
+        _GWS_BINARY = real_resolved
+        logger.debug("gws: resolved via which -> %s", real_resolved)
+        return _GWS_BINARY
+
+    # Last resort: use "gws" and hope for the best
+    _GWS_BINARY = "gws"
+    return _GWS_BINARY
+
+
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     """Run a gws CLI command, return parsed JSON or error dict."""
     import json as _json
 
     try:
+        # Ensure the process CWD is valid — the engine daemon may have a
+        # deleted temp dir as CWD which breaks subprocess spawning on some
+        # systems (libc getcwd failure in posix_spawn).
+        work_dir = str(Path.home())
+        try:
+            Path.cwd()
+        except OSError:
+            os.chdir(work_dir)
+
         proc = subprocess.run(
-            ["gws"] + args,
+            [_resolve_gws_binary()] + args,
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=work_dir,
         )
         if proc.returncode != 0:
             return {
@@ -948,10 +998,33 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     return {"error": f"Unknown gws tool: {name}"}
 
 
+# Mutating gws tools — refused when ctx.is_benchmark. These shell out to
+# the `gws` CLI, which uses real Workspace credentials and would otherwise
+# bypass the in-runner allow-list guard (the CLI is opaque to the runner).
+# Reads (gws_gmail_search / gws_gmail_get / gws_calendar_list / chat reads)
+# are intentionally allowed in benchmark mode — they let benchmark prompts
+# inspect real state without mutating it.
+_GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "gws_gmail_reply",
+        "gws_gmail_send",
+        "gws_gmail_modify",
+        "gws_calendar_create",
+        "gws_calendar_delete",
+        "gws_chat_send",
+    }
+)
+
+
 # Register all GWS tools as async handlers that delegate to sync _handle_gws_tool
 async def _gws_handler(
     args: dict[str, Any], ctx: ToolContext, *, tool_name: str = ""
 ) -> dict[str, Any]:
+    if ctx.is_benchmark and tool_name in _GWS_MUTATING_TOOLS:
+        return {
+            "error": f"Tool '{tool_name}' is disabled in benchmark mode.",
+            "guard": "is_benchmark",
+        }
     return await asyncio.to_thread(_handle_gws_tool, tool_name, args)
 
 
@@ -971,6 +1044,11 @@ for _tool_name in (
 
     def _make_handler(tn: str) -> Callable[..., Any]:
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+            if ctx.is_benchmark and tn in _GWS_MUTATING_TOOLS:
+                return {
+                    "error": f"Tool '{tn}' is disabled in benchmark mode.",
+                    "guard": "is_benchmark",
+                }
             return await asyncio.to_thread(_handle_gws_tool, tn, args)
 
         return handler

@@ -72,6 +72,9 @@ Call `todo_write` early in the run with the concrete steps. Mark `in_progress`/`
 **3. Don't silently drop unfinished work.**
 If the run exhausts iterations/budget with `pending` or `in_progress` items AND `parent_task_id` was passed in, the runtime automatically writes `Continue: <first unfinished item>` to the parent's `next_action` and promotes the parent to a thread if not already tagged. This is `_escalate_unfinished_todos` in `robothor/engine/runner.py` — the agent doesn't have to do anything. But the agent DOES have to (a) actually use `todo_write` for this to work, and (b) leave items in the list truthfully — a `completed` status means the work is actually done.
 
+**4. (Opt-in) Promote leftover items to real CRM subtasks.**
+When the manifest sets both `todo_list_enabled: true` AND `task_protocol: true`, AND the engine env carries `ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED=1`, unfinished todo items at run-end are ALSO converted into real CRM subtasks under the parent thread (up to `MAX_PROMOTIONS_PER_RUN = 5`). Promoted subtasks carry the `promoted_todo` tag, the parent's `assigned_to_agent` and `priority`, and a content-hash body marker that makes the operation idempotent across retries. A parent already tagged `promoted_todo` is skipped (one-level cycle guard). The Helm task board renders the queue and the planner gets discrete units to re-plan instead of one free-text hint. Implemented in `robothor/engine/todo_promotion.py`.
+
 ---
 
 ## 3. Orchestration Patterns

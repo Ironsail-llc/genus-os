@@ -1,0 +1,24 @@
+{
+  "name": "genus-os",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Release automation tooling for Genus OS (semantic-release + commitlint + husky). The product itself lives in the Python package `robothor/` and the Next.js app in `app/`.",
+  "scripts": {
+    "prepare": "husky",
+    "commitlint": "commitlint --edit"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.3",
+    "@semantic-release/release-notes-generator": "^14.0.1",
+    "conventional-changelog-conventionalcommits": "^8.0.0",
+    "husky": "^9.1.7",
+    "semantic-release": "^24.2.0",
+    "semantic-release-jira-notes": "^4.0.2"
+  }
+}

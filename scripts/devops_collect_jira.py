@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
 
+from robothor.engine.reports.devops_periods import ET, period_block, week_windows_jira
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.jira import _jira_search
 
@@ -45,22 +46,6 @@ PROJECTS: list[str] = _load_projects()
 CTX = ToolContext(agent_id="devops-manager")
 
 
-def _week_windows(now: datetime) -> tuple[str, str, str]:
-    """Calculate Monday-aligned JQL date strings.
-
-    Returns (current_week_start, last_week_start, last_week_end) as YYYY-MM-DD strings.
-    """
-    today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    days_since_monday = now.weekday()
-    current_week_start = today_midnight - timedelta(days=days_since_monday)
-    last_week_start = current_week_start - timedelta(days=7)
-    return (
-        current_week_start.strftime("%Y-%m-%d"),
-        last_week_start.strftime("%Y-%m-%d"),
-        current_week_start.strftime("%Y-%m-%d"),
-    )
-
-
 def _aggregate_issues(issues: list[dict]) -> dict:
     """Aggregate issues by assignee and type."""
     by_assignee: dict[str, int] = {}
@@ -74,9 +59,16 @@ def _aggregate_issues(issues: list[dict]) -> dict:
 
 
 async def collect() -> dict:
-    data: dict = {"projects": {}, "totals": {"resolved": 0, "stale": 0}, "errors": []}
-    now = datetime.now(UTC)
-    current_week_start, last_week_start, last_week_end = _week_windows(now)
+    now = datetime.now(ET)
+    # JQL bare-date semantics are evaluated in the JIRA account's profile
+    # timezone — for exact alignment the account TZ must be America/New_York.
+    data: dict = {
+        "period": period_block(now),
+        "projects": {},
+        "totals": {"resolved": 0, "stale": 0},
+        "errors": [],
+    }
+    current_week_start, last_week_start, last_week_end = week_windows_jira(now)
 
     for proj in PROJECTS:
         proj_data: dict = {}

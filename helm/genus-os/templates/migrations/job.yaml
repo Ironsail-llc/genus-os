@@ -1,0 +1,88 @@
+{{- if .Values.migrations.enabled -}}
+# Migration Job — runs as a NORMAL release resource (no helm hooks).
+# App pods block on this Job's `status.conditions[type=Complete]` via a
+# `wait-for-migrations` initContainer in _python_workload.tpl.
+# Pattern: https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "genus-os.migrationJobName" . }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      # wait-for-credentials initContainer needs kubectl access.
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "migrations") }}
+      {{- if $ns | trim }}
+      nodeSelector:
+        {{- $ns | nindent 8 }}
+      {{- end }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "migrations") }}
+      {{- if $tols | trim }}
+      tolerations:
+        {{- $tols | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- if .Values.postgres.enabled }}
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "genus-os.postgresHost" . }} -p {{ .Values.database.port }} -U {{ .Values.database.user }}; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+        {{- end }}
+        # envFrom on the migrate container will CreateContainerConfigError
+        # if this Secret doesn't exist yet — VSO may still be reconciling
+        # the VaultStaticSecret → K8s Secret materialization on first
+        # install. Block here until the Secret appears.
+        - name: wait-for-credentials
+          image: "{{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}"
+          imagePullPolicy: {{ .Values.kubectl.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              SECRET={{ include "genus-os.fullname" . }}-credentials
+              until kubectl get secret "$SECRET" >/dev/null 2>&1; do
+                echo "Waiting for secret $SECRET..."
+                sleep 2
+              done
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+      containers:
+        - name: migrate
+          image: {{ include "genus-os.image" (dict "root" . "component" "migrations") }}
+          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" . "component" "migrations") }}
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          command:
+            {{- toYaml .Values.migrations.command | nindent 12 }}
+          env:
+            {{- include "genus-os.commonEnv" . | nindent 12 }}
+          envFrom:
+            {{- include "genus-os.envFromSecret" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+{{- end }}

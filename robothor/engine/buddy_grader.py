@@ -97,7 +97,7 @@ def parse_baseline_from_body(body: str) -> dict[str, Any] | None:
     if not match:
         return None
     try:
-        return json.loads(match.group(1))
+        return json.loads(match.group(1))  # type: ignore[no-any-return]
     except json.JSONDecodeError as e:
         logger.warning("buddy-baseline JSON parse failed: %s", e)
         return None
@@ -348,7 +348,8 @@ def hold_check_7d(
 
     try:
         snapshot = compute_goal_metrics(agent_id, window_days=window_days, tenant_id=tenant_id)
-        current_val = float(snapshot.get(metric)) if snapshot.get(metric) is not None else None
+        _cv = snapshot.get(metric)
+        current_val = float(_cv) if _cv is not None else None
     except Exception as e:
         logger.warning("compute_goal_metrics failed for %s/%s: %s", agent_id, metric, e)
         return None
@@ -383,7 +384,7 @@ def hold_check_7d(
         agent_id=agent_id,
         metric=metric,
         target=target,
-        baseline=float(baseline.get("baseline")) if baseline.get("baseline") is not None else None,
+        baseline=(lambda _b: float(_b) if _b is not None else None)(baseline.get("baseline")),
         current=current_val,
         satisfied=held,
         escalation_level=extract_escalation_level(tags),

@@ -41,8 +41,7 @@ def _ollama_url() -> str:
     try:
         from robothor.config import get_config
 
-        cfg_url: str = get_config().ollama.url  # type: ignore[attr-defined]
-        return cfg_url
+        return get_config().ollama.base_url
     except Exception:
         return "http://localhost:11434"
 

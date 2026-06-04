@@ -56,6 +56,45 @@ class DatabaseConfig:
             d["password"] = self.password
         return d
 
+    @property
+    def url(self) -> str:
+        """Return a libpq-compatible ``postgresql://`` URL.
+
+        Tool subprocesses (e.g. ``psql $DATABASE_URL -c '...'`` inside
+        ``experiment_measure`` metric commands) expect this format rather than
+        the space-separated DSN.
+
+        TCP connections use ``postgresql://user:pass@host:port/db``. Unix
+        socket connections (``host=""`` or a socket directory path starting
+        with ``/``) use the query-parameter form ``postgresql:///db?user=...``
+        because the ``user@/db`` authority syntax is ambiguous in libpq — some
+        versions parse the user as the dbname. Socket directories cannot sit
+        in the URL authority at all; they must be a ``host=`` query param.
+        """
+        from urllib.parse import quote
+
+        is_socket = not self.host or self.host.startswith("/")
+
+        if not is_socket:
+            userinfo = ""
+            if self.user:
+                userinfo = quote(self.user, safe="")
+                if self.password:
+                    userinfo = f"{userinfo}:{quote(self.password, safe='')}"
+                userinfo = f"{userinfo}@"
+            return f"postgresql://{userinfo}{self.host}:{self.port}/{self.name}"
+
+        # Unix socket: put user, password, and socket dir (if set) in query.
+        params: list[str] = []
+        if self.user:
+            params.append(f"user={quote(self.user, safe='')}")
+        if self.password:
+            params.append(f"password={quote(self.password, safe='')}")
+        if self.host:
+            params.append(f"host={quote(self.host, safe='/')}")
+        qs = f"?{'&'.join(params)}" if params else ""
+        return f"postgresql:///{self.name}{qs}"
+
 
 @dataclass(frozen=True)
 class RedisConfig:
@@ -141,25 +180,32 @@ class Config:
     # Desktop / Computer Use
     desktop_display: str = ":99"
 
+    def _svc(self, port: int) -> str:
+        return f"http://127.0.0.1:{port}"
+
+    @property
+    def engine_url(self) -> str:
+        return self._svc(self.engine_port)
+
     @property
     def bridge_url(self) -> str:
-        return f"http://127.0.0.1:{self.bridge_port}"
+        return self._svc(self.bridge_port)
 
     @property
     def orchestrator_url(self) -> str:
-        return f"http://127.0.0.1:{self.orchestrator_port}"
+        return self._svc(self.orchestrator_port)
 
     @property
     def vision_url(self) -> str:
-        return f"http://127.0.0.1:{self.vision_port}"
+        return self._svc(self.vision_port)
 
     @property
     def voice_url(self) -> str:
-        return f"http://127.0.0.1:{self.voice_port}"
+        return self._svc(self.voice_port)
 
     @property
     def searxng_url(self) -> str:
-        return f"http://127.0.0.1:{self.searxng_port}"
+        return self._svc(self.searxng_port)
 
 
 # Singleton
@@ -187,6 +233,11 @@ def _load_from_env() -> Config:
         user=os.environ.get("ROBOTHOR_DB_USER", os.environ.get("USER", "robothor")),
         password=os.environ.get("ROBOTHOR_DB_PASSWORD", ""),
     )
+    # Export DATABASE_URL for subprocess tooling (e.g. experiment_measure
+    # metric commands that shell out to psql). Respect an explicit override
+    # so ops can point at a replica without editing code.
+    if "DATABASE_URL" not in os.environ:
+        os.environ["DATABASE_URL"] = db.url
 
     redis_cfg = RedisConfig(
         host=os.environ.get("ROBOTHOR_REDIS_HOST", "127.0.0.1"),

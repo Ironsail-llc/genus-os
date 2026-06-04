@@ -79,6 +79,95 @@ def main(argv: list[str] | None = None) -> int:
     # mcp
     subparsers.add_parser("mcp", help="Start the MCP server (stdio transport)")
 
+    # goal — long-running session goal (operator objective).
+    # Backed by a crm_task with the session_goal tag; see migration 065.
+    goal_parser = subparsers.add_parser("goal", help="Manage the active long-running session goal")
+    goal_parser.add_argument(
+        "--tenant",
+        default=None,
+        help="Tenant ID (defaults to ROBOTHOR_DEFAULT_TENANT or 'default')",
+    )
+    goal_parser.add_argument(
+        "--agent",
+        default="",
+        help="Agent ID for a per-agent goal (workspace goal otherwise, owner=main)",
+    )
+    goal_sub = goal_parser.add_subparsers(dest="goal_command")
+
+    goal_set = goal_sub.add_parser("set", help="Create the active session goal")
+    goal_set.add_argument("objective", help="Goal objective (one sentence)")
+    goal_set.add_argument(
+        "--criteria",
+        action="append",
+        default=[],
+        help="Success criterion; repeat to provide an explicit completion contract",
+    )
+    goal_set.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
+
+    goal_status = goal_sub.add_parser("status", help="Show the active session goal")
+    goal_status.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
+
+    goal_evidence = goal_sub.add_parser("evidence", help="Record typed evidence")
+    goal_evidence.add_argument(
+        "--kind",
+        required=True,
+        choices=["test_run", "commit", "ci_run", "note"],
+        help=(
+            "test_run: pytest:passed:N or run UUID; "
+            "commit: git SHA validated via git cat-file; "
+            "ci_run: https URL; "
+            "note: free-form (does not satisfy completion)"
+        ),
+    )
+    goal_evidence.add_argument("--summary", required=True, help="Short evidence summary")
+    goal_evidence.add_argument("--reference", default="", help="Verifiable reference for this kind")
+    goal_evidence.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
+    goal_complete = goal_sub.add_parser("complete", help="Mark the active session goal complete")
+    goal_complete.add_argument("note", help="Completion note")
+    goal_complete.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
+
+    goal_edit_obj = goal_sub.add_parser(
+        "edit-objective", help="Replace the goal's objective in place"
+    )
+    goal_edit_obj.add_argument("objective", help="New objective text")
+    goal_edit_obj.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_add_crit = goal_sub.add_parser(
+        "add-criterion", help="Append a success criterion to the goal"
+    )
+    goal_add_crit.add_argument("text", help="Criterion text")
+    goal_add_crit.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_set_target = goal_sub.add_parser(
+        "set-target",
+        help="Add or replace a metric target on the goal",
+    )
+    goal_set_target.add_argument("metric", help="Metric name (e.g. benchmark_pass_rate)")
+    goal_set_target.add_argument("target", help='Target comparator e.g. ">=0.85" or "<0.05"')
+    goal_set_target.add_argument("--weight", type=float, default=1.0)
+    goal_set_target.add_argument("--window-days", type=int, default=7)
+    goal_set_target.add_argument(
+        "--category",
+        default="correctness",
+        choices=["reach", "quality", "efficiency", "correctness"],
+    )
+    goal_set_target.add_argument(
+        "--id",
+        dest="target_id",
+        default=None,
+        help="Stable id for this target (defaults to metric)",
+    )
+    goal_set_target.add_argument("--json", dest="json_output", action="store_true")
+
+    goal_remove_target = goal_sub.add_parser("remove-target", help="Remove a metric target by id")
+    goal_remove_target.add_argument("target_id", help="Target id (typically the metric name)")
+    goal_remove_target.add_argument("--json", dest="json_output", action="store_true")
+
     # status
     subparsers.add_parser("status", help="Show system status")
 
@@ -105,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # tui
     tui_parser = subparsers.add_parser("tui", help="Launch the terminal chat interface")
-    tui_parser.add_argument("--url", default="http://127.0.0.1:18800", help="Engine URL")
+    try:
+        from robothor.config import get_config as _gc
+
+        _tui_default_url = _gc().engine_url
+    except Exception:
+        _tui_default_url = "http://127.0.0.1:18800"
+    tui_parser.add_argument("--url", default=_tui_default_url, help="Engine URL")
     tui_parser.add_argument(
         "--session", default=None, help="Session key (auto-generated if omitted)"
     )
@@ -259,6 +354,22 @@ def main(argv: list[str] | None = None) -> int:
     costs_parser = subparsers.add_parser("costs", help="Show cost breakdown")
     costs_parser.add_argument("--hours", type=int, default=24, help="Lookback hours")
 
+    # codex -- subscription-backed provider auth/status
+    codex_parser = subparsers.add_parser("codex", help="Manage Codex subscription provider")
+    codex_sub = codex_parser.add_subparsers(dest="codex_command")
+    codex_login = codex_sub.add_parser("login", help="Log in to Codex with ChatGPT")
+    codex_login.add_argument(
+        "--with-access-token",
+        action="store_true",
+        help="Read CODEX_ACCESS_TOKEN from stdin via codex login",
+    )
+    codex_sub.add_parser("status", help="Show Codex login status")
+    codex_sub.add_parser("doctor", help="Validate ChatGPT subscription auth for codex/* models")
+    codex_test = codex_sub.add_parser("test", help="Run a small codex/* provider call")
+    codex_test.add_argument("prompt", nargs="?", default="Reply with: codex provider ok")
+    codex_test.add_argument("--model", default="codex/gpt-5.5")
+    codex_test.add_argument("--timeout", type=int, default=120)
+
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
@@ -317,6 +428,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_mcp
 
         return cmd_mcp()
+    if args.command == "goal":
+        from robothor.cli.goal import cmd_goal
+
+        return cmd_goal(args)
     if args.command == "status":
         from robothor.cli.admin import cmd_status
 
@@ -363,6 +478,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.engine import cmd_costs
 
         return cmd_costs(args)
+    if args.command == "codex":
+        from robothor.cli.codex import cmd_codex
+
+        return cmd_codex(args)
     if args.command == "engine":
         from robothor.cli.engine import cmd_engine
 
