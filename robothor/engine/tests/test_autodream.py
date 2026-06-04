@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+def _cfg(tenant: str = "default", chat: str = "123"):
+    """Build a minimal EngineConfig stand-in for autoDream gating tests."""
+    c = MagicMock()
+    c.tenant_id = tenant
+    c.default_chat_id = chat
+    return c
+
 
 # ── Cooldown Logic ──────────────────────────────────────────────────────────
 
@@ -347,10 +357,11 @@ class TestAutodreamLoop:
     """Tests for the _autodream_loop integration in daemon.py."""
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream._get_last_run_ts", return_value=None)
     @patch("robothor.engine.dedup.running_agents", return_value=set())
     @patch("robothor.engine.autodream.is_cooled_down", return_value=True)
     @patch("robothor.engine.autodream.run_autodream", new_callable=AsyncMock)
-    async def test_loop_triggers_on_idle(self, mock_dream, mock_cool, mock_agents):
+    async def test_loop_triggers_on_idle(self, mock_dream, mock_cool, mock_agents, mock_ts):
         """Verify the daemon loop calls run_autodream when idle and cooled down."""
         from robothor.engine.daemon import _autodream_loop
 
@@ -366,16 +377,17 @@ class TestAutodreamLoop:
 
         with patch("robothor.engine.daemon.asyncio.sleep", new_callable=AsyncMock):
             with contextlib.suppress(asyncio.CancelledError):
-                await _autodream_loop()
+                await _autodream_loop(_cfg())
 
         assert call_count >= 1
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream._get_last_run_ts", return_value=None)
     @patch("robothor.engine.dedup.running_agents", return_value={"email-classifier"})
     @patch("robothor.engine.autodream.is_cooled_down", return_value=True)
     @patch("robothor.engine.autodream.run_autodream", new_callable=AsyncMock)
-    async def test_loop_skips_when_agents_active(self, mock_dream, mock_cool, mock_agents):
-        """Verify the loop does NOT trigger when agents are running."""
+    async def test_loop_skips_when_agents_active(self, mock_dream, mock_cool, mock_agents, mock_ts):
+        """Verify the loop does NOT trigger when agents are running (within defer ceiling)."""
         from robothor.engine.daemon import _autodream_loop
 
         iteration = 0
@@ -388,15 +400,18 @@ class TestAutodreamLoop:
 
         with patch("robothor.engine.daemon.asyncio.sleep", side_effect=counting_sleep):
             with contextlib.suppress(asyncio.CancelledError):
-                await _autodream_loop()
+                await _autodream_loop(_cfg())
 
         mock_dream.assert_not_called()
 
     @pytest.mark.asyncio
+    @patch("robothor.engine.autodream._get_last_run_ts", return_value=None)
     @patch("robothor.engine.dedup.running_agents", return_value=set())
     @patch("robothor.engine.autodream.is_cooled_down", return_value=False)
     @patch("robothor.engine.autodream.run_autodream", new_callable=AsyncMock)
-    async def test_loop_skips_when_not_cooled_down(self, mock_dream, mock_cool, mock_agents):
+    async def test_loop_skips_when_not_cooled_down(
+        self, mock_dream, mock_cool, mock_agents, mock_ts
+    ):
         """Verify the loop respects cooldown."""
         iteration = 0
 
@@ -410,6 +425,131 @@ class TestAutodreamLoop:
             from robothor.engine.daemon import _autodream_loop
 
             with contextlib.suppress(asyncio.CancelledError):
-                await _autodream_loop()
+                await _autodream_loop(_cfg())
 
         mock_dream.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.autodream.run_autodream", new_callable=AsyncMock)
+    async def test_loop_disabled_for_child_tenant(self, mock_dream):
+        """A child-tenant daemon (e.g. Delphi) must NOT run autoDream — it returns at once."""
+        from robothor.engine.daemon import _autodream_loop
+
+        # No sleep patch needed: a disabled loop returns immediately without iterating.
+        await _autodream_loop(_cfg(tenant="delphi"))
+        mock_dream.assert_not_called()
+
+
+# ── Tenant Gating ───────────────────────────────────────────────────────────
+
+
+class TestAutodreamEnabled:
+    """Tests for _autodream_enabled() — autoDream is a main/root-engine concern."""
+
+    def test_enabled_for_main_tenant(self):
+        from robothor.engine.autodream import _autodream_enabled
+
+        assert _autodream_enabled(_cfg(tenant="default")) is True
+
+    def test_disabled_for_child_tenant(self):
+        from robothor.engine.autodream import _autodream_enabled
+
+        assert _autodream_enabled(_cfg(tenant="delphi")) is False
+
+    @patch.dict(os.environ, {"AUTODREAM_ENABLED": "1"})
+    def test_env_override_enables_child_tenant(self):
+        from robothor.engine.autodream import _autodream_enabled
+
+        assert _autodream_enabled(_cfg(tenant="delphi")) is True
+
+    @patch.dict(os.environ, {"AUTODREAM_ENABLED": "0"})
+    def test_env_override_disables_main_tenant(self):
+        from robothor.engine.autodream import _autodream_enabled
+
+        assert _autodream_enabled(_cfg(tenant="default")) is False
+
+
+# ── Watchdog Staleness Alert ─────────────────────────────────────────────────
+
+
+class TestStalenessAlert:
+    """Tests for daemon.autodream_staleness_alert() — alert only on GENUINE failure."""
+
+    def test_alert_threshold_above_max_defer(self):
+        from robothor.engine import autodream
+
+        # The alert must fire strictly above the guaranteed-run ceiling, which is
+        # itself above the per-run cooldown. Otherwise intentional deferral alarms.
+        assert (
+            autodream.WATCHDOG_ALERT_THRESHOLD
+            > autodream.MAX_DEFER_SECONDS
+            > autodream.COOLDOWN_SECONDS
+        )
+
+    @patch("robothor.engine.autodream._get_last_run_ts")
+    def test_no_alert_during_deferral_window(self, mock_ts):
+        from robothor.engine.autodream import MAX_DEFER_SECONDS, WATCHDOG_ALERT_THRESHOLD
+        from robothor.engine.daemon import autodream_staleness_alert
+
+        # Staleness between the defer ceiling and the alert threshold = intentional defer.
+        mid = (MAX_DEFER_SECONDS + WATCHDOG_ALERT_THRESHOLD) / 2
+        mock_ts.return_value = time.time() - mid
+        assert autodream_staleness_alert(_cfg()) is None
+
+    @patch("robothor.engine.autodream._get_last_run_ts")
+    def test_alerts_on_genuine_failure(self, mock_ts):
+        from robothor.engine.autodream import WATCHDOG_ALERT_THRESHOLD
+        from robothor.engine.daemon import autodream_staleness_alert
+
+        mock_ts.return_value = time.time() - (WATCHDOG_ALERT_THRESHOLD + 3600)
+        msg = autodream_staleness_alert(_cfg())
+        assert msg is not None
+        assert "has not run" in msg
+
+    @patch("robothor.engine.autodream._get_last_run_ts")
+    def test_skips_alert_when_disabled_for_child_tenant(self, mock_ts):
+        from robothor.engine.daemon import autodream_staleness_alert
+
+        # Even at 10h staleness, a child-tenant daemon must not alert.
+        mock_ts.return_value = time.time() - (10 * 3600)
+        assert autodream_staleness_alert(_cfg(tenant="delphi")) is None
+
+
+# ── Lock TTL ─────────────────────────────────────────────────────────────────
+
+
+class TestLockTTL:
+    """The autoDream lock must outlive a deep run so it can't expire mid-pass."""
+
+    def test_lock_ttl_exceeds_max_run_and_decoupled_from_cooldown(self):
+        from robothor.engine import autodream
+
+        # A deep run can exceed COOLDOWN (importance scoring alone budgets 600s, one
+        # of six steps). The lock TTL must be independent of, and larger than, cooldown.
+        assert autodream.AUTODREAM_LOCK_TTL >= 1800
+        assert autodream.AUTODREAM_LOCK_TTL != autodream.COOLDOWN_SECONDS
+
+    @patch("robothor.events.bus._get_redis")
+    def test_try_acquire_lock_uses_lock_ttl(self, mock_get_redis):
+        from robothor.engine import autodream
+
+        r = MagicMock()
+        r.set.return_value = True
+        mock_get_redis.return_value = r
+
+        autodream.try_acquire_lock("run-1")
+
+        _, kwargs = r.set.call_args
+        assert kwargs["ex"] == autodream.AUTODREAM_LOCK_TTL
+
+    @patch("robothor.events.bus._get_redis")
+    def test_release_lock_declines_foreign_lock(self, mock_get_redis):
+        from robothor.engine import autodream
+
+        r = MagicMock()
+        r.get.return_value = "other-run-id"
+        mock_get_redis.return_value = r
+
+        autodream.release_lock("my-run-id")
+
+        r.delete.assert_not_called()

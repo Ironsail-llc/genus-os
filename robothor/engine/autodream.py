@@ -17,11 +17,13 @@ Usage (from daemon.py autodream loop):
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from robothor.memory.lifecycle import (
@@ -36,9 +38,51 @@ logger = logging.getLogger(__name__)
 # Minimum seconds between autoDream runs (default 30 min).
 COOLDOWN_SECONDS = int(os.environ.get("AUTODREAM_COOLDOWN_SECONDS", "1800"))
 
+# When agents are continuously busy (blocking normal idle windows), force a dream
+# run after this ceiling so consolidation still happens under sustained load.
+MAX_DEFER_SECONDS = int(os.environ.get("AUTODREAM_MAX_DEFER_SECONDS", str(4 * 3600)))  # 4h
+
+# The watchdog must only alert on GENUINE failure. Its alert threshold therefore sits
+# strictly above the guaranteed-run ceiling (MAX_DEFER_SECONDS) plus a margin covering a
+# deep run's duration (~20 min) and the watchdog's 10-min poll granularity. Without this
+# margin, the 3h–4h intentional-deferral window false-alarms.
+WATCHDOG_ALERT_MARGIN_SECONDS = int(
+    os.environ.get("AUTODREAM_WATCHDOG_MARGIN_SECONDS", str(30 * 60))
+)  # 30 min
+WATCHDOG_ALERT_THRESHOLD = MAX_DEFER_SECONDS + WATCHDOG_ALERT_MARGIN_SECONDS  # 4h30m
+
+# The distributed lock must outlive a deep run so it cannot auto-expire mid-pass and let a
+# second trigger start an overlapping run. Decoupled from COOLDOWN_SECONDS: a deep run can
+# exceed 30 min (importance scoring alone budgets 600s, one of six lifecycle steps).
+AUTODREAM_LOCK_TTL = int(os.environ.get("AUTODREAM_LOCK_TTL", "3600"))  # 1h
+
 # Quiet hours: deep mode runs full lifecycle instead of lightweight pass.
 QUIET_HOUR_START = 22  # 10 PM ET
 QUIET_HOUR_END = 6  # 6 AM ET
+
+
+def _autodream_enabled(config: Any = None) -> bool:
+    """Whether this daemon should run autoDream memory consolidation.
+
+    Memory consolidation is a single, fleet-wide concern owned by the main/root engine:
+    ``run_lifecycle_maintenance()`` already iterates ALL tenant IDs, so a child tenant
+    (e.g. the Delphi trading instance, which runs the same ``daemon.py``) has its facts
+    consolidated by the main engine's pass. Running autoDream on a child daemon is
+    redundant and produces duplicate "has not run" alerts on a second Telegram channel.
+
+    Resolution: an explicit ``AUTODREAM_ENABLED`` env var ("1"/"0") wins; otherwise
+    autoDream is enabled only when this daemon's tenant is the default/root tenant.
+    """
+    env = os.environ.get("AUTODREAM_ENABLED")
+    if env:  # non-empty string is an explicit operator override
+        return env.strip().lower() in ("1", "true", "yes", "on")
+
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant = getattr(config, "tenant_id", "") if config is not None else ""
+    if not tenant:
+        tenant = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
+    return tenant == DEFAULT_TENANT
 
 
 def _is_quiet_hours() -> bool:
@@ -56,31 +100,60 @@ _LOCK_KEY = "robothor:autodream:lock"
 _LAST_RUN_KEY = "robothor:autodream:last_run"
 
 
+# Filesystem fallback path for last_run timestamp when Redis is unavailable.
+_FALLBACK_LAST_RUN_PATH = os.environ.get(
+    "AUTODREAM_FALLBACK_PATH", "/tmp/robothor_autodream_last_run"
+)
+
+
 def _get_last_run_ts() -> float | None:
-    """Read the last autoDream run timestamp from Redis. Returns epoch or None."""
+    """Read the last autoDream run timestamp.
+
+    Tries Redis first; falls back to a local tmp file so autoDream tracking
+    survives Redis flaps.  Returns epoch or None.
+    """
     try:
         from robothor.events.bus import _get_redis
 
         r = _get_redis()
-        if r is None:
-            return None
-        val = r.get(_LAST_RUN_KEY)
-        return float(val) if val else None
+        if r is not None:
+            val = r.get(_LAST_RUN_KEY)
+            if val:
+                return float(val)
     except Exception:
-        return None
+        pass
+
+    # Filesystem fallback
+    try:
+        fallback = Path(_FALLBACK_LAST_RUN_PATH)
+        if fallback.is_file():
+            return float(fallback.read_text().strip())
+    except Exception:
+        pass
+    return None
 
 
 def _set_last_run_ts() -> None:
-    """Write the current timestamp as the last autoDream run time."""
+    """Write the current timestamp as the last autoDream run time.
+
+    Writes to Redis AND a filesystem fallback so the timestamp survives
+    Redis outages.  The fallback file has no TTL (the daemon restarts
+    are infrequent enough that stale data is harmless — it only makes
+    is_cooled_down() return False a bit longer).
+    """
+    ts_str = str(time.time())
     try:
         from robothor.events.bus import _get_redis
 
         r = _get_redis()
-        if r is None:
-            return
-        r.set(_LAST_RUN_KEY, str(time.time()), ex=86400)
+        if r is not None:
+            r.set(_LAST_RUN_KEY, ts_str, ex=86400)
     except Exception as e:
-        logger.debug("Failed to set autoDream timestamp: %s", e)
+        logger.debug("Failed to set autoDream timestamp in Redis: %s", e)
+
+    # Filesystem fallback (best-effort)
+    with contextlib.suppress(Exception):
+        Path(_FALLBACK_LAST_RUN_PATH).write_text(ts_str)
 
 
 def is_cooled_down() -> bool:
@@ -95,7 +168,8 @@ def try_acquire_lock(run_id: str) -> bool:
     """Acquire a distributed autoDream lock via Redis SET NX.
 
     Prevents overlapping runs across multiple daemon instances.
-    Lock auto-expires after COOLDOWN_SECONDS to prevent deadlocks.
+    Lock auto-expires after AUTODREAM_LOCK_TTL (sized above a deep run's duration) to
+    prevent deadlocks without expiring mid-run.
     """
     try:
         from robothor.events.bus import _get_redis
@@ -103,7 +177,7 @@ def try_acquire_lock(run_id: str) -> bool:
         r = _get_redis()
         if r is None:
             return True  # No Redis = single instance, allow
-        acquired: bool = bool(r.set(_LOCK_KEY, run_id, nx=True, ex=COOLDOWN_SECONDS))
+        acquired: bool = bool(r.set(_LOCK_KEY, run_id, nx=True, ex=AUTODREAM_LOCK_TTL))
         if not acquired:
             logger.debug("autoDream lock held by another instance")
         return acquired

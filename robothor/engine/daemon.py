@@ -456,7 +456,7 @@ async def main() -> None:
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
-        asyncio.create_task(_autodream_loop(), name="autodream"),
+        asyncio.create_task(_autodream_loop(config), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
     ]
     if bot is not None:
@@ -556,6 +556,56 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
         write_block("watchdog_log", "\n".join(lines))
     except Exception:
         logger.debug("Watchdog event recording failed", exc_info=True)
+
+
+def autodream_staleness_alert(config: EngineConfig) -> str | None:
+    """Return a watchdog alert message if autoDream is GENUINELY stale, else None.
+
+    Returns None when:
+      - autoDream is disabled for this daemon (child tenant — see _autodream_enabled),
+      - there is no last-run data at all, or
+      - staleness is within the intentional-deferral window (≤ WATCHDOG_ALERT_THRESHOLD).
+
+    Only staleness beyond the guaranteed-run ceiling plus margin produces an alert, so the
+    3h–4h deferral window under sustained load no longer false-alarms. When last-run data
+    is missing (Redis down + no filesystem fallback) we fall back to the daemon boot time
+    so a silently-broken autoDream still alerts after the threshold.
+    """
+    from robothor.engine.autodream import (
+        MAX_DEFER_SECONDS,
+        WATCHDOG_ALERT_THRESHOLD,
+        _autodream_enabled,
+        _get_last_run_ts,
+    )
+
+    if not _autodream_enabled(config):
+        return None
+
+    last_run = _get_last_run_ts()
+    if last_run is not None:
+        staleness = time.time() - last_run
+        src = "Redis"
+    elif _DAEMON_START_TS:
+        from datetime import datetime as _dt
+
+        boot = _dt.fromisoformat(_DAEMON_START_TS)
+        staleness = time.time() - boot.timestamp()
+        src = "daemon boot (Redis unavailable)"
+    else:
+        return None  # no data at all — skip check
+
+    if staleness > WATCHDOG_ALERT_THRESHOLD:
+        hours = int(staleness / 3600)
+        return (
+            f"*Watchdog Alert*\nautoDream has not run for {hours}h "
+            f"(source: {src}). Memory consolidation may be stalled."
+        )
+    if staleness > MAX_DEFER_SECONDS:
+        logger.warning(
+            "Watchdog: autoDream deferring under load (last run %.0f min ago)",
+            staleness / 60,
+        )
+    return None
 
 
 async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
@@ -711,27 +761,13 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
             try:
-                from robothor.engine.autodream import COOLDOWN_SECONDS, _get_last_run_ts
+                msg = autodream_staleness_alert(config)
+                if msg:
+                    from robothor.engine.delivery import get_telegram_sender
 
-                last_run = _get_last_run_ts()
-                if last_run is not None:
-                    staleness = time.time() - last_run
-                    if staleness > COOLDOWN_SECONDS * 6:
-                        from robothor.engine.delivery import get_telegram_sender
-
-                        sender = get_telegram_sender()
-                        if sender and config.default_chat_id:
-                            hours = int(staleness / 3600)
-                            await sender(
-                                config.default_chat_id,
-                                f"*Watchdog Alert*\n\nautoDream has not run for {hours}h. "
-                                "Memory consolidation may be stalled.",
-                            )
-                    elif staleness > COOLDOWN_SECONDS * 3:
-                        logger.warning(
-                            "Watchdog: autoDream stale (last run %.0f min ago)",
-                            staleness / 60,
-                        )
+                    sender = get_telegram_sender()
+                    if sender and config.default_chat_id:
+                        await sender(config.default_chat_id, msg)
             except Exception as e:
                 logger.debug("Watchdog: autoDream staleness check failed: %s", e)
 
@@ -802,14 +838,35 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             logger.warning("curiosity-density loop error: %s", e)
 
 
-async def _autodream_loop() -> None:
+async def _autodream_loop(config: EngineConfig) -> None:
     """Background loop — triggers autoDream memory consolidation when engine is idle.
 
     Implements exponential backoff on consecutive errors (60s → 120s → ... → 3600s max).
     Resets to normal 60s interval on success.
+
+    When agents are continuously running (blocking normal idle windows), a
+    MAX_DEFER_SECONDS ceiling ensures autoDream still fires in post_stall mode.  The
+    consolidation pass is read-heavy and safe to run concurrently with active agents.
+
+    autoDream is a single, fleet-wide concern owned by the main/root engine: child-tenant
+    daemons (e.g. the Delphi trading instance) exit this loop immediately, because the main
+    engine's lifecycle pass already iterates every tenant's facts.
     """
-    from robothor.engine.autodream import is_cooled_down, run_autodream
+    from robothor.engine.autodream import (
+        MAX_DEFER_SECONDS,
+        _autodream_enabled,
+        _get_last_run_ts,
+        is_cooled_down,
+        run_autodream,
+    )
     from robothor.engine.dedup import running_agents
+
+    if not _autodream_enabled(config):
+        logger.info(
+            "autoDream disabled for tenant '%s' — consolidation owned by the main engine.",
+            config.tenant_id,
+        )
+        return
 
     consecutive_errors = 0
 
@@ -817,9 +874,22 @@ async def _autodream_loop() -> None:
         sleep_seconds = 60 if consecutive_errors == 0 else min(60 * 2**consecutive_errors, 3600)
         await asyncio.sleep(sleep_seconds)
         try:
-            if running_agents() or not is_cooled_down():
+            last_run_ts = _get_last_run_ts()
+            too_long = last_run_ts is not None and (time.time() - last_run_ts) > MAX_DEFER_SECONDS
+            # Also treat missing last_run (Redis down + no fallback) as too_long
+            # once the daemon has been up for MAX_DEFER_SECONDS.
+            if last_run_ts is None and _DAEMON_START_TS:
+                from datetime import datetime as _dt
+
+                boot = _dt.fromisoformat(_DAEMON_START_TS)
+                if (time.time() - boot.timestamp()) > MAX_DEFER_SECONDS:
+                    too_long = True
+
+            agents_busy = bool(running_agents())
+            if (agents_busy and not too_long) or not is_cooled_down():
                 continue
-            await run_autodream(mode="idle")
+            mode = "post_stall" if agents_busy else "idle"
+            await run_autodream(mode=mode)
             consecutive_errors = 0
         except asyncio.CancelledError:
             return
