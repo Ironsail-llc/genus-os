@@ -177,6 +177,10 @@ def seed_default_permissions() -> None:
         ("viewer", "memory_block_read", "allow"),
         ("viewer", "memory_block_list", "allow"),
         ("viewer", "*", "deny"),
+        # service: system/cron/heartbeat runs (no interactive user). Allow-all by
+        # default so the fleet is unconstrained until an operator tightens it and
+        # enables RBAC enforcement (see rbac_enforcement_mode / PR-8).
+        ("service", "*", "allow"),
         # user: full access
         ("user", "*", "allow"),
         # admin: full access

@@ -326,6 +326,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
+        service_role=manifest.get("role", manifest.get("service_role", "service")),
         instruction_file=manifest.get("instruction_file", ""),
         bootstrap_files=manifest.get("bootstrap_files", []),
         reports_to=manifest.get("reports_to", ""),
