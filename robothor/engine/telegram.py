@@ -947,6 +947,39 @@ class TelegramBot:
                     msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True
                 )
 
+        # ── Voice notes / video notes ──
+        # Previously unhandled, so they were silently dropped. Now acknowledged.
+        # Transcription is gated on ROBOTHOR_VOICE_NOTES_ENABLED (no STT provider
+        # is wired yet — Claude has no audio endpoint — so this is a placeholder).
+
+        @self.dp.message(F.voice | F.video_note)
+        async def handle_voice(message: Message) -> None:
+            """Acknowledge voice/video notes (transcription pending an STT provider)."""
+            if not message.from_user:
+                return
+            enabled = os.environ.get("ROBOTHOR_VOICE_NOTES_ENABLED", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if not enabled:
+                await message.answer(
+                    "🎤 I can't process voice notes yet — please send text. "
+                    "(Voice transcription will arrive once an STT provider is configured.)"
+                )
+                return
+            media = message.voice or message.video_note
+            try:
+                if media is not None:
+                    await self.bot.get_file(media.file_id)  # verify reachability
+                await message.answer(
+                    "🎤 Voice received — transcription isn't wired yet (placeholder). "
+                    "Send text for now."
+                )
+            except Exception as e:
+                await message.answer(f"Couldn't fetch the voice note: {e}")
+
         # ── File/document/photo messages ──
 
         @self.dp.message(F.document | F.photo)
