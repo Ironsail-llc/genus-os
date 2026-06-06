@@ -144,3 +144,17 @@ def approval_mode() -> EnforcementMode:
     approver is reachable.
     """
     return _enforcement_mode("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE")
+
+
+def exec_allowlist_mode() -> EnforcementMode:
+    """Rollout mode for rejecting shell-chaining metacharacters in allowlisted exec.
+
+    Gated on ``ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED`` + ``ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE``.
+    ``observe`` logs commands that WOULD be blocked for containing shell control
+    characters (``;`` ``|`` ``&`` ``<`` ``>`` ``$(`` backtick) that let an
+    attacker chain past an allowlisted prefix, but allows them (legacy behavior);
+    ``enforce`` blocks them. Default off preserves today's behavior.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED", "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE"
+    )

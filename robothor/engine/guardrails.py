@@ -19,6 +19,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Shell control characters that let a command chain/substitute/redirect past an
+# allowlisted prefix (e.g. "git checkout -- f; rm -rf /" rides "^git checkout -- ").
+# Matches ; | & < > newline backtick, or $( command substitution. Bare $VAR is allowed.
+_SHELL_CONTROL = re.compile(r"[;|&<>\n`]|\$\(")
+
 # Patterns for destructive commands
 DESTRUCTIVE_PATTERNS = [
     re.compile(r"\brm\s+-rf\b", re.IGNORECASE),
@@ -366,6 +371,26 @@ class GuardrailEngine:
         if not patterns:  # No allowlist configured = no restriction (backward compat)
             return GuardrailResult()
         command = str(tool_args.get("command", ""))
+        # Reject shell-chaining metacharacters that let a command ride past an
+        # allowlisted prefix (e.g. "git checkout -- f; rm -rf /"). Flag-gated:
+        # off = legacy behavior; observe = log-only; enforce = block.
+        from robothor.engine.feature_flags import exec_allowlist_mode
+
+        mode = exec_allowlist_mode()
+        if mode != "off" and _SHELL_CONTROL.search(command):
+            if mode == "enforce":
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"shell control characters not permitted in allowlisted exec: {command[:100]}",
+                    guardrail_name="exec_allowlist",
+                )
+            logger.warning(
+                "exec_allowlist would block shell metacharacters for agent %s (mode=%s): %s",
+                agent_id,
+                mode,
+                command[:100],
+            )
         for pattern in patterns:
             if pattern.search(command):
                 return GuardrailResult()
