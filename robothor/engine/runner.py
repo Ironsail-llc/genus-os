@@ -371,6 +371,36 @@ litellm.register_model(
 )
 
 
+def _agent_holds_exec(config: AgentConfig) -> bool:
+    """True if the agent can call the ``exec`` tool (i.e. touches the host shell).
+
+    An empty ``tools_allowed`` means the agent receives the full tool set
+    (including ``exec``); a ``tools_denied`` entry removes it.
+    """
+    denied = set(config.tools_denied or [])
+    if "exec" in denied:
+        return False
+    allowed = config.tools_allowed or []
+    return "exec" in allowed or not allowed
+
+
+def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
+    """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
+
+    'docker' = start a Docker sandbox; 'observe' = an exec-holding agent that
+    WOULD be sandboxed but runs on host (caller logs it); 'host' = run on host.
+    ``mode`` is ``sandbox_default_mode()``. Explicit manifest ``sandbox: docker``
+    always sandboxes; ``sandbox: host`` always opts out.
+    """
+    if config.sandbox == "docker":
+        return "docker"
+    if config.sandbox == "host":
+        return "host"
+    if mode != "off" and _agent_holds_exec(config):
+        return "docker" if mode == "enforce" else "observe"
+    return "host"
+
+
 def _escalate_unfinished_todos(
     todos: Any,
     parent_task_id: str | None,
@@ -1064,9 +1094,30 @@ class AgentRunner:
                 if resume_from_run_id:
                     resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
-                # ── [SANDBOX] Create sandbox for computer-use agents ──
+                # ── [SANDBOX] Create sandbox for computer-use / exec agents ──
+                # Explicit "docker" always sandboxes; "host" always opts out.
+                # Otherwise, sandbox-by-default applies to exec-holding agents
+                # under the ROBOTHOR_SANDBOX_DEFAULT_* ladder (observe logs which
+                # agents WOULD be sandboxed; enforce sandboxes them). A missing
+                # image degrades to the host via the try/except below.
+                from robothor.engine.feature_flags import sandbox_default_mode
+
+                _sb_decision = _resolve_sandbox_decision(agent_config, sandbox_default_mode())
+                if _sb_decision == "observe":
+                    with contextlib.suppress(Exception):
+                        from robothor.engine.tracking import log_guardrail_event
+
+                        log_guardrail_event(
+                            run_id=session.run.id,
+                            guardrail_name="sandbox_default",
+                            action="observed",
+                            tool_name="exec",
+                            reason="exec-holding agent would run in a Docker sandbox",
+                            mode=sandbox_default_mode(),
+                            step_number=0,
+                        )
                 sandbox = None
-                if agent_config.sandbox == "docker":
+                if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
 
                     sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
