@@ -360,23 +360,38 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             return {"status": "already_running", "agent_id": agent_id}
 
         try:
+            from robothor.engine.sandbox import get_current_sandbox
+
             pw = await _get_playwright()
-            browser = await pw.chromium.launch(
-                headless=False,
-                args=[
-                    f"--display={_display()}",
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--window-size=1280,960",
-                    "--window-position=0,0",
-                ],
-                env={**os.environ, "DISPLAY": _display()},
-            )
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 960},
-                user_agent="Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Robothor/1.0",
-            )
-            page = await context.new_page()
+            sandbox = get_current_sandbox()
+            endpoint = sandbox.browser_endpoint() if sandbox else ""
+            if endpoint:
+                # Per-run Docker sandbox: drive the container's Chromium over CDP
+                # instead of launching one on the host display.
+                browser = await pw.chromium.connect_over_cdp(endpoint)
+                context = (
+                    browser.contexts[0]
+                    if browser.contexts
+                    else await browser.new_context(viewport={"width": 1280, "height": 960})
+                )
+                page = context.pages[0] if context.pages else await context.new_page()
+            else:
+                browser = await pw.chromium.launch(
+                    headless=False,
+                    args=[
+                        f"--display={_display()}",
+                        "--no-sandbox",
+                        "--disable-gpu",
+                        "--window-size=1280,960",
+                        "--window-position=0,0",
+                    ],
+                    env={**os.environ, "DISPLAY": _display()},
+                )
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 960},
+                    user_agent="Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Robothor/1.0",
+                )
+                page = await context.new_page()
             _sessions[agent_id] = BrowserSession(browser=browser, context=context, page=page)
             return {"status": "started", "agent_id": agent_id}
         except Exception as e:
