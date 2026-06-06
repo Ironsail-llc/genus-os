@@ -51,6 +51,88 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return await asyncio.to_thread(_run)
 
 
+_SEARCH_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        "venv",
+        ".venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)
+_SEARCH_MAX_FILE_BYTES = 2_000_000
+
+
+@_handler("search_files")
+async def _search_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Search file CONTENTS by regex (first-party, pure-Python, no shell-out).
+
+    Workspace-scoped, prunes heavy dirs (.git/venv/node_modules/...). Returns
+    {file, line, text} matches. Use this instead of shelling out via exec to find
+    code — it is the self-improvement loop's code-search surface.
+    """
+    import fnmatch
+    import os
+    import re as _re
+    from pathlib import Path
+
+    pattern = args.get("pattern", "")
+    if not pattern:
+        return {"error": "No pattern provided"}
+    glob = args.get("glob") or ""
+    max_results = int(args.get("max_results", 100))
+    root = Path(ctx.workspace).resolve() if ctx.workspace else Path.cwd()
+    base = (root / (args.get("path") or ".")).resolve()
+    try:  # keep the search inside the workspace
+        base.relative_to(root)
+    except ValueError:
+        return {"error": "path escapes the workspace"}
+    try:
+        rx = _re.compile(pattern)
+    except _re.error as e:
+        return {"error": f"invalid regex: {e}"}
+
+    def _rel(fp: Path) -> str:
+        try:
+            return str(fp.relative_to(root))
+        except ValueError:
+            return str(fp)
+
+    def _scan_file(fp: Path, matches: list[dict[str, Any]]) -> bool:
+        """Append matches; return True when max_results reached."""
+        try:
+            if fp.stat().st_size > _SEARCH_MAX_FILE_BYTES:
+                return False
+            with fp.open("r", errors="ignore") as f:
+                for i, line in enumerate(f, 1):
+                    if rx.search(line):
+                        matches.append({"file": _rel(fp), "line": i, "text": line.rstrip()[:300]})
+                        if len(matches) >= max_results:
+                            return True
+        except (OSError, UnicodeDecodeError):
+            return False
+        return False
+
+    def _run() -> dict[str, Any]:
+        matches: list[dict[str, Any]] = []
+        if base.is_file():
+            _scan_file(base, matches)
+            return {"matches": matches, "count": len(matches), "truncated": False}
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
+            for fn in sorted(filenames):
+                if glob and not fnmatch.fnmatch(fn, glob):
+                    continue
+                if _scan_file(Path(dirpath) / fn, matches):
+                    return {"matches": matches, "count": len(matches), "truncated": True}
+        return {"matches": matches, "count": len(matches), "truncated": False}
+
+    return await asyncio.to_thread(_run)
+
+
 @_handler("read_file")
 async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path

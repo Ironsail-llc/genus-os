@@ -2819,6 +2819,38 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Code intelligence: first-party content search (ripgrep-backed) so
+    #    agents don't shell out via exec to grep ──
+    schemas["search_files"] = {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": (
+                "Search file CONTENTS by regex across the workspace (fast, ripgrep). "
+                "Prefer this over exec+grep for finding code. Returns file/line/text matches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression to search for",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Dir or file to search, relative to workspace (default: whole workspace)",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "File filter, e.g. '*.py' (optional)",
+                    },
+                    "max_results": {"type": "integer", "description": "Max matches (default 100)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    }
+
     # ── Runtime self-scheduling (handler in handlers/timing.py; persists to
     #    user_cronjobs; the scheduler tick fires due jobs) ──
     schemas["register_user_cron"] = {
