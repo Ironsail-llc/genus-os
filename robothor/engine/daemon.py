@@ -480,6 +480,15 @@ async def main() -> None:
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
 
+    # Slack channel (Socket Mode) — env-gated; start() self-gates on the tokens.
+    slack_bot = None
+    if os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN"):
+        from robothor.engine.slack import SlackBot
+
+        slack_bot = SlackBot(runner, config)
+        tasks.append(asyncio.create_task(slack_bot.start(), name="slack"))
+        logger.info("Slack channel enabled (Socket Mode)")
+
     logger.info("All subsystems started")
     _sd_notify("READY=1")
 
@@ -548,6 +557,11 @@ async def main() -> None:
     await hooks.stop()
     if bot is not None:
         await bot.stop()
+    if slack_bot is not None:
+        try:
+            await slack_bot.stop()
+        except Exception as e:
+            logger.debug("Slack bot stop failed: %s", e)
 
     # Cancel remaining tasks
     for task in pending:
