@@ -805,6 +805,52 @@ class AgentRunner:
             message = f"{warmup_preamble}\n\n{message}"
         watchdog.touch("warmup_complete")
 
+        # ── [INJECTION] Scan the assembled system-run prompt ──
+        # Cron/hook/workflow runs are unattended; recalled memory, skills, or
+        # context files folded into the prompt above could carry an injection.
+        # Gated by ROBOTHOR_INJECTION_SCAN_* (observe logs; enforce aborts).
+        if trigger_type in (
+            TriggerType.CRON,
+            TriggerType.HOOK,
+            TriggerType.WORKFLOW,
+        ):
+            from robothor.engine.cron_safety import (
+                CronPromptInjectionBlockedError,
+                screen_cron_prompt,
+            )
+
+            try:
+                _inj_finding = screen_cron_prompt(
+                    f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
+                )
+            except CronPromptInjectionBlockedError as _inj_exc:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="blocked",
+                        tool_name=None,
+                        reason=str(_inj_exc),
+                        mode="enforce",
+                        step_number=0,
+                    )
+                raise
+            if _inj_finding:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="observed",
+                        tool_name=None,
+                        reason=_inj_finding,
+                        mode="observe",
+                        step_number=0,
+                    )
+
         # ── Warmup phase instrumentation ──────────────────────────────────────
         # Record setup milestones as warmup_phase steps so stalls are visible
         # in agent_run_steps instead of only in watchdog touch logs.

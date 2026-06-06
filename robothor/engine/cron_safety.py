@@ -10,7 +10,10 @@ known injection patterns before the API call and raise
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class CronPromptInjectionBlockedError(Exception):
@@ -59,3 +62,25 @@ def assert_safe(text: str) -> None:
     finding = scan_assembled_cron_prompt(text)
     if finding is not None:
         raise CronPromptInjectionBlockedError(finding)
+
+
+def screen_cron_prompt(text: str, *, context: str = "cron") -> str | None:
+    """Scan an assembled system-run prompt and act per ``injection_scan_mode``.
+
+    Returns the finding string when a signal is present (for the caller to log),
+    else ``None``. ``off`` → no-op (returns None without scanning). ``observe``/
+    ``alert`` → log a warning and return the finding but DO NOT raise. ``enforce``
+    → raise :class:`CronPromptInjectionBlockedError` to abort the run.
+    """
+    from robothor.engine.feature_flags import injection_scan_mode
+
+    mode = injection_scan_mode()
+    if mode == "off":
+        return None
+    finding = scan_assembled_cron_prompt(text)
+    if finding is None:
+        return None
+    logger.warning("Injection signal in %s prompt (mode=%s): %s", context, mode, finding)
+    if mode == "enforce":
+        raise CronPromptInjectionBlockedError(finding)
+    return finding
