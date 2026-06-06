@@ -1985,7 +1985,49 @@ class AgentRunner:
                                         scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                                     continue
                             else:
-                                pass  # no manager = auto-approve (autonomous default)
+                                # No approver reachable. Legacy behavior auto-
+                                # approves; ROBOTHOR_APPROVAL_* makes this fail
+                                # closed (observe logs the would-deny; enforce
+                                # denies the tool).
+                                from robothor.engine.feature_flags import approval_mode
+                                from robothor.engine.permission_escalation import (
+                                    fail_closed_on_missing_manager,
+                                )
+
+                                _appr_mode = approval_mode()
+                                if _appr_mode != "off":
+                                    with contextlib.suppress(Exception):
+                                        from robothor.engine.tracking import log_guardrail_event
+
+                                        log_guardrail_event(
+                                            run_id=session.run.id,
+                                            guardrail_name=gr.guardrail_name,
+                                            action="blocked"
+                                            if _appr_mode == "enforce"
+                                            else "observed",
+                                            tool_name=tool_name,
+                                            reason="human approval required but no approver reachable",
+                                            mode=_appr_mode,
+                                            step_number=len(session.run.steps),
+                                        )
+                                if fail_closed_on_missing_manager():
+                                    gr_error_msg = (
+                                        f"Denied — human approval required for "
+                                        f"{gr.guardrail_name} but no approver is reachable"
+                                    )
+                                    session.record_tool_call(
+                                        tool_name=tool_name,
+                                        tool_input=tool_args,
+                                        tool_output={"error": gr_error_msg},
+                                        tool_call_id=tc.id,
+                                        error_message=gr_error_msg,
+                                    )
+                                    if scratchpad:
+                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                                    if escalation:
+                                        escalation.record_error()
+                                    continue
+                                # otherwise auto-approve (legacy) and fall through
                         else:
                             gr_error_msg = (
                                 f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"

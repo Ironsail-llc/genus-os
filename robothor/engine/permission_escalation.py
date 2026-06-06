@@ -254,3 +254,15 @@ def init_permission_manager(bot: Any, chat_id: str) -> PermissionEscalationManag
     global _escalation_manager
     _escalation_manager = PermissionEscalationManager(bot=bot, chat_id=chat_id)
     return _escalation_manager
+
+
+def fail_closed_on_missing_manager() -> bool:
+    """Whether to DENY a human-approval escalation when no approver is reachable.
+
+    True only in enforce mode (ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED=1 +
+    ROBOTHOR_APPROVAL_MODE=enforce). Otherwise the legacy behavior of
+    auto-approving an un-answerable escalation is preserved.
+    """
+    from robothor.engine.feature_flags import approval_mode
+
+    return approval_mode() == "enforce"
