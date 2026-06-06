@@ -22,6 +22,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._schemas: dict[str, dict[str, Any]] = {}
         self._adapter_routes: dict[str, str] = {}  # tool_name → adapter server name
+        self._warned_unresolved: set[str] = set()  # agent_id → warned about dead tools once
         self._register_all()
 
     def _register_all(self) -> None:
@@ -143,6 +144,16 @@ class ToolRegistry:
     def _get_filtered_names(self, config: AgentConfig) -> list[str]:
         if config.tools_allowed:
             names = [n for n in config.tools_allowed if n in self._schemas]
+            unresolved = [n for n in config.tools_allowed if n not in self._schemas]
+            if unresolved and config.id not in self._warned_unresolved:
+                self._warned_unresolved.add(config.id)
+                logger.warning(
+                    "Agent %s declares %d tool(s) with no registered schema/adapter "
+                    "route; they are silently unavailable: %s",
+                    config.id,
+                    len(unresolved),
+                    ", ".join(sorted(unresolved)),
+                )
             names.extend(n for n in GOAL_TOOLS if n in self._schemas and n not in names)
         else:
             names = list(self._schemas.keys())
