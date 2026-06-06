@@ -2819,4 +2819,121 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Procedural memory (handlers in handlers/memory.py; were dark for lack
+    #    of schemas, so registry.build_for_agent filtered them out) ──
+    schemas["record_procedure"] = {
+        "type": "function",
+        "function": {
+            "name": "record_procedure",
+            "description": (
+                "Save a reusable procedure (named sequence of steps) so you or "
+                "other agents can find and reuse it for similar future tasks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Short procedure name"},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered steps to perform the procedure",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the procedure accomplishes",
+                    },
+                    "prerequisites": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Conditions/inputs needed before running it",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags for matching the procedure to future tasks",
+                    },
+                },
+                "required": ["name", "steps"],
+            },
+        },
+    }
+    schemas["find_procedure"] = {
+        "type": "function",
+        "function": {
+            "name": "find_procedure",
+            "description": (
+                "Find previously-recorded procedures applicable to a task "
+                "(semantic search, optionally filtered by tags)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Description of the task you need a procedure for",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tag filter",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max procedures to return (default 3)",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    }
+    schemas["report_procedure_outcome"] = {
+        "type": "function",
+        "function": {
+            "name": "report_procedure_outcome",
+            "description": (
+                "Record whether a procedure you applied succeeded or failed, so its "
+                "confidence score stays calibrated."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "procedure_id": {
+                        "type": "integer",
+                        "description": "ID of the procedure you applied",
+                    },
+                    "success": {
+                        "type": "boolean",
+                        "description": "Whether applying it succeeded",
+                    },
+                    "notes": {"type": "string", "description": "Optional outcome notes"},
+                },
+                "required": ["procedure_id", "success"],
+            },
+        },
+    }
+    schemas["leave_breadcrumb"] = {
+        "type": "function",
+        "function": {
+            "name": "leave_breadcrumb",
+            "description": (
+                "Persist mid-task state so your NEXT run resumes where you left off. "
+                "The latest breadcrumbs are surfaced in your warmup context."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "A short note (or JSON string) describing where you left off",
+                    },
+                    "ttl_days": {
+                        "type": "integer",
+                        "description": "Days before the breadcrumb expires (default 7)",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    }
+
     return schemas
