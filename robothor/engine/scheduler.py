@@ -383,9 +383,10 @@ class CronScheduler:
         self.scheduler.start()
         logger.info("Cron scheduler started")
 
-        # Keep running
+        # Keep running; poll user-authored cron jobs each minute.
         while True:
             await asyncio.sleep(60)
+            await self._tick_user_cronjobs()
 
     # ─── Shared execution path ────────────────────────────────────────
 
@@ -850,6 +851,48 @@ class CronScheduler:
             f"You are {config.name} ({config.id}). "
             f"Execute your scheduled tasks as described in your instructions."
         )
+
+    async def _tick_user_cronjobs(self) -> None:
+        """Fire any due user-authored cron jobs and advance their schedules.
+
+        Poll-based (not APScheduler-registered) so registering a job never
+        churns the live job registry. Best-effort: a DB hiccup is logged, not
+        fatal to the scheduler loop.
+        """
+        import json
+
+        try:
+            from robothor.engine.user_cron import (
+                compute_next_run,
+                list_due_cronjobs,
+                mark_cronjob_fired,
+            )
+
+            now = datetime.now(UTC)
+            due = await asyncio.to_thread(list_due_cronjobs, self.config.tenant_id, now)
+            for job in due:
+                job_id = job["job_id"]
+                with contextlib.suppress(Exception):
+                    asyncio.create_task(
+                        self.runner.execute(
+                            agent_id=job["agent_id"],
+                            message=job["prompt"],
+                            trigger_type=TriggerType.CRON,
+                            trigger_detail=f"user_cron:{job_id}",
+                        )
+                    )
+                payload = job.get("schedule_payload") or {}
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                next_run = compute_next_run(payload, now)
+                fire_count = (job.get("fire_count") or 0) + 1
+                max_fires = job.get("max_fires")
+                disable = next_run is None or (max_fires is not None and fire_count >= max_fires)
+                await asyncio.to_thread(
+                    mark_cronjob_fired, job_id, next_run_at=next_run, disable=disable
+                )
+        except Exception as e:
+            logger.debug("user_cron tick error: %s", e)
 
     def reconcile_schedules(self) -> list[str]:
         """Reconcile DB + in-memory jobs against current manifests.

@@ -2819,6 +2819,39 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Runtime self-scheduling (handler in handlers/timing.py; persists to
+    #    user_cronjobs; the scheduler tick fires due jobs) ──
+    schemas["register_user_cron"] = {
+        "type": "function",
+        "function": {
+            "name": "register_user_cron",
+            "description": (
+                "Schedule a future or recurring run of yourself with a custom prompt. "
+                "Schedule accepts natural language ('every 30m', 'in 2 hours', "
+                "'2026-06-07T09:00') or a 5-field cron expression. Sub-minute "
+                "schedules are rejected."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule": {
+                        "type": "string",
+                        "description": "When to run: 'every 30m', 'in 2 hours', ISO time, or cron",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The instruction to run on schedule",
+                    },
+                    "max_fires": {
+                        "type": "integer",
+                        "description": "Optional cap on how many times it fires (omit = unbounded)",
+                    },
+                },
+                "required": ["schedule", "prompt"],
+            },
+        },
+    }
+
     # ── Inter-agent messaging + teams (handlers in handlers/messaging.py;
     #    dark for lack of schemas; require daemon init_messenger/init_team_manager) ──
     schemas["send_agent_message"] = {
