@@ -476,6 +476,7 @@ async def main() -> None:
         asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
+        asyncio.create_task(_extension_watcher_loop(), name="extensions"),
     ]
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
@@ -832,6 +833,16 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             return
         except Exception as e:
             logger.warning("curiosity-density loop error: %s", e)
+
+
+async def _extension_watcher_loop() -> None:
+    """Hot-reload adapter YAML changes without an engine restart (ExtensionWatcher)."""
+    try:
+        from robothor.engine.extensions import ExtensionWatcher
+
+        await ExtensionWatcher().watch()
+    except Exception as e:
+        logger.debug("Extension watcher exited: %s", e)
 
 
 async def _autodream_loop() -> None:
