@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
+import socket
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -27,26 +29,47 @@ _BLOCKED_NETWORKS = [
 ]
 
 
+def _ip_is_blocked(ip_str: str) -> bool:
+    """True if an IP literal falls in a blocked (private/loopback/link-local) range."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+
 def _is_blocked_host(url: str) -> bool:
-    """Check if a URL targets a blocked (private/loopback) host."""
+    """Check if a URL targets a blocked (private/loopback/link-local) host.
+
+    Resolves hostnames via DNS and blocks if ANY resolved address is private —
+    closing the SSRF hole where ``evil.com`` resolves to ``127.0.0.1`` or the
+    cloud-metadata IP (``169.254.169.254``). Fails CLOSED: an unresolvable or
+    unparseable host is treated as blocked.
+    """
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname or ""
 
-        # Block common loopback hostnames
         if hostname in ("localhost", "localhost.localdomain", ""):
             return True
+        if hostname.endswith(".local") or hostname.endswith(".internal"):
+            return True
 
-        # Resolve and check against blocked networks
+        # IP literal — check directly, no DNS.
         try:
-            addr = ipaddress.ip_address(hostname)
-            return any(addr in net for net in _BLOCKED_NETWORKS)
+            ipaddress.ip_address(hostname)
+            return _ip_is_blocked(hostname)
         except ValueError:
-            # Not an IP literal — could be a hostname
-            # Block common internal patterns
-            return hostname.endswith(".local") or hostname.endswith(".internal")
+            pass
+
+        # Hostname — resolve every A/AAAA record and block if any is private.
+        try:
+            infos = socket.getaddrinfo(hostname, None)
+        except OSError:
+            return True  # unresolvable → fail closed
+        return any(_ip_is_blocked(info[4][0]) for info in infos)
     except Exception:
-        return False
+        return True  # fail closed on any parsing error
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -62,13 +85,26 @@ async def _web_fetch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     url = args.get("url", "")
     if not url:
         return {"error": "No URL provided"}
-    if _is_blocked_host(url):
-        return {"error": f"Blocked: agents cannot access private/loopback addresses ({url})"}
     try:
         import html2text
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
+        # Disable auto-redirect-following and re-validate every hop, so a public
+        # host cannot redirect the agent to a private/loopback target (SSRF).
+        max_redirects = 5
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            current = url
+            for _ in range(max_redirects + 1):
+                if await asyncio.to_thread(_is_blocked_host, current):
+                    return {
+                        "error": f"Blocked: agents cannot access private/loopback addresses ({current})"
+                    }
+                resp = await client.get(current)
+                if resp.is_redirect and resp.headers.get("location"):
+                    current = str(httpx.URL(current).join(resp.headers["location"]))
+                    continue
+                break
+            else:
+                return {"error": "Too many redirects"}
             resp.raise_for_status()
             import re as _re
 
