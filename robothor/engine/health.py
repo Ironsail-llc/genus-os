@@ -1137,6 +1137,26 @@ def create_health_app(
             logger.exception("Failed to resume run")
             return {"error": "Internal server error"}
 
+    @app.post("/api/runs/{run_id}/steer")
+    async def steer_run(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Inject a steering message into a live run (it continues, adjusted)."""
+        from robothor.engine.interrupt_api import steer_session
+
+        text = str((body or {}).get("text", ""))
+        if not text:
+            return {"error": "text required"}
+        found = steer_session(run_id, text)
+        return {"ok": found, "run_id": run_id, "found": found}
+
+    @app.post("/api/runs/{run_id}/interrupt")
+    async def interrupt_run(run_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Halt a live run at the next iteration boundary (optional note)."""
+        from robothor.engine.interrupt_api import interrupt_session
+
+        message = (body or {}).get("message")
+        found = interrupt_session(run_id, message)
+        return {"ok": found, "run_id": run_id, "found": found}
+
     @app.get("/api/v2/stats")
     async def v2_stats(hours: int = 24) -> dict[str, Any]:
         """v2 enhancement stats — guardrail events, budget exhaustions, checkpoints."""
