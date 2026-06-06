@@ -44,6 +44,134 @@ class TestCooldown:
         assert is_cooled_down() is False
 
 
+class TestLastRunTimestampWithSource:
+    """_get_last_run_ts_with_source: Redis->file read with value validation."""
+
+    @staticmethod
+    def _redis(value):
+        r = MagicMock()
+        r.get.return_value = value
+        return r
+
+    @patch("robothor.events.bus._get_redis")
+    def test_source_redis(self, mock_redis):
+        from robothor.engine.autodream import _get_last_run_ts_with_source
+
+        ts = time.time() - 100
+        mock_redis.return_value = self._redis(str(ts))
+        val, source = _get_last_run_ts_with_source()
+        assert source == "redis"
+        assert val is not None and abs(val - ts) < 1
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_source_file_fallback(self, mock_redis, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        ts = time.time() - 100
+        f = tmp_path / "last_run"
+        f.write_text(str(ts))
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(f))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert source == "file"
+        assert val is not None and abs(val - ts) < 1
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_source_none_when_no_file(self, mock_redis, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(tmp_path / "missing"))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert val is None
+        assert source == "none"
+
+    @patch("robothor.events.bus._get_redis")
+    def test_rejects_future_redis(self, mock_redis):
+        from robothor.engine.autodream import _get_last_run_ts_with_source
+
+        mock_redis.return_value = self._redis(str(time.time() + 10_000))
+        val, source = _get_last_run_ts_with_source()
+        assert val is None
+        assert source == "invalid"
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_rejects_future_file(self, mock_redis, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        f = tmp_path / "last_run"
+        f.write_text(str(time.time() + 10_000))
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(f))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert val is None
+        assert source == "invalid"
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_rejects_nan_file(self, mock_redis, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        f = tmp_path / "last_run"
+        f.write_text("nan")
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(f))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert val is None
+        assert source == "invalid"
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_rejects_negative_inf_file(self, mock_redis, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        f = tmp_path / "last_run"
+        f.write_text("-inf")
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(f))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert val is None
+        assert source == "invalid"
+
+    @patch("robothor.events.bus._get_redis")
+    def test_accepts_within_skew_tolerance(self, mock_redis):
+        from robothor.engine.autodream import _get_last_run_ts_with_source
+
+        # +100s is within the 300s skew tolerance -> accepted.
+        mock_redis.return_value = self._redis(str(time.time() + 100))
+        val, source = _get_last_run_ts_with_source()
+        assert source == "redis"
+        assert val is not None
+
+    @patch("robothor.events.bus._get_redis", return_value=None)
+    def test_file_older_than_max_age_ignored(self, mock_redis, tmp_path, monkeypatch):
+        import os
+
+        from robothor.engine import autodream
+
+        f = tmp_path / "last_run"
+        old = time.time() - 100_000  # ~27.7h, beyond the ~25h default max age
+        f.write_text(str(old))
+        os.utime(f, (old, old))
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(f))
+        val, source = autodream._get_last_run_ts_with_source()
+        assert val is None
+        assert source == "none"
+
+    @patch(
+        "robothor.engine.autodream._get_last_run_ts_with_source",
+        return_value=(123.0, "redis"),
+    )
+    def test_wrapper_returns_float_only(self, mock_src):
+        from robothor.engine.autodream import _get_last_run_ts
+
+        assert _get_last_run_ts() == 123.0
+
+    @patch(
+        "robothor.engine.autodream._get_last_run_ts_with_source",
+        return_value=(None, "invalid"),
+    )
+    def test_is_cooled_down_true_when_timestamp_invalid(self, mock_src):
+        # A future/corrupt timestamp is rejected -> treated as never-run ->
+        # a run is allowed (self-heal: the run overwrites the bad value).
+        from robothor.engine.autodream import is_cooled_down
+
+        assert is_cooled_down() is True
+
+
 # ── Quiet Hours Detection ───────────────────────────────────────────────────
 
 
@@ -345,6 +473,17 @@ class TestRunAutodream:
 
 class TestAutodreamLoop:
     """Tests for the _autodream_loop integration in daemon.py."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_defer_state(self):
+        """Reset the in-process loop globals so tests don't bleed into each other."""
+        from robothor.engine import daemon
+
+        daemon._autodream_defer_started_at = None
+        daemon._autodream_stale_alerted = False
+        yield
+        daemon._autodream_defer_started_at = None
+        daemon._autodream_stale_alerted = False
 
     @pytest.mark.asyncio
     @patch("robothor.engine.dedup.running_agents", return_value=set())

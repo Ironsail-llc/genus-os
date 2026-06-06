@@ -186,6 +186,54 @@ class TestRenderDevopsReport:
         assert "Bob Smith" in result["html"]
 
     @pytest.mark.asyncio
+    async def test_dict_period_subject_and_html_use_label(self):
+        """A period_block dict must render as a clean label, never a dict-repr."""
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        data = dict(SAMPLE_DATA)
+        data["period"] = {
+            "tz": "America/New_York",
+            "current_week_start_et": "2026-04-13T00:00:00-04:00",
+            "last_week_start_et": "2026-04-06T00:00:00-04:00",
+            "last_week_end_et": "2026-04-13T00:00:00-04:00",
+            "generated_at_et": "2026-04-13T09:00:00-04:00",
+            "report_label": "Week of 2026-04-06",
+        }
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        assert "Week of 2026-04-06" in result["subject"]
+        assert "'tz'" not in result["subject"]
+        assert "report_label" not in result["subject"]
+        # HTML header is clean too (no raw dict-repr leaked)
+        assert "'tz'" not in result["html"]
+        assert "Week of 2026-04-06" in result["html"]
+
+    @pytest.mark.asyncio
+    async def test_dict_period_without_report_label_derives_label(self):
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        data = dict(SAMPLE_DATA)
+        data["period"] = {"last_week_start_et": "2026-04-06T00:00:00-04:00"}
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        assert "Week of 2026-04-06" in result["subject"]
+        assert "'last_week_start_et'" not in result["plain_summary"]
+
+    @pytest.mark.asyncio
+    async def test_plain_summary_omits_nested_last_week(self):
+        """_build_plain_summary must skip nested objects, not dump their dict-repr."""
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        data = dict(SAMPLE_DATA)
+        es = dict(SAMPLE_DATA["executive_summary"])
+        es["last_week"] = {"tickets_resolved": 10, "prs_merged": 25}
+        data["executive_summary"] = es
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        plain = result["plain_summary"]
+        assert "{'tickets_resolved'" not in plain
+        assert "Last Week:" not in plain
+        # flat scalar fields still present
+        assert "86" in plain
+
+    @pytest.mark.asyncio
     async def test_accepts_json_string(self):
         import json
 
