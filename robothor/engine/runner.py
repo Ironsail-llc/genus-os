@@ -1977,6 +1977,55 @@ class AgentRunner:
                                 escalation.record_error()
                             continue
 
+                # ── [RBAC] System-run permission gate ──
+                # Interactive runs (telegram/webchat/channel) are gated by the
+                # dispatch user_role check. System runs (cron/hook/heartbeat/
+                # workflow) have no interactive user, so apply the agent's
+                # service_role here under the ROBOTHOR_RBAC_* ladder.
+                if agent_config is not None and session.run.trigger_type not in (
+                    TriggerType.TELEGRAM,
+                    TriggerType.WEBCHAT,
+                    TriggerType.CHANNEL_EVENT,
+                ):
+                    from robothor.engine.feature_flags import rbac_enforcement_mode
+                    from robothor.engine.permissions import classify_system_tool_access
+
+                    _rbac_mode = rbac_enforcement_mode()
+                    _rbac_action, _rbac_reason = classify_system_tool_access(
+                        agent_config.service_role,
+                        session.run.tenant_id,
+                        tool_name,
+                        _rbac_mode,
+                    )
+                    if _rbac_action != "allow":
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.tracking import log_guardrail_event
+
+                            log_guardrail_event(
+                                run_id=session.run.id,
+                                guardrail_name="rbac",
+                                action="blocked" if _rbac_action == "block" else "observed",
+                                tool_name=tool_name,
+                                reason=_rbac_reason,
+                                mode=_rbac_mode,
+                                step_number=len(session.run.steps),
+                            )
+                        if _rbac_action == "block":
+                            rbac_msg = f"Blocked by RBAC: {_rbac_reason}"
+                            session.record_tool_call(
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                                tool_output={"error": rbac_msg, "guardrail": "rbac"},
+                                tool_call_id=tc.id,
+                                error_message=rbac_msg,
+                            )
+                            iteration_errors.append((tool_name, rbac_msg, None))
+                            if scratchpad:
+                                scratchpad.record_tool_call(tool_name, error=rbac_msg)
+                            if escalation:
+                                escalation.record_error()
+                            continue
+
                 # Emit tool_start event
                 if on_tool:
                     with contextlib.suppress(Exception):

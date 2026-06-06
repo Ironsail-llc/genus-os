@@ -93,6 +93,34 @@ def check_tool_permission(
         return "Permission check unavailable — access denied"
 
 
+def classify_system_tool_access(
+    service_role: str,
+    tenant_id: str,
+    tool_name: str,
+    mode: str,
+) -> tuple[str, str | None]:
+    """Decide what to do with a SYSTEM-run (cron/hook/heartbeat) tool call.
+
+    Interactive runs are gated by the dispatch ``user_role`` check; system runs
+    have no interactive user, so this applies the agent's ``service_role`` under
+    the ``rbac_enforcement_mode`` ladder.
+
+    Returns ``(action, reason)`` where action is:
+      * ``"allow"`` — permitted (or mode is off — no check performed)
+      * ``"block"`` — denied AND mode is ``enforce`` (caller blocks the tool)
+      * ``"observe"`` — denied but mode is ``observe``/``alert`` (caller logs
+        the would-deny and ALLOWS the tool, preserving behavior)
+    """
+    if mode == "off":
+        return ("allow", None)
+    reason = check_tool_permission(service_role, tenant_id, tool_name)
+    if reason is None:
+        return ("allow", None)
+    if mode == "enforce":
+        return ("block", reason)
+    return ("observe", reason)
+
+
 def _get_child_tenants(tenant_id: str) -> list[str]:
     """Return direct child tenant IDs from the CRM database.
 
