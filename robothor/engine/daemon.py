@@ -334,6 +334,16 @@ async def main() -> None:
         config.hourly_cost_cap_usd,
     )
 
+    # Initialize inter-agent messaging + teams so the send_agent_message /
+    # receive_agent_messages / create_team / team_scratchpad_* tools work
+    # (their handlers no-op with "not initialized" until these are called).
+    from robothor.engine.messaging import init_messenger
+    from robothor.engine.teams import init_team_manager
+
+    init_messenger()
+    init_team_manager()
+    logger.info("Inter-agent messaging + teams initialized")
+
     # Initialize lifecycle hook registry
     from robothor.engine.hook_registry import (
         init_hook_registry,

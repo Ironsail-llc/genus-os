@@ -2819,6 +2819,89 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Inter-agent messaging + teams (handlers in handlers/messaging.py;
+    #    dark for lack of schemas; require daemon init_messenger/init_team_manager) ──
+    schemas["send_agent_message"] = {
+        "type": "function",
+        "function": {
+            "name": "send_agent_message",
+            "description": "Send a direct message to another agent's inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_agent": {"type": "string", "description": "Recipient agent id"},
+                    "content": {"type": "string", "description": "Message body"},
+                    "metadata": {"type": "object", "description": "Optional structured metadata"},
+                },
+                "required": ["to_agent", "content"],
+            },
+        },
+    }
+    schemas["receive_agent_messages"] = {
+        "type": "function",
+        "function": {
+            "name": "receive_agent_messages",
+            "description": "Read messages from your inbox (sent by other agents).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max messages (default 10)"},
+                },
+            },
+        },
+    }
+    schemas["create_team"] = {
+        "type": "function",
+        "function": {
+            "name": "create_team",
+            "description": "Form a team of agents with a shared objective and scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Unique team id"},
+                    "members": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Agent ids on the team (you are added automatically)",
+                    },
+                    "objective": {"type": "string", "description": "What the team is working on"},
+                },
+                "required": ["team_id", "members"],
+            },
+        },
+    }
+    schemas["team_scratchpad_write"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_write",
+            "description": "Write a key/value to a team's shared scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Scratchpad key"},
+                    "value": {"type": "string", "description": "Value to store"},
+                },
+                "required": ["team_id", "key"],
+            },
+        },
+    }
+    schemas["team_scratchpad_read"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_read",
+            "description": "Read a team's shared scratchpad (omit key to read all).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Specific key (optional)"},
+                },
+                "required": ["team_id"],
+            },
+        },
+    }
+
     # ── Procedural memory (handlers in handlers/memory.py; were dark for lack
     #    of schemas, so registry.build_for_agent filtered them out) ──
     schemas["record_procedure"] = {
