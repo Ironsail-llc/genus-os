@@ -198,6 +198,38 @@ async def add_relation(
     return rel_id
 
 
+async def add_relations_batch(
+    rows: list[tuple[int, int, str, int | None, float]],
+    *,
+    tenant_id: str = "",
+) -> int:
+    """Insert many relations in a SINGLE round-trip (fixes the N+1 in the
+    extract paths). ``rows`` are ``(source_id, target_id, relation_type,
+    fact_id, confidence)``. Same upsert semantics as :func:`add_relation`.
+    Returns the number of rows inserted/updated.
+    """
+    if not rows:
+        return 0
+    from psycopg2.extras import execute_values
+
+    _tenant = tenant_id or DEFAULT_TENANT
+    values = [(s, t, rt, fid, conf, _tenant) for (s, t, rt, fid, conf) in rows]
+    with get_connection() as conn:
+        cur = conn.cursor()
+        execute_values(
+            cur,
+            """
+            INSERT INTO memory_relations
+                (source_entity_id, target_entity_id, relation_type, fact_id, confidence, tenant_id)
+            VALUES %s
+            ON CONFLICT (tenant_id, source_entity_id, target_entity_id, relation_type) DO UPDATE
+            SET confidence = GREATEST(memory_relations.confidence, EXCLUDED.confidence)
+            """,
+            values,
+        )
+    return len(values)
+
+
 async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None:
     """Look up an entity and all its relationships.
 
@@ -310,13 +342,12 @@ async def extract_and_store_entities(
         eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
         entity_ids[e["name"]] = eid
 
-    relations_stored = 0
-    for r in extracted["relations"]:
-        src_id = entity_ids.get(r["source"])
-        tgt_id = entity_ids.get(r["target"])
-        if src_id and tgt_id:
-            await add_relation(src_id, tgt_id, r["relation"], fact_id=fact_id, tenant_id=tenant_id)
-            relations_stored += 1
+    rel_rows: list[tuple[int, int, str, int | None, float]] = [
+        (src_id, tgt_id, r["relation"], fact_id, 1.0)
+        for r in extracted["relations"]
+        if (src_id := entity_ids.get(r["source"])) and (tgt_id := entity_ids.get(r["target"]))
+    ]
+    relations_stored = await add_relations_batch(rel_rows, tenant_id=tenant_id)
 
     return {
         "entities_stored": len(extracted["entities"]),
@@ -361,16 +392,13 @@ async def extract_entities_batch(fact_ids: list[int], *, tenant_id: str = "") ->
         eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
         entity_ids[e["name"]] = eid
 
-    relations_stored = 0
     ref_fact_id = fact_ids[0] if fact_ids else None
-    for r in extracted["relations"]:
-        src_id = entity_ids.get(r["source"])
-        tgt_id = entity_ids.get(r["target"])
-        if src_id and tgt_id:
-            await add_relation(
-                src_id, tgt_id, r["relation"], fact_id=ref_fact_id, tenant_id=tenant_id
-            )
-            relations_stored += 1
+    rel_rows: list[tuple[int, int, str, int | None, float]] = [
+        (src_id, tgt_id, r["relation"], ref_fact_id, 1.0)
+        for r in extracted["relations"]
+        if (src_id := entity_ids.get(r["source"])) and (tgt_id := entity_ids.get(r["target"]))
+    ]
+    relations_stored = await add_relations_batch(rel_rows, tenant_id=tenant_id)
 
     return {
         "entities_stored": len(extracted["entities"]),
