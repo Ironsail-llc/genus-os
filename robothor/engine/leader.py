@@ -65,9 +65,16 @@ class LeaderElector:
                 self._is_leader = False
 
     async def run(self) -> None:
-        """Background leadership loop. No-op (always-leader) when HA is off."""
+        """Background leadership loop. Always-leader when HA is off.
+
+        Must NOT return while the daemon is alive — the daemon shuts down when
+        ANY of its tasks completes (FIRST_COMPLETED), so this loop stays alive
+        even when HA is off (it just holds leadership and sleeps).
+        """
         if not ha_leader_enabled():
             self._is_leader = True
+            while not self._stop:
+                await asyncio.sleep(3600)
             return
         while not self._stop:
             try:
