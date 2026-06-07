@@ -40,8 +40,33 @@ def register_post_compress_hook(fn: Callable[..., Any]) -> None:
     _post_compress_hooks.append(fn)
 
 
-def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    """Fast token estimate: total chars / 4, plus 400 per tool call."""
+def _real_tokenizer_enabled() -> bool:
+    import os
+
+    return os.environ.get("ROBOTHOR_REAL_TOKENIZER_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) -> int:
+    """Token estimate for ``messages``.
+
+    Default is the fast char/4 heuristic (+400 per tool call). When a ``model``
+    is given AND ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` is set, uses
+    ``litellm.token_counter`` for an exact count, falling back to the heuristic
+    if the model is unknown to litellm.
+    """
+    if model and _real_tokenizer_enabled():
+        try:
+            import litellm
+
+            return int(litellm.token_counter(model=model, messages=messages))
+        except Exception:
+            pass  # unknown model / counter error → heuristic below
+
     total_chars = 0
     tool_call_count = 0
 
@@ -102,7 +127,7 @@ async def maybe_compress(
     from robothor.engine.compaction import compact
 
     compress_at = threshold if threshold is not None else COMPRESS_THRESHOLD
-    est = estimate_tokens(messages)
+    est = estimate_tokens(messages, model=(models[0] if models else None))
     if est < compress_at:
         return messages
 
