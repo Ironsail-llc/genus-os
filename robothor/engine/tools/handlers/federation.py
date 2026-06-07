@@ -55,20 +55,44 @@ async def _federation_query(args: dict[str, Any], ctx: ToolContext) -> dict[str,
                     "imports": connection.imports,
                 }
             if query_type == "runs":
-                agent_id = args.get("agent_id")
-                limit = args.get("limit", 20)
-                return {
-                    "note": "Remote agent run queries require NATS transport (not yet deployed)",
-                    "connection_id": connection_id,
-                    "peer_name": connection.peer_name,
-                    "agent_id": agent_id,
-                    "limit": limit,
-                }
+                return {"_nats": True, "peer_name": connection.peer_name}
             return {"error": f"Unknown query type: {query_type}"}
         except Exception as e:
             return {"error": f"Federation query failed: {e}"}
 
-    return await asyncio.to_thread(_run)
+    result = await asyncio.to_thread(_run)
+    if not result.get("_nats"):
+        return result
+    # Remote run query over the NATS request-reply transport.
+    return await _federation_request(
+        connection_id,
+        {"op": "list_runs", "agent_id": args.get("agent_id"), "limit": args.get("limit", 20)},
+    )
+
+
+async def _federation_request(connection_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Send a NATS request to a peer and return its JSON reply (or an honest error)."""
+    import json
+
+    from robothor.federation.nats import get_nats_manager
+
+    nats_mgr = get_nats_manager()
+    if nats_mgr is None or not nats_mgr.is_connected:
+        return {
+            "error": "Federation transport not connected — enable NATS "
+            "(helm nats.enabled=true / ROBOTHOR_NATS_URL) and pair the instances.",
+            "connection_id": connection_id,
+        }
+    reply = await nats_mgr.request(connection_id, json.dumps(payload).encode(), timeout=5.0)
+    if reply is None:
+        return {
+            "error": "Federation request timed out or peer unavailable",
+            "connection_id": connection_id,
+        }
+    try:
+        return dict(json.loads(reply))
+    except Exception:
+        return {"raw": reply.decode(errors="ignore"), "connection_id": connection_id}
 
 
 @_handler("federation_trigger")
@@ -96,17 +120,16 @@ async def _federation_trigger(args: dict[str, Any], ctx: ToolContext) -> dict[st
             if connection.state != ConnectionState.ACTIVE:
                 return {"error": f"Connection not active (state={connection.state.value})"}
 
-            return {
-                "note": "Remote agent triggers require NATS transport (not yet deployed)",
-                "connection_id": connection_id,
-                "peer_name": connection.peer_name,
-                "agent_id": agent_id,
-                "message": message[:200],
-            }
+            return {"_nats": True, "peer_name": connection.peer_name}
         except Exception as e:
             return {"error": f"Federation trigger failed: {e}"}
 
-    return await asyncio.to_thread(_run)
+    result = await asyncio.to_thread(_run)
+    if not result.get("_nats"):
+        return result
+    return await _federation_request(
+        connection_id, {"op": "trigger", "agent_id": agent_id, "message": message}
+    )
 
 
 @_handler("federation_sync_status")

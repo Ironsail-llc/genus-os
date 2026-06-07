@@ -141,6 +141,48 @@ class NATSManager:
             logger.warning("NATS command publish failed on %s: %s", subject, e)
             return False
 
+    async def request(self, connection_id: str, data: bytes, timeout: float = 5.0) -> bytes | None:
+        """Send a request to a peer and await its reply (NATS request-reply).
+
+        Returns the reply bytes, or None on timeout / not-connected. Used by the
+        federation_query/trigger tools for synchronous remote calls.
+        """
+        if not self._nc:
+            return None
+        subject = command_subject(connection_id)
+        try:
+            reply = await self._nc.request(subject, data, timeout=timeout)
+            return bytes(reply.data)
+        except Exception as e:
+            logger.warning("NATS request failed on %s: %s", subject, e)
+            return None
+
+    async def serve_requests(self, connection_id: str, handler: Any) -> bool:
+        """Respond to peer requests on this connection's command subject.
+
+        ``handler`` is an async callable ``(bytes) -> bytes`` that executes a
+        read-only/triggered action and returns the reply payload.
+        """
+        if not self._nc:
+            return False
+        subject = command_subject(connection_id)
+
+        async def _on_request(msg: Any) -> None:
+            try:
+                reply = await handler(msg.data)
+            except Exception as e:
+                logger.warning("Federation request handler failed: %s", e)
+                reply = b'{"error": "handler failed"}'
+            if msg.reply:
+                await self._nc.publish(msg.reply, reply)
+
+        try:
+            await self._nc.subscribe(subject, cb=_on_request)
+            return True
+        except Exception as e:
+            logger.warning("NATS serve_requests failed on %s: %s", subject, e)
+            return False
+
     async def subscribe(
         self,
         connection_id: str,
@@ -201,3 +243,20 @@ class NATSManager:
         except Exception as e:
             logger.warning("NATS status publish failed: %s", e)
             return False
+
+
+# ── Module singleton ──────────────────────────────────────────────────
+# Set by the daemon at startup when federation (NATS) is enabled, so the
+# federation_query / federation_trigger tools can reach the connected manager.
+_nats_manager: NATSManager | None = None
+
+
+def get_nats_manager() -> NATSManager | None:
+    """Return the connected NATSManager singleton, or None if federation is off."""
+    return _nats_manager
+
+
+def set_nats_manager(manager: NATSManager | None) -> None:
+    """Register (or clear) the NATSManager singleton."""
+    global _nats_manager
+    _nats_manager = manager
