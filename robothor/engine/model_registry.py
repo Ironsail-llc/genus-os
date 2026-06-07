@@ -7,7 +7,9 @@ so the engine adapts to each model's capabilities instead of hardcoding.
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -183,13 +185,85 @@ _FALLBACK = ModelLimits(
 )
 
 
+@lru_cache(maxsize=256)
+def _dynamic_model_limits(model_id: str) -> ModelLimits | None:
+    """Look up limits from litellm's model catalog (cached). None if unknown.
+
+    Lets the engine size models that aren't in the hand-maintained
+    ``_MODEL_REGISTRY`` instead of silently using a wrong 128K fallback.
+    """
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model_id)
+    except Exception:
+        return None
+    if not info:
+        return None
+    max_in = info.get("max_input_tokens") or info.get("max_tokens")
+    if not max_in:
+        return None
+    max_out = int(info.get("max_output_tokens") or 8_192)
+    return ModelLimits(
+        max_input_tokens=int(max_in),
+        max_output_tokens=max_out,
+        default_output_tokens=min(max_out, 8_192),
+        input_cost_per_token=float(info.get("input_cost_per_token") or 0.0),
+        output_cost_per_token=float(info.get("output_cost_per_token") or 0.0),
+    )
+
+
 def get_model_limits(model_id: str) -> ModelLimits:
-    """Look up model limits. Returns conservative fallback for unknown models."""
+    """Look up model limits.
+
+    Order: the hand-maintained registry (authoritative — carries Genus-specific
+    facts like codex $0 / cache pins), then litellm's dynamic catalog, then a
+    conservative fallback WITH a warning so unknown models are visible rather
+    than silently mis-sized.
+    """
     limits = _MODEL_REGISTRY.get(model_id)
     if limits:
         return limits
-    logger.debug("Unknown model '%s', using fallback limits", model_id)
+    dynamic = _dynamic_model_limits(model_id)
+    if dynamic is not None:
+        return dynamic
+    logger.warning(
+        "Unknown model '%s' — not in the static registry or litellm catalog; "
+        "using conservative %dK fallback. Add it to model_registry._MODEL_REGISTRY.",
+        model_id,
+        _FALLBACK.max_input_tokens // 1000,
+    )
     return _FALLBACK
+
+
+# Reasoning-effort → thinking-token budget. Promotes the single global
+# THINKING_BUDGET_TOKENS into a per-agent setting (AgentConfig.reasoning_effort).
+_REASONING_BUDGETS: dict[str, int] = {
+    "low": 2_000,
+    "medium": THINKING_BUDGET_TOKENS,  # 10_000 — preserves the prior default
+    "high": 24_000,
+    "max": 48_000,
+}
+
+
+def reasoning_budget_tokens(effort: str) -> int:
+    """Thinking-token budget for a reasoning-effort level (default medium)."""
+    return _REASONING_BUDGETS.get((effort or "medium").strip().lower(), THINKING_BUDGET_TOKENS)
+
+
+# Per-run reasoning effort. A ContextVar so concurrent runs (each its own asyncio
+# task) don't race; set by the runner at run start, read when building thinking kwargs.
+_reasoning_effort_ctx: ContextVar[str] = ContextVar("reasoning_effort", default="medium")
+
+
+def set_reasoning_effort(effort: str) -> None:
+    """Set the reasoning effort for the current run's task context."""
+    _reasoning_effort_ctx.set(effort or "medium")
+
+
+def current_thinking_budget() -> int:
+    """Thinking-token budget for the current run's reasoning effort."""
+    return reasoning_budget_tokens(_reasoning_effort_ctx.get())
 
 
 def compute_token_budget(model_id: str, max_iterations: int) -> int:

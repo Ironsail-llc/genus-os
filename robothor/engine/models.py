@@ -369,6 +369,10 @@ class AgentConfig:
     # to (service, *, allow) so the fleet is unconstrained until an operator
     # tightens a role and enables ROBOTHOR_RBAC_ENABLED (see permissions.py).
     service_role: str = "service"
+    # Reasoning effort (low/medium/high/max) → extended-thinking token budget,
+    # via model_registry.reasoning_budget_tokens. Default medium = the prior
+    # global THINKING_BUDGET_TOKENS, so omitting it changes nothing.
+    reasoning_effort: str = "medium"
     exec_allowlist: list[str] = field(
         default_factory=list
     )  # regex patterns for allowed exec commands
