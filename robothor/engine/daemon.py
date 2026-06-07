@@ -344,6 +344,14 @@ async def main() -> None:
     init_team_manager()
     logger.info("Inter-agent messaging + teams initialized")
 
+    # HA: scheduler leadership elector (no-op / always-leader when HA off).
+    from robothor.engine.leader import LeaderElector, ha_leader_enabled, set_elector
+
+    _elector = LeaderElector()
+    set_elector(_elector)
+    if ha_leader_enabled():
+        logger.info("HA leader election enabled")
+
     # Initialize lifecycle hook registry
     from robothor.engine.hook_registry import (
         init_hook_registry,
@@ -477,6 +485,7 @@ async def main() -> None:
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_extension_watcher_loop(), name="extensions"),
+        asyncio.create_task(_elector.run(), name="leader"),
     ]
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
