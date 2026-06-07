@@ -22,6 +22,57 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _otlp_value(v: Any) -> dict[str, Any]:
+    """Convert a Python value to an OTLP AnyValue."""
+    if isinstance(v, bool):
+        return {"boolValue": v}
+    if isinstance(v, int):
+        return {"intValue": str(v)}
+    if isinstance(v, float):
+        return {"doubleValue": v}
+    if isinstance(v, (list, tuple)):
+        return {"arrayValue": {"values": [_otlp_value(x) for x in v]}}
+    return {"stringValue": str(v)}
+
+
+def _otlp_attrs(attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert an attribute dict to OTLP KeyValue list."""
+    return [{"key": k, "value": _otlp_value(v)} for k, v in attrs.items()]
+
+
+def gen_ai_attributes(
+    *,
+    model: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    finish_reason: str = "",
+    system: str = "",
+) -> dict[str, Any]:
+    """Build OpenTelemetry GenAI semantic-convention attributes for an LLM span."""
+    attrs: dict[str, Any] = {
+        "gen_ai.system": system or _gen_ai_system(model),
+        "gen_ai.request.model": model,
+    }
+    if input_tokens:
+        attrs["gen_ai.usage.input_tokens"] = int(input_tokens)
+    if output_tokens:
+        attrs["gen_ai.usage.output_tokens"] = int(output_tokens)
+    if finish_reason:
+        attrs["gen_ai.response.finish_reasons"] = [finish_reason]
+    return attrs
+
+
+def _gen_ai_system(model: str) -> str:
+    m = (model or "").lower()
+    if "anthropic" in m or "claude" in m:
+        return "anthropic"
+    if "openai" in m or "gpt" in m or "codex" in m:
+        return "openai"
+    if "gemini" in m or "google" in m:
+        return "google"
+    return m.split("/")[0] if "/" in m else "unknown"
+
+
 def _trace_id() -> str:
     """Generate a 32-char hex trace ID (OTel compatible)."""
     return uuid.uuid4().hex
@@ -141,48 +192,45 @@ class TraceContext:
         if otlp_endpoint:
             self._export_otlp(otlp_endpoint, run_data)
 
+    def build_otlp_payload(self, run_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Build a full OTLP/HTTP traces payload — span attributes, durations, and
+        status, not just status (the prior export dropped attributes/durations).
+        """
+        return {
+            "resourceSpans": [
+                {
+                    "resource": {"attributes": _otlp_attrs(self._resource_attributes())},
+                    "scopeSpans": [
+                        {
+                            "scope": {"name": "robothor.engine"},
+                            "spans": [self._span_to_otlp(s) for s in self.spans],
+                        }
+                    ],
+                }
+            ]
+        }
+
+    def _resource_attributes(self) -> dict[str, Any]:
+        return {"service.name": "robothor-engine", "agent.id": self.agent_id}
+
+    def _span_to_otlp(self, s: Span) -> dict[str, Any]:
+        return {
+            "traceId": self.trace_id,
+            "spanId": s.span_id,
+            "parentSpanId": s.parent_span_id or "",
+            "name": s.name,
+            "startTimeUnixNano": str(int(s.start_time * 1e9)) if s.start_time else "0",
+            "endTimeUnixNano": str(int(s.end_time * 1e9)) if s.end_time else "0",
+            "attributes": _otlp_attrs(s.attributes),
+            "status": {"code": 2 if s.status == "error" else 1},
+        }
+
     def _export_otlp(self, endpoint: str, run_data: dict[str, Any]) -> None:
         """Export trace data to an OTLP HTTP endpoint. Best-effort."""
         try:
             import httpx
 
-            payload = {
-                "resourceSpans": [
-                    {
-                        "resource": {
-                            "attributes": [
-                                {
-                                    "key": "service.name",
-                                    "value": {"stringValue": "robothor-engine"},
-                                },
-                                {"key": "agent.id", "value": {"stringValue": self.agent_id}},
-                            ]
-                        },
-                        "scopeSpans": [
-                            {
-                                "scope": {"name": "robothor.engine"},
-                                "spans": [
-                                    {
-                                        "traceId": self.trace_id,
-                                        "spanId": s.span_id,
-                                        "parentSpanId": s.parent_span_id or "",
-                                        "name": s.name,
-                                        "startTimeUnixNano": str(int(s.start_time * 1e9))
-                                        if s.start_time
-                                        else "0",
-                                        "endTimeUnixNano": str(int(s.end_time * 1e9))
-                                        if s.end_time
-                                        else "0",
-                                        "status": {"code": 2 if s.status == "error" else 1},
-                                    }
-                                    for s in self.spans
-                                ],
-                            }
-                        ],
-                    }
-                ]
-            }
             url = f"{endpoint.rstrip('/')}/v1/traces"
-            httpx.post(url, json=payload, timeout=5.0)
+            httpx.post(url, json=self.build_otlp_payload(run_data), timeout=5.0)
         except Exception as e:
             logger.debug("Failed to export OTLP trace: %s", e)

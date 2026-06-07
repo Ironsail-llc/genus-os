@@ -2852,6 +2852,24 @@ class AgentRunner:
                     temperature,
                     on_stream_event=on_stream_event,
                 )
+                # GenAI semantic-convention attributes for OTel export.
+                if response is not None:
+                    with contextlib.suppress(Exception):
+                        from robothor.engine.telemetry import gen_ai_attributes
+
+                        _usage = getattr(response, "usage", None)
+                        _finish = ""
+                        if getattr(response, "choices", None):
+                            _finish = getattr(response.choices[0], "finish_reason", "") or ""
+                        _span.attributes.update(
+                            gen_ai_attributes(
+                                model=getattr(response, "model", None)
+                                or (models[0] if models else ""),
+                                input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
+                                output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
+                                finish_reason=_finish,
+                            )
+                        )
         else:
             response = await self._do_llm_call(
                 session,
