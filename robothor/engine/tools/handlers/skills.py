@@ -417,3 +417,13 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     logger.info("Skill '%s' updated to revision %d by '%s'", name, revision, ctx.agent_id)
     return {"updated": True, "name": name, "revision": revision, "path": str(path)}
+
+
+@_handler("get_accretion_ledger")
+async def _get_accretion_ledger(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Audit what the fleet has learned: agent-authored skills + git history + usage."""
+    import asyncio
+
+    from robothor.engine.accretion import get_accretion_ledger
+
+    return await asyncio.to_thread(get_accretion_ledger, int(args.get("limit", 30)))
