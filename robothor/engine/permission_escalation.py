@@ -212,7 +212,20 @@ class PermissionEscalationManager:
             ],
         )
 
-        msg = await self._bot.send_message(
+        # ``self._bot`` is normally the raw aiogram ``Bot`` — but daemon.py
+        # wires the higher-level ``TelegramBot`` wrapper. That wrapper's own
+        # ``send_message`` is a chunking/markdown-conversion helper meant for
+        # plain chat delivery: it silently drops unknown kwargs (including
+        # ``reply_markup``/``parse_mode``) and returns a ``list[Message]``
+        # instead of a single message. Sending through it would deliver a
+        # prompt with no inline keyboard at all and then blow up on
+        # ``msg.message_id`` below. Reach for the wrapper's own raw bot so
+        # the keyboard is actually attached and we get one Message back.
+        from robothor.engine.telegram import TelegramBot
+
+        sender = self._bot.bot if isinstance(self._bot, TelegramBot) else self._bot
+
+        msg = await sender.send_message(
             self._chat_id,
             text,
             reply_markup=keyboard,
