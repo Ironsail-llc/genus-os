@@ -3,13 +3,14 @@ name: Release & Build
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - 'helm/**'
-      - 'CHANGELOG.md'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'docs/**'
-      - '**/*.md'
+    # No `paths-ignore`. Every bot-authored push to main carries `[skip ci]`
+    # in the commit message (semantic-release, deploy-staging bump,
+    # staging-reset bump), which GitHub Actions natively respects to skip
+    # the workflow run. Filtering paths additionally swallows legitimate
+    # cases — a chart-only `feat(helm):` PR or a human edit of
+    # values-production.yaml needs to trigger a release + build + deploy,
+    # but `helm/**` paths-ignore would silently skip the workflow and
+    # leave production on stale code.
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, closed]
   workflow_dispatch:
@@ -219,7 +220,11 @@ jobs:
   comment-pr:
     name: Sticky PR comment
     needs: [build]
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'deploy-staging') && needs.build.result == 'success'
+    if: |
+      always()
+      && needs.build.result == 'success'
+      && github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,10 +256,11 @@ jobs:
     name: Deploy to production
     needs: [release, build]
     if: |
-      github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
-      && needs.release.outputs.new_release_published == 'true'
+      always()
       && needs.build.result == 'success'
+      && needs.release.outputs.new_release_published == 'true'
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -299,11 +305,12 @@ jobs:
     name: Deploy to staging
     needs: [build]
     if: |
-      github.event_name == 'pull_request'
+      always()
+      && needs.build.result == 'success'
+      && github.event_name == 'pull_request'
       && github.event.action != 'closed'
       && github.event.action != 'unlabeled'
       && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
-      && needs.build.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
       group: staging-deploy

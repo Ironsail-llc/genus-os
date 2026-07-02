@@ -1,5 +1,7 @@
 # genus-os Helm chart
 
+<!-- Staging URL: https://genus-os.staging.internal.ironsail.ai -->
+
 Deploys the in-cluster subset of Genus OS — agent engine, bridge, orchestrator, the Helm dashboard, optional NATS, and toggleable in-cluster Postgres + Redis (as Helm dependencies on `groundhog2k/postgres` and `groundhog2k/redis` — no Bitnami, no operator). Out of scope: vision, voice, MediaMTX, desktop-use, Ollama (use OpenRouter / Anthropic / Gemini APIs instead).
 
 For cloud envs, set `postgres.enabled: false` and `redis.enabled: false` in the layer-3 values file (infra repo) and point `database.host` / `redis.host` at the managed equivalents (RDS / ElastiCache / CloudNativePG).
