@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/Ironsail-llc/genus-os/compare/v1.4.0...v1.5.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 2 — code search, safe-eval, model catalog, tokenizer, memory ([#154](https://github.com/Ironsail-llc/genus-os/issues/154)) ([75615ca](https://github.com/Ironsail-llc/genus-os/commit/75615ca5af8e312cc3e7ca494a24cc3d40de8632))
+
 ## [1.4.0](https://github.com/Ironsail-llc/genus-os/compare/v1.3.0...v1.4.0) (2026-07-02)
 
 ### Features
