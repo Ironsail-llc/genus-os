@@ -44,9 +44,11 @@ logger = logging.getLogger(__name__)
 
 OWNER_AGENT_ID = "main"
 
-EvidenceKind = Literal["test_run", "commit", "ci_run", "note"]
+EvidenceKind = Literal["test_run", "commit", "ci_run", "note", "tool_output", "benchmark_run"]
 
-_VALID_KINDS: frozenset[str] = frozenset({"test_run", "commit", "ci_run", "note"})
+_VALID_KINDS: frozenset[str] = frozenset(
+    {"test_run", "commit", "ci_run", "note", "tool_output", "benchmark_run"}
+)
 
 _PYTEST_REF_RE = re.compile(r"^pytest:(passed|failed):\d+$")
 _UUID_RE = re.compile(
@@ -54,6 +56,12 @@ _UUID_RE = re.compile(
     re.IGNORECASE,
 )
 _SHA_RE = re.compile(r"^[0-9a-f]{7,}$", re.IGNORECASE)
+# tool_output reference: "<run_id>:<step_number>" — the agent_run_steps row
+# a tool_output claim points at. run_id is a UUID; step_number is an int.
+_TOOL_OUTPUT_REF_RE = re.compile(
+    r"^(?P<run_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(?P<step>\d+)$",
+    re.IGNORECASE,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +181,35 @@ def validate_evidence(
         if reference.startswith("https://"):
             return True, ""
         return False, "ci_run reference must be an https:// URL"
+
+    if kind == "tool_output":
+        match = _TOOL_OUTPUT_REF_RE.match(reference)
+        if not match:
+            return (
+                False,
+                "tool_output reference must be 'run_id:step_index' (UUID:int)",
+            )
+        try:
+            exists = dal.run_step_exists(match.group("run_id"), int(match.group("step")))
+        except Exception as exc:  # noqa: BLE001 — DAL/driver errors, not a valid ref
+            return False, f"tool_output verification failed: {exc!r}"
+        if not exists:
+            return False, f"no agent_run_steps row for {reference}"
+        return True, ""
+
+    if kind == "benchmark_run":
+        if not reference.isdigit():
+            return (
+                False,
+                "benchmark_run reference must be a benchmark_results row id (integer)",
+            )
+        try:
+            exists = dal.benchmark_result_exists(int(reference))
+        except Exception as exc:  # noqa: BLE001 — DAL/driver errors, not a valid ref
+            return False, f"benchmark_run verification failed: {exc!r}"
+        if not exists:
+            return False, f"no benchmark_results row for id {reference}"
+        return True, ""
 
     return False, f"unhandled evidence kind: {kind!r}"
 

@@ -57,6 +57,7 @@ _OUTPUT_CHARS = 2000
 _MSG_CHARS = 600
 _MAX_MESSAGES = 12
 _MAX_STEPS = 12
+_MAX_GOAL_EVIDENCE = 10
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,11 @@ class EvidenceBundle:
     # Declared intent (crm_tasks.session_goal_meta), the closest thing to truth.
     objective: str | None = None
     success_criteria: list[str] = field(default_factory=list)
+    # PR-3a: the goal's typed, validated evidence (kind/reference/valid) —
+    # so the judge can cross-check a claimed outcome against the same
+    # evidence the completion-contract guard checks, not just the model's
+    # narration of what it did.
+    goal_evidence: list[dict[str, Any]] = field(default_factory=list)
     # The operator's own words in the window (chat_messages, role=user).
     operator_messages: list[str] = field(default_factory=list)
     # Obstacles: escalations, timeouts, task TODO<->IN_PROGRESS flapping.
@@ -153,6 +159,7 @@ def assemble_evidence_bundle(
     if not isinstance(criteria, list):
         criteria = []
     msgs = [m[:_MSG_CHARS] for m in (operator_messages or [])][:_MAX_MESSAGES]
+    goal_evidence = _extract_goal_evidence(meta)
     return EvidenceBundle(
         agent_id=agent_id,
         run=run,
@@ -163,7 +170,32 @@ def assemble_evidence_bundle(
         obstacles=list(obstacles or []),
         task_resolution=list(task_resolution or []),
         operator_verdict=operator_verdict,
+        goal_evidence=goal_evidence,
     )
+
+
+def _extract_goal_evidence(meta: Any) -> list[dict[str, Any]]:
+    """Curate ``session_goal_meta.evidence`` into (kind, reference, valid) dicts.
+
+    Tolerates malformed entries (non-dict items are dropped) and truncates to
+    the most recent ``_MAX_GOAL_EVIDENCE`` items — this feeds an LLM prompt,
+    not an audit log.
+    """
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("evidence")
+    if not isinstance(raw, list):
+        return []
+    curated = [
+        {
+            "kind": str(item.get("kind", "")),
+            "reference": str(item.get("reference", "")),
+            "valid": bool(item.get("valid", True)),
+        }
+        for item in raw
+        if isinstance(item, dict)
+    ]
+    return curated[-_MAX_GOAL_EVIDENCE:]
 
 
 _RUBRIC = (
@@ -211,6 +243,12 @@ def render_bundle_prompt(bundle: EvidenceBundle) -> str:
     else:
         lines.append("(no operator-declared objective — judge against role + trigger below)")
     lines.append("")
+    if bundle.goal_evidence:
+        lines.append("## Goal evidence (validated)")
+        for e in bundle.goal_evidence:
+            tag = "valid" if e.get("valid") else "INVALID/unverified"
+            lines.append(f"  - {e.get('kind')}: {e.get('reference')} [{tag}]")
+        lines.append("")
     lines.append(f"## Run {r.run_id} (status={r.status})")
     if r.trigger_type or r.trigger_detail:
         lines.append(f"triggered by: {r.trigger_type} {r.trigger_detail}".strip())

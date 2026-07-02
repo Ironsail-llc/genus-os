@@ -379,6 +379,51 @@ class AgentRunner:
         except Exception as exc:  # noqa: BLE001 — never block run finalization
             logger.debug("trajectory: post-response save raised: %s", exc)
 
+        # PR-3a: evidence-based completion contracts. Flag-gated
+        # off→observe→enforce (default off). When the run's final output
+        # claims a session goal is done, verify the claim against recorded,
+        # validated evidence rather than trusting the model's say-so.
+        from robothor.engine.feature_flags import completion_contract_mode
+
+        cc_mode = completion_contract_mode()
+        if cc_mode != "off":
+            try:
+                from robothor.engine.completion_contract import check_completion_contract
+
+                verdict = check_completion_contract(run, self.config)
+            except Exception as exc:  # noqa: BLE001 — never block run finalization
+                logger.debug("completion contract check raised: %s", exc)
+                verdict = None
+            if verdict is not None and verdict.status == "missing":
+                reason = "; ".join(verdict.missing)
+                try:
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=run.id,
+                        guardrail_name="completion_contract",
+                        action="blocked" if cc_mode == "enforce" else "observed",
+                        reason=reason,
+                        mode=cc_mode,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("completion contract event log failed: %s", exc)
+                if cc_mode == "enforce":
+                    try:
+                        from robothor.crm import dal
+
+                        dal.set_next_action(
+                            task_id=verdict.goal_id,
+                            next_action=f"Provide evidence: {reason}"[:500],
+                            agent=run.agent_id,
+                            by="completion_contract",
+                            tenant_id=run.tenant_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "completion contract enforce set_next_action failed: %s", exc
+                        )
+
     async def execute(
         self,
         agent_id: str,

@@ -142,6 +142,86 @@ class TestValidateEvidence:
         ok, _ = sg.validate_evidence(item, workspace=str(tmp_path))
         assert not ok
 
+    @patch("robothor.engine.session_goal.dal.run_step_exists")
+    def test_tool_output_valid_when_step_exists(self, mock_exists, tmp_path):
+        mock_exists.return_value = True
+        item = sg.GoalEvidence(
+            kind="tool_output",
+            summary="ran the tool",
+            reference="3fa85f64-5717-4562-b3fc-2c963f66afa6:3",
+        )
+        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert ok
+        mock_exists.assert_called_once_with("3fa85f64-5717-4562-b3fc-2c963f66afa6", 3)
+
+    @patch("robothor.engine.session_goal.dal.run_step_exists")
+    def test_tool_output_invalid_when_step_missing(self, mock_exists, tmp_path):
+        mock_exists.return_value = False
+        item = sg.GoalEvidence(
+            kind="tool_output",
+            summary="claim",
+            reference="3fa85f64-5717-4562-b3fc-2c963f66afa6:3",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert not ok
+        assert reason
+
+    def test_tool_output_invalid_when_ref_malformed(self, tmp_path):
+        item = sg.GoalEvidence(
+            kind="tool_output",
+            summary="claim",
+            reference="not-a-run-ref",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert not ok
+        assert reason
+
+    @patch("robothor.engine.session_goal.dal.run_step_exists")
+    def test_tool_output_dal_error_is_invalid(self, mock_exists, tmp_path):
+        mock_exists.side_effect = RuntimeError("db down")
+        item = sg.GoalEvidence(
+            kind="tool_output",
+            summary="claim",
+            reference="3fa85f64-5717-4562-b3fc-2c963f66afa6:3",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert not ok
+        assert reason
+
+    @patch("robothor.engine.session_goal.dal.benchmark_result_exists")
+    def test_benchmark_run_valid_when_row_exists(self, mock_exists, tmp_path):
+        mock_exists.return_value = True
+        item = sg.GoalEvidence(
+            kind="benchmark_run",
+            summary="suite passed",
+            reference="42",
+        )
+        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert ok
+        mock_exists.assert_called_once_with(42)
+
+    @patch("robothor.engine.session_goal.dal.benchmark_result_exists")
+    def test_benchmark_run_invalid_when_row_missing(self, mock_exists, tmp_path):
+        mock_exists.return_value = False
+        item = sg.GoalEvidence(
+            kind="benchmark_run",
+            summary="claim",
+            reference="999",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert not ok
+        assert reason
+
+    def test_benchmark_run_invalid_when_ref_not_numeric(self, tmp_path):
+        item = sg.GoalEvidence(
+            kind="benchmark_run",
+            summary="claim",
+            reference="suite-42",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path))
+        assert not ok
+        assert reason
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # missing_completion_requirements

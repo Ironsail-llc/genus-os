@@ -66,6 +66,52 @@ class TestAssembleEvidenceBundle:
         assert len(b.operator_messages) <= 12
         assert all(len(m) <= 600 for m in b.operator_messages)
 
+    def test_includes_goal_evidence_when_present(self):
+        b = assemble_evidence_bundle(
+            agent_id="main",
+            run=_digest(),
+            session_goal_meta={
+                "objective": "ship it",
+                "success_criteria": ["works"],
+                "evidence": [
+                    {
+                        "kind": "test_run",
+                        "reference": "pytest:passed:10",
+                        "valid": True,
+                    },
+                    {
+                        "kind": "commit",
+                        "reference": "deadbeef",
+                        "valid": False,
+                    },
+                ],
+            },
+        )
+        assert b.goal_evidence == [
+            {"kind": "test_run", "reference": "pytest:passed:10", "valid": True},
+            {"kind": "commit", "reference": "deadbeef", "valid": False},
+        ]
+
+    def test_goal_evidence_empty_when_no_meta(self):
+        b = assemble_evidence_bundle(agent_id="main", run=_digest(), session_goal_meta=None)
+        assert b.goal_evidence == []
+
+    def test_goal_evidence_tolerates_malformed_entries(self):
+        b = assemble_evidence_bundle(
+            agent_id="main",
+            run=_digest(),
+            session_goal_meta={"evidence": ["not-a-dict", {"kind": "note"}, None]},
+        )
+        # Only the well-formed dict entry survives, with defaults filled in.
+        assert b.goal_evidence == [{"kind": "note", "reference": "", "valid": True}]
+
+    def test_goal_evidence_truncated_to_ten(self):
+        evidence = [{"kind": "note", "reference": str(i), "valid": True} for i in range(20)]
+        b = assemble_evidence_bundle(
+            agent_id="main", run=_digest(), session_goal_meta={"evidence": evidence}
+        )
+        assert len(b.goal_evidence) == 10
+
 
 # ─── render_bundle_prompt ───────────────────────────────────────────
 
@@ -86,6 +132,30 @@ class TestRenderBundlePrompt:
     def test_shows_operator_verdict_when_present(self):
         b = assemble_evidence_bundle(agent_id="main", run=_digest(), operator_verdict=-2)
         assert "operator verdict" in render_bundle_prompt(b).lower()
+
+    def test_includes_goal_evidence_section_when_present(self):
+        b = assemble_evidence_bundle(
+            agent_id="main",
+            run=_digest(),
+            session_goal_meta={
+                "objective": "ship it",
+                "evidence": [
+                    {"kind": "test_run", "reference": "pytest:passed:10", "valid": True},
+                    {"kind": "commit", "reference": "deadbeef", "valid": False},
+                ],
+            },
+        )
+        text = render_bundle_prompt(b)
+        assert "Goal evidence" in text
+        assert "test_run" in text
+        assert "pytest:passed:10" in text
+        assert "deadbeef" in text
+        assert "invalid" in text.lower()  # the unvalidated commit is flagged
+
+    def test_no_goal_evidence_section_when_absent(self):
+        b = assemble_evidence_bundle(agent_id="main", run=_digest())
+        text = render_bundle_prompt(b)
+        assert "Goal evidence" not in text
 
     def test_judges_against_role_and_trigger_when_no_objective(self):
         run = RunDigest(
