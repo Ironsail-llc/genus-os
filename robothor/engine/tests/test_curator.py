@@ -164,3 +164,281 @@ class TestCuratorDryRun:
         assert curator_dry_run() is True
         monkeypatch.setenv("ROBOTHOR_CURATOR_APPLY", "1")
         assert curator_dry_run() is False
+
+
+# ─── PR-3b: accretion gate live caller ───────────────────────────────
+
+
+class TestEvaluateAccretionGate:
+    """evaluate_accretion_gate() computes the two-key verdict for the
+    curator's own apply pass. Scoping decision (see curator.py module
+    docstring): it gates on the curator agent itself, not per-skill —
+    there is no per-skill benchmark/judge attribution yet."""
+
+    def test_promotes_when_no_regression_and_judge_at_baseline(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import evaluate_accretion_gate
+
+        with (
+            patch(
+                "robothor.engine.curator._curator_benchmark_regression",
+                return_value=(False, "no benchmark suite for 'curator'"),
+            ),
+            patch(
+                "robothor.engine.curator._curator_judge_scores",
+                return_value=(4.0, 3.5),
+            ),
+        ):
+            ok, reason = evaluate_accretion_gate()
+        assert ok is True
+        assert "promoted" in reason
+
+    def test_blocks_on_benchmark_regression(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import evaluate_accretion_gate
+
+        with (
+            patch(
+                "robothor.engine.curator._curator_benchmark_regression",
+                return_value=(True, "benchmark pass rate regressed 0.90 -> 0.60"),
+            ),
+            patch(
+                "robothor.engine.curator._curator_judge_scores",
+                return_value=(4.0, 3.5),
+            ),
+        ):
+            ok, reason = evaluate_accretion_gate()
+        assert ok is False
+        assert "safety regression" in reason
+        assert "regressed" in reason
+
+    def test_blocks_below_baseline_judge_score(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import evaluate_accretion_gate
+
+        with (
+            patch(
+                "robothor.engine.curator._curator_benchmark_regression",
+                return_value=(False, "no benchmark suite for 'curator'"),
+            ),
+            patch(
+                "robothor.engine.curator._curator_judge_scores",
+                return_value=(2.0, 4.0),
+            ),
+        ):
+            ok, reason = evaluate_accretion_gate()
+        assert ok is False
+        assert "below baseline" in reason
+
+    def test_fails_closed_on_missing_judge_history(self):
+        """No judge rows yet for the curator agent — cannot confirm quality is
+        at least the baseline, so the gate blocks rather than assuming pass."""
+        from unittest.mock import patch
+
+        from robothor.engine.curator import evaluate_accretion_gate
+
+        with (
+            patch(
+                "robothor.engine.curator._curator_benchmark_regression",
+                return_value=(False, "no benchmark suite for 'curator'"),
+            ),
+            patch(
+                "robothor.engine.curator._curator_judge_scores",
+                return_value=(None, None),
+            ),
+        ):
+            ok, reason = evaluate_accretion_gate()
+        assert ok is False
+        assert "judge" in reason.lower()
+
+
+class _FakeScheduler:
+    async def _run_agent(self, agent_id: str) -> None:
+        return None
+
+
+class TestSpawnCuratorAccretionGateWiring:
+    def test_dry_run_mode_never_consults_gate(self):
+        import asyncio
+        from unittest.mock import patch
+
+        import robothor.engine.curator as curator_mod
+
+        with (
+            patch.object(curator_mod, "list_curator_candidates", return_value=(["a"], [], [])),
+            patch.object(curator_mod, "accretion_enabled", return_value=True),
+            patch.object(curator_mod, "evaluate_accretion_gate") as gate_mock,
+            patch.object(curator_mod, "store_curator_pass_summary"),
+        ):
+            result = asyncio.run(curator_mod.spawn_curator(_FakeScheduler(), dry_run=True))
+        gate_mock.assert_not_called()
+        assert result is not None
+        assert result["dry_run"] is True
+
+    def test_accretion_disabled_leaves_apply_mode_unchanged(self):
+        import asyncio
+        from unittest.mock import patch
+
+        import robothor.engine.curator as curator_mod
+
+        with (
+            patch.object(curator_mod, "list_curator_candidates", return_value=(["a"], [], [])),
+            patch.object(curator_mod, "accretion_enabled", return_value=False),
+            patch.object(curator_mod, "evaluate_accretion_gate") as gate_mock,
+            patch.object(
+                curator_mod,
+                "_curator_tool_whitelist",
+                wraps=curator_mod._curator_tool_whitelist,
+            ) as whitelist_spy,
+            patch.object(curator_mod, "store_curator_pass_summary"),
+        ):
+            result = asyncio.run(curator_mod.spawn_curator(_FakeScheduler(), dry_run=False))
+        gate_mock.assert_not_called()
+        whitelist_spy.assert_called_once_with(dry_run=False)
+        assert result is not None
+        assert result["dry_run"] is False
+
+    def test_gate_blocks_downgrades_apply_to_dry_run(self):
+        import asyncio
+        from unittest.mock import patch
+
+        import robothor.engine.curator as curator_mod
+
+        with (
+            patch.object(curator_mod, "list_curator_candidates", return_value=(["a"], [], [])),
+            patch.object(curator_mod, "accretion_enabled", return_value=True),
+            patch.object(
+                curator_mod,
+                "evaluate_accretion_gate",
+                return_value=(False, "blocked: judge score 2.00 below baseline 4.00"),
+            ),
+            patch.object(
+                curator_mod,
+                "_curator_tool_whitelist",
+                wraps=curator_mod._curator_tool_whitelist,
+            ) as whitelist_spy,
+            patch.object(curator_mod, "store_curator_pass_summary") as store_mock,
+        ):
+            result = asyncio.run(curator_mod.spawn_curator(_FakeScheduler(), dry_run=False))
+        whitelist_spy.assert_called_once_with(dry_run=True)
+        assert result is not None
+        assert result["dry_run"] is True
+        assert result["gate_verdict"] is False
+        assert result["gate_reason"] is not None
+        assert "below baseline" in result["gate_reason"]
+        stored_payload = store_mock.call_args.args[0]
+        assert stored_payload["gate_verdict"] is False
+        assert stored_payload["mode"] == "dry_run"
+
+    def test_gate_pass_keeps_apply_whitelist(self):
+        import asyncio
+        from unittest.mock import patch
+
+        import robothor.engine.curator as curator_mod
+
+        with (
+            patch.object(curator_mod, "list_curator_candidates", return_value=(["a"], [], [])),
+            patch.object(curator_mod, "accretion_enabled", return_value=True),
+            patch.object(
+                curator_mod,
+                "evaluate_accretion_gate",
+                return_value=(True, "promoted: no regression, judge 4.00 >= baseline 3.50"),
+            ),
+            patch.object(
+                curator_mod,
+                "_curator_tool_whitelist",
+                wraps=curator_mod._curator_tool_whitelist,
+            ) as whitelist_spy,
+            patch.object(curator_mod, "store_curator_pass_summary"),
+        ):
+            result = asyncio.run(curator_mod.spawn_curator(_FakeScheduler(), dry_run=False))
+        whitelist_spy.assert_called_once_with(dry_run=False)
+        assert result is not None
+        assert result["dry_run"] is False
+        assert result["gate_verdict"] is True
+
+
+class TestCuratorStatePersistence:
+    def test_store_and_load_summary_round_trip(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import (
+            load_curator_last_pass,
+            load_curator_last_summary,
+            store_curator_last_pass,
+            store_curator_pass_summary,
+        )
+
+        store: dict[str, str] = {}
+
+        def _read(name, tenant_id="t"):
+            return {"content": store.get(name, "")} if name in store else {"error": "missing"}
+
+        def _write(name, content, tenant_id="t"):
+            store[name] = content
+            return {"success": True}
+
+        when = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=_read),
+            patch("robothor.memory.blocks.write_block", side_effect=_write),
+        ):
+            store_curator_last_pass(when)
+            store_curator_pass_summary(
+                {
+                    "mode": "dry_run",
+                    "gate_verdict": None,
+                    "gate_reason": None,
+                    "candidates_inspected": 3,
+                    "skipped_pinned": ["p1"],
+                    "skipped_human_authored": [],
+                }
+            )
+            got_ts = load_curator_last_pass()
+            got_summary = load_curator_last_summary()
+
+        assert got_ts == when  # timestamp preserved alongside the new summary
+        assert got_summary is not None
+        assert got_summary["mode"] == "dry_run"
+        assert got_summary["candidates_inspected"] == 3
+
+    def test_summary_list_fields_are_capped(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import load_curator_last_summary, store_curator_pass_summary
+
+        store: dict[str, str] = {}
+
+        def _read(name, tenant_id="t"):
+            return {"content": store.get(name, "")} if name in store else {"error": "missing"}
+
+        def _write(name, content, tenant_id="t"):
+            store[name] = content
+            return {"success": True}
+
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=_read),
+            patch("robothor.memory.blocks.write_block", side_effect=_write),
+        ):
+            store_curator_pass_summary({"skipped_pinned": [f"s{i}" for i in range(50)]})
+            got = load_curator_last_summary()
+        assert got is not None
+        assert len(got["skipped_pinned"]) <= 10
+
+    def test_legacy_bare_iso_content_still_parses(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import load_curator_last_pass
+
+        when = datetime(2026, 5, 1, tzinfo=UTC)
+        store = {"curator_state": when.isoformat()}
+
+        def _read(name, tenant_id="t"):
+            return {"content": store.get(name, "")} if name in store else {"error": "missing"}
+
+        with patch("robothor.memory.blocks.read_block", side_effect=_read):
+            got = load_curator_last_pass()
+        assert got == when
