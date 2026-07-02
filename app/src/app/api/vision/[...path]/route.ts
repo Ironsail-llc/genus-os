@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
 
@@ -19,6 +20,7 @@ async function proxy(
   try {
     const headers: Record<string, string> = {
       "Content-Type": req.headers.get("content-type") || "application/json",
+      ...(await bridgeAuthHeaders()),
     };
 
     const res = await fetch(target.toString(), {

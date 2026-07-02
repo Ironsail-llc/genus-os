@@ -94,7 +94,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
       - run: pip install -e ".[dev,api,vision]" opencv-python-headless
-      - run: pytest tests/ robothor/engine/tests/ robothor/crm/tests/ robothor/memory/tests/ -m "not integration and not llm and not slow and not e2e" -v
+      - run: pytest tests/ robothor/engine/tests/ robothor/crm/tests/ robothor/memory/tests/ robothor/auth/tests/ robothor/cli/tests/test_auth_cli.py -m "not integration and not llm and not slow and not e2e" -v
 
   test-bridge:
     runs-on: ubuntu-latest
@@ -112,6 +112,7 @@ jobs:
           crm/bridge/tests/test_multi_tenancy.py
           crm/bridge/tests/test_agent_status.py
           crm/bridge/tests/test_answer_endpoint.py
+          crm/bridge/tests/test_auth_endpoint.py
           -v
 
   test-integration:
