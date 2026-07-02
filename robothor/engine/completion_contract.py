@@ -106,7 +106,7 @@ def check_completion_contract(run: AgentRun, config: EngineConfig) -> ContractVe
         return None
 
     workspace = getattr(config, "workspace", None)
-    missing = missing_completion_requirements(goal, workspace=workspace)
+    missing = missing_completion_requirements(goal, workspace=workspace, tenant_id=run.tenant_id)
     if missing:
         return ContractVerdict(status="missing", goal_id=goal.id, missing=missing)
     return ContractVerdict(status="satisfied", goal_id=goal.id, missing=[])

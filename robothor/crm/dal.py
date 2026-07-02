@@ -1710,34 +1710,44 @@ def add_session_goal_evidence(
             return False
 
 
-def run_step_exists(run_id: str, step_number: int) -> bool:
-    """Return True iff ``agent_run_steps`` has a row for (run_id, step_number).
+def run_step_exists(run_id: str, step_number: int, tenant_id: str = DEFAULT_TENANT) -> bool:
+    """Return True iff ``agent_run_steps`` has a row for (run_id, step_number)
+    belonging to a run owned by ``tenant_id``.
 
     Backs `tool_output` evidence validation in ``session_goal.validate_evidence``
     — confirms a claimed ``run_id:step_index`` reference points at real run
-    telemetry rather than a fabricated one.
+    telemetry for THIS tenant, rather than a fabricated one or a step under
+    another tenant's run. ``agent_run_steps`` carries no tenant column, so we
+    join ``agent_runs`` (which does) and filter there.
     """
     if not run_id:
         return False
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT 1 FROM agent_run_steps WHERE run_id = %s AND step_number = %s LIMIT 1",
-            (run_id, step_number),
+            """
+            SELECT 1
+            FROM agent_run_steps s
+            JOIN agent_runs r ON r.id = s.run_id
+            WHERE s.run_id = %s AND s.step_number = %s AND r.tenant_id = %s
+            LIMIT 1
+            """,
+            (run_id, step_number, tenant_id),
         )
         return cur.fetchone() is not None
 
 
-def benchmark_result_exists(result_id: int) -> bool:
-    """Return True iff ``benchmark_results`` has a row with this id.
+def benchmark_result_exists(result_id: int, tenant_id: str = DEFAULT_TENANT) -> bool:
+    """Return True iff ``benchmark_results`` has a row with this id owned by
+    ``tenant_id``.
 
     Backs `benchmark_run` evidence validation in ``session_goal.validate_evidence``.
     """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT 1 FROM benchmark_results WHERE id = %s LIMIT 1",
-            (result_id,),
+            "SELECT 1 FROM benchmark_results WHERE id = %s AND tenant_id = %s LIMIT 1",
+            (result_id, tenant_id),
         )
         return cur.fetchone() is not None
 

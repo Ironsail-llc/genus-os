@@ -136,8 +136,15 @@ def validate_evidence(
     item: GoalEvidence,
     *,
     workspace: str | Path | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> tuple[bool, str]:
-    """Per-kind validation. Returns (is_valid, reason_if_invalid)."""
+    """Per-kind validation. Returns (is_valid, reason_if_invalid).
+
+    ``tenant_id`` scopes the DB-backed kinds (``tool_output``,
+    ``benchmark_run``) so an agent can't validate evidence referencing
+    another tenant's run step or benchmark row. The git/regex kinds ignore
+    it.
+    """
     kind = (item.kind or "").strip()
     reference = (item.reference or "").strip()
     summary = (item.summary or "").strip()
@@ -190,7 +197,9 @@ def validate_evidence(
                 "tool_output reference must be 'run_id:step_index' (UUID:int)",
             )
         try:
-            exists = dal.run_step_exists(match.group("run_id"), int(match.group("step")))
+            exists = dal.run_step_exists(
+                match.group("run_id"), int(match.group("step")), tenant_id=tenant_id
+            )
         except Exception as exc:  # noqa: BLE001 — DAL/driver errors, not a valid ref
             return False, f"tool_output verification failed: {exc!r}"
         if not exists:
@@ -204,7 +213,7 @@ def validate_evidence(
                 "benchmark_run reference must be a benchmark_results row id (integer)",
             )
         try:
-            exists = dal.benchmark_result_exists(int(reference))
+            exists = dal.benchmark_result_exists(int(reference), tenant_id=tenant_id)
         except Exception as exc:  # noqa: BLE001 — DAL/driver errors, not a valid ref
             return False, f"benchmark_run verification failed: {exc!r}"
         if not exists:
@@ -223,12 +232,16 @@ def missing_completion_requirements(
     goal: SessionGoal,
     *,
     workspace: str | Path | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> list[str]:
     """Return a list of reasons this goal cannot be completed yet.
 
     Empty list means: ready to complete. The contract is structured:
       - At least one VALID `test_run` evidence AND
       - At least one VALID `commit` evidence.
+
+    ``tenant_id`` is forwarded to ``validate_evidence`` for the DB-backed
+    kinds; the completion guard itself only checks test_run/commit today.
     """
     missing: list[str] = []
     if not goal.success_criteria:
@@ -240,11 +253,11 @@ def missing_completion_requirements(
     has_test, has_commit = False, False
     for item in goal.evidence:
         if item.kind == "test_run":
-            ok, _ = validate_evidence(item, workspace=workspace)
+            ok, _ = validate_evidence(item, workspace=workspace, tenant_id=tenant_id)
             if ok:
                 has_test = True
         elif item.kind == "commit":
-            ok, _ = validate_evidence(item, workspace=workspace)
+            ok, _ = validate_evidence(item, workspace=workspace, tenant_id=tenant_id)
             if ok:
                 has_commit = True
     if not has_test:
@@ -352,7 +365,7 @@ def add_evidence(
     if not row:
         raise ValueError("no active goal")
     item = GoalEvidence(kind=kind, summary=summary, reference=reference)
-    is_valid, reason = validate_evidence(item, workspace=workspace)
+    is_valid, reason = validate_evidence(item, workspace=workspace, tenant_id=tenant_id)
     ok = dal.add_session_goal_evidence(
         task_id=str(row["id"]),
         kind=kind,
@@ -381,7 +394,7 @@ def complete_goal(
     if not row:
         raise ValueError("no active goal")
     goal = _goal_from_row(row)
-    missing = missing_completion_requirements(goal, workspace=workspace)
+    missing = missing_completion_requirements(goal, workspace=workspace, tenant_id=tenant_id)
     if missing:
         joined = "; ".join(missing)
         raise ValueError(f"goal is not ready to complete: {joined}")
@@ -807,6 +820,7 @@ def summarize_goal(
     goal: SessionGoal,
     *,
     workspace: str | Path | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict[str, Any]:
     return {
         "id": goal.id,
@@ -817,7 +831,7 @@ def summarize_goal(
         "evidence_count": len(goal.evidence),
         "valid_evidence_count": sum(1 for e in goal.evidence if e.valid),
         "missing_completion_requirements": missing_completion_requirements(
-            goal, workspace=workspace
+            goal, workspace=workspace, tenant_id=tenant_id
         ),
         "completion_note": goal.completion_note,
     }

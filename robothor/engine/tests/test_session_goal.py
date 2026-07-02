@@ -150,9 +150,29 @@ class TestValidateEvidence:
             summary="ran the tool",
             reference="3fa85f64-5717-4562-b3fc-2c963f66afa6:3",
         )
-        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path))
+        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path), tenant_id="tenant-a")
         assert ok
-        mock_exists.assert_called_once_with("3fa85f64-5717-4562-b3fc-2c963f66afa6", 3)
+        # The tenant must be threaded into the existence check so a step under
+        # another tenant's run can't validate.
+        mock_exists.assert_called_once_with(
+            "3fa85f64-5717-4562-b3fc-2c963f66afa6", 3, tenant_id="tenant-a"
+        )
+
+    @patch("robothor.engine.session_goal.dal.run_step_exists")
+    def test_tool_output_invalid_when_step_under_other_tenant(self, mock_exists, tmp_path):
+        # DAL returns False because the row exists only under another tenant.
+        mock_exists.return_value = False
+        item = sg.GoalEvidence(
+            kind="tool_output",
+            summary="claim",
+            reference="3fa85f64-5717-4562-b3fc-2c963f66afa6:3",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path), tenant_id="tenant-b")
+        assert not ok
+        assert reason
+        mock_exists.assert_called_once_with(
+            "3fa85f64-5717-4562-b3fc-2c963f66afa6", 3, tenant_id="tenant-b"
+        )
 
     @patch("robothor.engine.session_goal.dal.run_step_exists")
     def test_tool_output_invalid_when_step_missing(self, mock_exists, tmp_path):
@@ -196,9 +216,22 @@ class TestValidateEvidence:
             summary="suite passed",
             reference="42",
         )
-        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path))
+        ok, _ = sg.validate_evidence(item, workspace=str(tmp_path), tenant_id="tenant-a")
         assert ok
-        mock_exists.assert_called_once_with(42)
+        mock_exists.assert_called_once_with(42, tenant_id="tenant-a")
+
+    @patch("robothor.engine.session_goal.dal.benchmark_result_exists")
+    def test_benchmark_run_invalid_when_row_under_other_tenant(self, mock_exists, tmp_path):
+        mock_exists.return_value = False
+        item = sg.GoalEvidence(
+            kind="benchmark_run",
+            summary="claim",
+            reference="42",
+        )
+        ok, reason = sg.validate_evidence(item, workspace=str(tmp_path), tenant_id="tenant-b")
+        assert not ok
+        assert reason
+        mock_exists.assert_called_once_with(42, tenant_id="tenant-b")
 
     @patch("robothor.engine.session_goal.dal.benchmark_result_exists")
     def test_benchmark_run_invalid_when_row_missing(self, mock_exists, tmp_path):
