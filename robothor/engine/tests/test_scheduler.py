@@ -1470,3 +1470,39 @@ class TestFollowupResurfacePhase0:
             await scheduler._run_heartbeat("main")
         # Runner still executed despite the resurface failure.
         runner.execute.assert_called_once()
+
+
+class TestSchedulerLeadershipGate:
+    """The HA leadership gate at the top of _run_scheduled — only the leader
+    replica fires scheduled jobs."""
+
+    @pytest.mark.asyncio
+    async def test_non_leader_does_not_fire(self, monkeypatch):
+        import robothor.engine.scheduler as sched_mod
+        from robothor.engine.scheduler import CronScheduler
+
+        s = CronScheduler.__new__(CronScheduler)
+        s.config = MagicMock(tenant_id="default")
+        s.runner = MagicMock()
+        acquire = AsyncMock(return_value=True)
+        monkeypatch.setattr(sched_mod, "try_acquire", acquire)
+        monkeypatch.setattr("robothor.engine.leader.is_leader", lambda: False)
+
+        await s._run_scheduled("agent-1", "agent-1", MagicMock(), "cron")
+        acquire.assert_not_called()  # gated out before dedup/execute
+
+    @pytest.mark.asyncio
+    async def test_leader_passes_gate(self, monkeypatch):
+        import robothor.engine.scheduler as sched_mod
+        from robothor.engine.scheduler import CronScheduler
+
+        s = CronScheduler.__new__(CronScheduler)
+        s.config = MagicMock(tenant_id="default")
+        s.runner = MagicMock()
+        # Leader passes the gate, then dedup short-circuits (already running).
+        acquire = AsyncMock(return_value=False)
+        monkeypatch.setattr(sched_mod, "try_acquire", acquire)
+        monkeypatch.setattr("robothor.engine.leader.is_leader", lambda: True)
+
+        await s._run_scheduled("agent-1", "agent-1", MagicMock(), "cron")
+        acquire.assert_called_once()  # gate passed, reached dedup

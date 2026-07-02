@@ -2819,6 +2819,23 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["get_accretion_ledger"] = {
+        "type": "function",
+        "function": {
+            "name": "get_accretion_ledger",
+            "description": (
+                "Audit what the fleet has learned: agent-authored skills with their "
+                "git history and runtime usage counts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max entries (default 30)"}
+                },
+            },
+        },
+    }
+
     # ── Code intelligence: first-party content search (pure-Python os.walk + re)
     #    so agents don't shell out via exec to grep ──
     schemas["search_files"] = {

@@ -401,8 +401,14 @@ class CronScheduler:
     ) -> None:
         """Shared entry point for cron and heartbeat runs.
 
-        Handles: dedup → circuit breaker → safety timeout → execute/deliver → track.
+        Handles: leadership → dedup → circuit breaker → safety timeout → execute/deliver → track.
         """
+        # HA: only the leader replica fires scheduled jobs (no-op when HA off).
+        from robothor.engine.leader import is_leader
+
+        if not is_leader():
+            logger.debug("Skipping scheduled %s — not the leader replica", agent_id)
+            return
         if not await try_acquire(dedup_key):
             # Bumped to warning to make hour-boundary contention visible.
             # The noon-storm investigation (2026-05) needs to know when a
