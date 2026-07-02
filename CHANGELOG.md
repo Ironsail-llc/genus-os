@@ -1,3 +1,9 @@
+## [1.8.0](https://github.com/Ironsail-llc/genus-os/compare/v1.7.0...v1.8.0) (2026-07-02)
+
+### Features
+
+* **memory:** recall/anti-churn/cognitive-layer upgrade + engine phase-a ([#166](https://github.com/Ironsail-llc/genus-os/issues/166)) ([27586c6](https://github.com/Ironsail-llc/genus-os/commit/27586c6e3b579b06f6921d7b673088f275e9f5e6))
+
 ## [1.7.0](https://github.com/Ironsail-llc/genus-os/compare/v1.6.0...v1.7.0) (2026-07-02)
 
 ### Features
