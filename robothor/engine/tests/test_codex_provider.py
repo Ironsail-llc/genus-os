@@ -18,6 +18,16 @@ from robothor.engine.codex_provider import (
 )
 from robothor.engine.runner import AgentRunner
 
+
+@pytest.fixture(autouse=True)
+def _reset_login_cache():
+    """ensure_chatgpt_login caches a positive result across calls; clear it so
+    each test sees a fresh login probe."""
+    codex_provider._LOGIN_OK_UNTIL = 0.0
+    yield
+    codex_provider._LOGIN_OK_UNTIL = 0.0
+
+
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
 
@@ -139,11 +149,11 @@ async def test_runner_uses_codex_for_tool_turns(
 
     with (
         patch(
-            "robothor.engine.runner.codex_acompletion",
+            "robothor.engine.llm_client.codex_acompletion",
             new=AsyncMock(return_value=codex_response),
         ) as codex_call,
         patch("litellm.acompletion", new=AsyncMock()) as litellm_call,
-        patch.object(runner, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch.object(runner._llm, "_prepare_llm_call", new=AsyncMock(return_value=100)),
     ):
         result = await runner._call_llm(
             messages,
@@ -220,10 +230,11 @@ async def test_runner_uses_codex_for_text_only_turns(engine_config: EngineConfig
 
     with (
         patch(
-            "robothor.engine.runner.codex_acompletion", new=AsyncMock(return_value=codex_response)
+            "robothor.engine.llm_client.codex_acompletion",
+            new=AsyncMock(return_value=codex_response),
         ) as codex_call,
         patch("litellm.acompletion", new=AsyncMock()) as litellm_call,
-        patch.object(runner, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch.object(runner._llm, "_prepare_llm_call", new=AsyncMock(return_value=100)),
     ):
         result = await runner._call_llm(
             [{"role": "user", "content": "hi"}],

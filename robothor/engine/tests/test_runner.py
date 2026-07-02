@@ -261,8 +261,6 @@ class TestAgentRunnerExecute:
         import asyncio as _asyncio
         import time
 
-        import robothor.engine.runner as _runner_mod
-
         # Squeeze the per-LLM-call timeout so the test runs in ~1s. The
         # primary "hangs" for 5s, the fallback completes immediately.
         call_count = 0
@@ -281,7 +279,7 @@ class TestAgentRunnerExecute:
             return mock_litellm_response(content="fallback ok", model="openrouter/test/fallback")
 
         with (
-            patch.object(_runner_mod, "LLM_REQUEST_TIMEOUT", 1),
+            patch("robothor.engine.llm_client.LLM_REQUEST_TIMEOUT", 1),
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
@@ -1055,6 +1053,156 @@ class TestAssessOutcome:
         assert run.outcome_assessment == "successful"
 
 
+class TestPrimaryModelReached:
+    """_check_primary_model_reached — surface silent fallback degradation.
+
+    Regression for the 2026-05-29 audit: codex/gpt-5.5 was missing from the
+    engine PATH, so every top agent silently completed on the mimo fallback
+    with no error. The detector must flag any run whose used model isn't the
+    configured primary.
+    """
+
+    def _make_run(self, **kw):
+        from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+        defaults = {
+            "id": "run-x",
+            "agent_id": "main",
+            "trigger_type": TriggerType.CRON,
+            "status": RunStatus.COMPLETED,
+        }
+        defaults.update(kw)
+        return AgentRun(**defaults)
+
+    def _config(self, primary):
+        from unittest.mock import MagicMock
+
+        cfg = MagicMock()
+        cfg.model_primary = primary
+        return cfg
+
+    def test_flags_fallback_run(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="openrouter/xiaomi/mimo-v2.5-pro")
+        cfg = self._config("codex/gpt-5.5")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" in caplog.text
+        assert run.outcome_notes and "fallback" in run.outcome_notes
+
+    def test_silent_when_primary_used(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="codex/gpt-5.5")
+        cfg = self._config("codex/gpt-5.5")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+        assert run.outcome_notes is None
+
+    def test_skips_sub_agent_runs(self, caplog):
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="fallback-model", parent_run_id="parent-1")
+        cfg = self._config("primary-model")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+
+    def test_no_false_positive_on_normalized_primary(self, caplog):
+        """litellm reports the primary without prefix/with a date — not degraded."""
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        # manifest primary vs what litellm returns for a successful primary run
+        run = self._make_run(model_used="claude-opus-4-7-20260416")
+        cfg = self._config("openrouter/anthropic/claude-opus-4.7")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+        assert run.outcome_notes is None
+
+
+class TestActiveWatchdogContextVar:
+    """The active watchdog is per-task (ContextVar), not per-singleton — so a
+    nested/concurrent run can't clobber another run's stall watchdog
+    (audit 2026-05-29)."""
+
+    def test_property_reads_contextvar(self, runner):
+        from robothor.engine import runner as runner_mod
+
+        sentinel = object()
+        token = runner_mod._active_watchdog_var.set(sentinel)
+        try:
+            assert runner._active_watchdog is sentinel
+        finally:
+            runner_mod._active_watchdog_var.reset(token)
+        assert runner._active_watchdog is None
+
+    def test_nested_set_restores_parent(self, runner):
+        from robothor.engine import runner as runner_mod
+
+        parent = object()
+        child = object()
+        ptok = runner_mod._active_watchdog_var.set(parent)
+        try:
+            assert runner._active_watchdog is parent
+            ctok = runner_mod._active_watchdog_var.set(child)  # nested run
+            assert runner._active_watchdog is child
+            runner_mod._active_watchdog_var.reset(ctok)  # child finishes
+            assert runner._active_watchdog is parent  # parent restored
+        finally:
+            runner_mod._active_watchdog_var.reset(ptok)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tasks_isolated(self, runner):
+        import asyncio
+
+        from robothor.engine import runner as runner_mod
+
+        seen = {}
+
+        async def run_with(name, wd):
+            runner_mod._active_watchdog_var.set(wd)
+            await asyncio.sleep(0)  # yield so the other task interleaves
+            seen[name] = runner._active_watchdog
+
+        a, b = object(), object()
+        await asyncio.gather(run_with("a", a), run_with("b", b))
+        assert seen["a"] is a  # not clobbered by task b
+        assert seen["b"] is b
+
+
+class TestHandleModelErrorProviderDown:
+    """_handle_model_error — provider-availability failures mark the model broken.
+
+    A missing Codex CLI raises CodexProviderError (no HTTP status); it must be
+    treated like other hard provider failures so the primary is marked broken
+    and the PRIMARY-failed ERROR line fires (audit 2026-05-29).
+    """
+
+    def test_codex_missing_marks_primary_broken(self, caplog):
+        import logging
+
+        from robothor.engine.codex_provider import CodexProviderError
+        from robothor.engine.runner import AgentRunner
+
+        broken: set[str] = set()
+        err = CodexProviderError("Codex CLI not found: codex")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._handle_model_error(err, "codex/gpt-5.5", broken)
+        assert "codex/gpt-5.5" in broken
+        assert "PRIMARY model" in caplog.text
+
+
 class TestSynthesizeWrapupSummary:
     """When the force-wrapup LLM call comes back empty, the run must still
     produce a non-empty final text — synthesized from the tool actions taken.
@@ -1088,3 +1236,155 @@ class TestSynthesizeWrapupSummary:
 
         assert "No output was produced" in summary
         assert summary.strip()
+
+
+class TestInterruptSteerWiring:
+    """G3: the session interrupt/steer API (built in Rip 9) must actually be
+    consumed by the loop. Before this, `_after_iteration` was a no-op and
+    `_run_loop` never called `consume_interrupt`/`consume_pending_steer`, so the
+    advertised live-steering capability did nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_after_iteration_drains_steer_into_user_message(self, runner):
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession(agent_id="test-agent")
+        session.steer("focus on the budget question")
+
+        await runner._after_iteration(session, 1)
+
+        # Steer is consumed (drained) and surfaced for the next API call.
+        assert session.consume_pending_steer() is None
+        assert any(
+            m.get("role") == "user" and "budget question" in str(m.get("content", ""))
+            for m in session.messages
+        ), "steer text was not injected as a user message"
+
+    @pytest.mark.asyncio
+    async def test_steer_never_touches_system_prompt(self, runner):
+        """Cache safety: steering must not mutate the system prompt prefix."""
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession(agent_id="test-agent")
+        session.messages = [{"role": "system", "content": "STATIC SYSTEM PROMPT"}]
+        session.steer("new guidance")
+
+        await runner._after_iteration(session, 1)
+
+        assert session.messages[0] == {"role": "system", "content": "STATIC SYSTEM PROMPT"}
+
+    @pytest.mark.asyncio
+    async def test_interrupt_halts_loop_gracefully(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        sample_agent_config.max_iterations = 10  # check-in interval (won't fire)
+        sample_agent_config.safety_cap = 8  # would run this far absent interrupt
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        calls = {"n": 0}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            calls["n"] += 1
+            # Operator interrupts mid-run on the 2nd turn; the top-of-loop check
+            # on the 3rd iteration must consume it and stop gracefully.
+            if calls["n"] == 2:
+                session.interrupt("operator says stop")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        # Stopped at the top of iteration 3 → exactly 2 LLM calls, not safety_cap.
+        assert calls["n"] == 2, f"expected 2 LLM calls before interrupt, got {calls['n']}"
+        assert run.status != RunStatus.FAILED
+        assert "interrupt" in (run.outcome_notes or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_via_public_api_reaches_live_run(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """End-to-end: an external caller (Telegram/health API) halts a LIVE run
+        by run_id via interrupt_session -> session_registry.lookup. Proves the
+        runner registers the session (without registration this lookup fails and
+        the loop runs to safety_cap)."""
+        from robothor.engine.interrupt_api import interrupt_session
+
+        sample_agent_config.max_iterations = 10
+        sample_agent_config.safety_cap = 8
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = "{}"
+        runner.registry.execute = AsyncMock(return_value={"ok": True})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+
+        calls = {"n": 0}
+        captured = {"interrupt_ok": None}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                # External caller reaches the live run ONLY via the registry.
+                captured["interrupt_ok"] = interrupt_session(session.run_id, "operator stop")
+            resp = mock_litellm_response(content=None, tool_calls=[tc])
+            resp.choices[0].message.content = None
+            return resp
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        assert captured["interrupt_ok"] is True, "session was not registered — lookup failed"
+        assert calls["n"] == 2
+        assert "interrupt" in (run.outcome_notes or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_session_unregistered_after_run(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """The registry must not leak: after a run completes, lookup returns None."""
+        from robothor.engine import session_registry
+
+        seen = {"run_id": None}
+
+        async def fake_do_llm_call(session, *args, **kwargs):
+            seen["run_id"] = session.run_id
+            assert session_registry.lookup(session.run_id) is session  # live during the run
+            return mock_litellm_response(content="done")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
+        ):
+            await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        assert seen["run_id"] is not None
+        assert session_registry.lookup(seen["run_id"]) is None  # unregistered in finally

@@ -59,10 +59,20 @@ class TestManifestConfiguration:
     """Verify the agent-architect.yaml manifest is valid and well-formed."""
 
     def test_manifest_loads_cleanly(self):
-        """Manifest parses into a valid AgentConfig without errors."""
+        """Manifest parses into a valid AgentConfig without errors.
+
+        The model assignment is asserted against the manifest itself (its
+        ``model.primary``) rather than a hardcoded literal — model migrations
+        change the manifest frequently and must not break this structural
+        check. (A hardcoded literal here silently went stale across the
+        codex/gpt-5.5 migration; audit 2026-05-29.)
+        """
+        manifest = _load_manifest_checked(MANIFEST_PATH)
         config = _load_architect_config()
         assert config.id == "agent-architect"
-        assert config.model_primary == "openrouter/anthropic/claude-opus-4.7"
+        expected_model = manifest.get("model", {}).get("primary")
+        assert expected_model, "manifest is missing model.primary"
+        assert config.model_primary == expected_model
 
     def test_manifest_tools_registered(self):
         """Engine-native tools in tools_allowed exist in the ToolRegistry.
@@ -145,9 +155,17 @@ class TestManifestConfiguration:
         assert allowlist == ["brain/memory/agent-architect-status.md"]
 
     def test_manifest_cost_budget(self):
-        """Cost budget is set and reasonable for an Opus-powered agent."""
+        """The loaded cost cap matches the manifest's declared value.
+
+        Asserted against ``v2.max_cost_usd`` in the manifest (default 0.0 =
+        unlimited) rather than a hardcoded literal, so re-tuning the cap doesn't
+        break this loader check. (audit 2026-05-29)
+        """
+        manifest = _load_manifest_checked(MANIFEST_PATH)
         config = _load_architect_config()
-        assert config.max_cost_usd == 10.0
+        declared = float(manifest.get("v2", {}).get("max_cost_usd", 0.0))
+        assert config.max_cost_usd == declared
+        assert config.max_cost_usd >= 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -169,9 +187,15 @@ class TestSystemIntegration:
         assert "agent-architect" in manifest["receives_tasks_from"]
 
     def test_scheduler_registers_cron(self):
-        """Cron expression is valid and creates a scheduler trigger."""
+        """Cron matches the manifest and builds a valid scheduler trigger.
+
+        Asserted against the manifest's ``schedule.cron`` rather than a
+        hardcoded literal — schedule changes are routine instance config and
+        must not break this structural check. (audit 2026-05-29)
+        """
+        manifest = _load_manifest_checked(MANIFEST_PATH)
         config = _load_architect_config()
-        assert config.cron_expr == "0 3 * * 1,4"
+        assert config.cron_expr == manifest["schedule"]["cron"]
         from apscheduler.triggers.cron import CronTrigger
 
         trigger = CronTrigger.from_crontab(config.cron_expr)

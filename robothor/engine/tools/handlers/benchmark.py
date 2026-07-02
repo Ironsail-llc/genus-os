@@ -36,7 +36,9 @@ HANDLERS: dict[str, Any] = {}
 # Hard caps
 _MAX_TASKS_PER_SUITE = 50
 _MAX_COST_PER_SUITE_USD = 15.00
-_DEFAULT_TASK_MAX_COST = 0.15
+# Suite-level spend budget (whole-suite kill-switch). Per-task grading caps were
+# removed 2026-05-30 (Phase 0b/0c): cost is no longer graded, and the per-task
+# spend ceiling is now derived from the agent's model tier (_MODEL_TIER_TASK_COST).
 _DEFAULT_SUITE_MAX_COST = 1.00
 
 # Per-task cost ceilings by model tier. A flat cap auto-fails the cost check
@@ -149,9 +151,9 @@ def _agent_task_cost_ceiling(agent_id: str, manifest_dir: Path) -> float:
     to the cheap-tier ceiling when the manifest is missing or unreadable.
     """
     try:
-        manifest = yaml.safe_load((manifest_dir / f"{agent_id}.yaml").read_text()) or {}
+        manifest = yaml.safe_load((Path(manifest_dir) / f"{agent_id}.yaml").read_text()) or {}
         model_primary = str((manifest.get("model") or {}).get("primary") or "")
-    except (FileNotFoundError, OSError, yaml.YAMLError):
+    except (FileNotFoundError, OSError, TypeError, yaml.YAMLError):
         model_primary = ""
     return _MODEL_TIER_TASK_COST[_resolve_model_tier(model_primary)]
 
@@ -234,8 +236,15 @@ def _validate_task(task: dict[str, Any]) -> str | None:
 def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any]) -> float:
     """Score an agent's output against expected criteria.  Returns 0.0-1.0.
 
-    Scoring is deterministic (regex pattern matching + cost checks), no LLM.
-    Each criterion is equally weighted within the task.
+    Scoring is deterministic (regex pattern matching), no LLM. Each criterion
+    is equally weighted within the task.
+
+    Cost and iteration count are deliberately NOT graded — they are telemetry
+    only (recorded on the run result). Folding ``max_cost_usd`` /
+    ``max_iterations`` into the score made the self-improvement loop reward
+    cheapness over correctness and even truncate output to "win" the cost
+    check. See docs/SELF_IMPROVEMENT_REDESIGN_2026-05-30.md (Phase 0b). The
+    keys are still tolerated in suite YAML so existing suites parse unchanged.
     """
     checks: list[bool] = []
     for p in expected.get("must_contain", []):
@@ -248,16 +257,6 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
             checks.append(not bool(re.search(p, output, re.IGNORECASE)))
         except re.error:
             checks.append(False)
-
-    # max_cost_usd: run cost must be within cap
-    max_cost = expected.get("max_cost_usd")
-    if max_cost is not None:
-        checks.append(run_meta.get("total_cost_usd", 0) <= max_cost)
-
-    # max_iterations: agent must finish within N steps
-    max_iters = expected.get("max_iterations")
-    if max_iters is not None:
-        checks.append(run_meta.get("steps", 0) <= max_iters)
 
     if not checks:
         return 0.0
@@ -327,13 +326,8 @@ async def _score_task_async(
         except re.error:
             checks.append(False)
 
-    max_cost = expected.get("max_cost_usd")
-    if max_cost is not None:
-        checks.append(run_meta.get("total_cost_usd", 0) <= max_cost)
-
-    max_iters = expected.get("max_iterations")
-    if max_iters is not None:
-        checks.append(run_meta.get("steps", 0) <= max_iters)
+    # Cost and iteration count are telemetry only, never graded (Phase 0b) —
+    # see _score_task docstring.
 
     # LLM judge check
     judge = expected.get("judge")
@@ -490,7 +484,12 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             )
             continue
 
-        task_max_cost = task.get("expected", {}).get("max_cost_usd", _DEFAULT_TASK_MAX_COST)
+        # Spend kill-switch for this task. Decoupled from grading (Phase 0c):
+        # cost is no longer scored, so the sub-agent's real spend ceiling is a
+        # GENEROUS model-tier safety bound (prevents a hung/runaway run from
+        # wedging the fleet) rather than the suite author's tight per-task cap
+        # — which used to truncate output mid-task and tank the score.
+        task_spend_ceiling = _agent_task_cost_ceiling(agent_id, runner.config.manifest_dir)
 
         # Load and configure the target agent
         child_config = load_agent_config(agent_id, runner.config.manifest_dir)
@@ -512,7 +511,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # before they could converge.
         child_config.delivery_mode = DeliveryMode.NONE
         child_config.max_iterations = min(child_config.max_iterations, 25)
-        child_config.max_cost_usd = task_max_cost
+        child_config.max_cost_usd = task_spend_ceiling
 
         # Sandbox side-effecting tools during benchmark runs.
         # Prevents benchmark test data (e.g. carol@example.com) from
@@ -814,7 +813,10 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
     except yaml.YAMLError as exc:
         return {"error": f"Invalid YAML in {path}: {exc}"}
 
-    suite_id = suite_data.get("id") or f"{agent_id}-default"
+    # Accept both `id:` and `suite_id:` — 8 fleet suites declare `suite_id:`,
+    # which previously fell through to `<agent>-default`, silently scattering
+    # their benchmark_results under the wrong suite id (Phase 4b).
+    suite_id = suite_data.get("id") or suite_data.get("suite_id") or f"{agent_id}-default"
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
 
@@ -874,7 +876,10 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
     if not bench_root.exists():
         return {"error": f"No benchmarks directory at {bench_root}"}
 
+    agents_dir = _resolve_path("docs/agents", ctx.workspace)
+
     agents: list[str] = []
+    skipped_no_manifest: list[str] = []
     for child in sorted(bench_root.iterdir()):
         if not child.is_dir():
             continue
@@ -884,6 +889,14 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
         if agent_id in skip:
             continue
         if only and agent_id not in only:
+            continue
+        # Skip suites for agents that no longer have a live manifest (Phase 0f).
+        # A suite for a retired agent can never load its config, so it scores
+        # 0% every day — polluting benchmark_results and misleading the
+        # self-improvement triage. Delete the suite dir to retire it cleanly;
+        # until then, skip it loudly rather than grade a ghost at zero.
+        if not (agents_dir / f"{agent_id}.yaml").exists():
+            skipped_no_manifest.append(agent_id)
             continue
         agents.append(agent_id)
 
@@ -918,6 +931,7 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
         "tag": tag,
         "triggered_by": triggered_by,
         "agents_attempted": len(agents),
+        "skipped_no_manifest": skipped_no_manifest,
         "results": summary,
     }
 

@@ -265,3 +265,55 @@ class TestFireAndForget:
         # Should not raise; returns whatever spawn_background_review returned (None for off).
         result = asyncio.run(runner())
         assert result is None
+
+
+class TestForkSkipReason:
+    """The exclusion guard that makes flipping RIP_1 safe (no fork recursion)."""
+
+    def test_normal_top_level_run_proceeds(self, session: AgentSession) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+
+        assert _fork_skip_reason(session) is None
+
+    def test_benchmark_run_skipped(self, session: AgentSession) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+
+        session.run.is_benchmark = True
+        assert _fork_skip_reason(session) == "benchmark"
+
+    def test_nested_run_skipped(self, session: AgentSession) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+
+        session.run.nesting_depth = 1
+        assert _fork_skip_reason(session) == "nested"
+
+    def test_sub_agent_run_skipped(self, session: AgentSession) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+        from robothor.engine.models import TriggerType
+
+        session.run.trigger_type = TriggerType.SUB_AGENT
+        assert _fork_skip_reason(session) == "sub_agent"
+
+    def test_allowlist_excludes_unlisted_agent(
+        self, session: AgentSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+
+        monkeypatch.setenv("ROBOTHOR_RIP_1_AGENTS", "main,email-analyst")
+        assert _fork_skip_reason(session) == "not_in_allowlist"  # session agent is "test"
+
+    def test_allowlist_includes_listed_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robothor.engine.background_review import _fork_skip_reason
+
+        monkeypatch.setenv("ROBOTHOR_RIP_1_AGENTS", "test")
+        assert _fork_skip_reason(AgentSession(agent_id="test")) is None
+
+
+def test_session_start_counts_memory_nudge_turns() -> None:
+    """Each user turn (start + steer) advances the memory-review nudge counter."""
+    s = AgentSession(agent_id="test")
+    assert s._turns_since_memory == 0
+    s.start("sys", "hello", [])
+    assert s._turns_since_memory == 1
+    s.start("sys", "again", [])
+    assert s._turns_since_memory == 2

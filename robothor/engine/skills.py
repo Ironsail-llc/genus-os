@@ -10,6 +10,7 @@ The LLM is the orchestrator — skills are just instructions, not automated pipe
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -194,6 +195,12 @@ def build_skill_catalog(skills: dict[str, SkillDefinition] | None = None) -> str
     if skills is None:
         skills = load_skills()
 
+    # Anti-bloat (Phase 3): never surface archived agent-skills in the prompt.
+    # compute_skill_state is time-derived, so this holds even if no curator pass
+    # has run. Pinned / operator-authored skills are never archived.
+    _now = datetime.now(UTC)
+    skills = {n: d for n, d in skills.items() if not _skill_is_archived(n, _now)}
+
     if not skills:
         return ""
 
@@ -369,17 +376,33 @@ def class_level_check(name: str, description: str = "") -> str | None:
     return None
 
 
+# BUG-7: mtime-keyed cache so build_skill_catalog's per-skill meta read (one
+# per skill, every prompt) doesn't re-parse JSON from disk each time. Returns a
+# deep copy so callers that mutate-then-write (increment_usage, apply_skill_
+# lifecycle) can't corrupt the cached object.
+_meta_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+
 def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | None:
     """Read meta.json sidecar for a skill, or None if missing."""
     path = _meta_path(name, base)
     if not path.exists():
         return None
     try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    key = str(path)
+    cached = _meta_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return copy.deepcopy(cached[1])
+    try:
         result: dict[str, Any] = json.loads(path.read_text())
-        return result
     except Exception as e:
         logger.warning("Failed to read skill meta %s: %s", path, e)
         return None
+    _meta_cache[key] = (mtime, result)
+    return copy.deepcopy(result)
 
 
 def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
@@ -387,6 +410,8 @@ def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) 
     path = _meta_path(name, base)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(meta, indent=2, default=str) + "\n")
+    with contextlib.suppress(OSError):
+        _meta_cache[str(path)] = (path.stat().st_mtime, copy.deepcopy(meta))
 
 
 def write_skill_file(
@@ -437,8 +462,93 @@ def create_skill_meta(
         "revision": 1,
         "usage_count": 0,
         "last_used": None,
+        "state": "active",
         "revision_history": [],
     }
+
+
+# ── Skill lifecycle / time-retirement (self-improvement Phase 3) ─────────
+# Without this, autonomously-accreted skills pile up forever and bloat every
+# agent's system prompt — the one guardrail whose absence makes accretion
+# itself a degradation. State is derived purely from age + last use, so the
+# catalog filter is self-sufficient (it never surfaces an archived agent-skill
+# even if no curator pass has run). Pinned and operator-authored skills are
+# never retired.
+SKILL_STALE_AFTER_DAYS = 30
+SKILL_ARCHIVE_AFTER_DAYS = 90
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
+def compute_skill_state(meta: dict[str, Any] | None, now: datetime | None = None) -> str:
+    """Effective lifecycle state of a skill from its meta — pure & idempotent.
+
+    'active' → 'stale' (unused > 30d) → 'archived' (unused > 90d). Re-use resets
+    the clock automatically (last_used is the anchor). NEVER retires a pinned or
+    operator-authored (is_agent_created=False) skill, nor one with no meta.
+    """
+    if not meta:
+        return "active"
+    # BUG-2: the existing corpus stamps `auto_generated`; only the RIP_1 fork
+    # path stamps `is_agent_created`. Treat either as agent-made, else the whole
+    # anti-bloat guardrail is inert for every skill on disk today.
+    agent_made = meta.get("is_agent_created") or meta.get("auto_generated")
+    if meta.get("pinned") or not agent_made:
+        return "active"
+    now = now or datetime.now(UTC)
+    anchor = _parse_iso(meta.get("last_used")) or _parse_iso(meta.get("created_at"))
+    if anchor is None:
+        return "active"
+    age_days = (now - anchor).total_seconds() / 86400.0
+    if age_days >= SKILL_ARCHIVE_AFTER_DAYS:
+        return "archived"
+    if age_days >= SKILL_STALE_AFTER_DAYS:
+        return "stale"
+    return "active"
+
+
+def apply_skill_lifecycle(
+    base: Path | None = None, now: datetime | None = None
+) -> dict[str, list[str]]:
+    """Persist computed state transitions into each agent-skill's meta.json.
+
+    Returns {transition: [skill names]} for observability. The catalog filter
+    does not depend on this running (it computes state on the fly), but a
+    periodic pass keeps the persisted state honest for dashboards and the curator.
+    """
+    now = now or datetime.now(UTC)
+    transitions: dict[str, list[str]] = {"to_stale": [], "to_archived": [], "reactivated": []}
+    for fp in _skills_dir().glob("*/SKILL.md") if base is None else base.glob("*/SKILL.md"):
+        name = fp.parent.name
+        meta = read_skill_meta(name, base)
+        if meta is None:
+            continue
+        prev = meta.get("state", "active")
+        new = compute_skill_state(meta, now)
+        if new == prev:
+            continue
+        meta["state"] = new
+        if new == "stale":
+            transitions["to_stale"].append(name)
+        elif new == "archived":
+            transitions["to_archived"].append(name)
+        elif new == "active" and prev in ("stale", "archived"):
+            transitions["reactivated"].append(name)
+        write_skill_meta(name, meta, base)
+    return transitions
+
+
+def _skill_is_archived(name: str, now: datetime | None = None) -> bool:
+    """True if the skill should be hidden from the prompt catalog (anti-bloat)."""
+    return compute_skill_state(read_skill_meta(name), now) == "archived"
 
 
 def _content_hash(text: str) -> str:

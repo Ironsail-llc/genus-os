@@ -3,6 +3,8 @@
 # closure logic, never close active threads.
 # Created 2026-05-06. Recalibrated 2026-05-14 for MiMo V2.5 Pro fleet:
 # open-ended judgment tasks moved to judge rubrics, brittle keyword lists removed.
+# Fixed 2026-05-29: leave-active-alone must_not_contain was catching "never resolve"
+# (correct refusal). Narrowed to positive closure claims only.
 
 id: conversation-resolver-harness
 agent_id: conversation-resolver
@@ -28,7 +30,7 @@ tasks:
     category: correctness
     weight: 2.0
     expected:
-      must_not_contain: ["resolv|closed conversation"]
+      must_not_contain: ["\\b(?:resolved|closed) (?:cnv|it|this|the|conversation)"]
       judge:
         model: openrouter/xiaomi/mimo-v2.5-pro
         threshold: 0.7

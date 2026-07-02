@@ -15,6 +15,19 @@ from typing import Any
 import yaml
 
 
+def _safe_bundle_path(base: Path, name: str) -> Path:
+    """Return ``base / <leaf>`` for a single trusted filename.
+
+    ``name`` must be a bare filename — any directory separator or traversal
+    component is rejected (path-injection guard). ``os.path.basename`` strips
+    the directory so the result can never escape ``base``.
+    """
+    leaf = Path(name).name
+    if leaf != name or leaf in ("", ".", ".."):
+        raise ValueError(f"unsafe path: {name}")
+    return base / leaf
+
+
 @dataclass
 class DescriptionScore:
     """Score breakdown for an agent description."""
@@ -328,7 +341,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
     report.breakdown = {}
 
     # 1. SKILL.md exists with valid frontmatter (20 pts)
-    skill_path = bundle / "SKILL.md"
+    skill_path = _safe_bundle_path(bundle, "SKILL.md")
     skill_score: float = 0
     if skill_path.exists():
         content = skill_path.read_text()
@@ -351,7 +364,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
     report.breakdown["skill_md"] = int(skill_score)
 
     # 2. programmatic.json complete (20 pts)
-    prog_path = bundle / "programmatic.json"
+    prog_path = _safe_bundle_path(bundle, "programmatic.json")
     prog_score: float = 0
     if prog_path.exists():
         try:
@@ -418,7 +431,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
     report.breakdown["tags"] = tag_score
 
     # 5. setup.yaml has typed variables with descriptions (15 pts)
-    setup_path = bundle / "setup.yaml"
+    setup_path = _safe_bundle_path(bundle, "setup.yaml")
     setup_score = 0
     if setup_path.exists():
         try:
@@ -449,7 +462,7 @@ def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
     report.breakdown["setup_yaml"] = setup_score
 
     # 6. instructions.template.md uses {{ }} for customizable values (15 pts)
-    instr_path = bundle / "instructions.template.md"
+    instr_path = _safe_bundle_path(bundle, "instructions.template.md")
     instr_score = 0
     if instr_path.exists():
         content = instr_path.read_text()

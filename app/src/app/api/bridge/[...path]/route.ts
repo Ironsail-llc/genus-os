@@ -8,14 +8,23 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> }
 ) {
   const { path } = await context.params;
-  const target = `${BRIDGE_URL}/${path.join("/")}${req.nextUrl.search}`;
+  const base = new URL(BRIDGE_URL);
+  const pathStr = path.join("/");
+  const target = new URL(
+    pathStr.replace(/^\/+/, ""),
+    base.origin + base.pathname.replace(/\/?$/, "/")
+  );
+  if (target.origin !== base.origin) {
+    return new NextResponse("Bad gateway path", { status: 502 });
+  }
+  target.search = req.nextUrl.search;
 
   try {
     const headers: Record<string, string> = {
       "Content-Type": req.headers.get("content-type") || "application/json",
     };
 
-    const res = await fetch(target, {
+    const res = await fetch(target.toString(), {
       method: req.method,
       headers,
       body: ["POST", "PUT", "PATCH"].includes(req.method)

@@ -15,6 +15,8 @@ import asyncio
 import logging
 import os
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 _running: set[str] = set()
@@ -86,7 +88,7 @@ async def try_acquire(agent_id: str) -> bool:
 
     async with _lock:
         if agent_id in _running:
-            logger.debug("Dedup: %s already running, skipping", agent_id)
+            logger.debug("Dedup: %s already running, skipping", sanitize_log(agent_id))
             return False
         _running.add(agent_id)
         return True

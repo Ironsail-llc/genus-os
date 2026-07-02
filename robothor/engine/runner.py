@@ -29,20 +29,25 @@ import functools
 import json
 import logging
 import os
+import re
 import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
 import litellm
 
-from robothor.engine.codex_provider import acompletion as codex_acompletion
-from robothor.engine.codex_provider import is_codex_model
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
     build_system_prompt,
     load_agent_config,
 )
+
+# LLM dispatch/cost/streaming + the request-timeout constants now live in
+# llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
+# instance of it; the historical method surface is preserved via thin
+# delegators/aliases below so existing call sites keep working unchanged.
+from robothor.engine.llm_client import LLMClient  # noqa: E402
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
@@ -65,22 +70,30 @@ from robothor.engine.prompts import (
 # messages) must not inject newlines into log output.
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
+from robothor.engine.stall_watchdog import (
+    _active_watchdog_var,
+    _build_cancel_diagnostic,
+    _fleet_wallclock_ceiling,
+    _StallWatchdog,
+)
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, create_steps_batch, update_run
 
-# Max seconds to wait for the next streaming chunk before aborting and
-# falling back to the next model.  Prevents stalled streams from hanging
-# the entire run (the stream *creation* timeout is separate — see
-# `_build_llm_kwargs`'s `timeout`).
-STREAM_CHUNK_TIMEOUT = 90
 
-# HTTP-level timeout passed to litellm.acompletion for the initial
-# request (stream creation for streaming, full response for
-# non-streaming). Must be longer than STREAM_CHUNK_TIMEOUT so a slow
-# first chunk is handled by the per-chunk watchdog rather than killing
-# the whole request. Ollama gets more headroom for cold-start loads.
-LLM_REQUEST_TIMEOUT = 120
-LLM_REQUEST_TIMEOUT_OLLAMA = 600
+def _normalize_model_id(model: str) -> str:
+    """Collapse a model id to a provider/format-agnostic core for comparison.
+
+    litellm reports `response.model` without the `openrouter/` prefix and often
+    with a trailing date or dashes-for-dots, so an exact string compare against
+    the manifest's `model_primary` would false-positive on a *healthy* run. We
+    take the last path segment, drop a trailing date, and strip separators so
+    `openrouter/anthropic/claude-opus-4.7` and `claude-opus-4-7-20260416`
+    compare equal while still distinguishing genuinely different models.
+    """
+    core = (model or "").strip().lower().rsplit("/", 1)[-1]
+    core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
+    return re.sub(r"[.\-_\s]", "", core)
+
 
 # Announce-mode runs that end with fewer characters than this are flagged
 # as "partial" — almost always a meta-confirmation ("briefing delivered")
@@ -104,244 +117,6 @@ INIT_TIMEOUT_SECONDS = 60
 # breaker; this guard would have stopped it at 5M.
 RUNAWAY_TOKEN_ALERT = 500_000
 RUNAWAY_TOKEN_HARD_CAP = 5_000_000
-
-
-class _StallWatchdog:
-    """Kills a run if no activity occurs for stall_timeout seconds.
-
-    Activity is tracked via touch() — call it on every LLM response,
-    tool completion, and sub-agent completion. A background task checks
-    every 30s and cancels the given asyncio.Task if idle too long.
-
-    If stall_timeout <= 0, the watchdog is disabled (no-op).
-    Hard timeout_seconds is kept as an absolute safety net.
-
-    Uses a cooperative abort flag in addition to task.cancel() because
-    asyncio task cancellation doesn't reliably propagate through all
-    async HTTP libraries (litellm/httpx).
-    """
-
-    # Touch descriptions that indicate the model has actually started
-    # producing work. Setup/warmup signals don't count — those happen
-    # before any LLM round-trip.
-    _OUTPUT_TOUCH_PREFIXES: tuple[str, ...] = (
-        "llm_response",
-        "stream_text",
-        "stream_tool",
-        "tool:",
-    )
-
-    def __init__(
-        self,
-        stall_timeout: int,
-        hard_timeout: int,
-        early_stall_timeout: int = 0,
-        tick_seconds: float = 30.0,
-    ) -> None:
-        self._stall_timeout = stall_timeout
-        self._hard_timeout = hard_timeout
-        # Background-loop tick interval. Default 30s — tests use a
-        # smaller value (e.g. 0.1) to avoid waiting for real wall-clock
-        # in the early-stall test suite.
-        self._tick_seconds = tick_seconds
-        # Pre-output stall window. Trips when this many seconds have
-        # passed AND no real progress signal has been seen. Fires even
-        # while the post-progress _stall_timeout is still being reset
-        # by warmup touches. 0 = disabled.
-        self._early_stall_timeout = early_stall_timeout
-        self._last_activity = time.monotonic()
-        self._last_activity_desc: str = "run_start"
-        self._task: asyncio.Task[None] | None = None
-        self._cancelled = False
-        self._abort_event = asyncio.Event()
-        self._abort_reason: str = ""
-        # Set True on the first touch() that names an output-bearing
-        # event (LLM response, stream chunk, tool completion). Setup
-        # touches like init_begin / warmup_complete / session_started
-        # do not flip this — they are explicitly excluded so the early-
-        # stall guard can fire while warmup keeps refreshing the
-        # last-activity timestamp.
-        self._saw_output_signal = False
-        # Set on start() so callers can compute "time since run began" even
-        # when the watchdog itself didn't trip (e.g. external cancellation).
-        self._start_time: float = time.monotonic()
-
-    def touch(self, description: str = "") -> None:
-        """Record activity — resets the stall timer.
-
-        Pass ``description`` to name the progress signal (e.g.
-        ``"llm_response:sonnet-4.6"`` or ``"tool:list_tasks"``) so the
-        stall abort reason can point at the last thing that worked.
-
-        Touches whose description matches an output-prefix
-        (`llm_response`, `stream_text`, `stream_tool`, `tool:`) also
-        flip the watchdog's "model started talking" flag, which clears
-        the early-stall guard. Setup/warmup touches do not flip it.
-        """
-        self._last_activity = time.monotonic()
-        if description:
-            self._last_activity_desc = description
-            if not self._saw_output_signal and description.startswith(self._OUTPUT_TOUCH_PREFIXES):
-                self._saw_output_signal = True
-
-    @property
-    def last_activity_desc(self) -> str:
-        return self._last_activity_desc
-
-    def start(self, monitored_task: asyncio.Task[Any]) -> None:
-        """Start the watchdog background loop."""
-        if self._stall_timeout <= 0 and self._hard_timeout <= 0 and self._early_stall_timeout <= 0:
-            return
-        self._start_time = time.monotonic()
-        self._task = asyncio.create_task(self._watch(monitored_task))
-
-    async def _watch(self, monitored_task: asyncio.Task[Any]) -> None:
-        try:
-            while not monitored_task.done():
-                await asyncio.sleep(self._tick_seconds)
-                if monitored_task.done():
-                    break
-                now = time.monotonic()
-                idle = now - self._last_activity
-                elapsed = now - self._start_time
-
-                # Hard timeout (absolute safety net — should almost
-                # never fire; stall detection is the primary mechanism)
-                if self._hard_timeout > 0 and elapsed > self._hard_timeout:
-                    logger.warning(
-                        "Stall watchdog: hard timeout (%ds) reached after %.0fs; last_activity=%s",
-                        self._hard_timeout,
-                        elapsed,
-                        self._last_activity_desc,
-                    )
-                    self._abort_reason = (
-                        f"Circuit-breaker hard timeout ({self._hard_timeout}s) "
-                        f"after {elapsed:.0f}s; last activity: {self._last_activity_desc}"
-                    )
-                    self._cancelled = True
-                    self._abort_event.set()
-                    monitored_task.cancel()
-                    return
-
-                # Early-stall detection — fires before any output has been
-                # produced. Specifically targets the "warmup completes →
-                # silence" wedge pattern that the post-progress stall can't
-                # see (warmup touches keep resetting `idle`). Safe alongside
-                # the save-gate: with no output, nothing can poison the next
-                # heartbeat session.
-                if (
-                    self._early_stall_timeout > 0
-                    and not self._saw_output_signal
-                    and elapsed > self._early_stall_timeout
-                ):
-                    logger.warning(
-                        "Stall watchdog: early stall (%ds) — no LLM output after %.0fs; "
-                        "last_activity=%s",
-                        self._early_stall_timeout,
-                        elapsed,
-                        self._last_activity_desc,
-                    )
-                    self._abort_reason = (
-                        f"Early stall: no LLM output after {elapsed:.0f}s "
-                        f"(threshold {self._early_stall_timeout}s); "
-                        f"last activity: {self._last_activity_desc}"
-                    )
-                    self._cancelled = True
-                    self._abort_event.set()
-                    monitored_task.cancel()
-                    return
-
-                # Stall detection (primary mechanism)
-                if self._stall_timeout > 0 and idle > self._stall_timeout:
-                    logger.warning(
-                        "Stall watchdog: no progress for %.0fs (limit %ds), killing run; last_activity=%s",
-                        idle,
-                        self._stall_timeout,
-                        self._last_activity_desc,
-                    )
-                    self._abort_reason = (
-                        f"No progress for {idle:.0f}s (stall limit {self._stall_timeout}s); "
-                        f"last activity: {self._last_activity_desc}"
-                    )
-                    self._cancelled = True
-                    self._abort_event.set()
-                    monitored_task.cancel()
-                    return
-        except asyncio.CancelledError:
-            pass
-
-    def stop(self) -> None:
-        """Stop the watchdog."""
-        if self._task and not self._task.done():
-            self._task.cancel()
-
-    @property
-    def should_abort(self) -> bool:
-        """Cooperative abort check — run loop checks this each iteration."""
-        return self._abort_event.is_set()
-
-    @property
-    def abort_reason(self) -> str:
-        """Why the watchdog triggered."""
-        return self._abort_reason
-
-    @property
-    def was_stall_timeout(self) -> bool:
-        return self._cancelled
-
-    @property
-    def elapsed_seconds(self) -> float:
-        """Seconds since start() was called (0 if never started)."""
-        return max(0.0, time.monotonic() - self._start_time)
-
-    @property
-    def idle_seconds(self) -> float:
-        """Seconds since the last touch() call."""
-        return max(0.0, time.monotonic() - self._last_activity)
-
-
-def _build_cancel_diagnostic(watchdog: _StallWatchdog, agent_id: str) -> str:
-    """Capture asyncio context at the moment of an external cancellation.
-
-    Used to investigate the noon-storm symptom (multiple agents die at
-    `12:00:00.05–12:00:00.12` with `Run cancelled externally; last
-    activity: session_started`). Without context, the post-mortem is a
-    guess; with it, we can see whether something else is calling
-    `.cancel()` on the run task and what it is.
-
-    Returns a multi-line diagnostic string suitable for
-    ``agent_runs.error_traceback``.
-    """
-    lines: list[str] = []
-    try:
-        lines.append(f"agent_id={agent_id}")
-        lines.append(f"elapsed_since_start={watchdog.elapsed_seconds:.2f}s")
-        lines.append(f"idle_since_last_touch={watchdog.idle_seconds:.2f}s")
-        lines.append(f"last_activity={watchdog.last_activity_desc}")
-        try:
-            current = asyncio.current_task()
-            current_name = current.get_name() if current else "<no-current-task>"
-        except RuntimeError:
-            current_name = "<no-running-loop>"
-        lines.append(f"current_task={current_name}")
-        try:
-            alive = list(asyncio.all_tasks())
-        except RuntimeError:
-            alive = []
-        lines.append(f"alive_tasks_count={len(alive)}")
-        # Truncate to 20 task names — past that the dump is noise. Sort
-        # by name for stable output across runs.
-        names = sorted({t.get_name() for t in alive})[:20]
-        lines.extend(f"  task: {n}" for n in names)
-        # Walltime + pid help correlate with external events (cron,
-        # systemd, daemon restart) that show up at the same instant.
-        from datetime import UTC, datetime
-
-        lines.append(f"walltime_utc={datetime.now(UTC).isoformat()}")
-        lines.append(f"pid={os.getpid()}")
-    except Exception as e:  # diagnostic must never raise
-        lines.append(f"diagnostic_error={e!r}")
-    return "\n".join(lines)
 
 
 if TYPE_CHECKING:
@@ -369,23 +144,12 @@ _SYSTEM_TRIGGER_TYPES = frozenset(
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
-# Register custom pricing for OpenRouter-routed models.
-# Without this, litellm.completion_cost() returns $0.00 for these models.
-# NOTE: max_tokens here is the MODEL's context window, not the output cap we request.
-litellm.register_model(
-    {
-        "openrouter/xiaomi/mimo-v2-pro": {
-            "max_tokens": 1000000,
-            "input_cost_per_token": 0.000001,  # $0.80/M
-            "output_cost_per_token": 0.000003,  # $2.56/M
-        },
-        "openrouter/anthropic/claude-sonnet-4.6": {
-            "max_tokens": 200000,
-            "input_cost_per_token": 0.000003,  # $3/M
-            "output_cost_per_token": 0.000015,  # $15/M
-        },
-    }
-)
+# Register custom pricing so litellm.completion_cost() prices our models.
+# Single-sourced from model_registry._MODEL_REGISTRY (G6) when Rip 17 is on;
+# otherwise the legacy two-model block, preserved inside the function.
+from robothor.engine.model_registry import register_pricing_with_litellm  # noqa: E402
+
+register_pricing_with_litellm()
 
 
 def _agent_holds_exec(config: AgentConfig) -> bool:
@@ -468,7 +232,7 @@ def _escalate_unfinished_todos(
     try:
         parent = dal.get_task(parent_task_id, tenant_id=effective_tenant)
     except Exception as e:
-        logger.warning("todo escalation: get_task failed for %s: %s", parent_task_id, e)
+        logger.warning("todo escalation: get_task failed for %s: %s", _sanitize(parent_task_id), e)
         return False
     if not parent:
         return False
@@ -527,7 +291,18 @@ class AgentRunner:
     def __init__(self, config: EngineConfig) -> None:
         self.config = config
         self.registry = get_registry()
-        self._active_watchdog: _StallWatchdog | None = None
+        # LLM dispatch/fallback/cost/streaming + message hygiene. Extracted
+        # from this class (Phase A / Slice 1); stateless across runs.
+        self._llm = LLMClient()
+
+    @property
+    def _active_watchdog(self) -> _StallWatchdog | None:
+        """The current task's stall watchdog (per-run, not per-singleton).
+
+        Read-only view over ``_active_watchdog_var`` so the existing touch sites
+        keep working unchanged; ``execute`` sets/resets the ContextVar directly.
+        """
+        return _active_watchdog_var.get()
 
     # ── Upgrade-plan hook points (Phase 0 foundation) ──────────────────
     # These two methods are no-ops by default. Future rips wire their
@@ -558,6 +333,15 @@ class AgentRunner:
         non-blocking and exception-safe — the caller suppresses
         exceptions to keep the loop alive.
         """
+        # G3 (Rip 9 wiring): drain any operator steer queued via
+        # interrupt_api.steer_session into the conversation so the next LLM
+        # call sees it. Injected as a *user* turn — never the system prompt —
+        # so the cached prefix stays intact (prompt-cache discipline).
+        steer = session.consume_pending_steer()
+        if steer:
+            session.messages.append({"role": "user", "content": f"[steer] {steer}"})
+            # A steer is a user turn too — count it for the memory-review nudge.
+            session._turns_since_memory += 1
 
     def _after_response_delivered(
         self,
@@ -712,14 +496,25 @@ class AgentRunner:
         # Previously the watchdog was only started after setup completed,
         # meaning a hang during warmup/adapter loading went undetected.
         stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        hard_timeout = agent_config.timeout_seconds if agent_config.timeout_seconds > 0 else None
+        # Absolute wall-clock ceiling. When an agent sets timeout_seconds=0
+        # ("no cap" — e.g. main's heartbeat/worker) it previously had NO hard
+        # bound, so a slow-but-not-stalled run could grind for 25–128 min
+        # (audit 2026-05-29). Fall back to a generous fleet ceiling instead of
+        # leaving it unbounded; one turn never legitimately needs this long.
+        effective_hard_timeout = agent_config.timeout_seconds
+        if effective_hard_timeout <= 0:
+            effective_hard_timeout = _fleet_wallclock_ceiling()
+        hard_timeout = effective_hard_timeout if effective_hard_timeout > 0 else None
         early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
         watchdog = _StallWatchdog(
             stall_timeout=stall_timeout,
-            hard_timeout=agent_config.timeout_seconds,
+            hard_timeout=effective_hard_timeout,
             early_stall_timeout=early_stall_timeout,
         )
-        self._active_watchdog = watchdog  # expose for touch() from tool handlers
+        # Bind the watchdog to THIS task's context (see _active_watchdog_var).
+        # Saved token is reset in the run-loop finally so a nested run restores
+        # the parent's watchdog instead of clobbering it.
+        _wd_token = _active_watchdog_var.set(watchdog)
 
         # Start watchdog immediately to cover setup phase
         _init_task = asyncio.current_task()
@@ -957,7 +752,7 @@ class AgentRunner:
                         _sanitize(agent_id),
                         _sanitize(journal_state.experiment_id),
                         journal_state.iteration,
-                        journal_state.next_action,
+                        _sanitize(journal_state.next_action),
                     )
             except Exception as e:
                 logger.warning(
@@ -1213,11 +1008,26 @@ class AgentRunner:
 
                 # Watchdog already started before setup phase (see above).
 
+                # Deferred tools (Rip 16 / G4): when this agent's toolset is
+                # deferred, tool_schemas above were reduced to core+meta. Record
+                # the agent's full allowed set so the tool_call meta-tool can
+                # reach (only) allowed tools on demand. No-op when deferral off.
+                _defer_token = None
+                if self.registry.should_defer(agent_config):
+                    from robothor.engine.tools.dispatch import set_deferred_allowed
+
+                    _defer_token = set_deferred_allowed(
+                        self.registry.deferred_whitelist(agent_config)
+                    )
+
                 # Register the live session so external callers (Telegram /steer,
-                # /chat/steer, /chat/interrupt) can influence it mid-run (Rip 9).
+                # /chat/steer, /chat/interrupt) can influence it mid-run — the
+                # loop-side consume is otherwise unreachable in production.
+                # Scoped to the loop window; always unregistered in the finally.
                 from robothor.engine import session_registry
 
                 session_registry.register(session)
+
                 try:
                     await self._run_loop(
                         session,
@@ -1238,8 +1048,16 @@ class AgentRunner:
                         on_stream_event=on_stream_event,
                     )
                 finally:
-                    session_registry.unregister(session)
+                    with contextlib.suppress(Exception):
+                        session_registry.unregister(session)
+                    if _defer_token is not None:
+                        from robothor.engine.tools.dispatch import clear_deferred_allowed
+
+                        with contextlib.suppress(Exception):
+                            clear_deferred_allowed(_defer_token)
                     watchdog.stop()
+                    with contextlib.suppress(Exception):
+                        _active_watchdog_var.reset(_wd_token)
                     # Cleanup sandbox if created
                     if sandbox:
                         try:
@@ -1675,12 +1493,22 @@ class AgentRunner:
                     {"role": "user", "content": f"[operator steering update]\n{_steer_text}"}
                 )
                 logger.info("Live steer injected into run %s", session.run_id)
+            # ── [INTERRUPT] Operator halt requested via interrupt_api (Rip 9 / G3) ──
+            # Consume any pending interrupt and stop the run gracefully: record a
+            # distinct terminal state (CANCELLED, not COMPLETED/FAILED, verifier
+            # skipped) AND an outcome note so the halt is visible. The message may
+            # be "" when the operator halted without text, or None if no interrupt.
             _interrupt_msg = session.consume_interrupt()
             if _interrupt_msg is not None:
-                note = _interrupt_msg or "Operator halted the run."
+                note = (
+                    f"Run interrupted by operator: {_interrupt_msg}"
+                    if _interrupt_msg
+                    else "Run interrupted by operator"
+                )
                 session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
-                # Record a distinct terminal state so the run is CANCELLED, not
-                # COMPLETED, and the verifier is skipped for the halted run.
+                session.run.outcome_notes = (
+                    f"{session.run.outcome_notes}; {note}" if session.run.outcome_notes else note
+                )
                 session.mark_interrupted(note)
                 logger.info("Run %s interrupted by operator", session.run_id)
                 return
@@ -1704,17 +1532,22 @@ class AgentRunner:
                     session.run_id,
                     _used_tokens,
                 )
-                # Fire-and-forget alert — don't block the stop path.
+                # Fire-and-forget alert — don't block the stop path. Use the task
+                # registry's spawn (not bare create_task, which the loop only
+                # weakly references and can GC before it runs — losing exactly
+                # the alert we can least afford to lose; audit 2026-05-29).
                 try:
                     from robothor.engine.alerts import alert as _alert
+                    from robothor.engine.task_registry import get_task_registry
 
-                    asyncio.create_task(
+                    get_task_registry().spawn(
                         _alert(
                             "critical",
                             f"Runaway-token hard cap: {agent_config.id}",
                             f"run_id={session.run_id} tokens={_used_tokens:,} "
                             f"model={session.run.model_used}",
-                        )
+                        ),
+                        name=f"runaway-hardcap-alert:{agent_config.id}",
                     )
                 except Exception:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
@@ -1731,15 +1564,17 @@ class AgentRunner:
                 )
                 try:
                     from robothor.engine.alerts import alert as _alert
+                    from robothor.engine.task_registry import get_task_registry
 
-                    asyncio.create_task(
+                    get_task_registry().spawn(
                         _alert(
                             "warning",
                             f"Runaway-token alert: {agent_config.id}",
                             f"run_id={session.run_id} tokens={_used_tokens:,} "
                             f"(hard cap at {RUNAWAY_TOKEN_HARD_CAP:,}) "
                             f"model={session.run.model_used}",
-                        )
+                        ),
+                        name=f"runaway-alert:{agent_config.id}",
                     )
                 except Exception:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
@@ -1836,7 +1671,11 @@ class AgentRunner:
                     from robothor.engine.model_registry import get_model_limits
 
                     est_tokens = estimate_tokens(session.messages)
-                    model_limits = get_model_limits(models[0])
+                    # G2b: size against the model that will actually be tried
+                    # next (first non-broken), not the configured primary —
+                    # otherwise a run on a smaller-window fallback compacts at
+                    # the primary's (larger) threshold and can overflow.
+                    model_limits = get_model_limits(LLMClient.sizing_model(models, broken_models))
                     proactive_threshold = int(model_limits.max_input_tokens * 0.50)
                     if est_tokens > proactive_threshold:
                         pre_len = len(session.messages)
@@ -2102,6 +1941,8 @@ class AgentRunner:
                                     if scratchpad:
                                         scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                                     continue
+                            elif agent_config.human_approval_fail_open:
+                                pass  # opted-in unattended autonomy: auto-approve
                             else:
                                 # No approver reachable. Legacy behavior auto-
                                 # approves; ROBOTHOR_APPROVAL_* makes this fail
@@ -2272,6 +2113,7 @@ class AgentRunner:
                             tool_name,
                             tool_args,
                             agent_id=agent_config.id,
+                            run_id=session.run.id,
                             tenant_id=session.run.tenant_id,
                             workspace=str(self.config.workspace),
                             user_id=session.run.user_id,
@@ -2286,6 +2128,7 @@ class AgentRunner:
                         tool_name,
                         tool_args,
                         agent_id=agent_config.id,
+                        run_id=session.run.id,
                         tenant_id=session.run.tenant_id,
                         workspace=str(self.config.workspace),
                         user_id=session.run.user_id,
@@ -2962,47 +2805,12 @@ class AgentRunner:
 
         return response, model_used, elapsed_ms, msg_dict
 
-    def _response_cost(
-        self,
-        *,
-        response: Any,
-        model_used: str,
-        models: list[str],
-        input_tokens: int,
-        output_tokens: int,
-        cache_creation_tokens: int,
-        cache_read_tokens: int,
-    ) -> float:
-        """Compute the USD cost for one LLM response.
+    # ── LLM dispatch / cost — extracted to llm_client.LLMClient (Slice 1) ──
+    # Thin delegators preserve the historical AgentRunner method surface for
+    # existing call sites and tests; implementations live on ``self._llm``.
 
-        codex/* models are subscription-billed; litellm cannot price them
-        (it doesn't recognize the provider prefix) and raises on every call,
-        spamming the log. Those are priced from the registry ($0) with the
-        litellm call skipped entirely. Every other model keeps the original
-        litellm-first, registry-fallback behavior — including the fallback
-        case where codex failed over to an OpenRouter model.
-        """
-        if is_codex_model(model_used):
-            return self._calculate_cost(
-                model_used,
-                input_tokens,
-                output_tokens,
-                cache_creation_tokens,
-                cache_read_tokens,
-            )
-        try:
-            cost = litellm.completion_cost(completion_response=response, model=models[0])
-            if cost and cost > 0:
-                return cost
-        except Exception as e:
-            logger.warning("litellm cost calculation failed, using fallback: %s", e)
-        return self._calculate_cost(
-            models[0],
-            input_tokens,
-            output_tokens,
-            cache_creation_tokens,
-            cache_read_tokens,
-        )
+    def _response_cost(self, **kwargs: Any) -> float:
+        return self._llm._response_cost(**kwargs)
 
     def _calculate_cost(
         self,
@@ -3012,31 +2820,8 @@ class AgentRunner:
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
     ) -> float:
-        """Calculate cost from litellm model registry, with cache-aware pricing."""
-        info = litellm.model_cost.get(model, {})
-        input_rate: float = info.get("input_cost_per_token", 0.0)
-        output_rate: float = info.get("output_cost_per_token", 0.0)
-
-        # Use our registry for cache pricing (litellm doesn't expose these yet)
-        from robothor.engine.model_registry import get_model_limits
-
-        limits = get_model_limits(model)
-        cache_write_rate = limits.cache_write_cost_per_token or input_rate
-        cache_read_rate = limits.cache_read_cost_per_token or (input_rate * 0.1)
-
-        # Coerce to int to guard against MagicMock or None from test mocks
-        input_tokens = int(input_tokens or 0)
-        output_tokens = int(output_tokens or 0)
-        cache_creation_tokens = int(cache_creation_tokens or 0)
-        cache_read_tokens = int(cache_read_tokens or 0)
-
-        # Non-cached input = total input minus tokens that were cache hits
-        regular_input = max(0, input_tokens - cache_read_tokens)
-        return (
-            regular_input * input_rate
-            + output_tokens * output_rate
-            + cache_creation_tokens * cache_write_rate
-            + cache_read_tokens * cache_read_rate
+        return self._llm._calculate_cost(
+            model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
         )
 
     async def _do_llm_call(
@@ -3049,23 +2834,14 @@ class AgentRunner:
         temperature: float,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
-        """Dispatch to streaming or non-streaming LLM call."""
-        if on_content or on_stream_event:
-            return await self._call_llm_streaming(
-                session.messages,
-                models,
-                tool_schemas,
-                on_content,
-                broken_models=broken_models,
-                temperature=temperature,
-                on_stream_event=on_stream_event,
-            )
-        return await self._call_llm(
-            session.messages,
+        return await self._llm._do_llm_call(
+            session,
             models,
             tool_schemas,
-            broken_models=broken_models,
-            temperature=temperature,
+            on_content,
+            broken_models,
+            temperature,
+            on_stream_event=on_stream_event,
         )
 
     # ─── Error Recovery Helper ──────────────────────────────────────
@@ -3436,219 +3212,18 @@ class AgentRunner:
         self,
         messages: list[dict[str, Any]],
         models: list[str],
+        broken_models: set[str] | None = None,
     ) -> int:
-        """Shared pre-flight: compress context and estimate input tokens.
+        return await self._llm._prepare_llm_call(messages, models, broken_models)
 
-        Mutates messages in-place. Returns estimated input token count.
-        """
-        from robothor.engine.context import estimate_tokens, maybe_compress
-        from robothor.engine.model_registry import get_model_limits
+    # Pure-static helpers — aliased to the extracted implementations so
+    # ``AgentRunner._validate_tool_pairs(...)`` etc. keep resolving.
+    _validate_tool_pairs = staticmethod(LLMClient._validate_tool_pairs)
+    _guard_trailing_assistant = staticmethod(LLMClient._guard_trailing_assistant)
+    _build_llm_kwargs = staticmethod(LLMClient._build_llm_kwargs)
 
-        try:
-            model_limits = get_model_limits(models[0])
-            compress_threshold = int(model_limits.max_input_tokens * 0.75)
-            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
-        except Exception as e:
-            logger.warning("Pre-flight compression failed: %s", _sanitize(e))
-
-        return estimate_tokens(messages)
-
-    @staticmethod
-    def _validate_tool_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Drop orphaned tool messages whose tool_call_id has no matching tool_use.
-
-        This is a defense-in-depth measure: if compaction, checkpoint restore,
-        or format conversion ever corrupts the message history, this prevents
-        cryptic "unexpected tool_use_id in tool_result blocks" API errors.
-        """
-        valid_ids: set[str] = set()
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                for tc in msg.get("tool_calls", []):
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    if tc_id:
-                        valid_ids.add(tc_id)
-
-        if not valid_ids:
-            return messages  # no tool calls at all — nothing to validate
-
-        cleaned: list[dict[str, Any]] = []
-        dropped = 0
-        for msg in messages:
-            if msg.get("role") == "tool" and msg.get("tool_call_id") not in valid_ids:
-                dropped += 1
-                continue
-            cleaned.append(msg)
-
-        if dropped:
-            logger.warning(
-                "Dropped %d orphaned tool_result message(s) — "
-                "no matching tool_use in assistant messages",
-                dropped,
-            )
-
-        return cleaned if dropped else messages
-
-    @staticmethod
-    def _guard_trailing_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Drop a trailing assistant message before an LLM call.
-
-        OpenRouter-proxied Anthropic (via Azure/Google) rejects requests whose
-        final message is an assistant turn with:
-            "This model does not support assistant message prefill.
-             The conversation must end with a user message."
-
-        A trailing assistant normally indicates an orphaned turn — e.g. a prior
-        run's response that was carried into history without its follow-up, or
-        a checkpoint restored after a user turn was lost. Drop it so the LLM
-        call can proceed.
-        """
-        if messages and messages[-1].get("role") == "assistant":
-            logger.warning(
-                "Dropping trailing assistant message before LLM call (prefill-rejection guard)"
-            )
-            return messages[:-1]
-        return messages
-
-    @staticmethod
-    def _build_llm_kwargs(
-        model: str,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        input_est: int,
-        temperature: float,
-        *,
-        stream: bool = False,
-    ) -> dict[str, Any]:
-        """Build kwargs dict for litellm.acompletion."""
-        from robothor.engine.model_registry import get_model_limits, get_output_tokens
-
-        limits = get_model_limits(model)
-        actual_model = model
-
-        # For direct Anthropic API models, enable prompt caching on the system
-        # message by converting it to content-block format with cache_control.
-        # OpenRouter models (e.g. "openrouter/anthropic/claude-sonnet-4-6") must
-        # NOT get this conversion — litellm sends them via the OpenAI-compatible
-        # path and the mixed format causes tool_use/tool_result pairing failures.
-        is_direct_anthropic = model.startswith("anthropic/")
-        if is_direct_anthropic and messages and messages[0].get("role") == "system":
-            messages = list(messages)  # shallow copy to avoid mutating original
-            sys_content = messages[0].get("content")
-            if isinstance(sys_content, str):
-                sys_msg = dict(messages[0])
-                # Split into static (cacheable) + dynamic (time context) blocks.
-                # The dynamic tail starts at the last "---" separator before "Current time:".
-                split_marker = "\n\n---\n\nCurrent time:"
-                split_idx = sys_content.rfind(split_marker)
-                if split_idx > 0:
-                    static_part = sys_content[:split_idx]
-                    dynamic_part = sys_content[split_idx + len("\n\n---\n\n") :]
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": static_part,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "text",
-                            "text": dynamic_part,
-                        },
-                    ]
-                else:
-                    # Fallback: cache the whole thing (no time context found)
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": sys_content,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
-                messages[0] = sys_msg
-
-        # Defense in depth: drop orphaned tool_result messages that would
-        # cause "unexpected tool_use_id" API errors.
-        messages = AgentRunner._validate_tool_pairs(messages)
-
-        # Defense in depth: drop a trailing assistant message, which OpenRouter-
-        # proxied Anthropic rejects with "model does not support prefill".
-        messages = AgentRunner._guard_trailing_assistant(messages)
-
-        kwargs: dict[str, Any] = {
-            "model": actual_model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": get_output_tokens(model, input_est),
-            "timeout": (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
-            ),
-        }
-        # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
-        # backend. OpenRouter's default load-balancing also fans out to Google
-        # Vertex and Amazon Bedrock, both of which reject assistant-prefill
-        # ("This model does not support assistant message prefill") and
-        # ephemeral-cache_control content blocks. Anthropic-direct supports
-        # both. allow_fallbacks=False means an Anthropic outage falls through
-        # to our existing model_fallbacks chain (MiMo, DeepSeek, etc.) rather
-        # than silently routing to a less-compatible backend.
-        if model.startswith("openrouter/anthropic/"):
-            kwargs["extra_body"] = {
-                "provider": {
-                    "order": ["Anthropic"],
-                    "allow_fallbacks": False,
-                }
-            }
-        if stream:
-            kwargs["stream"] = True
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-        if limits.supports_thinking:
-            from robothor.engine.model_registry import current_thinking_budget
-
-            kwargs["temperature"] = 1.0  # Required by Anthropic API
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": current_thinking_budget(),
-            }
-        return kwargs
-
-    @staticmethod
-    def _handle_model_error(
-        e: Exception,
-        model: str,
-        broken_models: set[str] | None,
-        *,
-        streaming: bool = False,
-    ) -> None:
-        """Handle model failure: mark broken or log warning."""
-        status = getattr(e, "status_code", None)
-        is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
-        # Mark broken for auth, rate limit, provider failures, and timeouts
-        if broken_models is not None and (
-            status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout
-        ):
-            # First model to fail = primary model — log at ERROR for visibility
-            is_primary = len(broken_models) == 0
-            broken_models.add(model)
-            reason = "timeout" if is_timeout else str(status)
-            if is_primary:
-                logger.error(
-                    "PRIMARY model %s failed (%s), falling back — primary_model_fallback=True",
-                    _sanitize(model),
-                    _sanitize(reason),
-                )
-            else:
-                logger.warning(
-                    "Model %s failed (%s), removing from rotation for this run",
-                    _sanitize(model),
-                    _sanitize(reason),
-                )
-        else:
-            suffix = " (streaming)" if streaming else ""
-            logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))
+    # Pure-static helper — aliased to the extracted implementation.
+    _handle_model_error = staticmethod(LLMClient._handle_model_error)
 
     async def _call_llm(
         self,
@@ -3658,59 +3233,9 @@ class AgentRunner:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
     ) -> Any:
-        """Call LLM with model fallback. Returns litellm response or None."""
-        input_est = await self._prepare_llm_call(messages, models)
-        last_error: Exception | None = None
-
-        logger.debug(
-            "LLM call with models: %s (broken: %s)",
-            _sanitize(models),
-            _sanitize(broken_models or set()),
+        return await self._llm._call_llm(
+            messages, models, tools, broken_models=broken_models, temperature=temperature
         )
-        for model in models:
-            if broken_models and model in broken_models:
-                continue
-            # Per-call timeout (seconds) — wraps each provider call so the
-            # runner cancels and falls through if the provider hangs. The
-            # `timeout` kwarg already passed to litellm is best-effort and
-            # was observed silently ignored, causing 1800s stalls against
-            # codex/gpt-5.5 in the 2026-05-28 incident.
-            per_call_timeout = (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
-            )
-            try:
-                kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                async with asyncio.timeout(per_call_timeout):
-                    if is_codex_model(model):
-                        result = await codex_acompletion(**kwargs)
-                    else:
-                        result = await litellm.acompletion(**kwargs)
-                return result
-            except TimeoutError as e:
-                logger.warning(
-                    "LLM call to %s exceeded %ds — cancelling and falling back",
-                    _sanitize(model),
-                    per_call_timeout,
-                )
-                self._handle_model_error(e, model, broken_models)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"model_fallback:{model}")
-            except Exception as e:
-                self._handle_model_error(e, model, broken_models)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"model_fallback:{model}")
-
-        logger.error(
-            "All models failed. Models: %s, broken: %s, last error: %s",
-            _sanitize(models),
-            _sanitize(broken_models or set()),
-            _sanitize(last_error),
-        )
-        return None
 
     async def _call_llm_streaming(
         self,
@@ -3722,172 +3247,65 @@ class AgentRunner:
         temperature: float = 0.3,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
-        """Call LLM with streaming. Returns reconstructed ModelResponse.
+        return await self._llm._call_llm_streaming(
+            messages,
+            models,
+            tools,
+            on_content,
+            broken_models=broken_models,
+            temperature=temperature,
+            on_stream_event=on_stream_event,
+        )
 
-        Emits structured events to ``on_stream_event`` if provided:
-        - ``{"type": "text_delta", "delta": "...", "accumulated": "..."}``
-        - ``{"type": "tool_use_start", "tool_name": "...", "call_id": "..."}``
-        - ``{"type": "tool_use_delta", "delta": "...", "call_id": "..."}``
-        - ``{"type": "usage", "input_tokens": N, "output_tokens": N}``
-        - ``{"type": "message_stop"}``
+    @staticmethod
+    def _check_primary_model_reached(run: AgentRun, agent_config: Any) -> None:
+        """Alert when a run answered on a fallback instead of the configured primary.
+
+        This is the single highest-leverage degradation detector: it turns an
+        invisible, fleet-wide silent fallback (codex-not-on-PATH, 2026-05-29)
+        into a per-run WARN + operator alert. Only fires for top-level runs that
+        actually produced a model answer and whose used model differs from the
+        manifest's primary.
         """
-        input_est = await self._prepare_llm_call(messages, models)
-        last_error: Exception | None = None
+        if agent_config is None or getattr(run, "parent_run_id", None):
+            return
+        primary = getattr(agent_config, "model_primary", "") or ""
+        used = run.model_used or ""
+        if not primary or not used:
+            return
+        if _normalize_model_id(used) == _normalize_model_id(primary):
+            return
 
-        async def _emit(event: dict[str, Any]) -> None:
-            if on_stream_event:
-                with contextlib.suppress(Exception):
-                    await on_stream_event(event)
+        logger.error(
+            "DEGRADED model: agent=%s ran on %s, not configured primary %s "
+            "— primary_model_unreached=True",
+            _sanitize(run.agent_id),
+            _sanitize(used),
+            _sanitize(primary),
+        )
+        note = f"Ran on fallback {used}, not primary {primary}"
+        run.outcome_notes = f"{run.outcome_notes}; {note}" if run.outcome_notes else note
 
-        for model in models:
-            if broken_models and model in broken_models:
-                continue
-            # Per-call timeout for the initial stream-creation await.
-            # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
-            # in the consumption loop below. See _call_llm for context.
-            per_call_timeout = (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
+        with contextlib.suppress(RuntimeError):
+            asyncio.get_running_loop()
+            from robothor.engine.alerts import alert as _alert
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                _alert(
+                    "warning",
+                    f"Primary model unreached: {run.agent_id}",
+                    f"Agent `{run.agent_id}` completed on fallback `{used}` instead of "
+                    f"its configured primary `{primary}`. The primary may be "
+                    f"misconfigured or unavailable.",
+                    metadata={
+                        "agent_id": run.agent_id,
+                        "model_used": used,
+                        "model_primary": primary,
+                    },
+                ),
+                name=f"primary-unreached-alert:{run.agent_id}",
             )
-            try:
-                kwargs = self._build_llm_kwargs(
-                    model, messages, tools, input_est, temperature, stream=True
-                )
-                if is_codex_model(model):
-                    async with asyncio.timeout(per_call_timeout):
-                        result = await codex_acompletion(**kwargs)
-                    content = str(result.choices[0].message.content or "")
-                    if on_content and content:
-                        await on_content(content)
-                    await _emit({"type": "text_delta", "delta": content, "accumulated": content})
-                    await _emit(
-                        {
-                            "type": "usage",
-                            "input_tokens": 0,
-                            "output_tokens": 0,
-                        }
-                    )
-                    await _emit({"type": "message_stop"})
-                    return result
-
-                stream_start = time.monotonic()
-                async with asyncio.timeout(per_call_timeout):
-                    stream = await litellm.acompletion(**kwargs)
-
-                chunks: list[Any] = []
-                accumulated_content = ""
-                has_tool_calls = False
-                ttft_logged = False
-                seen_tool_ids: set[str] = set()
-
-                # Consume stream with per-chunk timeout so stalled streams
-                # fall back to the next model instead of hanging the run.
-                chunk_iter = stream.__aiter__()
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(
-                            chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
-                        )
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
-                        logger.warning(
-                            "Stream stalled for %ds, aborting model=%s",
-                            STREAM_CHUNK_TIMEOUT,
-                            _sanitize(model),
-                        )
-                        raise TimeoutError(
-                            f"Stream stalled after {STREAM_CHUNK_TIMEOUT}s of no chunks"
-                        ) from None
-
-                    chunks.append(chunk)
-
-                    # Progress-based watchdog: only real content (text or
-                    # tool-call bytes) counts as activity. SSE keepalive
-                    # chunks and empty frames used to keep the watchdog
-                    # alive on dead streams — that was the 07:00/08:00
-                    # failure mode (900s of pings, 0 tokens, hard-killed).
-                    if not chunk.choices:
-                        # Check for usage in non-choice chunks (some providers)
-                        usage = getattr(chunk, "usage", None)
-                        if usage:
-                            await _emit(
-                                {
-                                    "type": "usage",
-                                    "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                                    "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                                }
-                            )
-                        continue
-                    delta = chunk.choices[0].delta
-                    if getattr(delta, "content", None):
-                        if not ttft_logged:
-                            ttft_ms = int((time.monotonic() - stream_start) * 1000)
-                            logger.info("TTFT %dms model=%s", ttft_ms, _sanitize(model))
-                            ttft_logged = True
-                        accumulated_content += delta.content
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"stream_text:{model}")
-                        await _emit(
-                            {
-                                "type": "text_delta",
-                                "delta": delta.content,
-                                "accumulated": accumulated_content,
-                            }
-                        )
-                        if not has_tool_calls and on_content:
-                            with contextlib.suppress(Exception):
-                                await on_content(accumulated_content)
-                    if getattr(delta, "tool_calls", None):
-                        has_tool_calls = True
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"stream_tool_call:{model}")
-                        for tc in delta.tool_calls:
-                            tc_id = getattr(tc, "id", None)
-                            tc_fn = getattr(tc, "function", None)
-                            if tc_id and tc_id not in seen_tool_ids:
-                                seen_tool_ids.add(tc_id)
-                                await _emit(
-                                    {
-                                        "type": "tool_use_start",
-                                        "tool_name": getattr(tc_fn, "name", "") if tc_fn else "",
-                                        "call_id": tc_id,
-                                    }
-                                )
-                            if tc_fn and getattr(tc_fn, "arguments", None):
-                                await _emit(
-                                    {
-                                        "type": "tool_use_delta",
-                                        "delta": tc_fn.arguments,
-                                        "call_id": tc_id or "",
-                                    }
-                                )
-
-                await _emit({"type": "message_stop"})
-                # Final progress tick — we have a complete response to return.
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_complete:{model}")
-                return litellm.stream_chunk_builder(chunks)
-            except TimeoutError as te:
-                self._handle_model_error(
-                    te,
-                    model,
-                    broken_models,
-                    streaming=True,
-                )
-                last_error = te
-                # Model rotation is activity — don't let watchdog kill us mid-fallback
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_timeout_fallback:{model}")
-            except Exception as e:
-                self._handle_model_error(e, model, broken_models, streaming=True)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_error_fallback:{model}")
-
-        logger.error("All models failed (streaming). Last error: %s", last_error)
-        return None
 
     def _finish_run(
         self,
@@ -3913,6 +3331,15 @@ class AgentRunner:
                 check_post_run(run, agent_config, tenant_id=getattr(run, "tenant_id", ""))
             except Exception as e:
                 logger.warning("post-run guardrail error: %s", _sanitize(e))
+
+        # ── [OBSERVABILITY] Configured-primary-not-reached detector ──────
+        # A run that completes on a fallback model looks identical to a healthy
+        # run in the DB, so a dead primary (e.g. codex/gpt-5.5 missing from the
+        # engine PATH) can degrade the whole fleet silently. Emit a loud signal
+        # whenever the model that actually answered isn't the configured
+        # primary. Sub-agent runs inherit the parent's models, so skip them.
+        with contextlib.suppress(Exception):
+            self._check_primary_model_reached(run, agent_config)
 
         # ── Phase 0 hook: post-response extension point ──────────────
         # No-op by default; future rips spawn background reviews

@@ -109,3 +109,42 @@ class TestCuratorResult:
             proposed_demote=["e", "f", "g"],
         )
         assert result.total_actions() == 6
+
+
+# ─── spawn_curator + persistence (Phase 3 wiring) ───────────────────
+
+
+class TestCuratorOrchestration:
+    def test_spawn_curator_skips_when_no_candidates(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from robothor.engine.curator import spawn_curator
+
+        with patch("robothor.engine.curator.list_curator_candidates", return_value=([], [], [])):
+            result = asyncio.run(spawn_curator(scheduler=object()))
+        assert result == {"status": "skipped", "reason": "no_candidates"}
+
+    def test_last_pass_round_trip(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import load_curator_last_pass, store_curator_last_pass
+
+        store: dict[str, str] = {}
+
+        def _read(name, tenant_id="t"):
+            return {"content": store.get(name, "")} if name in store else {"error": "missing"}
+
+        def _write(name, content, tenant_id="t"):
+            store[name] = content
+            return {"success": True}
+
+        when = datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
+        with (
+            patch("robothor.memory.blocks.read_block", side_effect=_read),
+            patch("robothor.memory.blocks.write_block", side_effect=_write),
+        ):
+            assert load_curator_last_pass() is None  # nothing stored
+            store_curator_last_pass(when)
+            got = load_curator_last_pass()
+        assert got == when

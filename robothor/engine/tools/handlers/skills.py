@@ -304,13 +304,14 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     # consolidated; background-review-fork writes are explicitly
     # opt-in to curator management.
     from robothor.engine.skill_provenance import (
-        BACKGROUND_REVIEW,
         get_current_write_origin,
+        is_agent_authored_origin,
     )
 
     origin = get_current_write_origin()
     meta["write_origin"] = origin
-    meta["is_agent_created"] = origin == BACKGROUND_REVIEW
+    # Both the review fork and the curator are agent-authored (curator-eligible).
+    meta["is_agent_created"] = is_agent_authored_origin(origin)
 
     write_skill_meta(name, meta)
 
@@ -328,6 +329,45 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         "write_origin": origin,
         "is_agent_created": meta["is_agent_created"],
     }
+
+
+@_handler("skill_archive")
+async def _skill_archive(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Move an agent-created skill to agents/skills/.archive/ — reversible retirement.
+
+    The curator's only destructive action (Rip 5). Refuses pinned and operator-
+    authored skills. Content-preserving (a move, not a delete), so a wrongly
+    archived skill is recovered by moving it back.
+    """
+    import shutil
+
+    import robothor.engine.skills as _skills_mod
+    from robothor.engine.skills import _skills_dir, read_skill_meta
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+
+    skills_dir = _skills_dir()
+    src = (skills_dir / name).resolve()
+    if not src.is_relative_to(skills_dir.resolve()) or not src.is_dir():
+        return {"error": f"Skill '{name}' not found"}
+
+    meta = read_skill_meta(name) or {}
+    if meta.get("pinned"):
+        return {"error": f"Skill '{name}' is pinned — archive refused"}
+    if not (meta.get("is_agent_created") or meta.get("auto_generated")):
+        return {"error": f"Skill '{name}' is operator-authored — archive refused"}
+
+    archive_dir = skills_dir / ".archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    dest = archive_dir / name
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.move(str(src), str(dest))
+    _skills_mod._skills_cache = None  # hot-reload picks up the removal
+    logger.info("Skill '%s' archived to %s by '%s'", name, dest, ctx.agent_id)
+    return {"archived": name, "path": str(dest)}
 
 
 @_handler("update_skill")

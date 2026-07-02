@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -14,6 +16,8 @@ from models import (  # noqa: TC002 — used at runtime by FastAPI
 
 from robothor.audit.logger import log_event
 from robothor.db.connection import get_connection
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -96,7 +100,8 @@ async def get_memory_block(block_name: str):
             return JSONResponse({"error": result["error"]}, status_code=404)
         return result
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Failed to read memory block: %s", e)
+        return JSONResponse({"error": "internal error"}, status_code=500)
 
 
 @router.put("/blocks/{block_name}")
@@ -114,7 +119,8 @@ async def put_memory_block(block_name: str, body: MemoryBlockWriteRequest):
             )
         return result
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Failed to write memory block: %s", e)
+        return JSONResponse({"error": "internal error"}, status_code=500)
 
 
 @router.post("/blocks/{block_name}/append")
@@ -132,7 +138,8 @@ async def append_memory_block(
             return {"success": True, "block_name": block_name}
         return JSONResponse({"error": "failed to append"}, status_code=500)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Failed to append to memory block: %s", e)
+        return JSONResponse({"error": "internal error"}, status_code=500)
 
 
 # ─── Pipeline Status & Trigger ─────────────────────────────────────────
@@ -179,7 +186,8 @@ async def pipeline_status():
             ]
             return {"watermarks": watermarks, "recent_runs": runs}
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Failed to get pipeline status: %s", e)
+        return JSONResponse({"error": "internal error"}, status_code=500)
 
 
 @router.post("/pipeline/trigger/{tier}")
@@ -215,4 +223,5 @@ async def pipeline_trigger(tier: int):
         )
         return {"status": "triggered", "tier": tier, "pid": proc.pid}
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception("Failed to trigger pipeline: %s", e)
+        return JSONResponse({"error": "internal error"}, status_code=500)

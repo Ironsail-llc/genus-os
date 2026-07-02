@@ -17,6 +17,7 @@ Usage (from daemon.py autodream loop):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -190,6 +191,17 @@ def _update_memory_block(results: dict[str, Any], mode: str) -> None:
         ]
         if results.get("importance_scores_updated"):
             lines.append(f"  Importance re-scored: {results['importance_scores_updated']}")
+        wc = results.get("working_context")
+        if wc:
+            lines.append(
+                f"  working_context refreshed: {wc.get('tasks', 0)} tasks, "
+                f"{wc.get('facts', 0)} facts, {wc.get('intents', 0)} intents"
+            )
+        pr = results.get("preferences")
+        if pr:
+            lines.append(
+                f"  preferences: +{pr.get('new', 0)} new, {pr.get('reinforced', 0)} reinforced"
+            )
         write_block("autodream_log", "\n".join(lines))
     except Exception as e:
         logger.debug("Failed to update autodream_log block: %s", e)
@@ -255,6 +267,23 @@ async def run_autodream(mode: str = "idle") -> dict[str, Any]:
             # Step 3: Discover cross-domain insights
             insights = await discover_cross_domain_insights(hours_back=72)
             results["insights_discovered"] = len(insights)
+
+        # Step 4: Refresh the live working_context snapshot (replaces stale
+        # content with today's open tasks + recent high-signal facts + intents).
+        try:
+            from robothor.memory.working_context import refresh_working_context
+
+            results["working_context"] = await asyncio.to_thread(refresh_working_context)
+        except Exception as e:  # noqa: BLE001 — best-effort hygiene
+            logger.warning("autoDream working_context refresh failed: %s", e)
+
+        # Step 5: Mine recent facts for durable operator preferences.
+        try:
+            from robothor.memory.preferences import extract_preferences_from_facts
+
+            results["preferences"] = await extract_preferences_from_facts(hours_back=168)
+        except Exception as e:  # noqa: BLE001 — best-effort hygiene
+            logger.warning("autoDream preference extraction failed: %s", e)
 
     except Exception as e:
         error_msg = str(e)

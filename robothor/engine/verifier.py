@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 
 import litellm
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CRITERIA = "Task completed successfully without errors."
@@ -93,7 +95,11 @@ async def verify_output(
                 suggestions=data.get("suggestions", []),
             )
         except Exception as e:
-            logger.debug("Verification failed with model %s: %s", m, str(e).replace("\n", "\\n"))
+            logger.debug(
+                "Verification failed with model %s: %s",
+                sanitize_log(m),
+                sanitize_log(str(e)),
+            )
             continue
 
     # If all models fail, pass by default (non-fatal)

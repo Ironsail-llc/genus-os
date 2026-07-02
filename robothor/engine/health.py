@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import TriggerType
+from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -243,7 +244,7 @@ def create_health_app(
             }
         except Exception as e:
             logger.warning("Failed to load buddy ratings: %s", e)
-            return {"agents": [], "error": str(e)}
+            return {"agents": [], "error": "internal error"}
 
     @app.get("/api/buddy/reviews")
     async def buddy_reviews(limit: int = 50, agent_id: str | None = None) -> dict[str, Any]:
@@ -296,7 +297,7 @@ def create_health_app(
             }
         except Exception as e:
             logger.warning("Failed to load buddy reviews: %s", e)
-            return {"reviews": [], "error": str(e)}
+            return {"reviews": [], "error": "internal error"}
 
     @app.get("/api/buddy/findings")
     async def buddy_findings() -> dict[str, Any]:
@@ -362,7 +363,7 @@ def create_health_app(
             }
         except Exception as e:
             logger.warning("Failed to load buddy findings: %s", e)
-            return {"summary": {}, "findings": {}, "error": str(e)}
+            return {"summary": {}, "findings": {}, "error": "internal error"}
 
     @app.get("/api/buddy/verifications")
     async def buddy_verifications() -> dict[str, Any]:
@@ -414,7 +415,7 @@ def create_health_app(
             return {"verifications": out}
         except Exception as e:
             logger.warning("Failed to load buddy verifications: %s", e)
-            return {"verifications": [], "error": str(e)}
+            return {"verifications": [], "error": "internal error"}
 
     @app.get("/api/buddy/loop-health")
     async def buddy_loop_health(
@@ -479,7 +480,7 @@ def create_health_app(
             )
         except Exception as e:
             logger.warning("loop-health: list_tasks failed: %s", e)
-            return {"error": str(e)}
+            return {"error": "internal error"}
 
         # 1) Open breach count by day
         open_cutoff = now - timedelta(days=open_window_days)
@@ -580,8 +581,8 @@ def create_health_app(
             reviews = get_reviews(agent_id, days=days)
             return {"agentId": agent_id, "reviews": reviews}
         except Exception as e:
-            logger.warning("Failed to load reviews for %s: %s", agent_id, e)
-            return {"agentId": agent_id, "reviews": [], "error": str(e)}
+            logger.warning("Failed to load reviews for %s: %s", sanitize_log(agent_id), e)
+            return {"agentId": agent_id, "reviews": [], "error": "internal error"}
 
     @app.get("/api/reviews/{agent_id}/summary")
     async def api_review_summary(agent_id: str, days: int = 30) -> dict[str, Any]:
@@ -593,8 +594,8 @@ def create_health_app(
             summary = get_review_summary(agent_id, days=days)
             return {"agentId": agent_id, **summary}
         except Exception as e:
-            logger.warning("Failed to load review summary for %s: %s", agent_id, e)
-            return {"agentId": agent_id, "count": 0, "error": str(e)}
+            logger.warning("Failed to load review summary for %s: %s", sanitize_log(agent_id), e)
+            return {"agentId": agent_id, "count": 0, "error": "internal error"}
 
     @app.get("/api/kairos/dreams")
     async def kairos_dreams(limit: int = 10) -> dict[str, Any]:
@@ -808,9 +809,9 @@ def create_health_app(
                     """
                 )
                 rows = cur.fetchall()
-        except Exception as e:
+        except Exception:
             logger.exception("timeouts_last_24h query failed")
-            return {"error": f"query failed: {e}"}
+            return {"error": "query failed"}
 
         categories: list[dict[str, Any]] = []
         uncategorized = 0
@@ -1264,7 +1265,7 @@ def create_health_app(
                     agent_config=agent_config,
                 )
             except Exception:
-                logger.exception("Manual trigger of %s failed", agent_id)
+                logger.exception("Manual trigger of %s failed", sanitize_log(agent_id))
 
         asyncio.create_task(_go())
         return {"status": "started", "agent_id": agent_id}

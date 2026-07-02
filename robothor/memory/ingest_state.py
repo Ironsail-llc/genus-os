@@ -64,6 +64,31 @@ def is_already_ingested(
         return matches
 
 
+def get_ingested_count(source: str, item_id: str, tenant_id: str | None = None) -> int:
+    """Return the integer watermark stored for (source, item_id), else 0.
+
+    Reused by conversation ingestion to extract only NEW turns since last time:
+    the incremental path stores ``str(message_count)`` in the content_hash
+    field, so a numeric value reads back as the last-ingested count and a real
+    SHA-256 hash (non-numeric) reads back as 0.
+    """
+    tid = tenant_id or DEFAULT_TENANT
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT content_hash FROM ingested_items "
+            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s",
+            (tid, source, item_id),
+        )
+        row = cur.fetchone()
+    if not row or row[0] is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def record_ingested(
     source: str,
     item_id: str,

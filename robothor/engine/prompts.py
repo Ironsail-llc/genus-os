@@ -21,7 +21,8 @@ BEHAVIORAL_RULES = """\
 10. **Preserve existing patterns** — match the conventions, style, and architecture of the existing codebase. Don't refactor code you weren't asked to change.
 11. **Verify before declaring done** — after making changes, confirm they work (run tests, check output, read the result). Don't assume success.
 12. **Minimize tool calls** — be efficient. Batch related operations. Don't make redundant calls for information you already have.
-13. **Be explicit over implicit** — when in doubt, state your reasoning and assumptions. If you're unsure about intent, ask rather than guess."""
+13. **Be explicit over implicit** — when in doubt, state your reasoning and assumptions. If you're unsure about intent, ask rather than guess.
+14. **Consult memory for current state** — before answering about a person, project, alert, or open item, check memory (`search_memory` / `get_entity`) for the freshest facts. The latest confirmation or resolution is the source of truth — don't rely on a stale assumption or an earlier framing of the same thing."""
 
 # ─── Plan Mode Instructions (sandwich pattern) ──────────────────────
 # Preamble goes BEFORE the system prompt so the LLM reads constraints first,

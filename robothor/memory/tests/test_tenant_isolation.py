@@ -11,8 +11,13 @@ from unittest.mock import MagicMock, patch
 
 
 def _run(coro):
-    """Helper to run async functions in sync tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Helper to run async functions in sync tests.
+
+    Uses asyncio.run (a fresh loop per call) rather than get_event_loop(), which
+    raises 'no current event loop' on 3.12 once an earlier test in the suite has
+    closed the main-thread loop — making this file order-dependent in CI.
+    """
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -70,12 +75,15 @@ def test_search_facts_isolates_tenants(mock_llm, mock_get_conn):
     # Search as tenant_a
     _run(search_facts("Alice", tenant_id="tenant_a"))
 
-    # Verify tenant_id was passed to the SQL query
+    # Verify tenant_id was passed to the SQL query. search_facts issues some
+    # session-tuning statements first (SET LOCAL hnsw.*), so scan all execute
+    # calls for the tenant-scoped query rather than assuming it is the first.
     calls = mock_cur.execute.call_args_list
     assert len(calls) > 0
-    # The vector search query should contain tenant_a
-    sql_params = calls[0][0][1]  # second positional arg = params tuple
-    assert "tenant_a" in sql_params, f"tenant_a not found in SQL params: {sql_params}"
+    all_params = [c[0][1] for c in calls if len(c[0]) > 1 and isinstance(c[0][1], (tuple, list))]
+    assert any("tenant_a" in p for p in all_params), (
+        f"tenant_a not found in any SQL params: {all_params}"
+    )
 
 
 # ---------------------------------------------------------------------------

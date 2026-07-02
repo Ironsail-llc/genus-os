@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import SpawnContext
+from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -78,7 +79,7 @@ def _build_parent_context_block(parent_task_id: str, tenant_id: str = "") -> str
             get_task(parent_task_id, tenant_id=tenant_id) if tenant_id else get_task(parent_task_id)
         )
     except Exception as e:
-        logger.warning("Failed to load parent task %s: %s", parent_task_id, e)
+        logger.warning("Failed to load parent task %s: %s", sanitize_log(parent_task_id), e)
         return None
     if not task:
         return None
@@ -222,7 +223,7 @@ async def _handle_spawn_agent(
 
     # Namespaced dedup key — includes message hash so the same agent can be
     # spawned multiple times with different messages (wide research pattern)
-    msg_hash = hashlib.md5(message.encode()).hexdigest()[:8]
+    msg_hash = hashlib.sha256(message.encode()).hexdigest()[:8]
     dedup_key = f"sub:{spawn_ctx.parent_run_id}:{child_agent_id}:{msg_hash}"
     from robothor.engine.dedup import release, try_acquire
 

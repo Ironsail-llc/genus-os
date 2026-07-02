@@ -8,6 +8,11 @@ const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 30;
 const errorLog: number[] = [];
 
+// Remove line terminators so a user-supplied value cannot forge or break a log
+// entry (log-injection guard). Applied to the final assembled log line, which
+// is the value that actually reaches console.error.
+  const sanitizeLogLine = (s: string) => s.replace(/[\r\n\u2028\u2029]/g, " ");
+ 
 export async function POST(req: Request) {
   // Simple rate limit to prevent log spam
   const now = Date.now();
@@ -27,10 +32,13 @@ export async function POST(req: Request) {
     const details = body.details ? JSON.stringify(body.details).slice(0, 1000) : "";
     const status = body.status ? String(body.status) : "";
 
-    // Log to stdout → journalctl with structured prefix for easy grep
-    console.error(
-      `[dashboard-error] source=${source}${status ? ` status=${status}` : ""} | ${message}${details ? ` | ${details}` : ""}`
-    );
+    // Build the line, then sanitize the whole thing before logging.
+    const line =
+      `[dashboard-error] source=${source}` +
+      (status ? ` status=${status}` : "") +
+      ` | ${message}` +
+      (details ? ` | ${details}` : "");
+    console.error(sanitizeLogLine(line));
 
     return new Response(null, { status: 204 });
   } catch {

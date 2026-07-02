@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import tarfile
 import tempfile
 import time
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger("robothor.hub")
 
@@ -84,7 +87,12 @@ class HubClient:
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
             try:
-                logger.debug("Hub request: %s %s (attempt %d)", method, url, attempt + 1)
+                logger.debug(
+                    "Hub request: %s %s (attempt %d)",
+                    sanitize_log(method),
+                    sanitize_log(url),
+                    attempt + 1,
+                )
                 resp = self.client.request(method, url, **kwargs)
 
                 # Handle rate limiting
@@ -106,8 +114,8 @@ class HubClient:
                     logger.warning(
                         "Server error %d on %s %s (attempt %d/%d)",
                         resp.status_code,
-                        method,
-                        url,
+                        sanitize_log(method),
+                        sanitize_log(url),
                         attempt + 1,
                         MAX_RETRIES,
                     )
@@ -120,8 +128,8 @@ class HubClient:
                 last_exc = e
                 logger.warning(
                     "Connection error on %s %s (attempt %d/%d): %s",
-                    method,
-                    url,
+                    sanitize_log(method),
+                    sanitize_log(url),
                     attempt + 1,
                     MAX_RETRIES,
                     e,
@@ -131,15 +139,37 @@ class HubClient:
 
         raise HubError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")
 
-    def _verify_checksum(self, path: Path, expected_sha256: str) -> bool:
-        """Verify file checksum if provided."""
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    @staticmethod
+    def _safe_path(base: Path, candidate: str) -> Path:
+        """Return ``base / <name>`` for a single trusted filename ``candidate``.
+
+        ``candidate`` must already be a bare filename (callers pass ``path.name``
+        / ``f"{slug}.tar.gz"``); any directory separator or traversal component
+        is rejected (path-injection guard).
+        """
+        leaf = Path(candidate).name
+        if leaf != candidate or leaf in ("", ".", ".."):
+            raise HubError(f"unsafe path: {candidate}")
+        # Resolve and confirm containment with the os.path realpath/commonpath
+        # barrier (the form CodeQL recognises as a path-injection sanitizer).
+        base_real = os.path.realpath(base)
+        target_real = os.path.realpath(os.path.join(base_real, leaf))  # noqa: PTH118
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise HubError(f"unsafe path: {candidate}")
+        return Path(target_real)
+
+    def _verify_checksum(self, content: bytes, expected_sha256: str) -> bool:
+        """Verify the SHA-256 of the downloaded bytes.
+
+        Hashes the in-memory response body directly (no file read) — both faster
+        and free of any path-injection sink.
+        """
+        actual = hashlib.sha256(content).hexdigest()
         if actual != expected_sha256:
             logger.error(
-                "Checksum mismatch for %s: expected %s, got %s",
-                path.name,
-                expected_sha256,
-                actual,
+                "Checksum mismatch: expected %s, got %s",
+                sanitize_log(expected_sha256),
+                sanitize_log(actual),
             )
             return False
         return True
@@ -199,6 +229,11 @@ class HubClient:
 
         Returns path to the extracted bundle directory.
         """
+        # Validate the bundle slug at the source: it flows into both the request
+        # URL and the on-disk filename, so constrain it to a safe charset (no
+        # path separators / traversal) before any use (path-injection guard).
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", slug or ""):
+            raise HubError(f"invalid bundle slug: {slug!r}")
         resp = self._request_with_retry(
             "GET",
             f"/api/bundles/{slug}/download",
@@ -220,11 +255,11 @@ class HubClient:
 
         # Write to temp file and extract
         dest = Path(dest_dir) if dest_dir else Path(tempfile.mkdtemp(prefix="pr-"))
-        tarball_path = dest / f"{slug}.tar.gz"
+        tarball_path = self._safe_path(dest, f"{slug}.tar.gz")
         tarball_path.write_bytes(resp.content)
 
-        # Verify checksum if provided
-        if expected_sha256 and not self._verify_checksum(tarball_path, expected_sha256):
+        # Verify checksum if provided (hash the bytes we already have in memory)
+        if expected_sha256 and not self._verify_checksum(resp.content, expected_sha256):
             tarball_path.unlink()
             raise HubError(f"Checksum verification failed for bundle '{slug}'")
 
@@ -239,7 +274,7 @@ class HubClient:
         # Validate extracted bundle
         bundle_dir = subdirs[0] if len(subdirs) == 1 else dest
         if not (bundle_dir / "setup.yaml").exists():
-            logger.warning("Downloaded bundle '%s' missing setup.yaml", slug)
+            logger.warning("Downloaded bundle '%s' missing setup.yaml", sanitize_log(slug))
 
         if len(subdirs) == 1:
             return subdirs[0]

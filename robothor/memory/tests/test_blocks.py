@@ -25,6 +25,9 @@ EXPECTED_BLOCK_NAMES = {
     # Curiosity Engine + Self Model
     "curiosity_engine_findings",
     "self_model",
+    # Memory hygiene + self-improvement curator
+    "preferences",
+    "curator_state",
 }
 
 

@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -29,6 +30,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,91 @@ INSIGHT_SCHEMA = {
     },
     "required": ["insights"],
 }
+
+# WS-2: consolidation churn guard. Default OFF (observe). When on:
+#   - find_consolidation_candidates excludes source_type='consolidation' rows
+#     so a consolidated fact is never re-consolidated (the 150-deep chains and
+#     ~80%-inactive table came from consolidation re-eating its own output);
+#   - the consolidated fact inherits MAX(source importance) instead of the 0.5
+#     default (so it doesn't bury its high-importance sources);
+#   - a chain-depth cap stops any single supersession chain from running deep.
+_MAX_CHAIN_DEPTH = 3
+
+
+def _consolidation_guard_enabled() -> bool:
+    raw = os.environ.get("MEMORY_CONSOLIDATION_GUARD", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _intent_populate_enabled() -> bool:
+    """WS-6: run intent inference in nightly maintenance. Default OFF.
+
+    RIP 14 (intents) is enabled live but the store is empty — nothing calls
+    infer_intents_from_facts. When on, the nightly pass proposes standing
+    intents from recent facts so the recall leg has data to return.
+    """
+    raw = os.environ.get("MEMORY_INTENT_POPULATE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _chain_depth(cur: Any, fact_id: int) -> int:
+    """Depth of the supersession chain that has collapsed INTO ``fact_id``.
+
+    Walks ``superseded_by`` backwards: how many facts were transitively
+    superseded into this one. Used to refuse extending an already-deep chain.
+    """
+    cur.execute(
+        """
+        WITH RECURSIVE chain(id, depth) AS (
+            SELECT id, 0 FROM memory_facts WHERE id = %s
+            UNION ALL
+            SELECT m.id, c.depth + 1
+            FROM memory_facts m JOIN chain c ON m.superseded_by = c.id
+            WHERE c.depth < 200
+        )
+        SELECT COALESCE(MAX(depth), 0) FROM chain
+        """,
+        (fact_id,),
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> None:
+    """Supersede ``source_ids`` into the consolidated ``new_id``.
+
+    With the guard off this is the original loop (set is_active=false,
+    superseded_by=new_id). With the guard on it also (a) propagates the max
+    source importance onto the consolidated fact and (b) skips any source whose
+    chain is already at ``_MAX_CHAIN_DEPTH`` so chains stay bounded.
+    """
+    guard = _consolidation_guard_enabled()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if guard:
+            cur.execute(
+                "SELECT COALESCE(MAX(importance_score), 0.5) FROM memory_facts WHERE id = ANY(%s)",
+                (list(source_ids),),
+            )
+            row = cur.fetchone()
+            max_imp = float(row[0]) if row and row[0] is not None else 0.5
+            cur.execute(
+                "UPDATE memory_facts SET importance_score = GREATEST(importance_score, %s) "
+                "WHERE id = %s",
+                (max_imp, new_id),
+            )
+        for source_id in source_ids:
+            if guard and _chain_depth(cur, source_id) >= _MAX_CHAIN_DEPTH:
+                logger.debug("consolidation: skip supersede of deep-chain fact %s", source_id)
+                continue
+            cur.execute(
+                """
+                UPDATE memory_facts
+                SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
+                WHERE id = %s AND is_active = TRUE
+                """,
+                (new_id, source_id),
+            )
 
 
 def compute_decay_score(
@@ -114,6 +201,30 @@ def compute_decay_score(
     return max(0.0, min(1.0, score))
 
 
+# High-stakes cues the LLM judge (or the 0.5 default on timeout) under-scores:
+# security incidents and resolutions must not sit at neutral importance, or the
+# blend's importance term can't lift them above routine noise (WS-7).
+_HIGH_SIGNAL_CUES = (
+    "unauthorized",
+    "suspicious",
+    "breach",
+    "compromise",
+    "unrecognized",
+    "security alert",
+    "confirmed legitimate",
+    "marked as closed",
+    "false alarm",
+    "resolved",
+)
+_HIGH_SIGNAL_FLOOR = 0.7
+
+
+def importance_floor(content: str) -> float:
+    """Deterministic minimum importance for clearly high-stakes facts (pure)."""
+    low = (content or "").lower()
+    return _HIGH_SIGNAL_FLOOR if any(cue in low for cue in _HIGH_SIGNAL_CUES) else 0.0
+
+
 async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
     """Use the LLM to judge the importance of a fact.
 
@@ -122,8 +233,10 @@ async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
         timeout_s: Maximum seconds to wait for LLM response.
 
     Returns:
-        Importance score between 0.0 and 1.0.
+        Importance score between 0.0 and 1.0. A deterministic floor is applied
+        for high-stakes facts so a security/resolution fact never scores neutral.
     """
+    floor = importance_floor(content)
     try:
         prompt = f"""Rate the long-term importance of this fact on a scale of 0.0 to 1.0.
 
@@ -147,13 +260,13 @@ Fact: "{content}" """
 
         parsed = json.loads(raw.strip())
         score = float(parsed.get("score", 0.5))
-        return max(0.0, min(1.0, score))
+        return max(floor, min(1.0, score))
 
     except TimeoutError:
         logger.warning("judge_importance timed out after %.0fs", timeout_s)
-        return 0.5
+        return max(floor, 0.5)
     except Exception:
-        return 0.5
+        return max(floor, 0.5)
 
 
 async def find_consolidation_candidates(
@@ -173,6 +286,11 @@ async def find_consolidation_candidates(
         List of groups, where each group is a list of fact dicts.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
+    # WS-2: never feed a consolidation output back into consolidation — that is
+    # the loop that built the 150-deep chains and the ~80%-inactive table.
+    consolidation_filter = (
+        "AND source_type <> 'consolidation'" if _consolidation_guard_enabled() else ""
+    )
     fetch_limit = 100 if unconsolidated_only else 500
 
     with get_connection() as conn:
@@ -183,6 +301,7 @@ async def find_consolidation_candidates(
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
               {unconsolidated_filter}
+              {consolidation_filter}
             ORDER BY created_at DESC
             LIMIT {fetch_limit}
             """
@@ -204,14 +323,16 @@ async def find_consolidation_candidates(
 
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
+            apply_hnsw_session(cur)
             cur.execute(
-                """
+                f"""
                 SELECT id, fact_text, category, entities,
                        1 - (embedding <=> %s::vector) as similarity
                 FROM memory_facts
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
@@ -287,7 +408,7 @@ async def prune_low_quality_facts() -> dict[str, Any]:
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
               AND length(fact_text) < 15
-              AND category NOT IN ('decision', 'preference')
+              AND category NOT IN ('decision', 'preference', 'resolution')
             RETURNING id, fact_text
             """
         )
@@ -301,7 +422,7 @@ async def prune_low_quality_facts() -> dict[str, Any]:
               AND decay_score < 0.1
               AND importance_score < 0.3
               AND access_count = 0
-              AND category NOT IN ('decision', 'preference')
+              AND category NOT IN ('decision', 'preference', 'resolution')
             RETURNING id, fact_text
             """
         )
@@ -407,17 +528,7 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
                     source_content="[intra-day consolidation]",
                     source_type="consolidation",
                 )
-                with get_connection() as conn:
-                    cur = conn.cursor()
-                    for source_id in result["source_ids"]:
-                        cur.execute(
-                            """
-                            UPDATE memory_facts
-                            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                            WHERE id = %s AND is_active = TRUE
-                            """,
-                            (new_id, source_id),
-                        )
+                _apply_consolidation_supersession(new_id, result["source_ids"])
                 consolidation_groups += 1
     except Exception as e:
         logger.warning("Intra-day consolidation failed: %s", e)
@@ -936,18 +1047,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
                 source_content="[consolidated from similar facts]",
                 source_type="consolidation",
             )
-            # Supersede originals
-            with get_connection() as conn:
-                cur = conn.cursor()
-                for source_id in result["source_ids"]:
-                    cur.execute(
-                        """
-                        UPDATE memory_facts
-                        SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                        WHERE id = %s AND is_active = TRUE
-                        """,
-                        (new_id, source_id),
-                    )
+            # Supersede originals (guarded: importance propagation + chain cap)
+            _apply_consolidation_supersession(new_id, result["source_ids"])
             consolidation_groups += 1
         except Exception as e:
             logger.warning("Failed to store consolidated fact: %s", e)
@@ -1114,6 +1215,26 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["access_log_cleanup"],
     )
 
+    # Step 13: Intent inference — propose standing intents from recent facts so
+    # the (already-enabled) intent store stops being empty. Gated + best-effort.
+    intents_proposed = 0
+    if _intent_populate_enabled():
+        t11 = time.monotonic()
+        try:
+            from robothor.memory.intents import infer_intents_from_facts
+
+            for tid in tenant_ids:
+                created = await infer_intents_from_facts(tenant_id=tid)
+                intents_proposed += len(created)
+        except Exception as e:
+            logger.warning("Intent inference failed: %s", e)
+        step_timings["intent_inference"] = time.monotonic() - t11
+        logger.info(
+            "Step 13 (intent inference): %d proposed (%.1fs)",
+            intents_proposed,
+            step_timings["intent_inference"],
+        )
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -1134,5 +1255,6 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "access_log_pruned": access_log_pruned,
         "insights": insight_result,
         "relations_inferred": len(inferred_relations),
+        "intents_proposed": intents_proposed,
         "step_timings": step_timings,
     }

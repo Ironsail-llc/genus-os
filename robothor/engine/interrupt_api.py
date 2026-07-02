@@ -8,6 +8,7 @@ endpoint) shouldn't need to know about the registry indirection.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from robothor.engine import session_registry
 
@@ -26,6 +27,7 @@ def interrupt_session(run_id: str, message: str | None = None) -> bool:
         logger.debug("interrupt_session: no active session for run_id=%s", run_id)
         return False
     session.interrupt(message)
+    _record_intervention(session, "interrupt", message)
     return True
 
 
@@ -36,4 +38,23 @@ def steer_session(run_id: str, text: str) -> bool:
         logger.debug("steer_session: no active session for run_id=%s", run_id)
         return False
     session.steer(text)
+    _record_intervention(session, "steer", text)
     return True
+
+
+def _record_intervention(session: Any, kind: str, detail: str | None) -> None:
+    """Persist the intervention as an operator signal (Phase 2). Fails soft."""
+    try:
+        from robothor.engine.operator_signals import record_intervention
+
+        record_intervention(
+            run_id=session.run.id,
+            agent_id=session.run.agent_id,
+            kind=kind,
+            detail=detail,
+            tenant_id=session.run.tenant_id,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(
+            "intervention record failed for run_id=%s: %s", getattr(session, "run", None), exc
+        )

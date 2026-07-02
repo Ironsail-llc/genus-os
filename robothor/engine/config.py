@@ -388,6 +388,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         # Human-in-the-loop
         human_approval_tools=v2.get("human_approval_tools", []),
         human_approval_timeout=int(v2.get("human_approval_timeout", 300)),
+        human_approval_fail_open=bool(v2.get("human_approval_fail_open", False)),
     )
 
     # ── Continuous mode overrides — raise caps for sustained multi-hour runs ──
@@ -568,7 +569,11 @@ def explain_config(
 
     layers["fleet_defaults"] = _load_defaults(manifest_dir)
 
-    manifest_path = manifest_dir / f"{agent_id}.yaml"
+    # Prevent path traversal — agent_id must be a simple identifier
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+        raise ValueError("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
+    safe_id = str(agent_id)  # break taint chain after validation
+    manifest_path = manifest_dir / f"{safe_id}.yaml"
     layers["agent_manifest"] = (
         (load_manifest(manifest_path) or {}) if manifest_path.exists() else {}
     )

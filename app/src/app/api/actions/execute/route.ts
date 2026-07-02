@@ -186,7 +186,16 @@ export async function POST(request: NextRequest) {
     }
 
     const resolvedParams = params || {};
-    const url = `${BRIDGE_URL}${route.path(resolvedParams)}`;
+    const base = new URL(BRIDGE_URL);
+    const pathStr = route.path(resolvedParams);
+    const target = new URL(
+      pathStr.replace(/^\/+/, ""),
+      base.origin + base.pathname.replace(/\/?$/, "/")
+    );
+    if (target.origin !== base.origin) {
+      return NextResponse.json({ error: "Bad gateway path" }, { status: 502 });
+    }
+    const url = target.toString();
     const headers: Record<string, string> = {
       "X-Agent-Id": HELM_AGENT_ID,
       "Content-Type": "application/json",

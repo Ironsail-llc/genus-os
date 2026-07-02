@@ -13,10 +13,13 @@ future compactions via the [RETAINED CONTEXT] marker.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,10 @@ TOOL_SUMMARY_MIN_CHARS = 500
 
 # Model for fact extraction (cheap, fast)
 FACT_EXTRACTION_MODEL = "gemini/gemini-2.5-flash"
+# Hard ceiling on the compaction LLM call. It runs inside the agent loop, so a
+# hung provider (Gemini has been flaky) would otherwise stall the whole run and
+# trip the stall watchdog as if the agent itself froze (audit 2026-05-29).
+COMPACTION_LLM_TIMEOUT = 45.0
 
 FACT_EXTRACTION_PROMPT = """\
 Extract key facts from this conversation segment. Return JSON only:
@@ -137,15 +144,18 @@ async def extract_facts(
     try:
         import litellm
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": FACT_EXTRACTION_PROMPT},
-                {"role": "user", "content": conversation_text},
-            ],
-            temperature=0.1,
-            max_tokens=1000,
-            response_format={"type": "json_object"},
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": FACT_EXTRACTION_PROMPT},
+                    {"role": "user", "content": conversation_text},
+                ],
+                temperature=0.1,
+                max_tokens=1000,
+                response_format={"type": "json_object"},
+            ),
+            timeout=COMPACTION_LLM_TIMEOUT,
         )
 
         raw = response.choices[0].message.content
@@ -206,14 +216,17 @@ async def summarize_segment(
     try:
         import litellm
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
-                {"role": "user", "content": "\n".join(text_parts)},
-            ],
-            temperature=0.1,
-            max_tokens=300,
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
+                    {"role": "user", "content": "\n".join(text_parts)},
+                ],
+                temperature=0.1,
+                max_tokens=300,
+            ),
+            timeout=COMPACTION_LLM_TIMEOUT,
         )
 
         summary_text: str | None = response.choices[0].message.content
@@ -267,6 +280,75 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
     return idx
 
 
+def _dedup_tool_results(
+    messages: list[dict[str, Any]], protect_tail: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Elide repeated identical tool results outside the protected recent tail.
+
+    Reading the same file (or re-running the same command) N times keeps N full
+    copies in context. We keep the *newest* full copy (so the agent sees the
+    current state) and replace earlier identical ones with a one-line pointer.
+    Stateless, lossless-for-the-agent (it can re-fetch), and LLM-free.
+    """
+    import hashlib
+
+    n = len(messages)
+    if n <= protect_tail:
+        return messages, 0
+    cut = n - protect_tail
+    last_seen: dict[str, int] = {}
+    for i in range(cut):
+        m = messages[i]
+        c = m.get("content")
+        if m.get("role") == "tool" and isinstance(c, str) and len(c) > 200:
+            last_seen[hashlib.sha256(c.encode("utf-8", "ignore")).hexdigest()] = i
+
+    out = list(messages)
+    elided = 0
+    for i in range(cut):
+        m = messages[i]
+        c = m.get("content")
+        if m.get("role") == "tool" and isinstance(c, str) and len(c) > 200:
+            h = hashlib.sha256(c.encode("utf-8", "ignore")).hexdigest()
+            if last_seen.get(h) != i:  # an earlier duplicate of a later copy
+                out[i] = {**m, "content": "[duplicate of a later identical tool result — elided]"}
+                elided += 1
+    return out, elided
+
+
+def _strip_historical_media(
+    messages: list[dict[str, Any]], protect_tail: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace image/media blocks with a placeholder outside the recent tail.
+
+    Base64 screenshots dominate token counts and are rarely needed once acted
+    on; the recent tail keeps real media so the current turn is unaffected.
+    """
+    n = len(messages)
+    if n <= protect_tail:
+        return messages, 0
+    cut = n - protect_tail
+    out = list(messages)
+    stripped = 0
+    for i in range(cut):
+        m = messages[i]
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        new_blocks: list[Any] = []
+        changed = False
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("image_url", "image"):
+                new_blocks.append({"type": "text", "text": "[image omitted in compaction]"})
+                changed = True
+                stripped += 1
+            else:
+                new_blocks.append(block)
+        if changed:
+            out[i] = {**m, "content": new_blocks}
+    return out, stripped
+
+
 async def compact(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -310,6 +392,34 @@ async def compact(
     summary_model = models[0] if models else FACT_EXTRACTION_MODEL
     working = list(messages)  # Shallow copy
     all_facts: list[CompactionFact] = []
+
+    # ── Pass 0: LLM-free pre-pass (Rip 18 / G7) — dedup + strip media ──
+    # Cheap, lossless-for-the-agent reclamation before any LLM summary, per the
+    # Hermes pattern. Often recovers enough alone to skip the costlier passes.
+    from robothor.engine.feature_flags import compaction_hardening_enabled
+
+    if compaction_hardening_enabled():
+        from robothor.engine.context import KEEP_RECENT as _KEEP_RECENT
+
+        working, _eli = _dedup_tool_results(working, _KEEP_RECENT)
+        working, _med = _strip_historical_media(working, _KEEP_RECENT)
+        if _eli or _med:
+            logger.info(
+                "Compaction pre-pass: elided %s duplicate tool results, stripped %s media blocks",
+                sanitize_log(_eli),
+                sanitize_log(_med),
+            )
+            est0 = estimate_tokens(working)
+            if est0 < drain_to:
+                logger.info(
+                    "Pre-pass (dedup/media) sufficient: ~%d → ~%d tokens", tokens_before, est0
+                )
+                return CompactionResult(
+                    messages=working,
+                    passes_used=1,
+                    tokens_before=tokens_before,
+                    tokens_after=est0,
+                )
 
     # ── Pass 1: Tool result thinning ──────────────────────────────────
     tool_indices = [i for i, m in enumerate(working) if m.get("role") == "tool"]

@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from robothor.db.connection import get_connection
+from robothor.engine.sanitize import sanitize_log
 from robothor.memory.conflicts import resolve_and_store
 from robothor.memory.entities import extract_entities_batch
 from robothor.memory.facts import extract_facts, store_fact
@@ -61,9 +62,9 @@ async def ingest_content(
 
     logger.info(
         "Extracting facts from %s content (%d chars) via %s",
-        content_type,
+        sanitize_log(content_type),
         len(content),
-        source_channel,
+        sanitize_log(source_channel),
     )
     facts = await extract_facts(content)
     logger.info("Extracted %d facts", len(facts))
@@ -104,6 +105,17 @@ async def ingest_content(
         except Exception as e:
             logger.warning("Entity extraction failed: %s", e)
 
+    # Route verbatim reference values (account ids, phone numbers) to the
+    # Knowledge Vault so they survive byte-for-byte. Gated, best-effort (WS-6).
+    from robothor.memory.vault import _vault_populate_enabled, populate_vault_from_content
+
+    vault_stored = 0
+    if _vault_populate_enabled():
+        try:
+            vault_stored = len(await populate_vault_from_content(content, source=source_channel))
+        except Exception as e:
+            logger.warning("Vault auto-populate failed: %s", e)
+
     return {
         "source_channel": source_channel,
         "content_type": content_type,
@@ -112,6 +124,7 @@ async def ingest_content(
         "fact_ids": stored_ids,
         "entities_stored": entity_results.get("entities_stored", 0),
         "relations_stored": entity_results.get("relations_stored", 0),
+        "vault_stored": vault_stored,
     }
 
 

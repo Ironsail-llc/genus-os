@@ -26,10 +26,18 @@ export async function GET() {
     let status: "healthy" | "unhealthy" | "unknown" = "unknown";
     let responseTime: number | undefined;
 
-    if (healthUrl) {
+    const serviceUrl = getServiceUrl(key);
+    if (healthUrl && serviceUrl) {
       const start = Date.now();
       try {
-        const res = await fetch(healthUrl, {
+        // Assert the health URL resolves to the trusted service origin
+        // before fetching (breaks SSRF/file-access-to-http taint flow).
+        const base = new URL(serviceUrl);
+        const target = new URL(healthUrl, base.origin);
+        if (target.origin !== base.origin) {
+          throw new Error("Health URL origin mismatch");
+        }
+        const res = await fetch(target.toString(), {
           signal: AbortSignal.timeout(5000),
         });
         responseTime = Date.now() - start;
@@ -43,7 +51,7 @@ export async function GET() {
     results.push({
       name: key,
       port: svc.port,
-      url: getServiceUrl(key),
+      url: serviceUrl,
       healthUrl,
       status,
       responseTime,

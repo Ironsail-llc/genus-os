@@ -314,6 +314,187 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Knowledge Vault (verbatim memory store; RIP 12) ──
+    # Distinct from the secrets vault above. Stores reference data the agent
+    # must recall exactly (numbers, ids, addresses). Only registered when
+    # ROBOTHOR_RIP_12_ENABLED so the tools stay dark until the operator opts in.
+    from robothor.engine.feature_flags import is_rip_enabled
+
+    if is_rip_enabled(12):
+        schemas["memory_vault_store"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_store",
+                "description": (
+                    "Store a value in the Knowledge Vault to be recalled VERBATIM "
+                    "(exact phone numbers, account/case ids, addresses, bookmarks). "
+                    "Use this instead of store_memory when the exact characters matter. "
+                    "Set sensitivity='high' for credential-like values (encrypted at rest)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "caption": {
+                            "type": "string",
+                            "description": "Human description used to find the entry later",
+                        },
+                        "value": {"type": "string", "description": "The exact value to preserve"},
+                        "entry_type": {
+                            "type": "string",
+                            "description": "contact_info | account_id | address | bookmark | credential | api_key",
+                            "default": "contact_info",
+                        },
+                        "sensitivity": {
+                            "type": "string",
+                            "description": "low | medium | high (high is encrypted at rest)",
+                            "default": "medium",
+                        },
+                    },
+                    "required": ["caption", "value"],
+                },
+            },
+        }
+        schemas["memory_vault_search"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_search",
+                "description": (
+                    "Search the Knowledge Vault by description. Returns matching captions "
+                    "and ids only — call memory_vault_get with an id to read the exact value."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "What you're looking for"},
+                        "entry_type": {"type": "string", "description": "Optional type filter"},
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+        schemas["memory_vault_get"] = {
+            "type": "function",
+            "function": {
+                "name": "memory_vault_get",
+                "description": (
+                    "Retrieve the exact, verbatim value of a Knowledge Vault entry by id "
+                    "(decrypts high-sensitivity entries; the read is audited)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {"type": "integer", "description": "Vault entry id"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
+    # ── Symbolic memory (Rip 13): drill into a condensed tool step ──
+    from robothor.engine.feature_flags import symbolic_memory_mode
+
+    if symbolic_memory_mode() != "off":
+        schemas["recall_node"] = {
+            "type": "function",
+            "function": {
+                "name": "recall_node",
+                "description": (
+                    "Retrieve the full, byte-exact output of a prior tool step from the "
+                    "task-state graph (symbolic memory). Pass the node_id shown in the graph "
+                    "(e.g. 'n3') when you need detail that was condensed out of context."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": {"type": "string", "description": "Graph node id, e.g. n3"}
+                    },
+                    "required": ["node_id"],
+                },
+            },
+        }
+
+    # ── Intent memory (prospective objectives; RIP 14) ──
+    if is_rip_enabled(14):
+        schemas["intent_add"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_add",
+                "description": (
+                    "Record a STANDING INTENT — an ongoing objective the operator is "
+                    "working toward (e.g. 'grow Valhalla revenue'), not a one-off task. "
+                    "Persists across sessions so it can be advanced proactively."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short objective"},
+                        "description": {"type": "string", "description": "What success looks like"},
+                        "horizon": {
+                            "type": "string",
+                            "description": "ongoing | this_quarter | this_week | dated",
+                            "default": "ongoing",
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "description": "1 (high) .. 5 (low)",
+                            "default": 3,
+                        },
+                    },
+                    "required": ["title"],
+                },
+            },
+        }
+        schemas["intent_search"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_search",
+                "description": "Search standing intents semantically (default: active only).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status (default active)",
+                        },
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+        schemas["intent_list"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_list",
+                "description": "List the highest-priority active standing intents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "default": 10}},
+                },
+            },
+        }
+        schemas["intent_advance"] = {
+            "type": "function",
+            "function": {
+                "name": "intent_advance",
+                "description": (
+                    "Mark that you advanced a standing intent; pass goal_id to link a "
+                    "completed session goal to it."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "description": "Intent id"},
+                        "goal_id": {
+                            "type": "integer",
+                            "description": "Optional session-goal id to link",
+                        },
+                    },
+                    "required": ["id"],
+                },
+            },
+        }
+
     # ── Convenience aliases ──
     schemas["list_my_tasks"] = {
         "type": "function",
@@ -1903,6 +2084,27 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["skill_archive"] = {
+        "type": "function",
+        "function": {
+            "name": "skill_archive",
+            "description": (
+                "Retire an agent-created skill by moving it to "
+                "agents/skills/.archive/ (reversible — content preserved). The "
+                "curator's only destructive action. Refuses pinned and operator-"
+                "authored skills. Use to consolidate near-duplicates (after "
+                "merging into the umbrella) or to archive cold one-offs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name to archive."},
+                },
+                "required": ["name"],
+            },
+        },
+    }
+
     schemas["update_skill"] = {
         "type": "function",
         "function": {
@@ -2687,6 +2889,42 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["judge_run"] = {
+        "type": "function",
+        "function": {
+            "name": "judge_run",
+            "description": (
+                "Goal-judge: grade an agent's recent runs against REAL outcome "
+                "signals (its declared session goal, the run trace, the "
+                "operator's own words, and obstacles like timeouts/escalations) "
+                "and write one agent_reviews row per run with reviewer_type="
+                "'judge', dimension='goal_achievement'. goals.py reads these as "
+                "the spine of the achievement score. Evidence-or-abstain: a run "
+                "the judge cannot ground in cited evidence writes nothing "
+                "(stays neutral). Uses a separate model tier (Sonnet 4.6) so an "
+                "agent never grades itself. Inert unless ROBOTHOR_JUDGE_ENABLED=1."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent whose recent runs to judge.",
+                    },
+                    "window_hours": {
+                        "type": "integer",
+                        "description": "Look-back window in hours. Default 24.",
+                    },
+                    "max_runs": {
+                        "type": "integer",
+                        "description": "Max unjudged runs to grade this pass. Default 5.",
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+    }
+
     schemas["buddy_verify_pass"] = {
         "type": "function",
         "function": {
@@ -2717,6 +2955,35 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "healthy rate and does nothing."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["get_accretion_ledger"] = {
+        "type": "function",
+        "function": {
+            "name": "get_accretion_ledger",
+            "description": (
+                "Self-improvement health line: skill accretion (total, added this "
+                "week, archived, most-used), goal-judge volume (judgments written "
+                "this week), and the DIVERGENCE list — agents whose benchmark "
+                "passes but whose judge-measured real-outcome score is much lower "
+                "(acing the exam while failing in reality). A non-empty divergence "
+                "list is the reward-hack tripwire. Read-only. Surface in the "
+                "evening summary; escalate from the heartbeat when divergent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "window_days": {
+                        "type": "integer",
+                        "description": "Look-back window. Default 7.",
+                    },
+                    "gap_threshold": {
+                        "type": "number",
+                        "description": "Min benchmark−judge gap to flag as divergent. Default 0.25.",
+                    },
+                },
+            },
         },
     }
 
@@ -2819,119 +3086,83 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas["get_accretion_ledger"] = {
+    # ── Deferred / searchable tool meta-tools (Rip 16 / G4) ──
+    # Only advertised to an agent when its toolset is deferred (see registry).
+    # They let the model discover and invoke tools that aren't in the small
+    # always-on CORE set, keeping per-turn schema tokens low.
+    schemas["tool_search"] = {
         "type": "function",
         "function": {
-            "name": "get_accretion_ledger",
+            "name": "tool_search",
             "description": (
-                "Audit what the fleet has learned: agent-authored skills with their "
-                "git history and runtime usage counts."
+                "Search your full tool catalog for tools not shown in your "
+                "current toolset. Returns matching tool names + short "
+                "descriptions. Use when you need a capability you don't see a "
+                "tool for, then tool_describe it and tool_call it."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "description": "Max entries (default 30)"}
-                },
-            },
-        },
-    }
-
-    # ── Code intelligence: first-party content search (pure-Python os.walk + re)
-    #    so agents don't shell out via exec to grep ──
-    schemas["search_files"] = {
-        "type": "function",
-        "function": {
-            "name": "search_files",
-            "description": (
-                "Search file CONTENTS by regex across the workspace. "
-                "Prefer this over exec+grep for finding code. Returns file/line/text matches."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {
+                    "query": {
                         "type": "string",
-                        "description": "Regular expression to search for",
+                        "description": "Keywords describing the capability you need (e.g. 'send email', 'create calendar event', 'github pull request').",
                     },
-                    "path": {
-                        "type": "string",
-                        "description": "Dir or file to search, relative to workspace (default: whole workspace)",
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "File filter, e.g. '*.py' (optional)",
-                    },
-                    "max_results": {"type": "integer", "description": "Max matches (default 100)"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    }
-
-    # ── Runtime self-scheduling (handler in handlers/timing.py; persists to
-    #    user_cronjobs; the scheduler tick fires due jobs) ──
-    schemas["register_user_cron"] = {
-        "type": "function",
-        "function": {
-            "name": "register_user_cron",
-            "description": (
-                "Schedule a future or recurring run of yourself with a custom prompt. "
-                "Schedule accepts natural language ('every 30m', 'in 2 hours', "
-                "'2026-06-07T09:00') or a 5-field cron expression. Sub-minute "
-                "schedules are rejected."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "schedule": {
-                        "type": "string",
-                        "description": "When to run: 'every 30m', 'in 2 hours', ISO time, or cron",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "The instruction to run on schedule",
-                    },
-                    "max_fires": {
+                    "limit": {
                         "type": "integer",
-                        "description": "Optional cap on how many times it fires (omit = unbounded)",
+                        "description": "Max results to return (default 10).",
                     },
                 },
-                "required": ["schedule", "prompt"],
+                "required": ["query"],
+            },
+        },
+    }
+    schemas["tool_describe"] = {
+        "type": "function",
+        "function": {
+            "name": "tool_describe",
+            "description": (
+                "Return the full schema (parameters) for one tool by name, so "
+                "you can call it correctly via tool_call. Use after tool_search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact tool name (from tool_search results).",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    }
+    schemas["tool_call"] = {
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "description": (
+                "Invoke a tool by name with its arguments. Use this to run any "
+                "tool found via tool_search that isn't directly in your toolset. "
+                "Only tools in your allow-list can be called; others are refused."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact tool name to invoke.",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments object for the tool (per its tool_describe schema).",
+                    },
+                },
+                "required": ["name", "arguments"],
             },
         },
     }
 
-    # ── Inter-agent messaging + teams (handlers in handlers/messaging.py;
-    #    dark for lack of schemas; require daemon init_messenger/init_team_manager) ──
-    schemas["send_agent_message"] = {
-        "type": "function",
-        "function": {
-            "name": "send_agent_message",
-            "description": "Send a direct message to another agent's inbox.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "to_agent": {"type": "string", "description": "Recipient agent id"},
-                    "content": {"type": "string", "description": "Message body"},
-                    "metadata": {"type": "object", "description": "Optional structured metadata"},
-                },
-                "required": ["to_agent", "content"],
-            },
-        },
-    }
-    schemas["receive_agent_messages"] = {
-        "type": "function",
-        "function": {
-            "name": "receive_agent_messages",
-            "description": "Read messages from your inbox (sent by other agents).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "Max messages (default 10)"},
-                },
-            },
-        },
-    }
+    # ── Merged-in harden tools (messaging/teams, procedural memory, search, cron) ──
     schemas["create_team"] = {
         "type": "function",
         "function": {
@@ -2952,40 +3183,76 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["team_scratchpad_write"] = {
+
+    schemas["find_procedure"] = {
         "type": "function",
         "function": {
-            "name": "team_scratchpad_write",
-            "description": "Write a key/value to a team's shared scratchpad.",
+            "name": "find_procedure",
+            "description": (
+                "Find previously-recorded procedures applicable to a task "
+                "(semantic search, optionally filtered by tags)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Scratchpad key"},
-                    "value": {"type": "string", "description": "Value to store"},
+                    "task": {
+                        "type": "string",
+                        "description": "Description of the task you need a procedure for",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tag filter",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max procedures to return (default 3)",
+                    },
                 },
-                "required": ["team_id", "key"],
-            },
-        },
-    }
-    schemas["team_scratchpad_read"] = {
-        "type": "function",
-        "function": {
-            "name": "team_scratchpad_read",
-            "description": "Read a team's shared scratchpad (omit key to read all).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Specific key (optional)"},
-                },
-                "required": ["team_id"],
+                "required": ["task"],
             },
         },
     }
 
-    # ── Procedural memory (handlers in handlers/memory.py; were dark for lack
-    #    of schemas, so registry.build_for_agent filtered them out) ──
+    schemas["leave_breadcrumb"] = {
+        "type": "function",
+        "function": {
+            "name": "leave_breadcrumb",
+            "description": (
+                "Persist mid-task state so your NEXT run resumes where you left off. "
+                "The latest breadcrumbs are surfaced in your warmup context."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "A short note (or JSON string) describing where you left off",
+                    },
+                    "ttl_days": {
+                        "type": "integer",
+                        "description": "Days before the breadcrumb expires (default 7)",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    }
+
+    schemas["receive_agent_messages"] = {
+        "type": "function",
+        "function": {
+            "name": "receive_agent_messages",
+            "description": "Read messages from your inbox (sent by other agents).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max messages (default 10)"},
+                },
+            },
+        },
+    }
+
     schemas["record_procedure"] = {
         "type": "function",
         "function": {
@@ -3022,35 +3289,38 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["find_procedure"] = {
+
+    schemas["register_user_cron"] = {
         "type": "function",
         "function": {
-            "name": "find_procedure",
+            "name": "register_user_cron",
             "description": (
-                "Find previously-recorded procedures applicable to a task "
-                "(semantic search, optionally filtered by tags)."
+                "Schedule a future or recurring run of yourself with a custom prompt. "
+                "Schedule accepts natural language ('every 30m', 'in 2 hours', "
+                "'2026-06-07T09:00') or a 5-field cron expression. Sub-minute "
+                "schedules are rejected."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "task": {
+                    "schedule": {
                         "type": "string",
-                        "description": "Description of the task you need a procedure for",
+                        "description": "When to run: 'every 30m', 'in 2 hours', ISO time, or cron",
                     },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional tag filter",
+                    "prompt": {
+                        "type": "string",
+                        "description": "The instruction to run on schedule",
                     },
-                    "limit": {
+                    "max_fires": {
                         "type": "integer",
-                        "description": "Max procedures to return (default 3)",
+                        "description": "Optional cap on how many times it fires (omit = unbounded)",
                     },
                 },
-                "required": ["task"],
+                "required": ["schedule", "prompt"],
             },
         },
     }
+
     schemas["report_procedure_outcome"] = {
         "type": "function",
         "function": {
@@ -3076,27 +3346,83 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["leave_breadcrumb"] = {
+
+    schemas["search_files"] = {
         "type": "function",
         "function": {
-            "name": "leave_breadcrumb",
+            "name": "search_files",
             "description": (
-                "Persist mid-task state so your NEXT run resumes where you left off. "
-                "The latest breadcrumbs are surfaced in your warmup context."
+                "Search file CONTENTS by regex across the workspace. "
+                "Prefer this over exec+grep for finding code. Returns file/line/text matches."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content": {
+                    "pattern": {
                         "type": "string",
-                        "description": "A short note (or JSON string) describing where you left off",
+                        "description": "Regular expression to search for",
                     },
-                    "ttl_days": {
-                        "type": "integer",
-                        "description": "Days before the breadcrumb expires (default 7)",
+                    "path": {
+                        "type": "string",
+                        "description": "Dir or file to search, relative to workspace (default: whole workspace)",
                     },
+                    "glob": {
+                        "type": "string",
+                        "description": "File filter, e.g. '*.py' (optional)",
+                    },
+                    "max_results": {"type": "integer", "description": "Max matches (default 100)"},
                 },
-                "required": ["content"],
+                "required": ["pattern"],
+            },
+        },
+    }
+
+    schemas["send_agent_message"] = {
+        "type": "function",
+        "function": {
+            "name": "send_agent_message",
+            "description": "Send a direct message to another agent's inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_agent": {"type": "string", "description": "Recipient agent id"},
+                    "content": {"type": "string", "description": "Message body"},
+                    "metadata": {"type": "object", "description": "Optional structured metadata"},
+                },
+                "required": ["to_agent", "content"],
+            },
+        },
+    }
+
+    schemas["team_scratchpad_read"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_read",
+            "description": "Read a team's shared scratchpad (omit key to read all).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Specific key (optional)"},
+                },
+                "required": ["team_id"],
+            },
+        },
+    }
+
+    schemas["team_scratchpad_write"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_write",
+            "description": "Write a key/value to a team's shared scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Scratchpad key"},
+                    "value": {"type": "string", "description": "Value to store"},
+                },
+                "required": ["team_id", "key"],
             },
         },
     }

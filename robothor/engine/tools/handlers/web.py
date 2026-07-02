@@ -19,6 +19,7 @@ HANDLERS: dict[str, Any] = {}
 
 # Private/loopback networks that agents must never access
 _BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),  # "this host" — 0.0.0.0 routes to localhost
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("10.0.0.0/8"),
@@ -35,6 +36,10 @@ def _ip_is_blocked(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    # Unwrap IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) before range-checking, so a
+    # mapped loopback/private address can't slip past the block list.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 

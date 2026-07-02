@@ -179,6 +179,41 @@ def build_warmth_preamble(
 
     _run_section("agent_goal", _agent_goal)
 
+    def _goal_recall() -> str | None:
+        # R2: cron/scheduled runs otherwise start with no query-relevant recall
+        # (only interactive warmup extracts entities). Seed entity recall from
+        # the agent's goal so a heartbeat run recalls facts about its objective's
+        # entities instead of re-deriving them. Reuses the interactive helper.
+        from robothor.engine.feature_flags import cron_warmup_recall_enabled
+
+        if not cron_warmup_recall_enabled():
+            return None
+        from robothor.engine.session_goal import build_agent_goal_context
+
+        goal_text = build_agent_goal_context(
+            tenant_id=tenant_id,
+            agent_id=config.id,
+            manifest_path=getattr(config, "manifest_path", None),
+        )
+        if not goal_text:
+            return None
+        return _build_entity_context(goal_text, tenant_id=tenant_id) or None
+
+    _run_section("goal_recall", _goal_recall)
+
+    def _active_intents() -> str | None:
+        # Prospective/intent memory (RIP 14) — what the operator is working
+        # toward, so the heartbeat can advance standing objectives.
+        from robothor.engine.feature_flags import is_rip_enabled
+
+        if not is_rip_enabled(14):
+            return None
+        from robothor.memory.intents import build_active_intents_context
+
+        return build_active_intents_context(tenant_id)
+
+    _run_section("active_intents", _active_intents)
+
     total_elapsed = time.monotonic() - total_start
     if total_elapsed > 5.0:
         breakdown = " ".join(
@@ -492,57 +527,76 @@ def build_interactive_preamble(
 
 MAX_ENTITY_CONTEXT_CHARS = 1000
 
+# Words that are never entities (grammar) and capitalized sentence-starters that
+# must not be mistaken for proper nouns.
+_ENTITY_STOPWORDS = frozenset(
+    {"the", "what", "how", "when", "where", "why", "can", "does", "did", "hey", "hi",
+     "is", "are", "was", "were", "this", "that", "with", "for", "you", "your", "please",
+     "and", "but", "about", "have", "has"}
+)  # fmt: skip
+
+
+def _warmup_recall_v2_enabled() -> bool:
+    """Case-insensitive + recency-blended interactive entity recall (WS-5).
+
+    Default OFF. The legacy path only extracts CAPITALIZED words (so a lowercase
+    Telegram query surfaced nothing) and ordered hits by importance alone (so it
+    returned the stalest high-importance alert and never the fresh event). When
+    on, candidates are case-insensitive and hits are ranked by a recency/
+    importance blend with a recency tilt, so the current state wins.
+    """
+    raw = os.environ.get("MEMORY_WARMUP_RECALL_V2", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _extract_entity_candidates(user_message: str, *, lowercase_ok: bool) -> list[str]:
+    """Ordered candidate entity names from a message (pure, testable).
+
+    Capitalized proper nouns first (highest precision). When ``lowercase_ok``,
+    also append lowercase content words (len>=4) so a lowercase query still
+    finds entities — the case-insensitive SQL match filters out non-entities.
+    """
+    import re
+
+    capitalized: list[str] = []
+    lowercased: list[str] = []
+    seen: set[str] = set()
+    for i, word in enumerate(user_message.split()):
+        cleaned = re.sub(r"[^\w]", "", word)
+        if len(cleaned) <= 2:
+            continue
+        low = cleaned.lower()
+        if low in _ENTITY_STOPWORDS or low in seen:
+            continue
+        if cleaned[0].isupper() and (i > 0 or low not in _ENTITY_STOPWORDS):
+            capitalized.append(cleaned)
+            seen.add(low)
+        elif lowercase_ok and cleaned.isalpha() and len(cleaned) >= 4:
+            lowercased.append(cleaned)
+            seen.add(low)
+    return capitalized + lowercased
+
 
 def _build_entity_context(
     user_message: str,
     tenant_id: str = DEFAULT_TENANT,
     exclude_names: set[str] | None = None,
 ) -> str:
-    """Extract entities from user message and pull relevant facts.
-
-    Looks for capitalized proper nouns in the message and searches
-    memory facts for matching entity references.
+    """Extract entities from the user message and pull relevant facts.
 
     Args:
         exclude_names: Names to skip during entity search (e.g. the current
             user's name, to avoid confusing them with other people).
 
-    Budget: max 1000 chars for this section.
+    Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
+    run inside the sync warmup path; recency awareness is done in SQL.
     """
-    import re
+    v2 = _warmup_recall_v2_enabled()
+    candidates = _extract_entity_candidates(user_message, lowercase_ok=v2)
 
-    # Simple entity extraction: capitalized words that aren't sentence starters
-    words = user_message.split()
-    candidates = set()
-    for i, word in enumerate(words):
-        cleaned = re.sub(r"[^\w]", "", word)
-        if (
-            cleaned
-            and cleaned[0].isupper()
-            and len(cleaned) > 2
-            and (
-                i > 0
-                or cleaned.lower()
-                not in {
-                    "the",
-                    "what",
-                    "how",
-                    "when",
-                    "where",
-                    "why",
-                    "can",
-                    "does",
-                    "did",
-                    "hey",
-                    "hi",
-                }
-            )
-        ):
-            candidates.add(cleaned)
-
-    # Remove excluded names (e.g. the current user's name)
     if exclude_names:
-        candidates -= {n for n in exclude_names if n}
+        excluded = {n.lower() for n in exclude_names if n}
+        candidates = [c for c in candidates if c.lower() not in excluded]
 
     if not candidates:
         return ""
@@ -553,23 +607,45 @@ def _build_entity_context(
 
     lines = ["--- RELEVANT CONTEXT ---"]
     chars_used = 0
+    # V2 looks at a few more candidates (lowercase queries are noisier) and
+    # ranks by a recency/importance blend; legacy keeps the importance-only sort.
+    max_candidates = 5 if v2 else 3
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        for entity_name in list(candidates)[:3]:
-            cur.execute(
-                """
-                SELECT fact_text, category, importance_score
-                FROM memory_facts
-                WHERE is_active = TRUE AND %s = ANY(entities)
-                  AND tenant_id = %s
-                ORDER BY importance_score DESC, created_at DESC
-                LIMIT 3
-                """,
-                (entity_name, tenant_id),
-            )
-            facts = cur.fetchall()
-            for f in facts:
+        for entity_name in candidates[:max_candidates]:
+            if v2:
+                cur.execute(
+                    """
+                    SELECT fact_text, category, importance_score
+                    FROM memory_facts
+                    WHERE is_active = TRUE AND tenant_id = %s
+                      AND EXISTS (
+                        SELECT 1 FROM unnest(entities) e WHERE lower(e) = lower(%s)
+                      )
+                    ORDER BY
+                      0.55 * COALESCE(importance_score, 0.5)
+                      + 0.45 * POWER(
+                          0.5,
+                          EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
+                        ) DESC
+                    LIMIT 3
+                    """,
+                    (tenant_id, entity_name),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT fact_text, category, importance_score
+                    FROM memory_facts
+                    WHERE is_active = TRUE AND %s = ANY(entities)
+                      AND tenant_id = %s
+                    ORDER BY importance_score DESC, created_at DESC
+                    LIMIT 3
+                    """,
+                    (entity_name, tenant_id),
+                )
+            for f in cur.fetchall():
                 line = f"- {f['fact_text']}"
                 if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
                     break

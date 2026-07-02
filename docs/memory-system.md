@@ -12,6 +12,9 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_insights` | LLM-discovered cross-domain connections |
 | `memory_episodes` | Time-bucketed event clusters (added 2026-04) |
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
+| `memory_vault` | Verbatim Knowledge Vault — exact reference data, never paraphrased (added 2026-05, RIP 12) |
+| `vault_access_log` | Audit trail for every Knowledge Vault value read (added 2026-05) |
+| `memory_intents` | Prospective/intent memory — standing objectives the operator works toward (added 2026-05, RIP 14) |
 | `agent_memory_blocks` | Named text blocks (persona, user_profile, preferences, self_model, …) |
 | `agent_breadcrumbs` | 7-day cross-run scratchpad per agent (added 2026-04) |
 | `chat_messages` | Verbatim conversation turns with embeddings + 90-day TTL (added 2026-04) |
@@ -20,6 +23,13 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `ingestion_watermarks` | Per-source progress and error tracking |
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
+Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
+superseded vectors out of the candidate budget. pgvector **0.8.2** is installed;
+every vector search applies shared session tuning via
+`robothor/memory/vector_tuning.py` `apply_hnsw_session(cur)` —
+`hnsw.ef_search=100` plus, when `MEMORY_HNSW_ITERATIVE=1`,
+`hnsw.iterative_scan=relaxed_order` (fetches past the `WHERE` filter until `LIMIT`
+is met — the robust fix for filtered-vector recall).
 
 ## Retrieval
 
@@ -31,6 +41,47 @@ All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_constructio
 4. Optional entity-graph expansion (follow relations)
 5. Optional **cross-encoder reranker** (Qwen3-Reranker-0.6B) — on by default; kill-switch via `MEMORY_RERANK_ENABLED=0`
 6. Optional appended `memory_insights`, `memory_episodes`, and verbatim `chat_messages` (low-weight RRF merge)
+
+### Memory router (RIP 15)
+
+The `search_memory` tool previously hard-coded `expand_entities + insights +
+episodes = True` on *every* call — a full fan-out for even a trivial lookup.
+When `ROBOTHOR_RIP_15_ENABLED` is set, it routes through
+`robothor/memory/router.py`, which classifies the query (heuristics) and queries
+only the stores that fit:
+
+| Class | Stores | Notes |
+|-------|--------|-------|
+| `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
+| `temporal` | facts + episodes | results recency-reordered (latest first) |
+| `how_to` | procedures + facts | |
+| `who_is` | facts + entity-graph expansion | |
+| `intent` | standing intents + facts | |
+| `default` | facts + insights | no episode/entity fan-out |
+
+Results from each store are fused with the shared `rrf_fuse` (k=60, in
+`robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
+signature for back-compat; only the tool path changes.
+
+## Symbolic short-term memory (RIP 13)
+
+Long tool-heavy runs blow the context budget. Beyond the existing offload
+(`session._offload_tool_result` writes large tool outputs to a tempfile),
+`robothor/engine/symbolic_memory.py` encodes the run's tool activity as a compact
+**Mermaid task-state graph** keyed by `node_id`. The agent reasons over the graph
+and calls `recall_node(node_id)` to read the byte-exact output of any step on
+demand (the TencentDB-Agent-Memory technique).
+
+Modes (`feature_flags.symbolic_memory_mode`, env `ROBOTHOR_RIP_13_MODE`):
+
+- `observe` (default when `ROBOTHOR_RIP_13_ENABLED=1`) — build the per-run graph
+  and log the would-be token savings; injected context is **unchanged** (safe).
+- `enforce` — the runner injects `render_injection_block()` in place of raw tool
+  tails. (Wired once the runner refactor lands; observe-mode is the current rollout.)
+
+Ratio knobs (ported from the source project): `ROBOTHOR_MEMORY_OFFLOAD_MILD_RATIO`
+(0.5), `ROBOTHOR_MEMORY_OFFLOAD_AGGRESSIVE_RATIO` (0.85),
+`ROBOTHOR_MEMORY_MMD_MAX_TOKEN_RATIO` (0.2). Tool: `recall_node` (readonly).
 
 ## Lifecycle
 
@@ -172,6 +223,62 @@ results = search_all_memory("standup decisions", limit=10)
 stats = run_maintenance()
 # {"archived": 3, "deleted": 15, "lifecycle": {"facts_scored": 5, "decay_updated": 200}}
 ```
+
+## Knowledge Vault (verbatim store, RIP 12)
+
+`memory_facts` is LLM-extracted, so values are paraphrased — fine for "Alice
+prefers Redis," unsafe for an account number or a credential. The Knowledge
+Vault (`robothor/memory/vault.py`) preserves values **byte-for-byte**. It is
+**not** the secrets vault (`robothor.vault` / `vault_secrets`); it is a
+searchable, tenant-scoped memory store.
+
+Safety invariants:
+
+- Only the **caption** is embedded — the value is never vectorized.
+- `memory_vault_search` returns captions + ids only, **never a value**; reading
+  a value requires `memory_vault_get`, which writes a `vault_access_log` row.
+- `high` sensitivity values are encrypted at rest (AES-256-GCM via the shared
+  `robothor.vault.crypto` master key); `low`/`medium` keep `value_exact`
+  plaintext. A DB `CHECK` enforces exactly one of `value_exact` / `value_enc`.
+
+```python
+from robothor.memory import vault
+
+# Store exact reference data (high → encrypted at rest)
+await vault.store_vault_entry("FakeVendorCo support line", "555-0142 ext 7",
+                              entry_type="contact_info", sensitivity="low")
+# Find by description (no value returned), then read the exact value (audited)
+hits = await vault.search_vault("vendor phone number")
+vault.get_vault_value(hits[0]["id"])  # {"value": "555-0142 ext 7", ...}
+```
+
+Tools: `memory_vault_store`, `memory_vault_search` (readonly), `memory_vault_get`.
+Gated by `ROBOTHOR_RIP_12_ENABLED` — tools stay dark and the table inert until
+the operator opts in (restart the engine after toggling). Global kill switch:
+`ROBOTHOR_DISABLE_ALL_RIPS=1`.
+
+## Intent Memory (prospective, RIP 14)
+
+Everything above is *retrospective*. `memory_intents` (`robothor/memory/intents.py`)
+models what the operator is *working toward* and persists it across sessions, so
+the main agent's heartbeat can advance standing objectives instead of only
+reacting. It's parallel to `session_goal` (per-run, evidence-gated); intents are
+longer-lived business objectives.
+
+Confirmation model:
+
+- `stated` intents (the operator/agent declared them) are `active` immediately.
+- `inferred` intents (proposed by the nightly `infer_intents_from_facts` LLM pass)
+  start as `proposed` and only become `active` via `confirm_intent(id, token)` with
+  a valid HMAC token (`ROBOTHOR_INTENT_HMAC_SECRET`) — the agent never
+  auto-activates a goal it invented.
+
+The top active intents are injected into the warmup preamble (`active_intents`
+section). When a `session_goal` linked to an intent completes, the intent's
+`last_advanced_at` is bumped (loop closure); intents idle > 30 days go `dormant`.
+
+Tools: `intent_add`, `intent_search` / `intent_list` (readonly), `intent_advance`.
+Gated by `ROBOTHOR_RIP_14_ENABLED`.
 
 ## Knowledge Graph
 

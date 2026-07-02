@@ -23,16 +23,28 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 @_handler("search_memory")
 async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.engine.feature_flags import is_rip_enabled
+
+    # RIP 15: route through the query-classed memory router instead of the
+    # hard-coded full fan-out. Falls back below when the flag is off.
+    if is_rip_enabled(15):
+        return await _search_memory_routed(args, ctx)
+
+    from robothor.engine.feature_flags import narrow_memory_search_enabled
     from robothor.memory.facts import search_facts
     from robothor.memory.outcomes import log_fact_access
 
+    # R2: by default the tool fans out (entities + insights + episodes) on every
+    # call — expensive for a narrow lookup. When MEMORY_NARROW_SEARCH is on, a
+    # call defaults to facts-only and the caller opts into fan-out via args.
+    fan_out = not narrow_memory_search_enabled()
     results = await search_facts(
         args.get("query", ""),
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
-        expand_entities=True,
-        include_insights=True,
-        include_episodes=True,
+        expand_entities=bool(args.get("expand_entities", fan_out)),
+        include_insights=bool(args.get("include_insights", fan_out)),
+        include_episodes=bool(args.get("include_episodes", fan_out)),
     )
 
     # Log fact access for outcome attribution (best-effort).
@@ -63,6 +75,40 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     }
 
 
+async def _search_memory_routed(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """RIP 15 path — query-classed routing via robothor.memory.router."""
+    from robothor.memory.outcomes import log_fact_access
+    from robothor.memory.router import recall
+
+    out = await recall(
+        args.get("query", ""),
+        limit=args.get("limit", 10),
+        tenant_id=ctx.tenant_id,
+    )
+    results = out["results"]
+
+    # Outcome attribution: only fact-sourced rows feed the blame loop.
+    run_id = getattr(ctx, "run_id", None)
+    agent_id = getattr(ctx, "agent_id", None)
+    if run_id:
+        fact_ids = [r["id"] for r in results if r.get("source") == "fact" and r.get("id")]
+        if fact_ids:
+            await asyncio.to_thread(log_fact_access, str(run_id), fact_ids, agent_id, ctx.tenant_id)
+
+    return {
+        "query_class": out["query_class"],
+        "results": [
+            {
+                "fact": r.get("text", ""),
+                "category": r.get("category", ""),
+                "source": r.get("source", "fact"),
+                "score": round(r.get("score", 0) or 0, 4),
+            }
+            for r in results
+        ],
+    }
+
+
 @_handler("store_memory")
 async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.facts import extract_facts, store_fact
@@ -78,6 +124,20 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     fact = {"fact_text": content, "category": "personal", "entities": [], "confidence": 0.5}
     fact_id = await store_fact(fact, content, content_type, tenant_id=ctx.tenant_id)
     return {"id": fact_id, "facts_stored": 1}
+
+
+@_handler("record_resolution")
+async def _record_resolution(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Record that an open item/alert/decision is resolved and retire it."""
+    from robothor.memory.resolution import record_resolution
+
+    return await record_resolution(
+        open_item=args.get("open_item", ""),
+        outcome=args.get("outcome", ""),
+        confirmed_by=args.get("confirmed_by", ""),
+        tenant_id=ctx.tenant_id,
+        agent_id=getattr(ctx, "agent_id", "unknown"),
+    )
 
 
 @_handler("get_entity")

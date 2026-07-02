@@ -580,12 +580,14 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not body:
             return {"error": "body is required"}
 
-        # Fetch thread to extract headers, recipients, and Message-ID
+        # Fetch thread to extract headers, recipients, and Message-ID.
+        # NOTE: Do NOT include metadataHeaders here — gws CLI v0.8.0 does not
+        # correctly serialize array query params, causing the API to return 0
+        # headers per message.  Fetching all headers (format=metadata only) works.
         fetch_params = {
             "userId": "me",
             "id": thread_id,
             "format": "metadata",
-            "metadataHeaders": ["From", "To", "Cc", "Subject", "Message-ID"],
         }
         thread_data = _run_gws(
             ["gmail", "users", "threads", "get", "--params", _json.dumps(fetch_params)]
@@ -707,11 +709,11 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         # Guard: prevent duplicate replies to the same thread
         if thread_id:
             try:
+                # NOTE: Do NOT include metadataHeaders — gws CLI bug (see gws_gmail_reply).
                 check_params = {
                     "userId": "me",
                     "id": thread_id,
                     "format": "metadata",
-                    "metadataHeaders": ["From"],
                 }
                 thread_data = _run_gws(
                     [

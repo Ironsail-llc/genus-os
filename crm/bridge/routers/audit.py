@@ -44,7 +44,7 @@ async def get_audit_events(
         return {"events": events, "count": len(events)}
     except Exception as e:
         logger.error("Audit events query failed: %s", e)
-        return {"events": [], "count": 0, "error": str(e)}
+        return {"events": [], "count": 0, "error": "internal error"}
 
 
 @router.get("/guardrails")
@@ -105,7 +105,7 @@ async def get_guardrail_events(
         return {"events": events, "count": len(events)}
     except Exception as e:
         logger.error("Guardrail events query failed: %s", e)
-        return {"events": [], "count": 0, "error": str(e)}
+        return {"events": [], "count": 0, "error": "internal error"}
 
 
 @router.get("/stats")
@@ -128,7 +128,7 @@ async def get_audit_stats(
         }
     except Exception as e:
         logger.error("Audit stats failed: %s", e)
-        return {"error": str(e)}
+        return {"error": "internal error"}
 
 
 def _get_guardrail_stats(hours: int) -> dict[str, Any]:

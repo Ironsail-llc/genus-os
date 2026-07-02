@@ -31,6 +31,7 @@ from robothor.memory.drift import (
     compute_fact_hash,
     evaluate_drift,
 )
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ VALID_CATEGORIES = [
     "event",
     "contact",
     "technical",
+    "resolution",
 ]
 
 # JSON schema for Ollama structured output.
@@ -72,7 +74,7 @@ Rules:
 - Each fact MUST reference at least one specific named entity (person, organization, place, project, technology)
 - Each fact MUST be specific to this content — NOT generic knowledge anyone would know
 - Include temporal context when present (dates, "yesterday", "next week", etc.)
-- Categorize each fact: decision (someone decided X), preference (someone prefers X), event (X happened), contact (relationship info), project (work/technical), personal (personal life), technical (system/code)
+- Categorize each fact: decision (someone decided X), preference (someone prefers X), event (X happened), resolution (someone resolved/closed/confirmed an open item, alert, or question), contact (relationship info), project (work/technical), personal (personal life), technical (system/code)
 
 Skip:
 - Greetings, filler, partial sentences
@@ -166,8 +168,8 @@ def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
     for fact in valid_facts:
         text = fact["fact_text"]
 
-        # Too short to be meaningful
-        if len(text) < 15:
+        # Too short to be meaningful (resolutions may be terse but high-value).
+        if len(text) < 15 and fact["category"] != "resolution":
             logger.debug("Rejected (too short): %s", text[:50])
             continue
 
@@ -264,6 +266,54 @@ async def _extract_facts_inner(
     return []
 
 
+def _write_dedup_enabled() -> bool:
+    """Reject byte-identical active facts at write time (WS-3). Default OFF.
+
+    Requires migration 078 (partial unique index on active (tenant_id,
+    content_hash)). When on, store_fact/store_facts_batch
+    ``ON CONFLICT ... DO NOTHING`` and return the existing id instead of minting
+    a fresh copy of a fact already in memory. Do NOT enable before 078 is applied.
+    """
+    raw = os.environ.get("MEMORY_WRITE_DEDUP", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+_INSERT_FACT_SQL = """
+    INSERT INTO memory_facts
+    (fact_text, category, entities, confidence, source_content, source_type,
+     embedding, metadata, tenant_id, content_hash)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+_INSERT_FACT_ON_CONFLICT = (
+    " ON CONFLICT (tenant_id, content_hash) "
+    "WHERE is_active = TRUE AND content_hash IS NOT NULL DO NOTHING"
+)
+
+
+def _insert_fact(cur: Any, params: tuple[Any, ...], *, tenant_id: str, content_hash: str) -> int:
+    """Insert one memory_facts row and return its id.
+
+    With MEMORY_WRITE_DEDUP on, a byte-identical active fact short-circuits to
+    the existing row's id (no new row) via the partial unique index. With the
+    flag off this is a plain ``INSERT ... RETURNING id`` (unchanged behaviour).
+    """
+    if _write_dedup_enabled():
+        cur.execute(_INSERT_FACT_SQL + _INSERT_FACT_ON_CONFLICT + " RETURNING id", params)
+        row = cur.fetchone()
+        if row is not None:
+            return int(row[0])
+        cur.execute(
+            "SELECT id FROM memory_facts "
+            "WHERE tenant_id = %s AND content_hash = %s AND is_active = TRUE "
+            "ORDER BY id DESC LIMIT 1",
+            (tenant_id, content_hash),
+        )
+        existing = cur.fetchone()
+        return int(existing[0]) if existing else 0
+    cur.execute(_INSERT_FACT_SQL + " RETURNING id", params)
+    return int(cur.fetchone()[0])
+
+
 async def store_fact(
     fact: dict[str, Any],
     source_content: str,
@@ -292,14 +342,8 @@ async def store_fact(
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO memory_facts
-            (fact_text, category, entities, confidence, source_content, source_type,
-             embedding, metadata, tenant_id, content_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
+        fact_id = _insert_fact(
+            cur,
             (
                 fact["fact_text"],
                 fact["category"],
@@ -312,8 +356,9 @@ async def store_fact(
                 resolved_tenant,
                 content_hash,
             ),
+            tenant_id=resolved_tenant,
+            content_hash=content_hash,
         )
-        fact_id: int = cur.fetchone()[0]
 
     return fact_id
 
@@ -356,28 +401,25 @@ async def store_facts_batch(
             content_hash = compute_fact_hash(
                 fact["fact_text"], tenant_id=resolved_tenant, category=fact["category"]
             )
-            cur.execute(
-                """
-                INSERT INTO memory_facts
-                (fact_text, category, entities, confidence, source_content, source_type,
-                 embedding, metadata, tenant_id, content_hash)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    fact["fact_text"],
-                    fact["category"],
-                    fact.get("entities", []),
-                    fact.get("confidence", 1.0),
-                    source_content,
-                    source_type,
-                    embedding,
-                    json.dumps(metadata or {}),
-                    resolved_tenant,
-                    content_hash,
-                ),
+            ids.append(
+                _insert_fact(
+                    cur,
+                    (
+                        fact["fact_text"],
+                        fact["category"],
+                        fact.get("entities", []),
+                        fact.get("confidence", 1.0),
+                        source_content,
+                        source_type,
+                        embedding,
+                        json.dumps(metadata or {}),
+                        resolved_tenant,
+                        content_hash,
+                    ),
+                    tenant_id=resolved_tenant,
+                    content_hash=content_hash,
+                )
             )
-            ids.append(cur.fetchone()[0])
 
     logger.info("store_facts_batch: stored %d facts with batch embeddings", len(ids))
     return ids
@@ -516,6 +558,7 @@ async def search_insights(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        apply_hnsw_session(cur)
         cur.execute(
             """
             SELECT id, insight_text, source_fact_ids, categories, entities,
@@ -541,6 +584,216 @@ def _reranker_enabled_default() -> bool:
     """Feature flag for reranker. Default on; kill-switch via env."""
     raw = os.environ.get("MEMORY_RERANK_ENABLED", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def _rank_blend_enabled() -> bool:
+    """Blend importance/recency/access into final ranking. Default on."""
+    raw = os.environ.get("MEMORY_RANK_BLEND", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _dedup_enabled() -> bool:
+    """Suppress near-duplicate hits in results. Default on."""
+    raw = os.environ.get("MEMORY_DEDUP", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _temporal_coherence_enabled() -> bool:
+    """Supersession-aware temporal ranking (R1). Default OFF (observe first).
+
+    When on, a `decision` fact that has been superseded — either explicitly
+    (`superseded_by` set by conflict resolution) or by inference (a later
+    decision sharing the same topic) — is demoted, and a fresh decision is
+    boosted. Fixes "agent acts on a stale decision": the latest decision wins
+    even when an older one is a closer lexical match. Gated so it can be
+    measured on the memory-eval suite before flipping on.
+    """
+    raw = os.environ.get("MEMORY_TEMPORAL_COHERENCE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _rerank_wide_enabled() -> bool:
+    """Rerank a WIDE survivor pool, then let `_blend_rank` cut to `limit` (WS-1).
+
+    Default OFF (observe). When off, the cross-encoder truncates to `limit`
+    *before* the recency/importance blend runs, so a fresh, high-importance,
+    on-topic fact the 0.6B reranker drops can never be rescued. When on, rerank
+    keeps ``max(limit*4, 24)`` survivors — each carrying its yes/no verdict — and
+    the blend does the final cut, with a small bonus for ``rerank_relevant=yes``.
+    """
+    raw = os.environ.get("MEMORY_RERANK_WIDE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _episode_merge_enabled() -> bool:
+    """Merge episodes/insights/chat-turns on the RERANKED path too (WS-1.3).
+
+    Default OFF. The reranker branch used to return before the
+    include_episodes / second include_insights append, so the (only populated)
+    episode store was invisible whenever the reranker was on (the prod default).
+    When on, both the reranked and fallback paths share ``_append_auxiliary``.
+    """
+    raw = os.environ.get("MEMORY_EPISODE_MERGE", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _recency_key(r: dict[str, Any]) -> tuple[float, int]:
+    """Sortable "how recent" key: (created_at epoch, id).
+
+    For co-ingested facts (same batch → identical created_at), `id` (serial,
+    monotonic with insertion order) is the only signal of which came later —
+    so it is the tie-breaker for both the deterministic sort and supersession
+    inference.
+    """
+    ca = r.get("created_at")
+    ts = ca.timestamp() if ca is not None and hasattr(ca, "timestamp") else 0.0
+    return (ts, int(r.get("id") or 0))
+
+
+# Recency half-life: a 7-day half-life keeps a usable gradient across the
+# week+ window where most queries live (a 72h half-life flattened everything
+# older than a few days to ~0, so recency stopped differentiating).
+_RECENCY_HALFLIFE_HOURS = 168.0
+
+
+def _norm_tokens(text: str) -> frozenset[str]:
+    return frozenset(re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split())
+
+
+def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict[str, Any]]:
+    """Drop near-duplicate rows, keeping the higher-ranked one.
+
+    Catches exact dups, subsets, and lexical near-dups (Jaccard token overlap
+    >= threshold) — e.g. the camera-detection spam and reworded restatements
+    that otherwise fill the top of a result set. Conservative: only suppresses
+    clear textual overlap, not merely topically-related facts.
+    """
+    kept: list[dict[str, Any]] = []
+    kept_tokens: list[frozenset[str]] = []
+    for r in results:
+        txt = r.get("fact_text") or r.get("insight_text") or r.get("content") or ""
+        toks = _norm_tokens(txt)
+        is_dup = False
+        for kt in kept_tokens:
+            if not toks or not kt:
+                continue
+            union = len(toks | kt)
+            jac = len(toks & kt) / union if union else 0.0
+            if jac >= threshold or toks <= kt or kt <= toks:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(r)
+            kept_tokens.append(toks)
+    return kept
+
+
+def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Unified-score re-rank (relevance + recency + importance + access), then dedupe.
+
+    Per live feedback, recency is weighted heavily (operator wants the freshest
+    of several relevant hits surfaced first) while relevance stays the largest
+    single signal so on-topic hits keep the top. Near-duplicates are then
+    collapsed so the first few results are distinct.
+    """
+    coherence_on = _temporal_coherence_enabled()
+    # When the wide-rerank pool is in use, the candidate list mixes cross-encoder
+    # "yes" and "no" rows; fold the verdict in as a soft signal (not a hard gate)
+    # so relevance stays authoritative but a confirmed-relevant hit is nudged up.
+    wide_on = _rerank_wide_enabled()
+
+    # R1: read-time supersession inference. Among `decision` facts, a decision
+    # that shares a topic (>=2 entities) with a LATER decision is treated as
+    # superseded — the freshest decision on a topic is the current one. >=2
+    # shared entities avoids cross-linking unrelated decisions that merely
+    # mention the same person.
+    inferred_superseded: set[int] = set()
+    if coherence_on:
+        decisions = [r for r in results if (r.get("category") or "") == "decision"]
+        for r in decisions:
+            r_ents = set(r.get("entities") or [])
+            if len(r_ents) < 2:
+                continue
+            r_key = _recency_key(r)
+            for o in decisions:
+                if o is r:
+                    continue
+                if len(r_ents & set(o.get("entities") or [])) >= 2 and _recency_key(o) > r_key:
+                    inferred_superseded.add(id(r))
+                    break
+
+    for i, r in enumerate(results):
+        rel = r.get("similarity")
+        rel = (1.0 - i / (len(results) or 1)) if rel is None else float(rel)
+        imp = r.get("importance_score")
+        imp = 0.5 if imp is None else float(imp)
+        age_s = r.get("age_seconds")
+        recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / _RECENCY_HALFLIFE_HOURS)
+        acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
+        blend = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
+        if wide_on and r.get("rerank_relevant") == "yes":
+            blend += 0.10  # cross-encoder confirmed relevance — soft boost, not a gate
+        if coherence_on:
+            if r.get("superseded_by") is not None or id(r) in inferred_superseded:
+                blend *= 0.5  # demote known-stale / superseded decision
+            elif (r.get("category") or "") == "decision":
+                blend *= 1.0 + 0.30 * recency  # freshest decision floats up
+        r["_blend"] = blend
+    # Deterministic newest-wins tie-break: on equal _blend, prefer the later
+    # fact (created_at, id). Safe unflagged — only matters on exact ties.
+    ranked = sorted(results, key=lambda x: (x.get("_blend", 0.0), *_recency_key(x)), reverse=True)
+    for r in ranked:
+        r.pop("_blend", None)
+    if _dedup_enabled():
+        ranked = _dedupe(ranked)
+    return ranked[:limit]
+
+
+async def _append_auxiliary(
+    result: list[dict[str, Any]],
+    *,
+    query: str,
+    embedding: list[float],
+    tenant_id: str,
+    _tenant: str,
+    include_insights: bool,
+    include_episodes: bool,
+    include_chat_turns: bool,
+) -> list[dict[str, Any]]:
+    """Append cross-domain insights, episodic summaries, and verbatim chat turns.
+
+    Each leg is best-effort. Shared by the reranker and fallback paths so the
+    populated episode store is no longer dropped on the reranked path (WS-1.3).
+    """
+    if include_insights:
+        try:
+            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
+            result.extend(insights)
+        except Exception:
+            pass  # Insight search is best-effort
+    if include_episodes:
+        try:
+            from robothor.memory.episodes import search_episodes
+
+            result.extend(await search_episodes(query, limit=3, tenant_id=tenant_id))
+        except Exception:
+            pass  # Episode search is best-effort
+    if include_chat_turns:
+        try:
+            from robothor.engine.chat_store import search_chat_turns
+
+            turns = await asyncio.to_thread(
+                search_chat_turns, embedding, limit=5, tenant_id=_tenant
+            )
+            for t in turns:
+                t["fact_text"] = f"[{t['role']}] {t['content']}"
+                t["category"] = "chat_turn"
+                t["confidence"] = 0.5
+                t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
+            result.extend(turns)
+        except Exception:
+            pass  # Chat turn search is best-effort
+    return result
 
 
 async def search_facts(
@@ -580,17 +833,26 @@ async def search_facts(
     embedding = await llm_client.get_embedding_async(query)
 
     active_clause = "AND is_active = TRUE" if active_only else ""
-    fetch_limit = max(30, limit * 3)
+    # WS-1.4: modestly widen the candidate pool when the wide-rerank path is on,
+    # giving the blend more headroom. Kept conservative because the cross-encoder
+    # scores every candidate (per-candidate Ollama cost).
+    fetch_limit = max(45, limit * 3) if _rerank_wide_enabled() else max(30, limit * 3)
     _tenant = tenant_id or DEFAULT_TENANT
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Vector search
+        # Widen the HNSW candidate budget for this txn so the active-row filter
+        # has headroom. Live build is pgvector 0.8.2 with a partial active index
+        # (migrations 073/074) + optional iterative_scan; see apply_hnsw_session.
+        apply_hnsw_session(cur)
+
+        # Vector search — also pull the ranking signals (importance/recency/access).
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at,
+                   metadata, created_at, importance_score, access_count, superseded_by,
+                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
             WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause}
@@ -605,7 +867,8 @@ async def search_facts(
         cur.execute(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at,
+                   metadata, created_at, importance_score, access_count, superseded_by,
+                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
             FROM memory_facts
             WHERE tsv @@ plainto_tsquery('english', %s) AND tenant_id = %s
@@ -696,16 +959,39 @@ async def search_facts(
             for c in candidates:
                 c["content"] = c.get("fact_text", "")
             t0 = time.time()
+            # WS-1: decouple the reranker survivor pool from the final limit so
+            # the blend can rescue a fresh/high-importance fact the cross-encoder
+            # under-scores. When off, behaviour is unchanged (truncate to limit).
+            rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
             reranked: list[dict[str, Any]] = await rerank_with_fallback(
-                query, candidates, top_k=limit
+                query, candidates, top_k=rerank_topk
             )
             logger.info(
-                "search_facts rerank: %d candidates → %d results in %dms",
+                "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(candidates),
                 len(reranked),
+                rerank_topk,
                 int((time.time() - t0) * 1000),
             )
-            if include_insights:
+            # Unified-score re-rank: relevance-dominant, with importance/recency/
+            # access as tie-breakers (surfaces the most recent of equally-relevant hits).
+            if _rank_blend_enabled():
+                reranked = _blend_rank(reranked, limit)
+            else:
+                reranked = reranked[:limit]
+            if _episode_merge_enabled():
+                reranked = await _append_auxiliary(
+                    reranked,
+                    query=query,
+                    embedding=embedding,
+                    tenant_id=tenant_id,
+                    _tenant=_tenant,
+                    include_insights=include_insights,
+                    include_episodes=include_episodes,
+                    include_chat_turns=include_chat_turns,
+                )
+            elif include_insights:
+                # Legacy reranked-path behaviour (flag off): insights only.
                 try:
                     insights = await search_insights(query, limit=3, tenant_id=tenant_id)
                     reranked.extend(insights)
@@ -715,44 +1001,17 @@ async def search_facts(
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)
 
-    result = candidates[:limit]
-
-    # Append cross-domain insights if requested
-    if include_insights:
-        try:
-            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
-            result.extend(insights)
-        except Exception:
-            pass  # Insight search is best-effort
-
-    # Append episodic summaries if requested
-    if include_episodes:
-        try:
-            from robothor.memory.episodes import search_episodes
-
-            episodes = await search_episodes(query, limit=3, tenant_id=tenant_id)
-            result.extend(episodes)
-        except Exception:
-            pass  # Episode search is best-effort
-
-    # Append verbatim chat turns (low-weight — facts still dominate)
-    if include_chat_turns:
-        try:
-            from robothor.engine.chat_store import search_chat_turns
-
-            turns = await asyncio.to_thread(
-                search_chat_turns, embedding, limit=5, tenant_id=_tenant
-            )
-            for t in turns:
-                t["fact_text"] = f"[{t['role']}] {t['content']}"
-                t["category"] = "chat_turn"
-                t["confidence"] = 0.5
-                t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
-            result.extend(turns)
-        except Exception:
-            pass  # Chat turn search is best-effort
-
-    return result
+    result = _blend_rank(candidates, limit) if _rank_blend_enabled() else candidates[:limit]
+    return await _append_auxiliary(
+        result,
+        query=query,
+        embedding=embedding,
+        tenant_id=tenant_id,
+        _tenant=_tenant,
+        include_insights=include_insights,
+        include_episodes=include_episodes,
+        include_chat_turns=include_chat_turns,
+    )
 
 
 def get_memory_stats(tenant_id: str = "") -> dict[str, Any]:

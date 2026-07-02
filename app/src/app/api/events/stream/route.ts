@@ -60,6 +60,9 @@ export async function GET(request: NextRequest) {
         // Track last IDs per stream
         const lastIds: Partial<Record<StreamName, string>> = {};
         for (const s of requestedStreams) {
+          // Validate the key against the allow-list before using it as an
+          // object property to block remote property injection.
+          if (!isValidStream(s)) continue;
           lastIds[s] = "$"; // Only new events from now
         }
 

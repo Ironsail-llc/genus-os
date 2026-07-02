@@ -1,0 +1,230 @@
+id: memory-recall-v1
+description: >
+  Memory retrieval quality benchmark for the Genus OS memory system.
+  Seeds known fixture facts into an isolated tenant, runs the real hybrid
+  retrieval path, and scores recall, temporal/supersession correctness,
+  verbatim exactness, and multi-session persona consistency. All fixtures
+  are de-personalized (Alice / Bob / FakeVendorCo) per the platform rule.
+k: 5
+
+cases:
+  # --- recall@k: can we surface the right fact for a paraphrased query? ---
+  - id: recall-project-owner
+    kind: recall
+    query: "Who is responsible for the Helios project?"
+    gold: "Alice manages the Helios project"
+    seed:
+      - fact_text: "Alice manages the Helios project at FakeVendorCo."
+        category: project
+        entities: [Alice, Helios, FakeVendorCo]
+      - fact_text: "Bob prefers async standups over live meetings."
+        category: preference
+        entities: [Bob]
+      - fact_text: "The Helios project ships in Q3."
+        category: project
+        entities: [Helios]
+
+  - id: recall-contact-role
+    kind: recall
+    query: "What does Bob do at FakeVendorCo?"
+    gold: "Bob is the security lead"
+    seed:
+      - fact_text: "Bob is the security lead at FakeVendorCo."
+        category: contact
+        entities: [Bob, FakeVendorCo]
+      - fact_text: "Carol joined FakeVendorCo as a designer."
+        category: contact
+        entities: [Carol, FakeVendorCo]
+
+  # --- temporal: latest decision must win over the superseded one ---
+  - id: temporal-storage-decision
+    kind: temporal
+    query: "What storage engine did Alice decide to use for Helios?"
+    gold: "switch Helios storage to SQLite"
+    seed:
+      - fact_text: "Alice decided to use Postgres for Helios storage."
+        category: decision
+        entities: [Alice, Helios, Postgres]
+      - fact_text: "Alice later decided to switch Helios storage to SQLite."
+        category: decision
+        entities: [Alice, Helios, SQLite]
+
+  # multi-step chain: the newest of three same-topic decisions must win
+  - id: temporal-decision-chain
+    kind: temporal
+    query: "What deployment target did Bob settle on for the Helios API?"
+    gold: "deploy the Helios API on Fly.io"
+    seed:
+      - fact_text: "Bob decided to deploy the Helios API on Heroku."
+        category: decision
+        entities: [Bob, Helios, Heroku]
+      - fact_text: "Bob then decided to deploy the Helios API on Render."
+        category: decision
+        entities: [Bob, Helios, Render]
+      - fact_text: "Bob finally decided to deploy the Helios API on Fly.io."
+        category: decision
+        entities: [Bob, Helios, Fly.io]
+
+  # reaffirmation: returning to an earlier choice — the latest decision wins
+  - id: temporal-reaffirm
+    kind: temporal
+    query: "Which CI provider is Helios using now?"
+    gold: "move Helios CI back to GitHub Actions"
+    seed:
+      - fact_text: "Alice decided to run Helios CI on GitHub Actions."
+        category: decision
+        entities: [Alice, Helios, GitHub Actions]
+      - fact_text: "Alice decided to move Helios CI to CircleCI."
+        category: decision
+        entities: [Alice, Helios, CircleCI]
+      - fact_text: "Alice decided to move Helios CI back to GitHub Actions."
+        category: decision
+        entities: [Alice, Helios, GitHub Actions]
+
+  # --- verbatim: exact strings must survive retrieval (Vault target) ---
+  - id: verbatim-support-line
+    kind: verbatim
+    query: "FakeVendorCo support phone number"
+    gold_exact: "555-0142 ext 7"
+    seed:
+      - fact_text: "FakeVendorCo support line is 555-0142 ext 7."
+        category: contact
+        entities: [FakeVendorCo]
+
+  - id: verbatim-account-id
+    kind: verbatim
+    query: "Helios billing account identifier"
+    gold_exact: "ACCT-HEL-00917"
+    seed:
+      - fact_text: "The Helios billing account id is ACCT-HEL-00917."
+        category: technical
+        entities: [Helios]
+
+  # --- persona: stable preference recalled across sessions ---
+  - id: persona-meeting-pref
+    kind: persona
+    query: "How does Bob like to run standups?"
+    gold: "async standups"
+    seed:
+      - fact_text: "Bob prefers async standups over live meetings."
+        category: preference
+        entities: [Bob]
+      - fact_text: "Bob reiterated he wants standups kept async."
+        category: preference
+        entities: [Bob]
+
+  # --- noise floor: a FRESH high-importance fact must survive a DIVERSE
+  #     distractor cloud that is lexically STRONGER to the query. This is the
+  #     operator's real failure (generic facts returned instead of the answer).
+  #     Per-seed importance/age_hours break the harness's co-creation symmetry.
+  - id: noise-fresh-buried
+    kind: noise
+    query: "Is the FakeVendorCo VPN security incident resolved?"
+    gold: "reviewed and closed as a false alarm"
+    k: 5
+    seed:
+      # gold — fresh + high importance, deliberately weaker query overlap
+      - fact_text: "Alice reviewed and closed as a false alarm the odd weeknight sign-in to FakeVendorCo."
+        category: event
+        entities: [FakeVendorCo, Alice]
+        importance: 0.9
+        age_hours: 1
+      # distractors — stale, low importance, HIGH lexical overlap with the query
+      - fact_text: "A suspicious VPN login to FakeVendorCo was detected from an unknown device."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.35
+        age_hours: 72
+      - fact_text: "FakeVendorCo security raised a VPN access alert that needs review."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.35
+        age_hours: 80
+      - fact_text: "The FakeVendorCo VPN security incident remains an open item pending triage."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 96
+      - fact_text: "Unusual VPN traffic on the FakeVendorCo network was logged for the security team."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 110
+      - fact_text: "FakeVendorCo rotated VPN credentials after the access incident."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 120
+      - fact_text: "The FakeVendorCo security incident response runbook covers VPN compromise."
+        category: technical
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 200
+      - fact_text: "A VPN security advisory was circulated to the FakeVendorCo engineering team."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 150
+      - fact_text: "FakeVendorCo's VPN gateway logs are retained for ninety days for security review."
+        category: technical
+        entities: [FakeVendorCo]
+        importance: 0.3
+        age_hours: 300
+
+  # --- resolution after detection: a detection event is later RESOLVED; a query
+  #     for the OUTCOME must return the resolution, not the open detection.
+  - id: resolution-after-detection
+    kind: resolution
+    query: "What was the outcome of the unrecognized FakeVendorCo login alert?"
+    gold: "Bob confirmed the FakeVendorCo login was legitimate"
+    k: 5
+    seed:
+      - fact_text: "An unrecognized login to FakeVendorCo was detected and flagged for review."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 48
+      - fact_text: "Bob confirmed the FakeVendorCo login was legitimate and closed the alert."
+        category: decision
+        entities: [Bob, FakeVendorCo]
+        importance: 0.9
+        age_hours: 1
+      - fact_text: "FakeVendorCo uses Okta for single sign-on."
+        category: technical
+        entities: [FakeVendorCo, Okta]
+        importance: 0.4
+        age_hours: 240
+      - fact_text: "The FakeVendorCo login alert was escalated to the on-call engineer overnight."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.4
+        age_hours: 40
+
+  # --- resolution capture via the EXTRACTION path: a raw confirmation turn must
+  #     become a discrete fact recording the outcome (exercises WS-4 capture).
+  - id: resolution-capture-ingest
+    kind: resolution
+    seed_mode: ingest
+    query: "Did Bob resolve the FakeVendorCo login alert?"
+    gold: "legitimate"
+    k: 5
+    seed:
+      - source_content: "Bob: Yes — that unrecognized FakeVendorCo login alert from last night was me. It is legitimate, please mark it resolved and close it."
+
+  # --- event-category temporal: latest EVENT must win (R1 only acts on
+  #     decisions, so this must be carried by recency, not supersession).
+  - id: temporal-event-latest
+    kind: temporal
+    query: "What is the current status of the FakeVendorCo data migration?"
+    gold: "migration completed successfully"
+    seed:
+      - fact_text: "The FakeVendorCo data migration started and is in progress."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 72
+      - fact_text: "The FakeVendorCo data migration completed successfully."
+        category: event
+        entities: [FakeVendorCo]
+        importance: 0.6
+        age_hours: 1

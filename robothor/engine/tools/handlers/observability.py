@@ -350,6 +350,110 @@ async def _get_fleet_achievement_score(args: dict[str, Any], ctx: ToolContext) -
     return await asyncio.to_thread(_query)
 
 
+@_handler("get_accretion_ledger")
+async def _get_accretion_ledger(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Self-improvement health: skill accretion + judge volume + reward-hack divergence.
+
+    One line for the evening summary / heartbeat. The DIVERGENCE list is the
+    tripwire: agents whose synthetic benchmark passes but whose judge-measured
+    real-outcome score is much lower — i.e. acing the exam while failing in
+    reality (Phase 4c).
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = getattr(ctx, "tenant_id", None) or DEFAULT_TENANT
+    window_days = int(args.get("window_days", 7))
+    gap_threshold = float(args.get("gap_threshold", 0.25))
+
+    def _query() -> dict[str, Any]:
+        from robothor.db.connection import get_connection
+        from robothor.engine.goals import compute_goal_metrics
+        from robothor.engine.skills import compute_skill_state, load_skills, read_skill_meta
+
+        ws = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+
+        # Skill accretion (file-level; no network).
+        skills = load_skills()
+        total = len(skills)
+        archived = 0
+        usage: list[tuple[str, int]] = []
+        for name in skills:
+            meta = read_skill_meta(name) or {}
+            if compute_skill_state(meta) == "archived":
+                archived += 1
+            usage.append((name, int(meta.get("usage_count", 0))))
+        usage.sort(key=lambda x: x[1], reverse=True)
+        top_used = [f"{n}({c})" for n, c in usage[:3] if c > 0]
+
+        added = 0
+        try:
+            out = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    ws,
+                    "log",
+                    f"--since={window_days} days ago",
+                    "--diff-filter=A",
+                    "--name-only",
+                    "--pretty=format:",
+                    "--",
+                    "agents/skills/*/SKILL.md",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            added = len([ln for ln in out.stdout.splitlines() if ln.strip().endswith("SKILL.md")])
+        except Exception:  # noqa: BLE001
+            added = -1  # signal "couldn't read git"
+
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM agent_reviews WHERE reviewer_type='judge' "
+                "AND created_at > NOW() - make_interval(days => %s)",
+                (window_days,),
+            )
+            judge_rows = cur.fetchone()[0]
+            cur.execute(
+                "SELECT DISTINCT agent_id FROM agent_reviews WHERE reviewer_type='judge' "
+                "AND created_at > NOW() - make_interval(days => %s)",
+                (window_days,),
+            )
+            judged_agents = [r[0] for r in cur.fetchall()]
+
+        divergent: list[dict[str, Any]] = []
+        for agent_id in judged_agents:
+            m = compute_goal_metrics(agent_id, window_days=window_days, tenant_id=tenant_id)
+            ja, bp = m.get("goal_achievement"), m.get("benchmark_pass_rate")
+            if ja is not None and bp is not None and (bp - ja) >= gap_threshold:
+                divergent.append(
+                    {
+                        "agent_id": agent_id,
+                        "benchmark": round(bp, 2),
+                        "judge": round(ja, 2),
+                        "gap": round(bp - ja, 2),
+                    }
+                )
+        divergent.sort(key=lambda d: d["gap"], reverse=True)
+
+        return {
+            "skills_total": total,
+            "skills_added_7d": added,
+            "skills_archived": archived,
+            "top_used": top_used,
+            "judge_rows_7d": judge_rows,
+            "divergent": divergent,
+        }
+
+    return await asyncio.to_thread(_query)
+
+
 @_handler("list_agent_reviews")
 async def _list_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """List recent Buddy reviews for an agent.

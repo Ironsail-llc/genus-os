@@ -41,6 +41,39 @@ def register_post_compress_hook(fn: Callable[..., Any]) -> None:
     _post_compress_hooks.append(fn)
 
 
+# Flat char-equivalent cost of an image block (≈1500 tokens after the /4),
+# matching typical vision token accounting. Used so multimodal content is
+# sized realistically — and so stripping an image to a text placeholder
+# (compaction G7 / Rip 18) produces a *visible* token reduction.
+_IMAGE_CHARS_EQUIV = 6000
+
+
+def _content_chars(content: Any) -> int:
+    """Char-equivalent size of a message ``content`` (str OR content-block list).
+
+    Plain string → its length. A content-block list (multimodal) → sum of text
+    block lengths + a flat per-image cost. The old code did ``len(content)`` on
+    a list, which counted the *number of blocks* (≈2), so text-in-list was
+    ignored and a base64 image counted as ~0 — under-sizing vision context.
+    """
+    if not content:
+        return 0
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        chars = 0
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") in ("image_url", "image"):
+                    chars += _IMAGE_CHARS_EQUIV
+                else:
+                    chars += len(block.get("text") or block.get("content") or "")
+            else:
+                chars += len(str(block))
+        return chars
+    return len(str(content))
+
+
 def _real_tokenizer_enabled() -> bool:
     import os
 
@@ -55,10 +88,10 @@ def _real_tokenizer_enabled() -> bool:
 def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) -> int:
     """Token estimate for ``messages``.
 
-    Default is the fast char/4 heuristic (+400 per tool call). When a ``model``
-    is given AND ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` is set, uses
-    ``litellm.token_counter`` for an exact count, falling back to the heuristic
-    if the model is unknown to litellm.
+    Default is the multimodal-aware char/4 heuristic (+400 per tool call, images
+    sized via ``_content_chars``). When a ``model`` is given AND
+    ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` is set, uses ``litellm.token_counter``
+    for an exact count, falling back to the heuristic if the model is unknown.
     """
     if model and _real_tokenizer_enabled():
         try:
@@ -78,7 +111,7 @@ def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) ->
     for msg in messages:
         content = msg.get("content")
         if content:
-            total_chars += len(content)
+            total_chars += _content_chars(content)
         tool_calls = msg.get("tool_calls")
         if tool_calls:
             tool_call_count += len(tool_calls)

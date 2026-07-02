@@ -1,5 +1,7 @@
 """Tests for robothor.rag.context — context formatting (pure unit tests)."""
 
+from urllib.parse import urlparse
+
 from robothor.rag.context import SYSTEM_PROMPT, format_context, format_merged_context
 
 
@@ -78,7 +80,8 @@ class TestFormatMergedContext:
         ctx = format_merged_context([], web)
         assert "[Web 1]" in ctx
         assert "Wikipedia" in ctx
-        assert "https://en.wikipedia.org" in ctx
+        assert urlparse(web[0]["url"]).hostname == "en.wikipedia.org"
+        assert web[0]["url"] in ctx
 
     def test_combined(self):
         memory = [

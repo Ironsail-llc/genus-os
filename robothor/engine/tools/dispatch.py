@@ -51,11 +51,41 @@ def get_tool_whitelist() -> frozenset[str] | None:
     return _thread_tool_whitelist.get()
 
 
+# ── Deferred-tools allow-set (Rip 16 / G4) ─────────────────────────
+# When an agent's toolset is deferred, the runner records the agent's full
+# allowed tool set here. The tool_call meta-tool consults it so a discovered
+# tool outside the allow-list cannot be invoked (tools_denied is otherwise only
+# enforced by the advertised schema list, which deferral shrinks to core+meta).
+#
+# This is deliberately SEPARATE from _thread_tool_whitelist: it gates only
+# tool_call, not all dispatch, so it cannot wrongly restrict a non-deferring
+# sub-agent that inherits the parent task's context. Default None.
+_deferred_allowed_var: ContextVar[frozenset[str] | None] = ContextVar(
+    "_deferred_allowed_var", default=None
+)
+
+
+def set_deferred_allowed(allowed: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Record the deferred-run allow-set; returns a reset token."""
+    return _deferred_allowed_var.set(allowed)
+
+
+def clear_deferred_allowed(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior deferred allow-set state."""
+    _deferred_allowed_var.reset(token)
+
+
+def get_deferred_allowed() -> frozenset[str] | None:
+    """The current deferred-run allow-set, or None when not a deferred run."""
+    return _deferred_allowed_var.get()
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Context passed to every tool handler."""
 
     agent_id: str = ""
+    run_id: str = ""  # current AgentRun id — lets handlers find per-run state
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     workspace: str = ""
     user_id: str = ""
@@ -110,9 +140,12 @@ def _collect_handlers() -> dict[str, Any]:
         goal,
         gws,
         identity,
+        intents,
         jira,
+        judge,
         mcp_client,
         memory,
+        memory_vault,
         messaging,
         observability,
         pdf,
@@ -121,8 +154,10 @@ def _collect_handlers() -> dict[str, Any]:
         reports,
         skills,
         spawn,
+        symbolic,
         timing,
         todolist,
+        toolsearch,
         vault,
         vision,
         voice,
@@ -132,6 +167,9 @@ def _collect_handlers() -> dict[str, Any]:
     all_handlers: dict[str, Any] = {}
     for mod in [
         memory,
+        memory_vault,
+        intents,
+        symbolic,
         vision,
         web,
         apollo,
@@ -155,6 +193,7 @@ def _collect_handlers() -> dict[str, Any]:
         messaging,
         skills,
         jira,
+        judge,
         github_api,
         devops_metrics,
         identity,
@@ -162,6 +201,7 @@ def _collect_handlers() -> dict[str, Any]:
         mcp_client,
         timing,
         todolist,
+        toolsearch,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers
@@ -214,6 +254,7 @@ async def _execute_tool(
     args: dict[str, Any],
     *,
     agent_id: str = "",
+    run_id: str = "",
     tenant_id: str = "",
     workspace: str = "",
     user_id: str = "",
@@ -270,6 +311,7 @@ async def _execute_tool(
 
     ctx = ToolContext(
         agent_id=agent_id,
+        run_id=run_id,
         tenant_id=tenant_id,
         workspace=workspace,
         user_id=user_id,

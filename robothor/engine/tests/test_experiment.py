@@ -701,6 +701,37 @@ class TestExperimentGuardrails:
         changes = [{"file": "anywhere/file.py", "description": "whatever"}]
         assert _check_experiment_guardrails(config, changes) is None
 
+    def test_benchmark_suite_write_hard_denied_with_no_guardrails(self):
+        """An agent may never edit the benchmark suite it is graded against (Phase 0a)."""
+        config: dict[str, Any] = {"guardrails": []}
+        changes = [{"file": "docs/benchmarks/main/suite.yaml", "description": "tweak"}]
+        result = _check_experiment_guardrails(config, changes)
+        assert result is not None
+        assert "benchmark" in result.lower()
+
+    def test_benchmark_deny_resists_path_evasion(self):
+        """BUG-5: `docs//benchmarks/` and case tricks must not slip past the deny."""
+        config: dict[str, Any] = {"guardrails": []}
+        for evasion in (
+            "docs//benchmarks/main/suite.yaml",
+            "DOCS/Benchmarks/main/suite.yaml",
+            "./docs/benchmarks/main/suite.yaml",
+        ):
+            result = _check_experiment_guardrails(config, [{"file": evasion}])
+            assert result is not None, evasion
+            assert "benchmark" in result.lower()
+
+    def test_benchmark_suite_write_hard_denied_even_if_allowlisted(self):
+        """Hard-deny overrides any allowlist that re-adds docs/benchmarks/**."""
+        config = {
+            "guardrails": ["write_path_restrict"],
+            "write_path_allowlist": ["docs/benchmarks/**"],
+        }
+        changes = [{"file": "docs/benchmarks/main/suite.yaml", "description": "tweak"}]
+        result = _check_experiment_guardrails(config, changes)
+        assert result is not None
+        assert "benchmark" in result.lower()
+
     def test_write_path_restrict_allows_valid_path(self):
         config = {
             "guardrails": ["write_path_restrict"],
