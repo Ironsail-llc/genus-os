@@ -6,7 +6,10 @@ finds code via a first-party tool instead of shelling out through exec.
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from robothor.engine.tools.handlers.filesystem import _search_files
 from robothor.engine.tools.schemas import get_engine_schemas
@@ -35,6 +38,39 @@ async def test_no_matches_is_not_an_error(tmp_path):
 
 async def test_requires_pattern(tmp_path):
     assert "error" in await _search_files({}, _ctx(tmp_path))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+async def test_symlink_escaping_workspace_is_not_read(tmp_path):
+    """A symlink inside the workspace pointing at a secret outside it must not
+    have its contents scanned/returned."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("SUPERSECRET token here\n")
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "ok.py").write_text("SUPERSECRET is not here\n")
+    # A symlink living inside the workspace but pointing outside it.
+    (workspace / "leak.txt").symlink_to(secret)
+
+    out = await _search_files({"pattern": "SUPERSECRET"}, _ctx(workspace))
+    files = {m["file"] for m in out["matches"]}
+    assert not any("leak" in f for f in files), f"symlink target leaked: {out}"
+    # The genuine in-workspace file still matches.
+    assert any(f.endswith("ok.py") for f in files)
+
+
+async def test_single_file_truncation_flag(tmp_path):
+    """The single-file branch reports truncated=True when max_results is hit."""
+    big = tmp_path / "many.txt"
+    big.write_text("hit\n" * 50)
+    out = await _search_files(
+        {"pattern": "hit", "path": "many.txt", "max_results": 5}, _ctx(tmp_path)
+    )
+    assert out["count"] == 5
+    assert out["truncated"] is True
 
 
 def test_schema_registered():

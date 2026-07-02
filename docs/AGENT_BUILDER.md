@@ -534,6 +534,7 @@ model:
   fallbacks:
     - openrouter/minimax/minimax-m2.5
     - gemini/gemini-2.5-pro
+  reasoning_effort: medium                      # low | medium | high — thinking budget
 
 schedule:
   cron: "0 6-22/2 * * *"       # safety net every 2h

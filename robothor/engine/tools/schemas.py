@@ -2819,14 +2819,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    # ── Code intelligence: first-party content search (ripgrep-backed) so
-    #    agents don't shell out via exec to grep ──
+    # ── Code intelligence: first-party content search (pure-Python os.walk + re)
+    #    so agents don't shell out via exec to grep ──
     schemas["search_files"] = {
         "type": "function",
         "function": {
             "name": "search_files",
             "description": (
-                "Search file CONTENTS by regex across the workspace (fast, ripgrep). "
+                "Search file CONTENTS by regex across the workspace. "
                 "Prefer this over exec+grep for finding code. Returns file/line/text matches."
             ),
             "parameters": {

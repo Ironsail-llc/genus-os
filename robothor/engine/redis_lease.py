@@ -32,20 +32,28 @@ def default_owner() -> str:
     return f"{os.getpid()}:{_BOOT_TOKEN}"
 
 
+# Lazily-built shared client so repeated lease ops reuse one connection pool
+# instead of opening a fresh redis.Redis (and pool) on every call.
+_shared_client: Any = None
+
+
 def _client(redis_client: Any = None) -> Any:
     if redis_client is not None:
         return redis_client
-    import redis
+    global _shared_client
+    if _shared_client is None:
+        import redis
 
-    from robothor.config import get_config
+        from robothor.config import get_config
 
-    cfg = get_config()
-    return redis.Redis(
-        host=cfg.redis.host,
-        port=cfg.redis.port,
-        db=cfg.redis.db,
-        password=cfg.redis.password or None,
-    )
+        cfg = get_config()
+        _shared_client = redis.Redis(
+            host=cfg.redis.host,
+            port=cfg.redis.port,
+            db=cfg.redis.db,
+            password=cfg.redis.password or None,
+        )
+    return _shared_client
 
 
 # Only act if we still own the key (compare-and-act).

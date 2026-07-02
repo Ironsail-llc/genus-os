@@ -104,6 +104,12 @@ async def _search_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     def _scan_file(fp: Path, matches: list[dict[str, Any]]) -> bool:
         """Append matches; return True when max_results reached."""
         try:
+            # Resolve symlinks and confirm the real target is still inside the
+            # workspace. The relative_to guard on `base` only checks the symlink's
+            # own path, so a symlinked file pointing outside the workspace would
+            # otherwise have its contents read and leaked to the agent.
+            if not fp.resolve().is_relative_to(root):
+                return False
             if fp.stat().st_size > _SEARCH_MAX_FILE_BYTES:
                 return False
             with fp.open("r", errors="ignore") as f:
@@ -119,8 +125,8 @@ async def _search_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     def _run() -> dict[str, Any]:
         matches: list[dict[str, Any]] = []
         if base.is_file():
-            _scan_file(base, matches)
-            return {"matches": matches, "count": len(matches), "truncated": False}
+            hit = _scan_file(base, matches)
+            return {"matches": matches, "count": len(matches), "truncated": hit}
         for dirpath, dirnames, filenames in os.walk(base):
             dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
             for fn in sorted(filenames):

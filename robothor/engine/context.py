@@ -7,6 +7,7 @@ and provides stats for the /context command.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -64,8 +65,12 @@ def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) ->
             import litellm
 
             return int(litellm.token_counter(model=model, messages=messages))
-        except Exception:
-            pass  # unknown model / counter error → heuristic below
+        except Exception as e:
+            # Unknown model / counter error → heuristic below. Log it so the
+            # real-tokenizer mode doesn't silently degrade with no signal.
+            logger.warning(
+                "real tokenizer failed for model %s (%s); using char heuristic", model, e
+            )
 
     total_chars = 0
     tool_call_count = 0
@@ -127,7 +132,10 @@ async def maybe_compress(
     from robothor.engine.compaction import compact
 
     compress_at = threshold if threshold is not None else COMPRESS_THRESHOLD
-    est = estimate_tokens(messages, model=(models[0] if models else None))
+    # Offload to a thread: with the real tokenizer enabled this calls
+    # litellm.token_counter, a synchronous, potentially CPU-bound call we must
+    # not run on the event loop in the compaction hot path.
+    est = await asyncio.to_thread(estimate_tokens, messages, models[0] if models else None)
     if est < compress_at:
         return messages
 
