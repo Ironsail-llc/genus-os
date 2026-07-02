@@ -21,8 +21,12 @@ logger = logging.getLogger(__name__)
 
 # Shell control characters that let a command chain/substitute/redirect past an
 # allowlisted prefix (e.g. "git checkout -- f; rm -rf /" rides "^git checkout -- ").
-# Matches ; | & < > newline backtick, or $( command substitution. Bare $VAR is allowed.
-_SHELL_CONTROL = re.compile(r"[;|&<>\n`]|\$\(")
+# Matches ; | & < > newline (incl. \r) backtick, or $( command substitution.
+# Intentionally NOT matched — these expand/split words but cannot introduce a
+# second command on their own, so they don't defeat a prefix allowlist:
+#   - bare $VAR / ${VAR} parameter expansion (e.g. ${IFS})
+#   - tab and other horizontal whitespace
+_SHELL_CONTROL = re.compile(r"[;|&<>\n\r`]|\$\(")
 
 # Patterns for destructive commands
 DESTRUCTIVE_PATTERNS = [

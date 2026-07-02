@@ -1,4 +1,4 @@
--- Wave-1 hardening (PR-1): make the guardrail-event audit trail support the
+-- Wave-1 hardening (PR-1, migration 079): make the guardrail-event audit trail support the
 -- observe → alert → enforce rollout ladder.
 --
 -- agent_guardrail_events has existed since migration 014 and is read by the
@@ -20,7 +20,7 @@ DECLARE
 BEGIN
     -- Only act if the table exists (fresh installs that ran 014 will have it).
     IF to_regclass('public.agent_guardrail_events') IS NULL THEN
-        RAISE NOTICE 'agent_guardrail_events not present; skipping 071';
+        RAISE NOTICE 'agent_guardrail_events not present; skipping 079';
         RETURN;
     END IF;
 

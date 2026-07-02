@@ -53,6 +53,21 @@ class TestExecAllowlistBypass:
     def test_redirection_blocked(self, strict):
         assert not _check(_engine(), "git checkout -- f > /etc/passwd").allowed
 
+    def test_newline_chaining_blocked(self, strict):
+        # A newline starts a fresh command line just like ';'.
+        assert not _check(_engine(), "git checkout -- f\nrm -rf /").allowed
+
+    def test_carriage_return_chaining_blocked(self, strict):
+        # \r is a line terminator too — must not ride the prefix.
+        assert not _check(_engine(), "git checkout -- f\r\nrm -rf /").allowed
+
+    def test_word_splitting_expansions_allowed(self, strict):
+        # ${IFS}, bare $VAR, and tabs expand/split words but cannot introduce a
+        # second command, so they stay allowed (documented in _SHELL_CONTROL).
+        assert _check(_engine(), "git checkout -- foo${IFS}bar").allowed
+        assert _check(_engine(), "git checkout -- $BRANCH").allowed
+        assert _check(_engine(), "git checkout -- foo\tbar").allowed
+
     def test_non_matching_command_still_blocked(self, strict):
         assert not _check(_engine(), "rm -rf /").allowed
 

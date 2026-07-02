@@ -19,11 +19,21 @@ logger = logging.getLogger(__name__)
 class ToolRegistry:
     """Registry of available tools with schema filtering per agent."""
 
+    # Warn-once dedup for unresolved-tool warnings, keyed by agent id. Class-level
+    # (shared across instances) so re-instantiated registries — the sub-agent
+    # runner and template validator each build a fresh ToolRegistry() — don't
+    # degrade the "warn once" guarantee into "warn every build".
+    _warned_unresolved: set[str] = set()
+
     def __init__(self) -> None:
         self._schemas: dict[str, dict[str, Any]] = {}
         self._adapter_routes: dict[str, str] = {}  # tool_name → adapter server name
-        self._warned_unresolved: set[str] = set()  # agent_id → warned about dead tools once
         self._register_all()
+
+    @classmethod
+    def reset_unresolved_warnings(cls) -> None:
+        """Clear the process-wide warn-once dedup (test isolation hook)."""
+        cls._warned_unresolved.clear()
 
     def _register_all(self) -> None:
         """Register all tool schemas."""

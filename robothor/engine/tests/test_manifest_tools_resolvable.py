@@ -14,11 +14,24 @@ from __future__ import annotations
 import dataclasses
 import logging
 
+import pytest
+
 
 def _registry():
     from robothor.engine.tools.registry import ToolRegistry
 
     return ToolRegistry()
+
+
+@pytest.fixture(autouse=True)
+def _reset_warn_dedup():
+    """The warn-once dedup is process-wide (class-level); clear it around each
+    test so one test's warning doesn't suppress another's."""
+    from robothor.engine.tools.registry import ToolRegistry
+
+    ToolRegistry.reset_unresolved_warnings()
+    yield
+    ToolRegistry.reset_unresolved_warnings()
 
 
 def test_unresolved_tool_is_dropped_and_warned(sample_agent_config, caplog):
@@ -52,4 +65,18 @@ def test_warns_once_per_agent(sample_agent_config, caplog):
         reg.build_for_agent(cfg)
         reg.get_tool_names(cfg)
     hits = [r for r in caplog.records if "bogus_xyz" in r.getMessage()]
+    assert len(hits) == 1
+
+
+def test_warns_once_across_reinstantiated_registries(sample_agent_config, caplog):
+    """The sub-agent runner and template validator build fresh ToolRegistry()
+    instances. Warn-once must hold across instances, not reset per build."""
+    cfg = dataclasses.replace(
+        sample_agent_config,
+        tools_allowed=[sorted(_registry()._schemas)[0], "bogus_across_reg"],
+    )
+    with caplog.at_level(logging.WARNING, logger="robothor.engine.tools.registry"):
+        _registry().get_tool_names(cfg)  # first instance warns
+        _registry().get_tool_names(cfg)  # second instance must NOT re-warn
+    hits = [r for r in caplog.records if "bogus_across_reg" in r.getMessage()]
     assert len(hits) == 1
