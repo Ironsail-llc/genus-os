@@ -60,6 +60,9 @@ PROTOCOL_VERSION = "2024-11-05"
 # We stay version-tolerant: accept initialize if a legacy client sends it
 # (echoing back whichever known version it requested), but never require it —
 # a stateless client that skips straight to tools/list works unchanged.
+# "2026-07-28" is duplicated (not imported) from robothor.engine.mcp_client's
+# PROTOCOL_STATELESS: this module runs standalone (see module docstring) and
+# deliberately has no import dependency on the engine package.
 KNOWN_PROTOCOL_VERSIONS = {PROTOCOL_VERSION, "2026-07-28"}
 _FALSEY = {"", "0", "false", "no", "off"}
 

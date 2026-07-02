@@ -56,6 +56,17 @@ class TestProtocolConfig:
         config = McpServerConfig(name="a", url="http://x/_mcp", protocol="bogus")
         assert config.stateless is False
 
+    def test_unknown_protocol_value_logs_a_warning(self, caplog):
+        with caplog.at_level("WARNING", logger="robothor.engine.mcp_client"):
+            McpServerConfig(name="typo-server", url="http://x/_mcp", protocol="2026-07-29")
+        assert any("typo-server" in r.message and "2026-07-29" in r.message for r in caplog.records)
+
+    def test_known_protocol_values_do_not_warn(self, caplog):
+        with caplog.at_level("WARNING", logger="robothor.engine.mcp_client"):
+            McpServerConfig(name="a", url="http://x/_mcp", protocol="legacy")
+            McpServerConfig(name="b", url="http://x/_mcp", protocol="2026-07-28")
+        assert caplog.records == []
+
 
 class TestConfigureMcpServersThreadsProtocol:
     def test_manifest_source_threads_protocol(self):

@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 # stateless ("any request can land on any server instance"). Per-server opt-in
 # via McpServerConfig.protocol; legacy stays the untouched default until a
 # server is known to have upgraded.
+PROTOCOL_LEGACY = "legacy"
 PROTOCOL_STATELESS = "2026-07-28"
+_KNOWN_PROTOCOLS = (PROTOCOL_LEGACY, PROTOCOL_STATELESS)
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,17 @@ class McpServerConfig:
     timeout_seconds: int = 30
     # "legacy" (default, today's 2024-11-05 handshake+session behavior) or
     # "2026-07-28" (stateless — see PROTOCOL_STATELESS).
-    protocol: str = "legacy"
+    protocol: str = PROTOCOL_LEGACY
+
+    def __post_init__(self) -> None:
+        if self.protocol not in _KNOWN_PROTOCOLS:
+            logger.warning(
+                "MCP server '%s' has unrecognized protocol %r (expected one of %s); "
+                "treating as legacy",
+                self.name,
+                self.protocol,
+                _KNOWN_PROTOCOLS,
+            )
 
     @property
     def transport(self) -> str:
@@ -453,7 +465,7 @@ def configure_mcp_servers(servers: list[dict[str, Any]]) -> None:
                 url=srv.get("url", ""),
                 headers=srv.get("headers", {}),
                 timeout_seconds=srv.get("timeout_seconds", 30),
-                protocol=srv.get("protocol", "legacy"),
+                protocol=srv.get("protocol", PROTOCOL_LEGACY),
             )
         )
 
@@ -461,7 +473,7 @@ def configure_mcp_servers(servers: list[dict[str, Any]]) -> None:
 def register_adapter(adapter: Any) -> None:
     """Register a single AdapterConfig in the MCP client pool."""
     pool = get_mcp_client_pool()
-    protocol = getattr(adapter, "protocol", "legacy")
+    protocol = getattr(adapter, "protocol", PROTOCOL_LEGACY)
     if adapter.transport == "http":
         pool.register(
             McpServerConfig(
