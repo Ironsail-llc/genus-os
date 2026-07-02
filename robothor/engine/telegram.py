@@ -947,6 +947,39 @@ class TelegramBot:
                     msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True
                 )
 
+        # ── Voice notes / video notes ──
+        # Previously unhandled, so they were silently dropped. Now acknowledged.
+        # Transcription is gated on ROBOTHOR_VOICE_NOTES_ENABLED (no STT provider
+        # is wired yet — Claude has no audio endpoint — so this is a placeholder).
+
+        @self.dp.message(F.voice | F.video_note)
+        async def handle_voice(message: Message) -> None:
+            """Acknowledge voice/video notes (transcription pending an STT provider)."""
+            if not message.from_user:
+                return
+            enabled = os.environ.get("ROBOTHOR_VOICE_NOTES_ENABLED", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if not enabled:
+                await message.answer(
+                    "🎤 I can't process voice notes yet — please send text. "
+                    "(Voice transcription will arrive once an STT provider is configured.)"
+                )
+                return
+            media = message.voice or message.video_note
+            try:
+                if media is not None:
+                    await self.bot.get_file(media.file_id)  # verify reachability
+                await message.answer(
+                    "🎤 Voice received — transcription isn't wired yet (placeholder). "
+                    "Send text for now."
+                )
+            except Exception as e:
+                await message.answer(f"Couldn't fetch the voice note: {e}")
+
         # ── File/document/photo messages ──
 
         @self.dp.message(F.document | F.photo)
@@ -1109,6 +1142,20 @@ class TelegramBot:
 
             chat_id = str(message.chat.id)
             user_text = message.text.strip()
+
+            # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
+            if user_text.startswith("/"):
+                from robothor.engine.skill_bundles import resolve_slash_command
+
+                _kind, _bundle = resolve_slash_command(user_text.split()[0])
+                if _kind == "bundle" and _bundle is not None:
+                    _parts = user_text.split(maxsplit=1)
+                    _extra = _parts[1] if len(_parts) > 1 else ""
+                    user_text = (
+                        f"{_bundle.instruction}\n\n"
+                        f"Run these skills in order: {', '.join(_bundle.skills)}."
+                        + (f"\n\nAdditional context: {_extra}" if _extra else "")
+                    )
 
             logger.info(
                 "Telegram message from %s (chat %s): %s",

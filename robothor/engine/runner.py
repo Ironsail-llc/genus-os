@@ -1208,6 +1208,11 @@ class AgentRunner:
 
                 # Watchdog already started before setup phase (see above).
 
+                # Register the live session so external callers (Telegram /steer,
+                # /chat/steer, /chat/interrupt) can influence it mid-run (Rip 9).
+                from robothor.engine import session_registry
+
+                session_registry.register(session)
                 try:
                     await self._run_loop(
                         session,
@@ -1228,6 +1233,7 @@ class AgentRunner:
                         on_stream_event=on_stream_event,
                     )
                 finally:
+                    session_registry.unregister(session)
                     watchdog.stop()
                     # Cleanup sandbox if created
                     if sandbox:
@@ -1295,6 +1301,18 @@ class AgentRunner:
             session.record_error(str(e), tb)
             return self._finish_run(
                 session.fail(str(e), tb),
+                trace=trace,
+                agent_config=agent_config,
+                session=session,
+                spawn_context=spawn_context,
+            )
+
+        # ── [INTERRUPT] Operator halted the run — finalize as CANCELLED ──
+        # Skip the verifier and the COMPLETED finalization; the run was cut short
+        # on purpose.
+        if session.was_interrupted:
+            return self._finish_run(
+                session.cancelled(session._interrupt_note),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1643,6 +1661,25 @@ class AgentRunner:
         _runaway_alerted = False  # one-shot latch for 500K alert
 
         while True:
+            # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
+            # An external caller may have set a steer (inject + continue) or an
+            # interrupt (halt) on this session via session_registry.
+            _steer_text = session.consume_pending_steer()
+            if _steer_text:
+                session.messages.append(
+                    {"role": "user", "content": f"[operator steering update]\n{_steer_text}"}
+                )
+                logger.info("Live steer injected into run %s", session.run_id)
+            _interrupt_msg = session.consume_interrupt()
+            if _interrupt_msg is not None:
+                note = _interrupt_msg or "Operator halted the run."
+                session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
+                # Record a distinct terminal state so the run is CANCELLED, not
+                # COMPLETED, and the verifier is skipped for the halted run.
+                session.mark_interrupted(note)
+                logger.info("Run %s interrupted by operator", session.run_id)
+                return
+
             # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
             if self._active_watchdog and self._active_watchdog.should_abort:
                 logger.warning(

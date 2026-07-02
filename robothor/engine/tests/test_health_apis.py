@@ -36,6 +36,45 @@ def client():
     return TestClient(app, raise_server_exceptions=False)
 
 
+class TestControlRouteAuth:
+    """steer/interrupt/resume mutate a live run and must require the shared
+    control token when one is configured."""
+
+    def test_open_when_token_unset(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", raising=False)
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        # No token configured → route reachable (not 401).
+        r = c.post("/api/runs/run-x/steer", json={"text": "hi"})
+        assert r.status_code != 401
+
+    def test_rejects_missing_token_when_configured(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        for path in ("steer", "interrupt", "resume"):
+            r = c.post(f"/api/runs/run-x/{path}", json={"text": "hi"})
+            assert r.status_code == 401, f"{path} allowed without token"
+
+    def test_rejects_wrong_token(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        r = c.post(
+            "/api/runs/run-x/steer",
+            json={"text": "hi"},
+            headers={"X-Robothor-Control-Token": "wrong"},
+        )
+        assert r.status_code == 401
+
+    def test_accepts_correct_token(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        r = c.post(
+            "/api/runs/run-x/steer",
+            json={"text": "hi"},
+            headers={"X-Robothor-Control-Token": "s3cr3t"},
+        )
+        assert r.status_code != 401  # authorized (200 with found=False)
+
+
 class TestBuddyStatsEndpoint:
     """Test GET /api/buddy/stats."""
 

@@ -25,9 +25,31 @@ def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
     """Create a lightweight FastAPI health app."""
-    from fastapi import FastAPI
+    import hmac
+
+    from fastapi import Depends, FastAPI, Header, HTTPException
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
+
+    # ── Control-route auth ────────────────────────────────────────────────
+    # Routes that mutate a live run (steer/interrupt/resume) inject operator-
+    # trusted text into the agent, bypassing the injection scanner. Guard them
+    # with a shared secret so any process that can merely reach the engine port
+    # cannot drive another agent's run. Enforced when ROBOTHOR_ENGINE_CONTROL_TOKEN
+    # is set; if unset we allow (to avoid breaking a live instance mid-rollout)
+    # but warn once so the operator knows to configure it.
+    _control_token = os.environ.get("ROBOTHOR_ENGINE_CONTROL_TOKEN", "")
+    if not _control_token:
+        logger.warning(
+            "engine control routes (steer/interrupt/resume) are UNAUTHENTICATED; "
+            "set ROBOTHOR_ENGINE_CONTROL_TOKEN to require a shared secret"
+        )
+
+    def _require_control_token(x_robothor_control_token: str = Header(default="")) -> None:
+        if not _control_token:
+            return  # unconfigured → allow (warned above)
+        if not hmac.compare_digest(x_robothor_control_token, _control_token):
+            raise HTTPException(status_code=401, detail="invalid control token")
 
     # Mount dashboard endpoints (replaces brain/ Node.js servers)
     from robothor.engine.dashboards import get_dashboard_router, get_public_router
@@ -1110,7 +1132,7 @@ def create_health_app(
     # ── v2 Enhancement endpoints ─────────────────────────────────────
 
     @app.post("/api/runs/{run_id}/resume")
-    async def resume_run(run_id: str) -> dict[str, Any]:
+    async def resume_run(run_id: str, _: None = Depends(_require_control_token)) -> dict[str, Any]:
         """Resume a run from its latest checkpoint."""
         if not runner:
             return {"error": "Runner not available"}
@@ -1136,6 +1158,32 @@ def create_health_app(
         except Exception:
             logger.exception("Failed to resume run")
             return {"error": "Internal server error"}
+
+    @app.post("/api/runs/{run_id}/steer")
+    async def steer_run(
+        run_id: str, body: dict[str, Any], _: None = Depends(_require_control_token)
+    ) -> dict[str, Any]:
+        """Inject a steering message into a live run (it continues, adjusted)."""
+        from robothor.engine.interrupt_api import steer_session
+
+        text = str((body or {}).get("text", ""))
+        if not text:
+            return {"error": "text required"}
+        found = steer_session(run_id, text)
+        return {"ok": found, "run_id": run_id, "found": found}
+
+    @app.post("/api/runs/{run_id}/interrupt")
+    async def interrupt_run(
+        run_id: str,
+        body: dict[str, Any] | None = None,
+        _: None = Depends(_require_control_token),
+    ) -> dict[str, Any]:
+        """Halt a live run at the next iteration boundary (optional note)."""
+        from robothor.engine.interrupt_api import interrupt_session
+
+        message = (body or {}).get("message")
+        found = interrupt_session(run_id, message)
+        return {"ok": found, "run_id": run_id, "found": found}
 
     @app.get("/api/v2/stats")
     async def v2_stats(hours: int = 24) -> dict[str, Any]:
