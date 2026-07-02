@@ -56,6 +56,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = "2024-11-05"
+# MCP 2026-07-28 (RC) drops the initialize handshake entirely (stateless core).
+# We stay version-tolerant: accept initialize if a legacy client sends it
+# (echoing back whichever known version it requested), but never require it —
+# a stateless client that skips straight to tools/list works unchanged.
+KNOWN_PROTOCOL_VERSIONS = {PROTOCOL_VERSION, "2026-07-28"}
 _FALSEY = {"", "0", "false", "no", "off"}
 
 
@@ -676,10 +681,12 @@ class StdioMcpServer:
         if method is None:
             return None
         if method == "initialize":
+            requested = (msg.get("params") or {}).get("protocolVersion")
+            version = requested if requested in KNOWN_PROTOCOL_VERSIONS else PROTOCOL_VERSION
             return self._result(
                 msg_id,
                 {
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": version,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": self.name, "version": self.version},
                 },
