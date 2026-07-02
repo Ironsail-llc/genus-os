@@ -2,9 +2,9 @@
   "auto_generated": true,
   "created_by": "main",
   "created_at": "2026-04-18T22:23:20.116487+00:00",
-  "revision": 2,
-  "usage_count": 3,
-  "last_used": "2026-05-27T01:05:35.581264+00:00",
+  "revision": 3,
+  "usage_count": 6,
+  "last_used": "2026-06-27T01:11:27.190826+00:00",
   "revision_history": [
     {
       "revision": 1,
@@ -12,9 +12,16 @@
       "agent": "main",
       "content_hash": "9252d70655d2fcd7",
       "reason": "Goodrx.com confirmed to block both web_fetch and headless Chromium with 403 Forbidden. Added to known-blocked list with fallback guidance."
+    },
+    {
+      "revision": 2,
+      "date": "2026-06-27T01:11:07.599932+00:00",
+      "agent": "main",
+      "content_hash": "a9fd5fd9e5500e4a",
+      "reason": "Added pattern for handling anti-bot redirects and empty cache results, with fallback strategy using Wayback Machine and documentation navigation"
     }
   ],
-  "content_hash": "a9fd5fd9e5500e4a",
+  "content_hash": "2c4f84602386d502",
   "last_revised_by": "main",
-  "last_revised_at": "2026-05-09T18:28:54.549779+00:00"
+  "last_revised_at": "2026-06-27T01:11:07.601222+00:00"
 }
