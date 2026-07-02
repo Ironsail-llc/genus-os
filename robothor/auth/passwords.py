@@ -17,7 +17,7 @@ def hash_password(password: str) -> str:
     """Return an argon2id hash string for ``password``."""
     if not password:
         raise ValueError("password must be non-empty")
-    return _hasher.hash(password)
+    return str(_hasher.hash(password))
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
@@ -25,7 +25,7 @@ def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
         return False
     try:
-        return _hasher.verify(password_hash, password)
+        return bool(_hasher.verify(password_hash, password))
     except (VerifyMismatchError, InvalidHashError, Exception):
         return False
 
@@ -33,6 +33,6 @@ def verify_password(password: str, password_hash: str | None) -> bool:
 def needs_rehash(password_hash: str) -> bool:
     """Whether the stored hash should be upgraded to current parameters."""
     try:
-        return _hasher.check_needs_rehash(password_hash)
+        return bool(_hasher.check_needs_rehash(password_hash))
     except Exception:
         return False

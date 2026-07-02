@@ -84,7 +84,7 @@ def issue_access_token(
         "iat": now,
         "exp": now + ttl_seconds,
     }
-    return jwt.encode(claims, signing_key(), algorithm=ALGORITHM)
+    return str(jwt.encode(claims, signing_key(), algorithm=ALGORITHM))
 
 
 def decode_token(token: str) -> dict[str, Any]:
@@ -92,13 +92,14 @@ def decode_token(token: str) -> dict[str, Any]:
     if not token:
         raise TokenError("empty token")
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             token,
             signing_key(),
             algorithms=[ALGORITHM],
             issuer=_ISSUER,
             options={"require": ["exp", "sub", "iss"]},
         )
+        return dict(claims)
     except jwt.PyJWTError as e:
         raise TokenError(str(e)) from e
 
