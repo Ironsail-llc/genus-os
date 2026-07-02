@@ -20,16 +20,32 @@ def test_enabled_with_webhook(monkeypatch):
     assert siem.siem_enabled() is True
 
 
+class _FakeResp:
+    def __init__(self):
+        self.raised = False
+
+    def raise_for_status(self):
+        self.raised = True
+
+
 def test_webhook_forward(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_SIEM_WEBHOOK_URL", "http://siem.example/intake")
     monkeypatch.delenv("ROBOTHOR_SIEM_SYSLOG_HOST", raising=False)
     import httpx
 
     captured = {}
-    monkeypatch.setattr(httpx, "post", lambda url, **k: captured.update({"url": url, **k}))
-    siem.forward_event(_EVENT)
+    resp = _FakeResp()
+
+    def _post(url, **k):
+        captured.update({"url": url, **k})
+        return resp
+
+    monkeypatch.setattr(httpx, "post", _post)
+    # Drive the blocking path directly (forward_event offloads to a thread).
+    siem._forward_event_blocking(_EVENT)
     assert captured["url"] == "http://siem.example/intake"
     assert captured["json"] == _EVENT
+    assert resp.raised is True  # response status is checked, not silently dropped
 
 
 def test_syslog_format_is_rfc5424():
@@ -48,7 +64,30 @@ def test_forward_never_raises(monkeypatch):
         raise RuntimeError("down")
 
     monkeypatch.setattr(httpx, "post", _boom)
-    siem.forward_event(_EVENT)  # must not raise
+    siem._forward_event_blocking(_EVENT)  # must not raise
+
+
+def test_forward_event_is_non_blocking(monkeypatch):
+    """forward_event must return immediately even if the sink hangs — the I/O
+    runs on a daemon thread so the audited operation never stalls."""
+    import threading
+
+    monkeypatch.setenv("ROBOTHOR_SIEM_WEBHOOK_URL", "http://siem.example/intake")
+    monkeypatch.delenv("ROBOTHOR_SIEM_SYSLOG_HOST", raising=False)
+    import httpx
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _hang(*a, **k):
+        started.set()
+        release.wait(2.0)  # simulate a slow/dead sink
+        return _FakeResp()
+
+    monkeypatch.setattr(httpx, "post", _hang)
+    siem.forward_event(_EVENT)  # returns without waiting on _hang
+    assert started.wait(1.0)  # the forward really ran, on another thread
+    release.set()
 
 
 def test_empty_event_noop():

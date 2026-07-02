@@ -26,6 +26,30 @@ _lock = asyncio.Lock()
 # back to in-process automatically if Redis is unavailable.
 _HA_TTL_MS = 7_200_000  # 2h — covers the longest run; a crashed holder's lease expires
 _owners: dict[str, str] = {}  # agent_id → lease owner token (HA mode)
+_renew_tasks: dict[str, asyncio.Task[None]] = {}  # agent_id → background renew loop
+
+
+async def _renew_loop(agent_id: str, token: str) -> None:
+    """Renew the HA lease at TTL/3 so a run longer than the TTL doesn't let the
+    lease expire and another replica start a duplicate concurrent run."""
+    interval = _HA_TTL_MS / 3 / 1000  # seconds
+    from robothor.engine import redis_lease
+
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            ok = await asyncio.to_thread(redis_lease.renew, _dedup_key(agent_id), token, _HA_TTL_MS)
+            if not ok:
+                logger.warning("HA dedup: lost lease for %s during renew", agent_id)
+                return
+        except Exception as e:
+            logger.warning("HA dedup renew failed for %s: %s", agent_id, e)
+
+
+def _stop_renew(agent_id: str) -> None:
+    task = _renew_tasks.pop(agent_id, None)
+    if task is not None:
+        task.cancel()
 
 
 def _ha_enabled() -> bool:
@@ -52,6 +76,8 @@ async def try_acquire(agent_id: str) -> bool:
                 logger.debug("Dedup(HA): %s already running on another node", agent_id)
                 return False
             _owners[agent_id] = token
+            # Keep the lease alive for runs longer than the TTL.
+            _renew_tasks[agent_id] = asyncio.create_task(_renew_loop(agent_id, token))
             async with _lock:
                 _running.add(agent_id)
             return True
@@ -68,28 +94,37 @@ async def try_acquire(agent_id: str) -> bool:
 
 async def release(agent_id: str) -> None:
     """Release the agent lock."""
-    token = _owners.pop(agent_id, None)
+    _stop_renew(agent_id)
+    # Read the token without removing it first: if the Redis release fails we
+    # must NOT drop our record, or nothing can retry and the 2h-TTL key strands
+    # the agent as "running on another node" fleet-wide until it expires.
+    token = _owners.get(agent_id)
     if token is not None:
         try:
             from robothor.engine import redis_lease
 
             await asyncio.to_thread(redis_lease.release, _dedup_key(agent_id), token)
+            _owners.pop(agent_id, None)  # only forget the lease once released
         except Exception as e:
-            logger.debug("HA dedup release failed: %s", e)
+            logger.warning("HA dedup release failed for %s; lease will TTL out: %s", agent_id, e)
     async with _lock:
         _running.discard(agent_id)
 
 
 def release_sync(agent_id: str) -> None:
     """Release the agent lock (sync version for non-async contexts like run_in_executor)."""
-    token = _owners.pop(agent_id, None)
+    _stop_renew(agent_id)
+    token = _owners.get(agent_id)  # don't drop until Redis confirms the release
     if token is not None:
         try:
             from robothor.engine import redis_lease
 
             redis_lease.release(_dedup_key(agent_id), token)
+            _owners.pop(agent_id, None)
         except Exception as e:
-            logger.debug("HA dedup release_sync failed: %s", e)
+            logger.warning(
+                "HA dedup release_sync failed for %s; lease will TTL out: %s", agent_id, e
+            )
     _running.discard(agent_id)
 
 
@@ -106,3 +141,6 @@ def running_agents() -> set[str]:
 def clear() -> None:
     """Clear all locks. Only for testing."""
     _running.clear()
+    for agent_id in list(_renew_tasks):
+        _stop_renew(agent_id)
+    _owners.clear()

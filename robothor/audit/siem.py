@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import socket
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -28,9 +29,20 @@ def siem_enabled() -> bool:
 
 
 def forward_event(event: dict[str, Any]) -> None:
-    """Fan an audit event out to the configured SIEM target(s). Best-effort."""
+    """Fan an audit event out to the configured SIEM target(s).
+
+    Truly non-blocking: the network I/O runs on a daemon thread so a slow or dead
+    SIEM (the webhook uses a 5s timeout) never stalls the audited operation — or
+    the engine event loop, since ``log_event`` is called synchronously from async
+    dispatch code. ``contextlib.suppress`` at the call site only hides *failure*,
+    not *blocking*; offloading is what makes the fire-and-forget promise true.
+    """
     if not event:
         return
+    threading.Thread(target=_forward_event_blocking, args=(event,), daemon=True).start()
+
+
+def _forward_event_blocking(event: dict[str, Any]) -> None:
     webhook = os.environ.get("ROBOTHOR_SIEM_WEBHOOK_URL")
     if webhook:
         _forward_webhook(webhook, event)
@@ -44,7 +56,10 @@ def _forward_webhook(url: str, event: dict[str, Any]) -> None:
     try:
         import httpx
 
-        httpx.post(url, json=event, timeout=5.0)
+        resp = httpx.post(url, json=event, timeout=5.0)
+        # Surface a rejected sink (bad HEC token → 401/403, 5xx) instead of
+        # silently dropping the event.
+        resp.raise_for_status()
     except Exception as e:
         logger.debug("SIEM webhook forward failed: %s", e)
 
