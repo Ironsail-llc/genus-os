@@ -27,9 +27,17 @@ benchmark/judge attribution in the engine yet, and building one is out of
 scope for this wiring. This is a pragmatic v1 proxy ("is the curator's own
 recent behavior safe/healthy") for "is it safe to let it apply destructive
 skill changes"; revisit once per-skill scoring exists. If the gate blocks,
-the pass is silently downgraded to the dry-run whitelist (proposals only)
-rather than aborted, so a blocked pass still produces an inspectable
-proposal set.
+the pass is downgraded to the dry-run whitelist (proposals only) rather than
+aborted — the downgrade is logged (warning) and persisted to the
+``curator_state`` summary, so a blocked pass still produces an inspectable
+proposal set with the blocking reason on record.
+
+Fail-open/-closed asymmetry of key 1 (benchmark): "no suite configured" fails
+OPEN by design — there is nothing to regress against and the brief forbids
+inventing a benchmark run. But once a suite EXISTS, any inability to read its
+signal (DAL unavailable, query failure, fewer than 2 recorded runs, missing
+case counts) fails CLOSED: signal genuinely unknown must not read as "safe",
+the same principle key 2 applies to missing judge history.
 """
 
 from __future__ import annotations
@@ -198,12 +206,21 @@ def _curator_benchmark_regression(
 ) -> tuple[bool, str]:
     """Key 1 of the accretion gate: has the curator's own suite regressed?
 
-    Looks for ``docs/benchmarks/<agent_id>/suite.yaml``. If the curator has no
-    benchmark suite (true today — the curator has no ``suite.yaml``), there is
-    nothing to regress against; we treat that as no-regression and log a note
-    rather than inventing a benchmark run (per PR-3b brief). If a suite exists,
-    compares the two most recent ``benchmark_results`` rows (same passed/
-    total_cases access pattern as ``goals._get_benchmark_pass_rate``).
+    Looks for ``docs/benchmarks/<agent_id>/suite.yaml``. Fail-open/-closed
+    asymmetry (deliberate):
+
+    - **No suite configured** — fail OPEN (``(False, note)``): there is nothing
+      to regress against and the brief forbids inventing a benchmark run.
+      This is the state today (the curator has no ``suite.yaml``).
+    - **Suite exists but the signal is unknown** (DAL import failure, DB query
+      error, or fewer than 2 recorded runs) — fail CLOSED (``(True, note)``):
+      the operator configured a suite expecting it to gate, so "signal
+      genuinely unknown" must not read as "safe" — the same principle the
+      judge key applies to missing history.
+
+    When both rows are available, compares the two most recent
+    ``benchmark_results`` rows (same passed/total_cases access pattern as
+    ``goals._get_benchmark_pass_rate``).
     """
     import os
     from pathlib import Path
@@ -219,7 +236,7 @@ def _curator_benchmark_regression(
     try:
         from robothor.crm.dal import get_connection
     except Exception:
-        return False, "benchmark DAL unavailable"
+        return True, "benchmark DAL unavailable with suite configured (fail closed)"
 
     try:
         with get_connection() as conn:
@@ -236,16 +253,16 @@ def _curator_benchmark_regression(
             )
             rows = cur.fetchall()
     except Exception as exc:  # noqa: BLE001
-        logger.debug("curator gate: benchmark_results lookup failed: %s", exc)
-        return False, "benchmark lookup failed"
+        logger.warning("curator gate: benchmark_results lookup failed: %s", exc)
+        return True, "benchmark lookup failed with suite configured (fail closed)"
 
     if len(rows) < 2:
-        return False, "fewer than 2 benchmark runs recorded"
+        return True, "fewer than 2 benchmark runs recorded with suite configured (fail closed)"
 
     latest_passed, latest_total = rows[0]
     prev_passed, prev_total = rows[1]
     if not latest_total or not prev_total:
-        return False, "benchmark run missing case counts"
+        return True, "benchmark run missing case counts with suite configured (fail closed)"
 
     latest_rate = float(latest_passed) / float(latest_total)
     prev_rate = float(prev_passed) / float(prev_total)
@@ -285,16 +302,16 @@ def evaluate_accretion_gate(
     See the module docstring for the scoping decision (gates on the curator
     agent itself, not per-skill). Fails closed: if there is no judge history
     yet to compare against a baseline, the gate blocks rather than assuming
-    the change is safe.
+    the change is safe. The judge check runs first and short-circuits — no
+    benchmark DB round-trip is made when the verdict is already blocked.
     """
-    has_regression, regression_note = _curator_benchmark_regression(agent_id, tenant_id)
     judge_score, baseline_score = _curator_judge_scores(agent_id, tenant_id)
     if judge_score is None or baseline_score is None:
         return (
             False,
-            f"blocked: insufficient judge history for '{agent_id}' to establish a "
-            f"baseline ({regression_note})",
+            f"blocked: insufficient judge history for '{agent_id}' to establish a baseline",
         )
+    has_regression, regression_note = _curator_benchmark_regression(agent_id, tenant_id)
     ok, reason = accretion_gate(
         has_safety_regression=has_regression,
         judge_score=judge_score,

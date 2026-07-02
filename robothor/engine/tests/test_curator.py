@@ -169,6 +169,221 @@ class TestCuratorDryRun:
 # ─── PR-3b: accretion gate live caller ───────────────────────────────
 
 
+class _FakeCursor:
+    """Drives the real _curator_benchmark_regression body (convention from
+    test_goals_benchmark_metric.py, extended with fetchall)."""
+
+    def __init__(self, rows, raise_on_execute=False):
+        self.rows = rows
+        self.raise_on_execute = raise_on_execute
+        self.last_sql = None
+
+    def execute(self, sql, params=None):
+        if self.raise_on_execute:
+            raise RuntimeError("db down")
+        self.last_sql = sql
+        return self
+
+    def fetchall(self):
+        return self.rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, rows, raise_on_execute=False):
+        self.rows = rows
+        self.raise_on_execute = raise_on_execute
+        self.last_cursor = None
+
+    def cursor(self):
+        self.last_cursor = _FakeCursor(self.rows, raise_on_execute=self.raise_on_execute)
+        return self.last_cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _make_suite(tmp_path, agent_id="curator"):
+    suite_dir = tmp_path / "docs" / "benchmarks" / agent_id
+    suite_dir.mkdir(parents=True)
+    (suite_dir / "suite.yaml").write_text("tasks: []\n")
+
+
+class TestCuratorBenchmarkRegression:
+    """Direct coverage of _curator_benchmark_regression (key 1).
+
+    Asymmetry under test: no suite configured = fail OPEN (nothing to regress
+    against, per brief); suite exists but the signal is unknown (DAL missing,
+    query error, <2 runs) = fail CLOSED.
+    """
+
+    def test_no_suite_fails_open(self, tmp_path, monkeypatch):
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is False
+        assert "no benchmark suite" in note
+
+    def test_two_row_regression_detected(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        # rows[0] is the LATEST run (ORDER BY run_at DESC): 6/10 after 9/10.
+        conn = _FakeConn([(6, 10), (9, 10)])
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is True
+        assert "regressed" in note
+        assert "0.90 -> 0.60" in note
+
+    def test_two_row_no_regression(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        # Latest 9/10 after 6/10 — improvement, not regression.
+        conn = _FakeConn([(9, 10), (6, 10)])
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is False
+        assert "stable/improved" in note
+
+    def test_row_order_is_run_at_desc(self, tmp_path, monkeypatch):
+        """The regression math assumes rows[0] is the newest run — pin the
+        SQL ordering that assumption depends on."""
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        conn = _FakeConn([(9, 10), (6, 10)])
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            _curator_benchmark_regression("curator")
+        assert conn.last_cursor is not None
+        assert "ORDER BY run_at DESC" in conn.last_cursor.last_sql
+
+    def test_dal_import_failure_fails_closed(self, tmp_path, monkeypatch):
+        import sys
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        # None in sys.modules makes `from robothor.crm.dal import ...` raise.
+        with patch.dict(sys.modules, {"robothor.crm.dal": None}):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is True
+        assert "fail closed" in note
+
+    def test_query_exception_fails_closed(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        conn = _FakeConn([], raise_on_execute=True)
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is True
+        assert "fail closed" in note
+
+    def test_fewer_than_two_runs_with_suite_fails_closed(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        conn = _FakeConn([(9, 10)])  # suite exists, only one recorded run
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is True
+        assert "fail closed" in note
+
+    def test_missing_case_counts_with_suite_fails_closed(self, tmp_path, monkeypatch):
+        """Rows exist but total_cases is 0/None — same 'suite exists, signal
+        unknown' class, so it also fails closed."""
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_benchmark_regression
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        _make_suite(tmp_path)
+        conn = _FakeConn([(0, 0), (9, 10)])
+        with patch("robothor.crm.dal.get_connection", return_value=conn):
+            regressed, note = _curator_benchmark_regression("curator")
+        assert regressed is True
+        assert "fail closed" in note
+
+
+class TestCuratorJudgeScores:
+    """Direct coverage of _curator_judge_scores (key 2 inputs)."""
+
+    def test_windows_are_adjacent_seven_day_periods(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_judge_scores
+
+        calls = []
+
+        def _fake_judgment(agent_id, window_days=7, tenant_id="default", as_of=None):
+            calls.append({"agent_id": agent_id, "as_of": as_of})
+            return 0.8
+
+        with patch(
+            "robothor.engine.goals._get_goal_achievement_judgment",
+            side_effect=_fake_judgment,
+        ):
+            current, baseline = _curator_judge_scores("curator")
+
+        assert current == 0.8
+        assert baseline == 0.8
+        assert len(calls) == 2
+        assert all(c["agent_id"] == "curator" for c in calls)
+        # Baseline window ends exactly 7 days before the current window's end.
+        gap = calls[0]["as_of"] - calls[1]["as_of"]
+        assert gap == timedelta(days=7)
+
+    def test_none_propagates_for_missing_history(self):
+        from unittest.mock import patch
+
+        from robothor.engine.curator import _curator_judge_scores
+
+        # Current window has a score; baseline window has no judge rows.
+        with patch(
+            "robothor.engine.goals._get_goal_achievement_judgment",
+            side_effect=[0.9, None],
+        ):
+            current, baseline = _curator_judge_scores("curator")
+        assert current == 0.9
+        assert baseline is None
+
+        with patch(
+            "robothor.engine.goals._get_goal_achievement_judgment",
+            side_effect=[None, None],
+        ):
+            current, baseline = _curator_judge_scores("curator")
+        assert current is None
+        assert baseline is None
+
+
 class TestEvaluateAccretionGate:
     """evaluate_accretion_gate() computes the two-key verdict for the
     curator's own apply pass. Scoping decision (see curator.py module
@@ -235,16 +450,15 @@ class TestEvaluateAccretionGate:
 
     def test_fails_closed_on_missing_judge_history(self):
         """No judge rows yet for the curator agent — cannot confirm quality is
-        at least the baseline, so the gate blocks rather than assuming pass."""
+        at least the baseline, so the gate blocks rather than assuming pass.
+        The judge check runs FIRST and short-circuits: the benchmark DB
+        round-trip is never made when the verdict is already blocked."""
         from unittest.mock import patch
 
         from robothor.engine.curator import evaluate_accretion_gate
 
         with (
-            patch(
-                "robothor.engine.curator._curator_benchmark_regression",
-                return_value=(False, "no benchmark suite for 'curator'"),
-            ),
+            patch("robothor.engine.curator._curator_benchmark_regression") as bench_mock,
             patch(
                 "robothor.engine.curator._curator_judge_scores",
                 return_value=(None, None),
@@ -253,6 +467,7 @@ class TestEvaluateAccretionGate:
             ok, reason = evaluate_accretion_gate()
         assert ok is False
         assert "judge" in reason.lower()
+        bench_mock.assert_not_called()
 
 
 class _FakeScheduler:
