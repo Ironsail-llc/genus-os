@@ -1,0 +1,22 @@
+{
+  "auto_generated": true,
+  "created_by": "main",
+  "created_at": "2026-06-06T19:42:52.486556+00:00",
+  "revision": 2,
+  "usage_count": 1,
+  "last_used": "2026-06-07T11:06:10.554580+00:00",
+  "revision_history": [
+    {
+      "revision": 1,
+      "date": "2026-06-07T11:06:58.319400+00:00",
+      "agent": "main",
+      "content_hash": "03bcddd1e3e96f0a",
+      "reason": "Add pitfall about false tool-gap diagnoses \u2014 accepting another agent's claim about missing tools without verifying the actual YAML config. Real incident: architect diagnosed 'write_file missing' when it was already present; real cause was un-staged benchmark input files."
+    }
+  ],
+  "content_hash": "40b6cc765d435c83",
+  "write_origin": "background_review",
+  "is_agent_created": true,
+  "last_revised_by": "main",
+  "last_revised_at": "2026-06-07T11:06:58.320454+00:00"
+}
