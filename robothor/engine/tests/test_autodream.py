@@ -552,3 +552,72 @@ class TestAutodreamLoop:
                 await _autodream_loop()
 
         mock_dream.assert_not_called()
+
+
+class TestMaxDeferForcesDeep:
+    """Under sustained load, the MAX_DEFER force-run must use DEEP mode (full
+    lifecycle maintenance), not post_stall — the reviewer's HIGH finding."""
+
+    @pytest.mark.asyncio
+    async def test_maxdefer_force_uses_deep_not_post_stall(self, monkeypatch):
+        import asyncio as _aio
+        import contextlib
+
+        import robothor.engine.autodream as ad
+        import robothor.engine.dedup as dedup
+        from robothor.engine import daemon
+
+        calls = []
+
+        async def _fake_run(mode=None, **k):
+            calls.append(mode)
+            return {}
+
+        monkeypatch.setattr(ad, "run_autodream", _fake_run)
+        monkeypatch.setattr(ad, "is_cooled_down", lambda: False)  # not cooled → defer path
+        monkeypatch.setattr(dedup, "running_agents", lambda: {"main"})  # busy
+        monkeypatch.setattr(
+            daemon,
+            "_autodream_defer_decision",
+            lambda *a: {"force": True, "defer_started_at": 0.0, "deferred_for": 999999.0},
+        )
+
+        async def _sleep(_s):
+            if calls:  # break out once the forced run has happened
+                raise _aio.CancelledError
+
+        monkeypatch.setattr(daemon.asyncio, "sleep", _sleep)
+        with contextlib.suppress(_aio.CancelledError):
+            await daemon._autodream_loop()
+        assert calls and calls[0] == "deep", f"forced run used {calls}, expected deep"
+
+
+class TestFallbackPathSecurity:
+    """The last-run fallback must not live in world-writable /tmp and must not
+    follow a symlink (CWE-59)."""
+
+    def test_default_fallback_not_in_tmp(self):
+        from robothor.engine import autodream
+
+        path = autodream._default_fallback_path()
+        assert not path.startswith("/tmp"), path
+        assert ".robothor" in path
+
+    def test_set_last_run_does_not_follow_symlink(self, tmp_path, monkeypatch):
+        from robothor.engine import autodream
+
+        monkeypatch.setattr("robothor.events.bus._get_redis", lambda: None, raising=False)
+        # First a normal write works.
+        target = tmp_path / "ts"
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(target))
+        autodream._set_last_run_ts()
+        assert target.exists() and float(target.read_text()) > 0
+
+        # A symlink pre-planted at the path must NOT be followed → victim intact.
+        victim = tmp_path / "victim"
+        victim.write_text("SECRET")
+        link = tmp_path / "link"
+        link.symlink_to(victim)
+        monkeypatch.setattr(autodream, "_FALLBACK_PATH", str(link))
+        autodream._set_last_run_ts()  # must not raise
+        assert victim.read_text() == "SECRET", "symlink target was clobbered"

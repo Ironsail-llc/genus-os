@@ -44,8 +44,17 @@ COOLDOWN_SECONDS = int(os.environ.get("AUTODREAM_COOLDOWN_SECONDS", "1800"))
 # Configurable via AUTODREAM_LOCK_TTL_SECONDS.
 _LOCK_TTL_SECONDS = int(os.environ.get("AUTODREAM_LOCK_TTL_SECONDS", str(4 * 3600)))
 
-# Filesystem fallback for last_run timestamp (survives Redis restarts).
-_FALLBACK_PATH = os.environ.get("AUTODREAM_FALLBACK_PATH", "/tmp/robothor_autodream_last_run")
+
+# Filesystem fallback for last_run timestamp (survives Redis restarts). Kept
+# under the workspace's private .robothor dir — NOT world-writable /tmp, whose
+# predictable path let a local attacker pre-plant a symlink and have the daemon
+# clobber an arbitrary file / read a spoofed timestamp (CWE-59/377).
+def _default_fallback_path() -> str:
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE") or str(Path.home() / "robothor")
+    return str(Path(workspace) / ".robothor" / "autodream_last_run")
+
+
+_FALLBACK_PATH = os.environ.get("AUTODREAM_FALLBACK_PATH") or _default_fallback_path()
 
 # Clock-skew tolerance: a stored timestamp more than this far in the future is
 # treated as corrupt (clock skew / NTP step-back / a bad write). Rejecting it
@@ -173,8 +182,15 @@ def _set_last_run_ts() -> None:
     # *past* value is harmless: it only makes is_cooled_down() return True
     # *sooner* (a run is allowed, which overwrites the value).
     try:
-        with Path(_FALLBACK_PATH).open("w") as f:
-            f.write(ts)
+        p = Path(_FALLBACK_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # O_NOFOLLOW so a symlink at the path is never followed (no arbitrary
+        # clobber); O_CREAT|O_TRUNC|O_WRONLY to (re)write our own regular file.
+        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, ts.encode())
+        finally:
+            os.close(fd)
     except Exception as e:
         logger.debug("Failed to write autoDream fallback timestamp: %s", e)
 

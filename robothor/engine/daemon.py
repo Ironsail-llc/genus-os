@@ -1055,10 +1055,15 @@ async def _autodream_loop() -> None:
                 if decision["force"]:
                     logger.warning(
                         "autoDream continuously deferred for %.1fh due to busy agents — "
-                        "forcing post_stall run",
+                        "forcing DEEP run",
                         decision["deferred_for"] / 3600,
                     )
-                    result = await run_autodream(mode="post_stall")
+                    # Deep, not post_stall: only deep mode runs full lifecycle
+                    # maintenance (importance scoring, decay, GC). Under sustained
+                    # load a post_stall force would reset the staleness clock while
+                    # deep maintenance silently never runs — the exact starvation
+                    # this MAX_DEFER ceiling exists to prevent.
+                    result = await run_autodream(mode="deep")
                     if result.get("skipped"):
                         # A concurrent run holds the lock. Back off instead of
                         # re-firing every 60s; keep the defer streak so we retry,
