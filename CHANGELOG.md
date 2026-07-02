@@ -1,3 +1,23 @@
+## [1.9.0](https://github.com/Ironsail-llc/genus-os/compare/v1.8.0...v1.9.0) (2026-07-02)
+
+### Features
+
+* **auth:** multi-user SSO login + bridge JWT sessions (Phase A, shadow mode) ([#145](https://github.com/Ironsail-llc/genus-os/issues/145)) ([8603a68](https://github.com/Ironsail-llc/genus-os/commit/8603a68fef32eff1b7a34b33687dfb9e4b254972))
+
+### Bug Fixes
+
+* **engine:** reconcile autoDream robustness — deep-mode, symlink-safe fallback, single-owner ([#150](https://github.com/Ironsail-llc/genus-os/issues/150)) ([8ed2c04](https://github.com/Ironsail-llc/genus-os/commit/8ed2c043ec90db2e6371ac1cdcb8ebff6281478a))
+* **engine:** wire federation responder + code-enforce curator dry-run ([#169](https://github.com/Ironsail-llc/genus-os/issues/169)) ([9c7b274](https://github.com/Ironsail-llc/genus-os/commit/9c7b2747622c530e5f9b1169ff0c84dc36ef9efa))
+* **helm:** reference ghcr-credentials pull secret for private images ([#141](https://github.com/Ironsail-llc/genus-os/issues/141)) ([c7e3ade](https://github.com/Ironsail-llc/genus-os/commit/c7e3adeac04cf2afadada8092c4a8f2a7a7ecde6))
+
+### Documentation
+
+* **helm:** add staging URL hint + release-and-build CI gating ([#135](https://github.com/Ironsail-llc/genus-os/issues/135)) ([54a00b4](https://github.com/Ironsail-llc/genus-os/commit/54a00b400ae99c561a8a2de2e0cd10c76a28c4d4))
+
+### Code Refactoring
+
+* **crm:** break the engine↔CRM import cycle behind a hooks seam ([#144](https://github.com/Ironsail-llc/genus-os/issues/144)) ([41c7b71](https://github.com/Ironsail-llc/genus-os/commit/41c7b7189fdb4fd1582bc1a698a83611cf339851))
+
 ## [1.8.0](https://github.com/Ironsail-llc/genus-os/compare/v1.7.0...v1.8.0) (2026-07-02)
 
 ### Features
