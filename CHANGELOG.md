@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/Ironsail-llc/genus-os/compare/v1.1.1...v1.2.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — audit substrate, honesty & low-risk security ([#151](https://github.com/Ironsail-llc/genus-os/issues/151)) ([58dd51e](https://github.com/Ironsail-llc/genus-os/commit/58dd51ef525d71999fa94c97c73a48cab1c1b844))
+
 ## [1.1.1](https://github.com/Ironsail-llc/genus-os/compare/v1.1.0...v1.1.1) (2026-06-04)
 
 ### Bug Fixes
