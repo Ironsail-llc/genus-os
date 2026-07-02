@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/Ironsail-llc/genus-os/compare/v1.2.0...v1.3.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — fleet RBAC, sandboxing, approval & injection guards ([#152](https://github.com/Ironsail-llc/genus-os/issues/152)) ([251f0ce](https://github.com/Ironsail-llc/genus-os/commit/251f0ce690d11388c652644ff3689983a60d8989))
+
 ## [1.2.0](https://github.com/Ironsail-llc/genus-os/compare/v1.1.1...v1.2.0) (2026-07-02)
 
 ### Features
