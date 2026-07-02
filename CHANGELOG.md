@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/Ironsail-llc/genus-os/compare/v1.6.0...v1.7.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 2 — federation transport, goal-judge, HA leader, accretion ([#156](https://github.com/Ironsail-llc/genus-os/issues/156)) ([1017974](https://github.com/Ironsail-llc/genus-os/commit/1017974afa22b2835350c6751a75e62f7853ac30))
+
 ## [1.6.0](https://github.com/Ironsail-llc/genus-os/compare/v1.5.0...v1.6.0) (2026-07-02)
 
 ### Features
