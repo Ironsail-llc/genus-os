@@ -1948,7 +1948,10 @@ class AgentRunner:
                             )
                             iteration_errors.append((tool_name, gr_error_msg, None))
                             with contextlib.suppress(Exception):
-                                from robothor.engine.tracking import log_tool_event
+                                from robothor.engine.tracking import (
+                                    log_guardrail_event,
+                                    log_tool_event,
+                                )
 
                                 log_tool_event(
                                     run_id=session.run.id,
@@ -1956,6 +1959,17 @@ class AgentRunner:
                                     duration_ms=0,
                                     success=False,
                                     error_type="guardrail_blocked",
+                                )
+                                # Make the guardrail block visible in the audit
+                                # table the health dashboard reads (PR-1).
+                                log_guardrail_event(
+                                    run_id=session.run.id,
+                                    guardrail_name=gr.guardrail_name,
+                                    action="blocked",
+                                    tool_name=tool_name,
+                                    reason=gr.reason,
+                                    mode="enforce",
+                                    step_number=len(session.run.steps),
                                 )
                             if scratchpad:
                                 scratchpad.record_tool_call(tool_name, error=gr_error_msg)

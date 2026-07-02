@@ -26,6 +26,11 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 Rip7Mode = Literal["off", "observe", "alert", "enforce"]
 _VALID_RIP_7_MODES = frozenset(("observe", "alert", "enforce"))
 
+# Generic observe→alert→enforce rollout ladder, shared by the Wave-1
+# hardening flags below. Same shape as ``rip_7_enforcement_mode``.
+EnforcementMode = Literal["off", "observe", "alert", "enforce"]
+_VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -85,3 +90,71 @@ def rip_7_enforcement_mode() -> Rip7Mode:
     if raw in _VALID_RIP_7_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
+
+
+def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
+    """Generic observe→alert→enforce ladder gated on two env vars.
+
+    Returns ``"off"`` when the global panic flag is set or ``enabled_var``
+    is falsy. Otherwise reads ``mode_var`` and returns ``"observe"``
+    (default — compute the verdict, log it, but DO NOT act), ``"alert"``
+    (observe + notify the operator), or ``"enforce"`` (apply the verdict).
+
+    The default of ``observe`` plus a behavior-preserving default elsewhere
+    means flipping ``enabled_var`` on is a no-op until ``mode_var`` is
+    promoted, and rollback is instant.
+    """
+    if _disabled_all() or not _env_bool(enabled_var):
+        return "off"
+    raw = os.environ.get(mode_var, "observe").strip().lower()
+    if raw in _VALID_ENFORCEMENT_MODES:
+        return raw  # type: ignore[return-value]
+    return "observe"
+
+
+def sandbox_default_mode() -> EnforcementMode:
+    """Rollout mode for defaulting exec-holding agents into the Docker sandbox.
+
+    Gated on ``ROBOTHOR_SANDBOX_DEFAULT_ENABLED`` + ``ROBOTHOR_SANDBOX_DEFAULT_MODE``.
+    ``observe`` logs which agents/runs WOULD be sandboxed (running on host as
+    today); ``enforce`` sets ``sandbox=docker`` for exec-holding agents that
+    have not opted out via ``sandbox: host``.
+    """
+    return _enforcement_mode("ROBOTHOR_SANDBOX_DEFAULT_ENABLED", "ROBOTHOR_SANDBOX_DEFAULT_MODE")
+
+
+def rbac_enforcement_mode() -> EnforcementMode:
+    """Rollout mode for RBAC over system/cron/hook runs.
+
+    Gated on ``ROBOTHOR_RBAC_ENABLED`` + ``ROBOTHOR_RBAC_MODE``. ``observe``
+    computes the permission verdict and logs would-denies but returns allow;
+    ``enforce`` actually denies. The default ``service`` role is allow-all, so
+    observe should surface zero would-denies unless a role was deliberately
+    tightened.
+    """
+    return _enforcement_mode("ROBOTHOR_RBAC_ENABLED", "ROBOTHOR_RBAC_MODE")
+
+
+def approval_mode() -> EnforcementMode:
+    """Rollout mode for fail-closed human-approval escalation.
+
+    Gated on ``ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED`` + ``ROBOTHOR_APPROVAL_MODE``.
+    ``observe`` logs escalations that WOULD be denied (no/declining manager) but
+    proceeds (auto-approves, as today); ``enforce`` denies the tool call when no
+    approver is reachable.
+    """
+    return _enforcement_mode("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE")
+
+
+def exec_allowlist_mode() -> EnforcementMode:
+    """Rollout mode for rejecting shell-chaining metacharacters in allowlisted exec.
+
+    Gated on ``ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED`` + ``ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE``.
+    ``observe`` logs commands that WOULD be blocked for containing shell control
+    characters (``;`` ``|`` ``&`` ``<`` ``>`` ``$(`` backtick) that let an
+    attacker chain past an allowlisted prefix, but allows them (legacy behavior);
+    ``enforce`` blocks them. Default off preserves today's behavior.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED", "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE"
+    )

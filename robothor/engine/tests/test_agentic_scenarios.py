@@ -181,11 +181,23 @@ class TestScenario2RateLimitBackoff:
 
         import asyncio as _asyncio
 
+        _real_sleep = _asyncio.sleep
+
+        async def _yielding_sleep(*_args, **_kwargs):
+            # Yield to the event loop instead of blocking. Patching asyncio.sleep
+            # module-wide also neutralizes the runner's stall-watchdog tick
+            # (`await asyncio.sleep(...)`); returning instantly turns that loop into
+            # a busy-loop that starves the agent coroutine and times out under
+            # Python 3.13's scheduler. Yielding keeps the loop fair on all versions.
+            await _real_sleep(0)
+
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.runner.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
-                        with patch.object(_asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+                        with patch.object(
+                            _asyncio, "sleep", new=AsyncMock(side_effect=_yielding_sleep)
+                        ) as mock_sleep:
                             runner._spawn_recovery_helper = mock_spawn
                             run = await runner.execute(
                                 "test-agent",
