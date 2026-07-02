@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/Ironsail-llc/genus-os/compare/v1.3.0...v1.4.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — activate built-but-dark subsystems ([#153](https://github.com/Ironsail-llc/genus-os/issues/153)) ([5eaa868](https://github.com/Ironsail-llc/genus-os/commit/5eaa86890287f802218cd5af6940069fa391621f))
+
 ## [1.3.0](https://github.com/Ironsail-llc/genus-os/compare/v1.2.0...v1.3.0) (2026-07-02)
 
 ### Features
