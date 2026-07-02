@@ -81,9 +81,20 @@ tests:
 
   - it: Job omits imagePullSecrets when global.imagePullSecrets is empty
     template: migrations/job.yaml
+    set:
+      global.imagePullSecrets: []
     asserts:
       - notExists:
           path: spec.template.spec.imagePullSecrets
+
+  - it: Job references ghcr-credentials pull secret by default
+    template: migrations/job.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.imagePullSecrets
+          content:
+            name: ghcr-credentials
+          any: true
 
   # ─── RBAC is scoped via resourceNames ──────────────────────────────────────
   - it: Role exists with scoped jobs+secrets verbs
