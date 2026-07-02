@@ -148,3 +148,19 @@ class TestCuratorOrchestration:
             store_curator_last_pass(when)
             got = load_curator_last_pass()
         assert got == when
+
+
+class TestCuratorDryRun:
+    def test_whitelist_excludes_archive_in_dry_run(self):
+        from robothor.engine.curator import _curator_tool_whitelist
+
+        assert "skill_archive" not in _curator_tool_whitelist(dry_run=True)
+        assert "skill_archive" in _curator_tool_whitelist(dry_run=False)
+
+    def test_curator_dry_run_default_true(self, monkeypatch):
+        from robothor.engine.curator import curator_dry_run
+
+        monkeypatch.delenv("ROBOTHOR_CURATOR_APPLY", raising=False)
+        assert curator_dry_run() is True
+        monkeypatch.setenv("ROBOTHOR_CURATOR_APPLY", "1")
+        assert curator_dry_run() is False
