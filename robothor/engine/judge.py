@@ -80,8 +80,11 @@ def parse_judge_response(text: str) -> dict[str, Any] | None:
     data = _extract_json(text)
     if not data:
         return None
+    raw_ga = data.get("goal_achievement")
+    if raw_ga is None:
+        return None
     try:
-        ga = int(data.get("goal_achievement"))
+        ga = int(raw_ga)
     except (TypeError, ValueError):
         return None
     return {
@@ -102,22 +105,47 @@ async def _default_llm(system: str, user: str) -> str:
     return resp.choices[0].message.content or ""
 
 
-def _write_review(run_id: str, agent_id: str, verdict: dict[str, Any]) -> None:
-    """Persist the verdict to agent_reviews (best-effort)."""
+def _write_review(run_id: str, agent_id: str | None, verdict: dict[str, Any]) -> None:
+    """Persist the verdict to agent_reviews (best-effort).
+
+    Uses the real agent_reviews schema (031/036 + migration 080): the NOT NULL
+    ``agent_id``/``reviewer`` columns are supplied, ``tenant_id`` falls back to
+    its column default, the goal-achievement score lands in ``rating`` (1-5), the
+    rationale in ``feedback``, and structured detail in the ``categories`` JSONB.
+    ``reviewer_type='judge'`` requires migration 080.
+    """
     try:
+        import json
+
         from robothor.db.connection import get_connection
 
+        categories = json.dumps(
+            {
+                "dimension": "goal_achievement",
+                "safety_regression": bool(verdict.get("safety_regression")),
+            }
+        )
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO agent_reviews (run_id, reviewer_type, rating, dimension, specific_issue)
-                VALUES (%s, 'judge', %s, 'goal_achievement', %s)
+                INSERT INTO agent_reviews
+                    (agent_id, run_id, reviewer, reviewer_type, rating, categories, feedback)
+                VALUES (%s, %s, 'judge', 'judge', %s, %s::jsonb, %s)
                 """,
-                (run_id, verdict["goal_achievement"], verdict.get("rationale", "")[:500]),
+                (
+                    agent_id or "unknown",
+                    run_id,
+                    verdict["goal_achievement"],
+                    categories,
+                    verdict.get("rationale", "")[:500],
+                ),
             )
+            conn.commit()
     except Exception as e:
-        logger.debug("Judge review write failed: %s", e)
+        # WARNING, not DEBUG: a schema/constraint mismatch here silently drops
+        # every judge verdict, which is exactly how this went unnoticed before.
+        logger.warning("Judge review write failed for run %s: %s", run_id, e)
 
 
 async def judge_run(

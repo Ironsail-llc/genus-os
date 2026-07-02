@@ -573,6 +573,14 @@ async def main() -> None:
         except Exception as e:
             logger.debug("Slack bot stop failed: %s", e)
 
+    # Release the leadership lease explicitly before cancelling its task —
+    # otherwise the lease sits until its TTL expires and the whole fleet is
+    # leaderless (no cron/heartbeat) for up to that window.
+    try:
+        await _elector.stop()
+    except Exception as e:
+        logger.debug("Leader elector stop failed: %s", e)
+
     # Cancel remaining tasks
     for task in pending:
         task.cancel()

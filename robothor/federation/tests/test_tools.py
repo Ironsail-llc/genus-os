@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -91,14 +91,35 @@ class TestFederationQuery:
         assert "health" in result["exports"]
 
     @pytest.mark.asyncio
-    async def test_query_runs(self, ctx):
-        with _mock_load_connections([_active_conn()]):
+    async def test_query_runs_dispatches_over_nats(self, ctx):
+        # query_type=runs crosses the wire via the NATS request transport.
+        with (
+            _mock_load_connections([_active_conn()]),
+            patch(
+                "robothor.engine.tools.handlers.federation._federation_request",
+                new_callable=AsyncMock,
+                return_value={"runs": []},
+            ) as req,
+        ):
             result = await _federation_query(
                 {"connection_id": "conn-1", "query_type": "runs", "agent_id": "main", "limit": 5},
                 ctx,
             )
-        assert result["agent_id"] == "main"
-        assert result["limit"] == 5
+        assert result == {"runs": []}
+        payload = req.call_args.args[1]
+        assert payload["op"] == "list_runs"
+        assert payload["agent_id"] == "main"
+        assert payload["limit"] == 5
+
+    @pytest.mark.asyncio
+    async def test_query_runs_denied_without_capability(self, ctx):
+        # A live connection that did NOT negotiate 'agent_runs' cannot list runs.
+        conn = _active_conn()
+        conn.imports = ["memory_search"]  # no agent_runs
+        with _mock_load_connections([conn]):
+            result = await _federation_query({"connection_id": "conn-1", "query_type": "runs"}, ctx)
+        assert "error" in result
+        assert "not authorized" in result["error"]
 
     @pytest.mark.asyncio
     async def test_query_unknown_type(self, ctx):
@@ -135,14 +156,35 @@ class TestFederationTrigger:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_trigger_success(self, ctx):
-        with _mock_load_connections([_active_conn()]):
+    async def test_trigger_dispatches_over_nats(self, ctx):
+        with (
+            _mock_load_connections([_active_conn()]),
+            patch(
+                "robothor.engine.tools.handlers.federation._federation_request",
+                new_callable=AsyncMock,
+                return_value={"triggered": True},
+            ) as req,
+        ):
             result = await _federation_trigger(
                 {"connection_id": "conn-1", "agent_id": "email-classifier", "message": "run now"},
                 ctx,
             )
-        assert result["agent_id"] == "email-classifier"
-        assert result["peer_name"] == "Peer"
+        assert result == {"triggered": True}
+        payload = req.call_args.args[1]
+        assert payload["op"] == "trigger"
+        assert payload["agent_id"] == "email-classifier"
+        assert payload["message"] == "run now"
+
+    @pytest.mark.asyncio
+    async def test_trigger_denied_without_capability(self, ctx):
+        conn = _active_conn()
+        conn.imports = ["memory_search"]  # no agent_runs → trigger not authorized
+        with _mock_load_connections([conn]):
+            result = await _federation_trigger(
+                {"connection_id": "conn-1", "agent_id": "main", "message": "go"}, ctx
+            )
+        assert "error" in result
+        assert "not authorized" in result["error"]
 
     @pytest.mark.asyncio
     async def test_trigger_connection_not_active(self, ctx):
@@ -151,13 +193,20 @@ class TestFederationTrigger:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_trigger_truncates_message(self, ctx):
-        with _mock_load_connections([_active_conn()]):
-            result = await _federation_trigger(
+    async def test_trigger_forwards_full_message(self, ctx):
+        with (
+            _mock_load_connections([_active_conn()]),
+            patch(
+                "robothor.engine.tools.handlers.federation._federation_request",
+                new_callable=AsyncMock,
+                return_value={"ok": True},
+            ) as req,
+        ):
+            await _federation_trigger(
                 {"connection_id": "conn-1", "agent_id": "main", "message": "x" * 500},
                 ctx,
             )
-        assert len(result["message"]) == 200
+        assert req.call_args.args[1]["message"] == "x" * 500
 
 
 # ── federation_sync_status ─────────────────────────────────────────────

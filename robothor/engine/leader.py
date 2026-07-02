@@ -42,6 +42,7 @@ class LeaderElector:
         # Single-node (HA off) is always leader; HA starts as follower until acquired.
         self._is_leader = not ha_leader_enabled()
         self._stop = False
+        self._consec_errors = 0
 
     def is_leader(self) -> bool:
         return self._is_leader
@@ -79,10 +80,24 @@ class LeaderElector:
         while not self._stop:
             try:
                 await self._tick()
+                self._consec_errors = 0
             except Exception as e:
-                # Keep current leadership state on a transient Redis error rather
-                # than thrash; never flip a follower to leader on error.
-                logger.warning("Leader election tick error: %s", e)
+                # A transient error keeps current state (never flip a follower to
+                # leader on error). But if we're the leader and can't reach Redis
+                # for longer than the lease TTL, our lease has expired and another
+                # replica may have taken over — demote to avoid a two-leader split
+                # brain. Renews happen every TTL/3, so 3 consecutive failures ≈ TTL.
+                self._consec_errors += 1
+                logger.warning(
+                    "Leader election tick error (%d consecutive): %s", self._consec_errors, e
+                )
+                if self._is_leader and self._owner is not None and self._consec_errors >= 3:
+                    logger.warning(
+                        "Demoting from leader: %d consecutive errors exceed lease TTL",
+                        self._consec_errors,
+                    )
+                    self._is_leader = False
+                    self._owner = None
             await asyncio.sleep(max(1, self._ttl // 3 // 1000))
 
     async def stop(self) -> None:

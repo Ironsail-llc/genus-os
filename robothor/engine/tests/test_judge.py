@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from robothor.engine import judge
@@ -67,3 +69,61 @@ async def test_grades_and_writes():
     assert out["goal_achievement"] == 4
     assert captured["agent_id"] == "worker"
     assert captured["run_id"] == "r1"
+
+
+# The real agent_reviews columns (031 + migration 080). The old INSERT used
+# 'dimension'/'specific_issue' (nonexistent) and omitted NOT NULL agent_id/
+# reviewer, so every judge verdict was silently dropped.
+_REAL_COLUMNS = {
+    "id",
+    "tenant_id",
+    "agent_id",
+    "run_id",
+    "reviewer",
+    "reviewer_type",
+    "rating",
+    "categories",
+    "feedback",
+    "action_items",
+    "created_at",
+}
+_PHANTOM_COLUMNS = {"dimension", "specific_issue"}
+
+
+def test_write_review_uses_real_schema_columns():
+    """_write_review must INSERT only columns that exist and supply the NOT NULL
+    ones (agent_id, reviewer); reviewer_type must be 'judge'."""
+    executed = {}
+    cur = MagicMock()
+
+    def _execute(sql, params=None):
+        executed["sql"] = sql
+        executed["params"] = params
+
+    cur.execute.side_effect = _execute
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+
+    class _CM:
+        def __enter__(self):
+            return conn
+
+        def __exit__(self, *a):
+            return False
+
+    with patch("robothor.db.connection.get_connection", return_value=_CM()):
+        judge._write_review(
+            "run-1",
+            "worker",
+            {"goal_achievement": 4, "rationale": "ok", "safety_regression": False},
+        )
+
+    sql = executed["sql"]
+    # Only real columns are referenced between the parentheses of the INSERT.
+    col_blob = sql.split("(", 1)[1].split(")", 1)[0]
+    used = {c.strip() for c in col_blob.split(",")}
+    assert used <= _REAL_COLUMNS, f"INSERT references unknown columns: {used - _REAL_COLUMNS}"
+    assert not (used & _PHANTOM_COLUMNS), "INSERT still references phantom columns"
+    assert {"agent_id", "reviewer", "reviewer_type", "rating"} <= used  # NOT NULLs supplied
+    assert "'judge'" in sql  # reviewer_type='judge'
+    conn.commit.assert_called_once()  # actually persisted

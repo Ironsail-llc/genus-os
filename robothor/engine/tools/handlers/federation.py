@@ -21,6 +21,21 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
+# Privileged ops that cross the wire to act on / read a peer must be authorized
+# by the capabilities the peer granted us (the connection's `imports`), not
+# merely by the connection being ACTIVE.
+_OP_REQUIRED_CAPABILITY = {"list_runs": "agent_runs", "trigger": "agent_runs"}
+
+
+def _authorize_op(connection: Any, op: str) -> str | None:
+    """Return an error string if ``op`` is not permitted by the connection's
+    negotiated ``imports``, else None."""
+    cap = _OP_REQUIRED_CAPABILITY.get(op)
+    if cap and cap not in getattr(connection, "imports", []):
+        return f"Operation '{op}' not authorized by connection capabilities (needs '{cap}')"
+    return None
+
+
 @_handler("federation_query")
 async def _federation_query(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Query a connected instance's data (health, runs, memory)."""
@@ -55,6 +70,9 @@ async def _federation_query(args: dict[str, Any], ctx: ToolContext) -> dict[str,
                     "imports": connection.imports,
                 }
             if query_type == "runs":
+                denied = _authorize_op(connection, "list_runs")
+                if denied:
+                    return {"error": denied}
                 return {"_nats": True, "peer_name": connection.peer_name}
             return {"error": f"Unknown query type: {query_type}"}
         except Exception as e:
@@ -119,6 +137,9 @@ async def _federation_trigger(args: dict[str, Any], ctx: ToolContext) -> dict[st
                 return {"error": f"Connection not found: {connection_id}"}
             if connection.state != ConnectionState.ACTIVE:
                 return {"error": f"Connection not active (state={connection.state.value})"}
+            denied = _authorize_op(connection, "trigger")
+            if denied:
+                return {"error": denied}
 
             return {"_nats": True, "peer_name": connection.peer_name}
         except Exception as e:
