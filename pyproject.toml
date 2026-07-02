@@ -55,7 +55,7 @@ api = [
     "uvicorn[standard]>=0.32",
     # Auth: bridge-issued JWT sessions + password hashing (break-glass admin).
     # pyjwt/bcrypt already resolve transitively; declare them as first-class.
-    "pyjwt>=2.10",
+    "pyjwt>=2.13.0",
     "argon2-cffi>=23.1",
 ]
 vision = [
