@@ -199,11 +199,13 @@ def _cleanup_stale_runs() -> int:
         return 0
 
 
-async def _start_federation(config: EngineConfig) -> Any:
+async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
     """Start federation NATS transport if connections exist.
 
     Returns the NATSManager (connected) or None. Backward-compatible no-op
-    when no federation is configured.
+    when no federation is configured. When ``runner`` is provided, also registers
+    an inbound responder per active connection so peer federation_query/trigger
+    calls are actually answered (not just sendable).
     """
     try:
         from robothor.federation.config import FederationConfig
@@ -234,10 +236,15 @@ async def _start_federation(config: EngineConfig) -> Any:
                 "Federation: NATS connected, %d connections loaded",
                 len(connections),
             )
-            # Ensure streams for active connections
+            # Ensure streams + register an inbound responder for active
+            # connections so peer federation_query/trigger calls are answered.
             for conn in connections:
                 if conn.state.value == "active":
                     await nats_mgr.ensure_stream(conn.id)
+                    if runner is not None:
+                        from robothor.engine.federation_responder import make_command_handler
+
+                        await nats_mgr.serve_requests(conn.id, make_command_handler(conn, runner))
         else:
             logger.warning("Federation: NATS connection failed, federation disabled")
             return None
@@ -471,7 +478,7 @@ async def main() -> None:
         logger.warning("Channel-bus debouncer init failed (non-fatal): %s", e)
 
     # Federation — start NATS if connections exist (no-op otherwise)
-    nats_mgr = await _start_federation(config)
+    nats_mgr = await _start_federation(config, runner=runner)
 
     # Start all subsystems concurrently
     tasks = [

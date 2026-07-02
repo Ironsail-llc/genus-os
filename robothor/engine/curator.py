@@ -146,10 +146,34 @@ def should_run_curator(
 _CURATOR_STATE_BLOCK = "curator_state"
 
 
-def _curator_tool_whitelist() -> frozenset[str]:
-    """Review-fork tools PLUS skill_archive (the per-turn fork never archives)."""
+def curator_dry_run() -> bool:
+    """Whether the curator runs in dry-run (propose-only) mode.
+
+    Default True (safe): the documented 2-week soak must be code-enforced, not
+    prompt-trust. The operator sets ``ROBOTHOR_CURATOR_APPLY=1`` to allow real
+    consolidation after reviewing proposals in ``crm_curator_state``.
+    """
+    import os
+
+    return os.environ.get("ROBOTHOR_CURATOR_APPLY", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _curator_tool_whitelist(dry_run: bool = True) -> frozenset[str]:
+    """Review-fork tools, plus skill_archive ONLY when not dry-run.
+
+    In dry-run the destructive ``skill_archive`` tool is withheld entirely, so
+    the curator physically cannot archive/merge — it can only propose. This
+    makes the soak real rather than trusting the prompt.
+    """
     from robothor.engine.background_review import REVIEW_TOOL_WHITELIST
 
+    if dry_run:
+        return REVIEW_TOOL_WHITELIST
     return REVIEW_TOOL_WHITELIST | frozenset({"skill_archive"})
 
 
@@ -158,6 +182,7 @@ async def spawn_curator(
     *,
     curator_agent_id: str = "curator",
     tenant_id: str | None = None,
+    dry_run: bool | None = None,
 ) -> dict[str, Any] | None:
     """Run one LLM consolidation pass as a top-level ``curator`` agent run.
 
@@ -175,13 +200,18 @@ async def spawn_curator(
     )
     from robothor.engine.tools.dispatch import clear_tool_whitelist, set_tool_whitelist
 
+    if dry_run is None:
+        dry_run = curator_dry_run()
+
     candidates, pinned, human = list_curator_candidates()
     if not candidates:
         logger.info("spawn_curator: no agent-created candidates; skipping LLM pass")
         return {"status": "skipped", "reason": "no_candidates"}
 
+    if dry_run:
+        logger.info("curator: DRY-RUN — skill_archive withheld, proposals only")
     origin_token = set_current_write_origin(CURATOR)
-    whitelist_token = set_tool_whitelist(_curator_tool_whitelist())
+    whitelist_token = set_tool_whitelist(_curator_tool_whitelist(dry_run=dry_run))
     try:
         await scheduler._run_agent(curator_agent_id)  # noqa: SLF001
     except Exception as exc:  # noqa: BLE001 — background, never propagate
@@ -199,6 +229,7 @@ async def spawn_curator(
     )
     return {
         "status": "completed",
+        "dry_run": dry_run,
         "candidates": len(candidates),
         "skipped_pinned": len(pinned),
         "skipped_human": len(human),
