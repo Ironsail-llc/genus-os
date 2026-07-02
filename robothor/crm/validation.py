@@ -13,6 +13,8 @@ Usage:
 
 from __future__ import annotations
 
+from typing import Any
+
 # ─── Blocklists ──────────────────────────────────────────────────────────
 
 PERSON_BLOCKLIST: set[str] = {
@@ -124,3 +126,77 @@ def normalize_email(email: str | None) -> str | None:
     if "@" not in normalized:
         return None
     return normalized
+
+
+# ─── Autonomy budget validation ───────────────────────────────────────────
+# Lives here (not in robothor.engine.autonomy) so the CRM data layer can
+# validate the autonomy_budget JSONB it persists without importing the engine.
+# Engine code keeps `from robothor.engine.autonomy import validate_budget`
+# working via a re-export there.
+
+# Allowed top-level keys in an autonomy_budget dict. Extra keys are typos, not
+# features — the validator rejects them so the planner never silently degrades.
+_VALID_BUDGET_KEYS = frozenset(
+    {
+        "reversible_cap_usd",
+        "irreversible_cap_usd",
+        "categories",
+        "hard_floor",
+    }
+)
+
+_VALID_VERDICTS = frozenset({"auto", "ask", "refuse"})
+
+
+def validate_budget(budget: Any) -> tuple[bool, str]:
+    """Validate an autonomy_budget dict before persisting to JSONB.
+
+    Returns ``(True, "")`` for empty dicts and partial-but-recognized shapes —
+    legacy rows must continue to round-trip cleanly. Returns ``(False, reason)``
+    for clearly malformed inputs the DAL should reject with ``{"error": reason}``.
+
+    Recognized shape:
+        {
+          "reversible_cap_usd":   <non-negative number>,
+          "irreversible_cap_usd": <non-negative number>,
+          "categories":           {<action_type>: "auto"|"ask"|"refuse"},
+          "hard_floor":           [<action_type>, ...],
+        }
+    """
+    if not isinstance(budget, dict):
+        return False, "autonomy_budget must be a dict"
+
+    extra = set(budget.keys()) - _VALID_BUDGET_KEYS
+    if extra:
+        return False, f"unknown autonomy_budget key(s): {sorted(extra)}"
+
+    for cap_key in ("reversible_cap_usd", "irreversible_cap_usd"):
+        if cap_key in budget:
+            cap = budget[cap_key]
+            if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+                return False, f"{cap_key} must be a non-negative number"
+            if cap < 0:
+                return False, f"{cap_key} must be non-negative (got {cap})"
+
+    if "categories" in budget:
+        cats = budget["categories"]
+        if not isinstance(cats, dict):
+            return False, "categories must be a dict of action_type → verdict"
+        for action_type, verdict in cats.items():
+            if not isinstance(action_type, str):
+                return False, f"categories keys must be strings (got {type(action_type).__name__})"
+            if verdict not in _VALID_VERDICTS:
+                return (
+                    False,
+                    f"categories[{action_type!r}] must be one of {sorted(_VALID_VERDICTS)} (got {verdict!r})",
+                )
+
+    if "hard_floor" in budget:
+        hf = budget["hard_floor"]
+        if not isinstance(hf, list):
+            return False, "hard_floor must be a list of action_type strings"
+        for entry in hf:
+            if not isinstance(entry, str):
+                return False, f"hard_floor entries must be strings (got {type(entry).__name__})"
+
+    return True, ""
