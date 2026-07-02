@@ -84,8 +84,12 @@ class TestCacheHitRatio:
 
     def test_zero_prompt_tokens_with_nonzero_cache_read_clamped(self):
         # Degenerate: cache_read > prompt_tokens shouldn't happen in practice,
-        # but the math must not raise — denominator floors at 1.
-        assert cache_hit_ratio(cache_read_tokens=5, prompt_tokens=0) == 5.0
+        # but the math must not raise (denominator floors at 1) and the result
+        # must stay a ratio — clamped to a documented max of 1.0.
+        assert cache_hit_ratio(cache_read_tokens=5, prompt_tokens=0) == 1.0
+
+    def test_cache_read_exceeding_prompt_tokens_clamped_to_one(self):
+        assert cache_hit_ratio(cache_read_tokens=1500, prompt_tokens=1000) == 1.0
 
     def test_no_cache_read_is_zero(self):
         assert cache_hit_ratio(cache_read_tokens=0, prompt_tokens=1000) == 0.0

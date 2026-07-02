@@ -150,18 +150,37 @@ class TestSupportsCacheControl:
     def test_unknown_model_defaults_false(self):
         assert supports_cache_control("unknown/model-xyz") is False
 
-    def test_unmapped_future_anthropic_model_still_true(self):
-        """litellm's ``supports_prompt_caching`` is an exact catalog lookup,
-        not a provider-prefix heuristic — it returns False for any
-        anthropic/* id its bundled JSON hasn't caught up with yet (verified:
-        'anthropic/claude-opus-4-9-20261231' -> False). Anthropic's API
-        supports cache_control on essentially every current model, so a
-        catalog-lag false-negative would silently disable caching for a
-        newly-deployed fleet model — the exact "follows fleet model changes"
-        case this PR exists for. The prefix fallback preserves the historical
-        assumption when litellm has no data, without overriding a curated or
-        litellm-confirmed answer."""
-        assert supports_cache_control("anthropic/claude-opus-4-9-20261231") is True
+    def test_uncataloged_anthropic_model_is_false(self):
+        """Regression (review finding): NO anthropic/-prefix fallback.
+
+        litellm's ``supports_prompt_caching`` returns False both for models
+        explicitly marked unsupported and for ids it simply hasn't mapped —
+        the two are indistinguishable from the return value. A prefix
+        fallback treating False as "catalog lag, assume True" would also
+        return True for a genuinely caching-unsupported anthropic model,
+        making this lookup an untrustworthy capability oracle. The chain is
+        strictly: curated override → litellm → default False. Catalog lag
+        for a newly-released fleet model is handled by adding a curated
+        ``supports_cache_control=True`` override to ``_MODEL_REGISTRY``
+        (next test)."""
+        assert supports_cache_control("anthropic/claude-mythos-preview") is False
+
+    def test_curated_override_covers_catalog_lag_for_new_anthropic_model(self):
+        """The supported path for a new direct-Anthropic model litellm hasn't
+        cataloged yet: pin it in the curated registry."""
+        fake_limits = ModelLimits(
+            max_input_tokens=200_000,
+            max_output_tokens=64_000,
+            default_output_tokens=16_384,
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            supports_cache_control=True,
+        )
+        with patch.dict(
+            "robothor.engine.model_registry._MODEL_REGISTRY",
+            {"anthropic/claude-mythos-preview": fake_limits},
+        ):
+            assert supports_cache_control("anthropic/claude-mythos-preview") is True
 
     def test_curated_override_beats_litellm(self):
         """An explicit ``ModelLimits.supports_cache_control`` wins over both

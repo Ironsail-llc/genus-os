@@ -41,12 +41,14 @@ def _otlp_attrs(attrs: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def cache_hit_ratio(cache_read_tokens: int, prompt_tokens: int) -> float:
-    """Fraction of prompt tokens served from the prompt cache.
+    """Fraction of prompt tokens served from the prompt cache, in [0.0, 1.0].
 
     ``prompt_tokens`` is floored at 1 so a zero-token run (or a run that
-    hasn't accumulated any input tokens yet) never divides by zero.
+    hasn't accumulated any input tokens yet) never divides by zero, and the
+    result is clamped to 1.0 so degenerate accounting (cache_read reported
+    higher than prompt tokens) stays a well-formed ratio for dashboards.
     """
-    return (cache_read_tokens or 0) / max(prompt_tokens or 0, 1)
+    return min((cache_read_tokens or 0) / max(prompt_tokens or 0, 1), 1.0)
 
 
 def gen_ai_attributes(

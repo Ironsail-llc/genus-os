@@ -307,17 +307,16 @@ def supports_cache_control(model_id: str) -> bool:
     3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
        custom providers (e.g. ``codex/*``, a subscription provider litellm
        doesn't catalog; it reports False rather than raising).
-    4. Direct ``anthropic/*`` ids litellm doesn't have a catalog entry for
-       default True. ``supports_prompt_caching`` is an *exact* catalog
-       lookup, not a provider-prefix heuristic — it reports False for any
-       dated Anthropic model id its bundled JSON hasn't caught up with yet,
-       even though the Anthropic API supports cache_control on essentially
-       every current model. Without this, a newly-released direct-Anthropic
-       fleet model would silently lose caching until litellm ships an update
-       — exactly the catalog-lag scenario this capability lookup exists to
-       avoid, not reproduce. Preserves the historical
-       ``model.startswith("anthropic/")`` assumption as the last resort.
-    5. Default False.
+    4. Default False.
+
+    Deliberately NO ``anthropic/``-prefix fallback: litellm returns False
+    both for models explicitly marked unsupported and for ids it simply
+    hasn't mapped, and the two are indistinguishable from the return value —
+    a prefix fallback that treats False as "catalog lag, assume True" would
+    also flip genuinely unsupported models to True, making this an
+    untrustworthy capability oracle. If a newly-released direct-Anthropic
+    fleet model lags litellm's catalog, pin it with a curated
+    ``supports_cache_control=True`` override in ``_MODEL_REGISTRY``.
     """
     limits = _MODEL_REGISTRY.get(model_id)
     if limits is not None and limits.supports_cache_control is not None:
@@ -326,10 +325,7 @@ def supports_cache_control(model_id: str) -> bool:
     if model_id.startswith("openrouter/"):
         return False
 
-    if _cache_control_from_litellm(model_id):
-        return True
-
-    return model_id.startswith("anthropic/")
+    return _cache_control_from_litellm(model_id)
 
 
 @lru_cache(maxsize=256)
