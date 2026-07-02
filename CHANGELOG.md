@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/Ironsail-llc/genus-os/compare/v1.5.0...v1.6.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 2 — HA dedup, OTLP observability & SIEM audit ([#155](https://github.com/Ironsail-llc/genus-os/issues/155)) ([98de1ab](https://github.com/Ironsail-llc/genus-os/commit/98de1ab53f267a665cf943d0a87151b0139071c0))
+
 ## [1.5.0](https://github.com/Ironsail-llc/genus-os/compare/v1.4.0...v1.5.0) (2026-07-02)
 
 ### Features
