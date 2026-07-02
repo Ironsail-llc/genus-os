@@ -4,6 +4,12 @@ After=network-online.target postgresql.service redis.service
 Wants=network-online.target
 
 [Service]
+# The daemon calls sd_notify READY=1 after startup and WATCHDOG=1 every 30s
+# (robothor/engine/daemon.py). Type=notify makes systemd wait for readiness;
+# WatchdogSec restarts the engine if the asyncio loop hangs (no ping in 300s).
+Type=notify
+NotifyAccess=main
+WatchdogSec=300
 User=robothor
 Group=robothor
 EnvironmentFile=/etc/robothor/robothor.env

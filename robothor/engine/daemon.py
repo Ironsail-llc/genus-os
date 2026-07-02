@@ -334,6 +334,24 @@ async def main() -> None:
         config.hourly_cost_cap_usd,
     )
 
+    # Initialize inter-agent messaging + teams so the send_agent_message /
+    # receive_agent_messages / create_team / team_scratchpad_* tools work
+    # (their handlers no-op with "not initialized" until these are called).
+    from robothor.engine.messaging import init_messenger
+    from robothor.engine.teams import init_team_manager
+
+    init_messenger()
+    init_team_manager()
+    logger.info("Inter-agent messaging + teams initialized")
+
+    # HA: scheduler leadership elector (no-op / always-leader when HA off).
+    from robothor.engine.leader import LeaderElector, ha_leader_enabled, set_elector
+
+    _elector = LeaderElector()
+    set_elector(_elector)
+    if ha_leader_enabled():
+        logger.info("HA leader election enabled")
+
     # Initialize lifecycle hook registry
     from robothor.engine.hook_registry import (
         init_hook_registry,
@@ -414,6 +432,14 @@ async def main() -> None:
             "ROBOTHOR_TELEGRAM_BOT_TOKEN is empty — Telegram delivery disabled. "
             "Engine API, scheduler, and hooks will still run."
         )
+    else:
+        # Wire human-approval escalations to the operator's Telegram. Without
+        # this, get_permission_manager() returns None and every human_approval
+        # escalation auto-approves (see runner fail-closed branch).
+        from robothor.engine.permission_escalation import init_permission_manager
+
+        init_permission_manager(bot, config.default_chat_id)
+        logger.info("Permission escalation manager wired to Telegram")
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
 
@@ -459,9 +485,20 @@ async def main() -> None:
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
+        asyncio.create_task(_extension_watcher_loop(), name="extensions"),
+        asyncio.create_task(_elector.run(), name="leader"),
     ]
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
+
+    # Slack channel (Socket Mode) — env-gated; start() self-gates on the tokens.
+    slack_bot = None
+    if os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN"):
+        from robothor.engine.slack import SlackBot
+
+        slack_bot = SlackBot(runner, config)
+        tasks.append(asyncio.create_task(slack_bot.start(), name="slack"))
+        logger.info("Slack channel enabled (Socket Mode)")
 
     logger.info("All subsystems started")
     _sd_notify("READY=1")
@@ -531,6 +568,19 @@ async def main() -> None:
     await hooks.stop()
     if bot is not None:
         await bot.stop()
+    if slack_bot is not None:
+        try:
+            await slack_bot.stop()
+        except Exception as e:
+            logger.debug("Slack bot stop failed: %s", e)
+
+    # Release the leadership lease explicitly before cancelling its task —
+    # otherwise the lease sits until its TTL expires and the whole fleet is
+    # leaderless (no cron/heartbeat) for up to that window.
+    try:
+        await _elector.stop()
+    except Exception as e:
+        logger.debug("Leader elector stop failed: %s", e)
 
     # Cancel remaining tasks
     for task in pending:
@@ -855,6 +905,16 @@ async def _curator_loop(scheduler: Any) -> None:
             return
         except Exception as e:  # noqa: BLE001
             logger.warning("curator loop error: %s", e)
+
+
+async def _extension_watcher_loop() -> None:
+    """Hot-reload adapter YAML changes without an engine restart (ExtensionWatcher)."""
+    try:
+        from robothor.engine.extensions import ExtensionWatcher
+
+        await ExtensionWatcher().watch()
+    except Exception as e:
+        logger.debug("Extension watcher exited: %s", e)
 
 
 async def _autodream_loop() -> None:

@@ -383,9 +383,10 @@ class CronScheduler:
         self.scheduler.start()
         logger.info("Cron scheduler started")
 
-        # Keep running
+        # Keep running; poll user-authored cron jobs each minute.
         while True:
             await asyncio.sleep(60)
+            await self._tick_user_cronjobs()
 
     # ─── Shared execution path ────────────────────────────────────────
 
@@ -400,8 +401,14 @@ class CronScheduler:
     ) -> None:
         """Shared entry point for cron and heartbeat runs.
 
-        Handles: dedup → circuit breaker → safety timeout → execute/deliver → track.
+        Handles: leadership → dedup → circuit breaker → safety timeout → execute/deliver → track.
         """
+        # HA: only the leader replica fires scheduled jobs (no-op when HA off).
+        from robothor.engine.leader import is_leader
+
+        if not is_leader():
+            logger.debug("Skipping scheduled %s — not the leader replica", agent_id)
+            return
         if not await try_acquire(dedup_key):
             # Bumped to warning to make hour-boundary contention visible.
             # The noon-storm investigation (2026-05) needs to know when a
@@ -859,6 +866,72 @@ class CronScheduler:
             f"You are {config.name} ({config.id}). "
             f"Execute your scheduled tasks as described in your instructions."
         )
+
+    async def _tick_user_cronjobs(self) -> None:
+        """Fire any due user-authored cron jobs and advance their schedules.
+
+        Poll-based (not APScheduler-registered) so registering a job never
+        churns the live job registry. Best-effort: a DB hiccup is logged, not
+        fatal to the scheduler loop.
+        """
+        import json
+
+        try:
+            from robothor.engine.user_cron import (
+                compute_next_run,
+                list_due_cronjobs,
+                mark_cronjob_fired,
+            )
+
+            now = datetime.now(UTC)
+            due = await asyncio.to_thread(list_due_cronjobs, self.config.tenant_id, now)
+            for job in due:
+                job_id = job["job_id"]
+                # Per-job isolation: a single malformed job (bad cron payload, DB
+                # error advancing its schedule) must not abort the whole tick and
+                # starve every other due job.
+                try:
+                    payload = job.get("schedule_payload") or {}
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    next_run = compute_next_run(payload, now)
+                    fire_count = (job.get("fire_count") or 0) + 1
+                    max_fires = job.get("max_fires")
+                    disable = next_run is None or (
+                        max_fires is not None and fire_count >= max_fires
+                    )
+                    # Mark-before-fire: advance the schedule BEFORE launching the
+                    # run. If the mark write fails we skip launching this cycle,
+                    # so the job can never fire every tick with an unadvanced
+                    # next_run_at (duplicate execution).
+                    await asyncio.to_thread(
+                        mark_cronjob_fired, job_id, next_run_at=next_run, disable=disable
+                    )
+                    # Gate the fire behind the per-agent dedup lock, like every
+                    # other execution path — user_cron was the only one bypassing
+                    # it, letting two ticks/replicas double-run the same agent.
+                    asyncio.create_task(
+                        self._run_user_cronjob(job["agent_id"], job["prompt"], job_id)
+                    )
+                except Exception as e:
+                    logger.warning("user_cron job %s failed to fire: %s", job_id, e)
+        except Exception as e:
+            logger.debug("user_cron tick error: %s", e)
+
+    async def _run_user_cronjob(self, agent_id: str, prompt: str, job_id: str) -> None:
+        """Execute a user-cron fire under the per-agent dedup lock."""
+        if not await try_acquire(agent_id):
+            logger.warning("user_cron %s skipped: agent %s already running", job_id, agent_id)
+            return
+        try:
+            await self.runner.execute(
+                agent_id=agent_id,
+                message=prompt,
+                trigger_type=TriggerType.CRON,
+                trigger_detail=f"user_cron:{job_id}",
+            )
+        finally:
+            await release(agent_id)
 
     def reconcile_schedules(self) -> list[str]:
         """Reconcile DB + in-memory jobs against current manifests.

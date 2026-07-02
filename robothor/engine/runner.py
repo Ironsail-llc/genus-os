@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -123,6 +124,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Trigger types that run with no interactive human and are therefore governed by
+# the agent's service_role under the RBAC ladder (see the system-run gate in
+# _run_loop). This is an ALLOWLIST on purpose: interactive surfaces (telegram,
+# webchat, slack, ide, manual, webhook, channel_event) are gated by the dispatch
+# user_role check instead, and any future trigger type defaults to that
+# restrictive path rather than silently inheriting allow-all service_role.
+_SYSTEM_TRIGGER_TYPES = frozenset(
+    {
+        TriggerType.CRON,
+        TriggerType.HOOK,
+        TriggerType.EVENT,
+        TriggerType.WORKFLOW,
+        TriggerType.SUB_AGENT,
+        TriggerType.FEDERATION,
+    }
+)
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -132,6 +150,36 @@ litellm.suppress_debug_info = True
 from robothor.engine.model_registry import register_pricing_with_litellm  # noqa: E402
 
 register_pricing_with_litellm()
+
+
+def _agent_holds_exec(config: AgentConfig) -> bool:
+    """True if the agent can call the ``exec`` tool (i.e. touches the host shell).
+
+    An empty ``tools_allowed`` means the agent receives the full tool set
+    (including ``exec``); a ``tools_denied`` entry removes it.
+    """
+    denied = set(config.tools_denied or [])
+    if "exec" in denied:
+        return False
+    allowed = config.tools_allowed or []
+    return "exec" in allowed or not allowed
+
+
+def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
+    """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
+
+    'docker' = start a Docker sandbox; 'observe' = an exec-holding agent that
+    WOULD be sandboxed but runs on host (caller logs it); 'host' = run on host.
+    ``mode`` is ``sandbox_default_mode()``. Explicit manifest ``sandbox: docker``
+    always sandboxes; ``sandbox: host`` always opts out.
+    """
+    if config.sandbox == "docker":
+        return "docker"
+    if config.sandbox == "host":
+        return "host"
+    if mode != "off" and _agent_holds_exec(config):
+        return "docker" if mode == "enforce" else "observe"
+    return "host"
 
 
 def _escalate_unfinished_todos(
@@ -372,6 +420,11 @@ class AgentRunner:
             session.start("", message, [])
             return session.fail(f"Agent config not found: {agent_id}")
 
+        # Per-run reasoning effort → extended-thinking budget (task-local).
+        from robothor.engine.model_registry import set_reasoning_effort
+
+        set_reasoning_effort(agent_config.reasoning_effort)
+
         # Create session
         session = AgentSession(
             agent_id=agent_id,
@@ -568,6 +621,65 @@ class AgentRunner:
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
         watchdog.touch("warmup_complete")
+
+        # ── [INJECTION] Scan the assembled system-run prompt ──
+        # Cron/hook/workflow runs are unattended; recalled memory, skills, or
+        # context files folded into the prompt above could carry an injection.
+        # Gated by ROBOTHOR_INJECTION_SCAN_* (observe logs; enforce aborts).
+        if trigger_type in (
+            TriggerType.CRON,
+            TriggerType.HOOK,
+            TriggerType.WORKFLOW,
+        ):
+            from robothor.engine.cron_safety import (
+                CronPromptInjectionBlockedError,
+                screen_cron_prompt,
+            )
+
+            try:
+                _inj_finding = screen_cron_prompt(
+                    f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
+                )
+            except CronPromptInjectionBlockedError as _inj_exc:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="blocked",
+                        tool_name=None,
+                        reason=str(_inj_exc),
+                        mode="enforce",
+                        step_number=0,
+                    )
+                # Persist a terminal FAILED run rather than letting a bare
+                # exception escape execute() to the scheduler task (which has no
+                # handler). This scan runs before the main create_run below, so
+                # record the run first — otherwise there's no agent_runs row for
+                # the watchdog to reap or the operator to inspect.
+                with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                return self._finish_run(
+                    session.fail(f"Blocked by injection scan: {_inj_exc}"),
+                    trace=None,
+                    agent_config=agent_config,
+                    session=session,
+                    spawn_context=spawn_context,
+                )
+            if _inj_finding:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="observed",
+                        tool_name=None,
+                        reason=_inj_finding,
+                        mode="observe",
+                        step_number=0,
+                    )
 
         # ── Warmup phase instrumentation ──────────────────────────────────────
         # Record setup milestones as warmup_phase steps so stalls are visible
@@ -858,9 +970,30 @@ class AgentRunner:
                 if resume_from_run_id:
                     resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
-                # ── [SANDBOX] Create sandbox for computer-use agents ──
+                # ── [SANDBOX] Create sandbox for computer-use / exec agents ──
+                # Explicit "docker" always sandboxes; "host" always opts out.
+                # Otherwise, sandbox-by-default applies to exec-holding agents
+                # under the ROBOTHOR_SANDBOX_DEFAULT_* ladder (observe logs which
+                # agents WOULD be sandboxed; enforce sandboxes them). A missing
+                # image degrades to the host via the try/except below.
+                from robothor.engine.feature_flags import sandbox_default_mode
+
+                _sb_decision = _resolve_sandbox_decision(agent_config, sandbox_default_mode())
+                if _sb_decision == "observe":
+                    with contextlib.suppress(Exception):
+                        from robothor.engine.tracking import log_guardrail_event
+
+                        log_guardrail_event(
+                            run_id=session.run.id,
+                            guardrail_name="sandbox_default",
+                            action="observed",
+                            tool_name="exec",
+                            reason="exec-holding agent would run in a Docker sandbox",
+                            mode=sandbox_default_mode(),
+                            step_number=0,
+                        )
                 sandbox = None
-                if agent_config.sandbox == "docker":
+                if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
 
                     sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
@@ -887,12 +1020,10 @@ class AgentRunner:
                         self.registry.deferred_whitelist(agent_config)
                     )
 
-                # G3: register the live session so external callers
-                # (interrupt_api.interrupt_session / steer_session, driven by
-                # the Telegram bot or health API) can look it up by run_id and
-                # steer/halt it mid-loop. Without this the loop-side consume is
-                # unreachable in production. Scoped to the loop window; always
-                # unregistered in the finally so the registry can't leak.
+                # Register the live session so external callers (Telegram /steer,
+                # /chat/steer, /chat/interrupt) can influence it mid-run — the
+                # loop-side consume is otherwise unreachable in production.
+                # Scoped to the loop window; always unregistered in the finally.
                 from robothor.engine import session_registry
 
                 session_registry.register(session)
@@ -993,6 +1124,18 @@ class AgentRunner:
             session.record_error(str(e), tb)
             return self._finish_run(
                 session.fail(str(e), tb),
+                trace=trace,
+                agent_config=agent_config,
+                session=session,
+                spawn_context=spawn_context,
+            )
+
+        # ── [INTERRUPT] Operator halted the run — finalize as CANCELLED ──
+        # Skip the verifier and the COMPLETED finalization; the run was cut short
+        # on purpose.
+        if session.was_interrupted:
+            return self._finish_run(
+                session.cancelled(session._interrupt_note),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1341,21 +1484,20 @@ class AgentRunner:
         _runaway_alerted = False  # one-shot latch for 500K alert
 
         while True:
-            # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
-            if self._active_watchdog and self._active_watchdog.should_abort:
-                logger.warning(
-                    "Run loop aborting: watchdog flagged abort — %s",
-                    self._active_watchdog.abort_reason,
+            # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
+            # An external caller may have set a steer (inject + continue) or an
+            # interrupt (halt) on this session via session_registry.
+            _steer_text = session.consume_pending_steer()
+            if _steer_text:
+                session.messages.append(
+                    {"role": "user", "content": f"[operator steering update]\n{_steer_text}"}
                 )
-                session.record_error(self._active_watchdog.abort_reason)
-                return
-
-            # ── [INTERRUPT] Operator halt requested via interrupt_api ──
-            # G3 (Rip 9 wiring): consume any pending interrupt and stop the run
-            # *gracefully* — through the normal return path into _finish_run, not
-            # as an error — so the run persists as completed with a note rather
-            # than failed/timeout. consume_interrupt() returns the message (which
-            # may be "" when the operator halted without text) or None.
+                logger.info("Live steer injected into run %s", session.run_id)
+            # ── [INTERRUPT] Operator halt requested via interrupt_api (Rip 9 / G3) ──
+            # Consume any pending interrupt and stop the run gracefully: record a
+            # distinct terminal state (CANCELLED, not COMPLETED/FAILED, verifier
+            # skipped) AND an outcome note so the halt is visible. The message may
+            # be "" when the operator halted without text, or None if no interrupt.
             _interrupt_msg = session.consume_interrupt()
             if _interrupt_msg is not None:
                 note = (
@@ -1363,16 +1505,21 @@ class AgentRunner:
                     if _interrupt_msg
                     else "Run interrupted by operator"
                 )
-                logger.info(
-                    "Run %s interrupted at iteration %d: %s",
-                    session.run_id,
-                    _iteration,
-                    _sanitize(_interrupt_msg or "(no message)"),
-                )
-                session.messages.append({"role": "assistant", "content": note})
+                session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
                 session.run.outcome_notes = (
                     f"{session.run.outcome_notes}; {note}" if session.run.outcome_notes else note
                 )
+                session.mark_interrupted(note)
+                logger.info("Run %s interrupted by operator", session.run_id)
+                return
+
+            # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
+            if self._active_watchdog and self._active_watchdog.should_abort:
+                logger.warning(
+                    "Run loop aborting: watchdog flagged abort — %s",
+                    self._active_watchdog.abort_reason,
+                )
+                session.record_error(self._active_watchdog.abort_reason)
                 return
 
             # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──
@@ -1797,32 +1944,49 @@ class AgentRunner:
                             elif agent_config.human_approval_fail_open:
                                 pass  # opted-in unattended autonomy: auto-approve
                             else:
-                                # Fail CLOSED: a tool gated on human approval must
-                                # not execute when no approval channel exists (cron,
-                                # workflow, degraded boot). Auto-approving here
-                                # silently disabled the control (audit 2026-05-29).
-                                gr_error_msg = (
-                                    f"Blocked ({gr.guardrail_name}): requires human "
-                                    "approval but no approval channel is available"
+                                # No approver reachable. Legacy behavior auto-
+                                # approves; ROBOTHOR_APPROVAL_* makes this fail
+                                # closed (observe logs the would-deny; enforce
+                                # denies the tool).
+                                from robothor.engine.feature_flags import approval_mode
+                                from robothor.engine.permission_escalation import (
+                                    fail_closed_on_missing_manager,
                                 )
-                                logger.warning(
-                                    "Human-approval tool %s blocked (fail-closed): "
-                                    "no permission manager for agent %s",
-                                    _sanitize(tool_name),
-                                    _sanitize(agent_config.id),
-                                )
-                                session.record_tool_call(
-                                    tool_name=tool_name,
-                                    tool_input=tool_args,
-                                    tool_output={"error": gr_error_msg},
-                                    tool_call_id=tc.id,
-                                    error_message=gr_error_msg,
-                                )
-                                if scratchpad:
-                                    scratchpad.record_tool_call(tool_name, error=gr_error_msg)
-                                if escalation:
-                                    escalation.record_error()
-                                continue
+
+                                _appr_mode = approval_mode()
+                                if _appr_mode != "off":
+                                    with contextlib.suppress(Exception):
+                                        from robothor.engine.tracking import log_guardrail_event
+
+                                        log_guardrail_event(
+                                            run_id=session.run.id,
+                                            guardrail_name=gr.guardrail_name,
+                                            action="blocked"
+                                            if _appr_mode == "enforce"
+                                            else "observed",
+                                            tool_name=tool_name,
+                                            reason="human approval required but no approver reachable",
+                                            mode=_appr_mode,
+                                            step_number=len(session.run.steps),
+                                        )
+                                if fail_closed_on_missing_manager():
+                                    gr_error_msg = (
+                                        f"Denied — human approval required for "
+                                        f"{gr.guardrail_name} but no approver is reachable"
+                                    )
+                                    session.record_tool_call(
+                                        tool_name=tool_name,
+                                        tool_input=tool_args,
+                                        tool_output={"error": gr_error_msg},
+                                        tool_call_id=tc.id,
+                                        error_message=gr_error_msg,
+                                    )
+                                    if scratchpad:
+                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                                    if escalation:
+                                        escalation.record_error()
+                                    continue
+                                # otherwise auto-approve (legacy) and fall through
                         else:
                             gr_error_msg = (
                                 f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
@@ -1836,7 +2000,10 @@ class AgentRunner:
                             )
                             iteration_errors.append((tool_name, gr_error_msg, None))
                             with contextlib.suppress(Exception):
-                                from robothor.engine.tracking import log_tool_event
+                                from robothor.engine.tracking import (
+                                    log_guardrail_event,
+                                    log_tool_event,
+                                )
 
                                 log_tool_event(
                                     run_id=session.run.id,
@@ -1845,8 +2012,69 @@ class AgentRunner:
                                     success=False,
                                     error_type="guardrail_blocked",
                                 )
+                                # Make the guardrail block visible in the audit
+                                # table the health dashboard reads (PR-1).
+                                log_guardrail_event(
+                                    run_id=session.run.id,
+                                    guardrail_name=gr.guardrail_name,
+                                    action="blocked",
+                                    tool_name=tool_name,
+                                    reason=gr.reason,
+                                    mode="enforce",
+                                    step_number=len(session.run.steps),
+                                )
                             if scratchpad:
                                 scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                            if escalation:
+                                escalation.record_error()
+                            continue
+
+                # ── [RBAC] System-run permission gate ──
+                # Only genuinely autonomous, no-interactive-user runs are governed
+                # by the (permissive) service_role here. Interactive surfaces
+                # (telegram/webchat/slack/ide/manual/webhook/channel) are gated by
+                # the dispatch user_role check instead — an ALLOWLIST so a new
+                # trigger type defaults to the restrictive user path, not
+                # service_role. See _SYSTEM_TRIGGER_TYPES.
+                if agent_config is not None and session.run.trigger_type in _SYSTEM_TRIGGER_TYPES:
+                    from robothor.engine.feature_flags import rbac_enforcement_mode
+                    from robothor.engine.permissions import classify_system_tool_access
+
+                    _rbac_mode = rbac_enforcement_mode()
+                    # check_tool_permission opens a sync DB connection; keep it off
+                    # the event loop so a slow round-trip can't stall the engine.
+                    _rbac_action, _rbac_reason = await asyncio.to_thread(
+                        classify_system_tool_access,
+                        agent_config.service_role,
+                        session.run.tenant_id,
+                        tool_name,
+                        _rbac_mode,
+                    )
+                    if _rbac_action != "allow":
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.tracking import log_guardrail_event
+
+                            log_guardrail_event(
+                                run_id=session.run.id,
+                                guardrail_name="rbac",
+                                action="blocked" if _rbac_action == "block" else "observed",
+                                tool_name=tool_name,
+                                reason=_rbac_reason,
+                                mode=_rbac_mode,
+                                step_number=len(session.run.steps),
+                            )
+                        if _rbac_action == "block":
+                            rbac_msg = f"Blocked by RBAC: {_rbac_reason}"
+                            session.record_tool_call(
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                                tool_output={"error": rbac_msg, "guardrail": "rbac"},
+                                tool_call_id=tc.id,
+                                error_message=rbac_msg,
+                            )
+                            iteration_errors.append((tool_name, rbac_msg, None))
+                            if scratchpad:
+                                scratchpad.record_tool_call(tool_name, error=rbac_msg)
                             if escalation:
                                 escalation.record_error()
                             continue
@@ -2467,6 +2695,24 @@ class AgentRunner:
                     temperature,
                     on_stream_event=on_stream_event,
                 )
+                # GenAI semantic-convention attributes for OTel export.
+                if response is not None:
+                    with contextlib.suppress(Exception):
+                        from robothor.engine.telemetry import gen_ai_attributes
+
+                        _usage = getattr(response, "usage", None)
+                        _finish = ""
+                        if getattr(response, "choices", None):
+                            _finish = getattr(response.choices[0], "finish_reason", "") or ""
+                        _span.attributes.update(
+                            gen_ai_attributes(
+                                model=getattr(response, "model", None)
+                                or (models[0] if models else ""),
+                                input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
+                                output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
+                                finish_reason=_finish,
+                            )
+                        )
         else:
             response = await self._do_llm_call(
                 session,
@@ -3112,14 +3358,29 @@ class AgentRunner:
                 todos = getattr(session, "todo_list", None) if session else None
                 parent_task_id = spawn_context.parent_task_id if spawn_context else None
                 if todos and parent_task_id:
-                    _escalate_unfinished_todos(
-                        todos=todos,
-                        parent_task_id=parent_task_id,
-                        agent_id=run.agent_id,
-                        tenant_id=getattr(run, "tenant_id", "") or "",
-                        agent_config=agent_config,
-                        run_id=getattr(run, "id", None),
-                    )
+                    esc_kwargs: dict[str, Any] = {
+                        "todos": todos,
+                        "parent_task_id": parent_task_id,
+                        "agent_id": run.agent_id,
+                        "tenant_id": getattr(run, "tenant_id", "") or "",
+                        "agent_config": agent_config,
+                        "run_id": getattr(run, "id", None),
+                    }
+                    # Escalation does up to ~15 blocking psycopg2 round-trips
+                    # (get_task + set_next_action + update_task + per-item
+                    # promotion). Offload to a worker thread so it never blocks
+                    # the event loop — same spawn-or-run-sync pattern as
+                    # _persist_run below. Sync fallback for CLI/tests (no loop).
+                    try:
+                        asyncio.get_running_loop()
+                        from robothor.engine.task_registry import get_task_registry
+
+                        get_task_registry().spawn(
+                            self._escalate_unfinished_todos_bg(esc_kwargs),
+                            name=f"todo-escalate:{run.id}",
+                        )
+                    except RuntimeError:
+                        _escalate_unfinished_todos(**esc_kwargs)
             except Exception as e:
                 logger.warning("todo escalation error: %s", _sanitize(e))
 
@@ -3192,6 +3453,20 @@ class AgentRunner:
         """Persist run state and steps to the database in a background thread."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._persist_run_sync, run)
+
+    async def _escalate_unfinished_todos_bg(self, kwargs: dict[str, Any]) -> None:
+        """Run the blocking todo escalation/promotion off the event loop.
+
+        Best-effort: the escalation is non-critical (the next heartbeat re-plans
+        from the parent task anyway), so failures are logged, not raised.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, functools.partial(_escalate_unfinished_todos, **kwargs)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("todo escalation (bg) error: %s", _sanitize(e))
 
     @staticmethod
     def _assess_outcome(run: AgentRun) -> None:

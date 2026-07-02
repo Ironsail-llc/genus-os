@@ -7,7 +7,9 @@ so the engine adapts to each model's capabilities instead of hardcoding.
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import lru_cache
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -225,26 +227,56 @@ def _from_litellm_catalog(model_id: str) -> ModelLimits | None:
     return result
 
 
+@lru_cache(maxsize=256)
+def _dynamic_model_limits(model_id: str) -> ModelLimits | None:
+    """Look up limits from litellm's model catalog (cached). None if unknown.
+
+    Lets the engine size models that aren't in the hand-maintained
+    ``_MODEL_REGISTRY`` instead of silently using a wrong 128K fallback.
+    """
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model_id)
+    except Exception:
+        return None
+    if not info:
+        return None
+    max_in = info.get("max_input_tokens") or info.get("max_tokens")
+    if not max_in:
+        return None
+    max_out = int(info.get("max_output_tokens") or 8_192)
+    return ModelLimits(
+        max_input_tokens=int(max_in),
+        max_output_tokens=max_out,
+        default_output_tokens=min(max_out, 8_192),
+        input_cost_per_token=float(info.get("input_cost_per_token") or 0.0),
+        output_cost_per_token=float(info.get("output_cost_per_token") or 0.0),
+    )
+
+
 def get_model_limits(model_id: str) -> ModelLimits:
     """Look up model limits.
 
-    Order: curated ``_MODEL_REGISTRY`` (authoritative) → litellm's bundled
-    catalog when catalog-backed mode (Rip 17 / G6) is on → conservative
-    fallback. The curated registry always wins so our hand-tuned cache pricing
-    and thinking flags are never overridden.
+    Order: curated ``_MODEL_REGISTRY`` (authoritative — carries Genus-specific
+    facts like codex $0 / cache pins) → litellm's bundled catalog when
+    catalog-backed mode (Rip 17 / G6) is on → conservative fallback. The curated
+    registry always wins so our hand-tuned pricing and thinking flags stand.
     """
     limits = _MODEL_REGISTRY.get(model_id)
     if limits:
         return limits
 
-    from robothor.engine.feature_flags import catalog_backed_models_enabled
+    dynamic = _dynamic_model_limits(model_id)
+    if dynamic is not None:
+        return dynamic
 
-    if catalog_backed_models_enabled():
-        catalog = _from_litellm_catalog(model_id)
-        if catalog:
-            return catalog
-
-    logger.debug("Unknown model '%s', using fallback limits", sanitize_log(model_id))
+    logger.warning(
+        "Unknown model '%s' — not in the static registry or litellm catalog; "
+        "using conservative %dK fallback. Add it to model_registry._MODEL_REGISTRY.",
+        sanitize_log(model_id),
+        _FALLBACK.max_input_tokens // 1000,
+    )
     return _FALLBACK
 
 
@@ -290,6 +322,36 @@ def register_pricing_with_litellm() -> None:
                 },
             }
         )
+
+
+# Reasoning-effort → thinking-token budget. Promotes the single global
+# THINKING_BUDGET_TOKENS into a per-agent setting (AgentConfig.reasoning_effort).
+_REASONING_BUDGETS: dict[str, int] = {
+    "low": 2_000,
+    "medium": THINKING_BUDGET_TOKENS,  # 10_000 — preserves the prior default
+    "high": 24_000,
+    "max": 48_000,
+}
+
+
+def reasoning_budget_tokens(effort: str) -> int:
+    """Thinking-token budget for a reasoning-effort level (default medium)."""
+    return _REASONING_BUDGETS.get((effort or "medium").strip().lower(), THINKING_BUDGET_TOKENS)
+
+
+# Per-run reasoning effort. A ContextVar so concurrent runs (each its own asyncio
+# task) don't race; set by the runner at run start, read when building thinking kwargs.
+_reasoning_effort_ctx: ContextVar[str] = ContextVar("reasoning_effort", default="medium")
+
+
+def set_reasoning_effort(effort: str) -> None:
+    """Set the reasoning effort for the current run's task context."""
+    _reasoning_effort_ctx.set(effort or "medium")
+
+
+def current_thinking_budget() -> int:
+    """Thinking-token budget for the current run's reasoning effort."""
+    return reasoning_budget_tokens(_reasoning_effort_ctx.get())
 
 
 def compute_token_budget(model_id: str, max_iterations: int) -> int:

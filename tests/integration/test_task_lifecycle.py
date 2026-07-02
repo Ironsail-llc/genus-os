@@ -4,7 +4,7 @@ Five tests that walk the canonical multi-day workflow:
 
   1. create → plan → ask → answer → advance → close (the quote→PO loop)
   2. follow_up_at snooze + resurface
-  3. a redundant transition is rejected by the state-machine guard
+  3. a redundant same-state transition is an idempotent no-op (no dup history)
   4. reject spawns subtasks with correct parent_task_id + priority
   5. todo promotion creates idempotent subtasks
 
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import psycopg2
 import pytest
 
 from robothor.constants import DEFAULT_TENANT
@@ -38,10 +37,8 @@ from robothor.constants import DEFAULT_TENANT
 class TestFullLifecycle:
     def test_create_plan_ask_answer_advance_close(self, db_conn, mock_get_connection, test_prefix):
         """Full quote→PO loop. Each transition writes the expected `kind` history row."""
-        # answer_question is the Phase-4 operator-answer DAL writer. It is not on
-        # this branch yet, so skip cleanly (rather than ImportError) until it lands.
-        import robothor.crm.dal as dal
         from robothor.crm.dal import (
+            answer_question,
             approve_task,
             create_task,
             get_task_history,
@@ -50,13 +47,9 @@ class TestFullLifecycle:
             update_task,
         )
 
-        answer_question = getattr(dal, "answer_question", None)
-        if answer_question is None:
-            pytest.skip("answer_question (Phase 4 DAL writer) not present on this branch yet")
-
         # 1. create — operator files a thread-tagged task with an objective
         task_id = create_task(
-            title=f"{test_prefix} Confirm RxHistory pricing",
+            title=f"{test_prefix} Confirm widget pricing",
             body="Initial inquiry to Alice at Acme Corp.",
             objective="Confirm pricing without scheduling a meeting",
             assigned_to_agent="email-responder",
@@ -206,74 +199,59 @@ class TestFollowUpResurface:
 
 @pytest.mark.integration
 class TestRedundantTransition:
-    def test_redundant_transition_is_rejected(
-        self, db_conn, mock_get_connection, test_prefix, db_dsn
+    def test_redundant_transition_is_idempotent_noop(
+        self, db_conn, mock_get_connection, test_prefix
     ):
-        """A second client advancing an already-advanced task is a no-op.
+        """Re-applying an already-applied status is an idempotent no-op.
 
-        This exercises the state-machine guard, not MVCC/row-locking: the first
-        transition commits before the second begins, so the second sees
-        IN_PROGRESS and the validator refuses a no-op IN_PROGRESS → IN_PROGRESS.
-        Uses a second real psycopg2 connection only to prove the rejection holds
-        across connections.
+        ``update_task`` adds ``status`` to the SET clause unconditionally, so a
+        same-state IN_PROGRESS → IN_PROGRESS runs the UPDATE and returns True —
+        there is no same-state guard. But it does NOT write a second
+        transition-history row, since history is only recorded when
+        ``current_status != new_status`` (dal.update_task). This is the real
+        invariant: redundant transitions succeed without polluting history.
         """
         from robothor.crm.dal import create_task, update_task
 
         task_id = create_task(
-            title=f"{test_prefix} Concurrent target",
+            title=f"{test_prefix} Redundant target",
             body="x",
             tenant_id=DEFAULT_TENANT,
         )
         assert isinstance(task_id, str)
 
-        # First client moves TODO → IN_PROGRESS and commits.
-        result_a = update_task(
-            task_id=task_id,
-            status="IN_PROGRESS",
-            changed_by="agent-a",
-            tenant_id=DEFAULT_TENANT,
+        # First move: TODO → IN_PROGRESS (a real transition, records history).
+        assert (
+            update_task(
+                task_id=task_id,
+                status="IN_PROGRESS",
+                changed_by="agent-a",
+                tenant_id=DEFAULT_TENANT,
+            )
+            is True
         )
-        assert result_a is True
 
-        # Second client sees the committed status and the transition validator
-        # refuses the redundant IN_PROGRESS → IN_PROGRESS.
-        second = psycopg2.connect(db_dsn)
-        try:
-            # Re-use the DAL but force its connection to be this second one.
-            from unittest.mock import patch
+        # Second move: IN_PROGRESS → IN_PROGRESS. Idempotent success (True),
+        # not an error — and it must NOT append another transition row.
+        assert (
+            update_task(
+                task_id=task_id,
+                status="IN_PROGRESS",
+                changed_by="agent-b",
+                tenant_id=DEFAULT_TENANT,
+            )
+            is True
+        )
 
-            with patch("robothor.crm.dal.get_connection") as mock_get:
-                second.autocommit = False
-                # Make get_connection return a context-manager wrapper.
-                cm = _ConnContext(second)
-                mock_get.return_value = cm
-                result_b = update_task(
-                    task_id=task_id,
-                    status="IN_PROGRESS",
-                    changed_by="agent-b",
-                    tenant_id=DEFAULT_TENANT,
-                )
-            # update_task returns False when there are no fields to set
-            # (status is already IN_PROGRESS and no other fields supplied).
-            # Either False or {"error": ...} is acceptable — both indicate
-            # no second commit happened.
-            assert result_b is False or isinstance(result_b, dict)
-        finally:
-            second.close()
-
-
-class _ConnContext:
-    """Tiny context-manager wrapper around a psycopg2 conn for DAL patching."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def __enter__(self):
-        return self._conn
-
-    def __exit__(self, *_):
-        self._conn.commit()
-        return False
+        # Exactly one TODO → IN_PROGRESS history row exists (from the first
+        # move); the redundant no-op wrote none.
+        cur = db_conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM crm_task_history "
+            "WHERE task_id = %s AND to_status = 'IN_PROGRESS'",
+            (task_id,),
+        )
+        assert cur.fetchone()[0] == 1
 
 
 @pytest.mark.integration
@@ -346,16 +324,11 @@ class TestRejectSpawnsSubtasks:
 @pytest.mark.integration
 class TestTodoPromotionIdempotency:
     def test_same_hash_does_not_duplicate(self, db_conn, mock_get_connection, test_prefix):
-        # Phase 3's todo-promotion path is not merged on this branch yet; skip
-        # cleanly (rather than ImportError) until it lands.
-        todo_promotion = pytest.importorskip(
-            "robothor.engine.todo_promotion",
-            reason="Phase 3 todo-promotion path not merged on this branch yet",
-        )
-        compute_item_hash = todo_promotion.compute_item_hash
-        promote_todo_to_subtask = todo_promotion.promote_todo_to_subtask
-
         from robothor.crm.dal import create_task
+        from robothor.engine.todo_promotion import (
+            compute_item_hash,
+            promote_todo_to_subtask,
+        )
         from robothor.engine.todolist import TodoItem
 
         parent_id = create_task(
@@ -380,6 +353,9 @@ class TestTodoPromotionIdempotency:
             status="pending",
         )
 
+        # promote_todo_to_subtask returns PromotionOutcome(subtask_id, created):
+        # the first call creates (created=True), the second is an idempotent hit
+        # that reuses the same subtask_id (created=False).
         first = promote_todo_to_subtask(
             parent=parent,
             item=item,
@@ -387,7 +363,8 @@ class TestTodoPromotionIdempotency:
             run_id="run-A",
             tenant_id=DEFAULT_TENANT,
         )
-        assert first is not None
+        assert first.subtask_id is not None
+        assert first.created is True
 
         second = promote_todo_to_subtask(
             parent=parent,
@@ -396,11 +373,14 @@ class TestTodoPromotionIdempotency:
             run_id="run-B",
             tenant_id=DEFAULT_TENANT,
         )
-        assert second == first, "second promotion must reuse the existing subtask"
+        assert second.subtask_id == first.subtask_id, (
+            "second promotion must reuse the existing subtask"
+        )
+        assert second.created is False, "idempotent hit must not create a new subtask"
 
         # Body carries the hash marker so future runs can look it up.
         cur = db_conn.cursor()
-        cur.execute("SELECT body, tags FROM crm_tasks WHERE id = %s", (first,))
+        cur.execute("SELECT body, tags FROM crm_tasks WHERE id = %s", (first.subtask_id,))
         body, tags = cur.fetchone()
         h = compute_item_hash(parent_id, item.content)
         assert f"todo_hash: {h}" in body

@@ -46,14 +46,20 @@ class TestGetModelLimits:
         assert limits == _FALLBACK
 
     def test_gpt_5_5_pro_removed(self):
-        """GPT-5.5 Pro was retired 2026-04-25 (cost) — registry must return fallback."""
-        limits = get_model_limits("openrouter/openai/gpt-5.5-pro")
-        assert limits == _FALLBACK
+        """GPT-5.5 Pro was retired 2026-04-25 (cost) — absent from the static registry.
+
+        (get_model_limits may now size it via litellm's dynamic catalog; the
+        contract these tests guard is that it's not in the hand-maintained dict.)
+        """
+        from robothor.engine.model_registry import _MODEL_REGISTRY
+
+        assert "openrouter/openai/gpt-5.5-pro" not in _MODEL_REGISTRY
 
     def test_opus_4_6_removed(self):
-        """Opus 4.6 was superseded by 4.7 — registry must return fallback."""
-        limits = get_model_limits("openrouter/anthropic/claude-opus-4.6")
-        assert limits == _FALLBACK
+        """Opus 4.6 was superseded by 4.7 — absent from the static registry."""
+        from robothor.engine.model_registry import _MODEL_REGISTRY
+
+        assert "openrouter/anthropic/claude-opus-4.6" not in _MODEL_REGISTRY
 
     def test_unknown_model_returns_fallback(self):
         limits = get_model_limits("unknown/model-xyz")

@@ -7,6 +7,7 @@ and provides stats for the /context command.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -73,12 +74,37 @@ def _content_chars(content: Any) -> int:
     return len(str(content))
 
 
-def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    """Fast token estimate: total chars / 4, plus 400 per tool call.
+def _real_tokenizer_enabled() -> bool:
+    import os
 
-    Handles both string and content-block (multimodal) content via
-    ``_content_chars`` so images and text-in-list are sized realistically.
+    return os.environ.get("ROBOTHOR_REAL_TOKENIZER_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) -> int:
+    """Token estimate for ``messages``.
+
+    Default is the multimodal-aware char/4 heuristic (+400 per tool call, images
+    sized via ``_content_chars``). When a ``model`` is given AND
+    ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` is set, uses ``litellm.token_counter``
+    for an exact count, falling back to the heuristic if the model is unknown.
     """
+    if model and _real_tokenizer_enabled():
+        try:
+            import litellm
+
+            return int(litellm.token_counter(model=model, messages=messages))
+        except Exception as e:
+            # Unknown model / counter error → heuristic below. Log it so the
+            # real-tokenizer mode doesn't silently degrade with no signal.
+            logger.warning(
+                "real tokenizer failed for model %s (%s); using char heuristic", model, e
+            )
+
     total_chars = 0
     tool_call_count = 0
 
@@ -139,7 +165,10 @@ async def maybe_compress(
     from robothor.engine.compaction import compact
 
     compress_at = threshold if threshold is not None else COMPRESS_THRESHOLD
-    est = estimate_tokens(messages)
+    # Offload to a thread: with the real tokenizer enabled this calls
+    # litellm.token_counter, a synchronous, potentially CPU-bound call we must
+    # not run on the event loop in the compaction hot path.
+    est = await asyncio.to_thread(estimate_tokens, messages, models[0] if models else None)
     if est < compress_at:
         return messages
 

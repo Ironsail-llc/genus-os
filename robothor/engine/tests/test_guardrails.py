@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from robothor.engine.guardrails import DEFAULT_RATE_LIMIT, GuardrailEngine
 
 
@@ -178,9 +180,19 @@ class TestNoRecentChangelogReversal:
 
 
 class TestExecAllowlistChaining:
-    """exec_allowlist must reject shell chaining that defeats prefix patterns."""
+    """exec_allowlist must reject shell chaining that defeats prefix patterns.
+
+    The rejection is flag-gated (ROBOTHOR_EXEC_ALLOWLIST_STRICT_*, observe→enforce
+    rollout); this suite exercises the enforce path.
+    """
 
     import re as _re
+
+    @pytest.fixture(autouse=True)
+    def _strict(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED", "1")
+        monkeypatch.setenv("ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE", "enforce")
 
     def _engine(self):
         return GuardrailEngine(

@@ -52,8 +52,20 @@ def _env() -> dict[str, str]:
 
 
 def _run_xdotool(*args: str, timeout: int = 10) -> dict[str, Any]:
-    """Run an xdotool command and return result."""
+    """Run an xdotool command and return result.
+
+    When a per-run Docker sandbox is active, automate the container's display
+    (``docker exec``) instead of the host's — so a sandboxed agent cannot drive
+    the operator's real screen. With no sandbox (the default) this is the
+    unchanged host path.
+    """
+    from robothor.engine.sandbox import get_current_sandbox
+
     cmd = ["xdotool", *args]
+    sandbox = get_current_sandbox()
+    container_id = getattr(sandbox, "container_id", None) if sandbox else None
+    if container_id:
+        cmd = ["docker", "exec", "-e", "DISPLAY=:0", str(container_id), *cmd]
     try:
         proc = subprocess.run(
             cmd,

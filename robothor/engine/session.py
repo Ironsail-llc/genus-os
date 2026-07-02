@@ -105,6 +105,11 @@ class AgentSession:
         self._pending_steer: str | None = None
         self._interrupt_requested: bool = False
         self._interrupt_message: str | None = None
+        # Set once the runner has honored an interrupt and halted the loop, so
+        # execute() finalizes the run as CANCELLED (not COMPLETED) and skips the
+        # verifier.
+        self._interrupted: bool = False
+        self._interrupt_note: str | None = None
 
     @property
     def run_id(self) -> str:
@@ -370,6 +375,15 @@ class AgentSession:
         except Exception as e:  # noqa: BLE001
             logger.debug("symbol graph finalize skipped: %s", e)
 
+    def mark_interrupted(self, note: str | None = None) -> None:
+        """Record that the operator halted this run at a checkpoint."""
+        self._interrupted = True
+        self._interrupt_note = note or "Operator halted the run."
+
+    @property
+    def was_interrupted(self) -> bool:
+        return self._interrupted
+
     def complete(self, output_text: str | None = None) -> AgentRun:
         """Mark the run as completed successfully."""
         self.run.status = RunStatus.COMPLETED
@@ -378,6 +392,16 @@ class AgentSession:
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         self._finalize_symbol_graph()
+        return self.run
+
+    def cancelled(self, reason: str | None = None) -> AgentRun:
+        """Mark the run as cancelled (e.g. operator interrupt)."""
+        self.run.status = RunStatus.CANCELLED
+        self.run.completed_at = datetime.now(UTC)
+        self.run.error_message = reason or "Run cancelled"
+        self.run.output_text = self.get_final_text() or None
+        if self._start_time:
+            self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
         return self.run
 
     def fail(self, error_message: str, traceback: str | None = None) -> AgentRun:

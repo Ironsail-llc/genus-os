@@ -3162,4 +3162,269 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    # ── Merged-in harden tools (messaging/teams, procedural memory, search, cron) ──
+    schemas["create_team"] = {
+        "type": "function",
+        "function": {
+            "name": "create_team",
+            "description": "Form a team of agents with a shared objective and scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Unique team id"},
+                    "members": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Agent ids on the team (you are added automatically)",
+                    },
+                    "objective": {"type": "string", "description": "What the team is working on"},
+                },
+                "required": ["team_id", "members"],
+            },
+        },
+    }
+
+    schemas["find_procedure"] = {
+        "type": "function",
+        "function": {
+            "name": "find_procedure",
+            "description": (
+                "Find previously-recorded procedures applicable to a task "
+                "(semantic search, optionally filtered by tags)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Description of the task you need a procedure for",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tag filter",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max procedures to return (default 3)",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    }
+
+    schemas["leave_breadcrumb"] = {
+        "type": "function",
+        "function": {
+            "name": "leave_breadcrumb",
+            "description": (
+                "Persist mid-task state so your NEXT run resumes where you left off. "
+                "The latest breadcrumbs are surfaced in your warmup context."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "A short note (or JSON string) describing where you left off",
+                    },
+                    "ttl_days": {
+                        "type": "integer",
+                        "description": "Days before the breadcrumb expires (default 7)",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    }
+
+    schemas["receive_agent_messages"] = {
+        "type": "function",
+        "function": {
+            "name": "receive_agent_messages",
+            "description": "Read messages from your inbox (sent by other agents).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max messages (default 10)"},
+                },
+            },
+        },
+    }
+
+    schemas["record_procedure"] = {
+        "type": "function",
+        "function": {
+            "name": "record_procedure",
+            "description": (
+                "Save a reusable procedure (named sequence of steps) so you or "
+                "other agents can find and reuse it for similar future tasks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Short procedure name"},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered steps to perform the procedure",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the procedure accomplishes",
+                    },
+                    "prerequisites": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Conditions/inputs needed before running it",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags for matching the procedure to future tasks",
+                    },
+                },
+                "required": ["name", "steps"],
+            },
+        },
+    }
+
+    schemas["register_user_cron"] = {
+        "type": "function",
+        "function": {
+            "name": "register_user_cron",
+            "description": (
+                "Schedule a future or recurring run of yourself with a custom prompt. "
+                "Schedule accepts natural language ('every 30m', 'in 2 hours', "
+                "'2026-06-07T09:00') or a 5-field cron expression. Sub-minute "
+                "schedules are rejected."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule": {
+                        "type": "string",
+                        "description": "When to run: 'every 30m', 'in 2 hours', ISO time, or cron",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The instruction to run on schedule",
+                    },
+                    "max_fires": {
+                        "type": "integer",
+                        "description": "Optional cap on how many times it fires (omit = unbounded)",
+                    },
+                },
+                "required": ["schedule", "prompt"],
+            },
+        },
+    }
+
+    schemas["report_procedure_outcome"] = {
+        "type": "function",
+        "function": {
+            "name": "report_procedure_outcome",
+            "description": (
+                "Record whether a procedure you applied succeeded or failed, so its "
+                "confidence score stays calibrated."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "procedure_id": {
+                        "type": "integer",
+                        "description": "ID of the procedure you applied",
+                    },
+                    "success": {
+                        "type": "boolean",
+                        "description": "Whether applying it succeeded",
+                    },
+                    "notes": {"type": "string", "description": "Optional outcome notes"},
+                },
+                "required": ["procedure_id", "success"],
+            },
+        },
+    }
+
+    schemas["search_files"] = {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": (
+                "Search file CONTENTS by regex across the workspace. "
+                "Prefer this over exec+grep for finding code. Returns file/line/text matches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression to search for",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Dir or file to search, relative to workspace (default: whole workspace)",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "File filter, e.g. '*.py' (optional)",
+                    },
+                    "max_results": {"type": "integer", "description": "Max matches (default 100)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    }
+
+    schemas["send_agent_message"] = {
+        "type": "function",
+        "function": {
+            "name": "send_agent_message",
+            "description": "Send a direct message to another agent's inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_agent": {"type": "string", "description": "Recipient agent id"},
+                    "content": {"type": "string", "description": "Message body"},
+                    "metadata": {"type": "object", "description": "Optional structured metadata"},
+                },
+                "required": ["to_agent", "content"],
+            },
+        },
+    }
+
+    schemas["team_scratchpad_read"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_read",
+            "description": "Read a team's shared scratchpad (omit key to read all).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Specific key (optional)"},
+                },
+                "required": ["team_id"],
+            },
+        },
+    }
+
+    schemas["team_scratchpad_write"] = {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_write",
+            "description": "Write a key/value to a team's shared scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Scratchpad key"},
+                    "value": {"type": "string", "description": "Value to store"},
+                },
+                "required": ["team_id", "key"],
+            },
+        },
+    }
+
     return schemas

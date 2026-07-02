@@ -19,10 +19,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Shell metacharacters that allow command chaining / redirection / substitution.
-# When an exec allowlist is active these defeat prefix-anchored patterns, so the
-# command is rejected if it contains any of them.
-_SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "&", "$(", "`", ">", "<", "\n")
+# Shell control characters that let a command chain/substitute/redirect past an
+# allowlisted prefix (e.g. "git checkout -- f; rm -rf /" rides "^git checkout -- ").
+# Matches ; | & < > newline (incl. \r) backtick, or $( command substitution.
+# Intentionally NOT matched — these expand/split words but cannot introduce a
+# second command on their own, so they don't defeat a prefix allowlist:
+#   - bare $VAR / ${VAR} parameter expansion (e.g. ${IFS})
+#   - tab and other horizontal whitespace
+_SHELL_CONTROL = re.compile(r"[;|&<>\n\r`]|\$\(")
 
 # Tools that send outbound email (subject to the inbound_only policy).
 _EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply", "send_email", "send-email"})
@@ -418,15 +422,25 @@ class GuardrailEngine:
         if not patterns:  # No allowlist configured = no restriction (backward compat)
             return GuardrailResult()
         command = str(tool_args.get("command", ""))
-        if any(op in command for op in _SHELL_CHAIN_OPERATORS):
-            return GuardrailResult(
-                allowed=False,
-                action="blocked",
-                reason=(
-                    "exec blocked: shell chaining/redirection is not allowed when an "
-                    f"allowlist is active: {command[:100]}"
-                ),
-                guardrail_name="exec_allowlist",
+        # Reject shell-chaining metacharacters that let a command ride past an
+        # allowlisted prefix (e.g. "git checkout -- f; rm -rf /"). Flag-gated:
+        # off = legacy behavior; observe = log-only; enforce = block.
+        from robothor.engine.feature_flags import exec_allowlist_mode
+
+        mode = exec_allowlist_mode()
+        if mode != "off" and _SHELL_CONTROL.search(command):
+            if mode == "enforce":
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"shell control characters not permitted in allowlisted exec: {command[:100]}",
+                    guardrail_name="exec_allowlist",
+                )
+            logger.warning(
+                "exec_allowlist would block shell metacharacters for agent %s (mode=%s): %s",
+                agent_id,
+                mode,
+                command[:100],
             )
         for pattern in patterns:
             if pattern.search(command):

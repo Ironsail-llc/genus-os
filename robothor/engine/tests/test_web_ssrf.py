@@ -57,7 +57,9 @@ def test_allows_hostname_resolving_to_public() -> None:
         assert _is_blocked_host("http://example.com/") is False
 
 
-def test_unresolvable_host_not_blocked_here() -> None:
-    """An unresolvable name lets the fetch fail naturally, not at the guard."""
+def test_unresolvable_host_fails_closed() -> None:
+    """An unresolvable name fails CLOSED (blocked) — a name that doesn't resolve
+    now could resolve to a private target later (DNS rebinding), so the SSRF
+    guard rejects it rather than letting the fetch proceed."""
     with patch("socket.getaddrinfo", side_effect=OSError("nxdomain")):
-        assert _is_blocked_host("http://does-not-exist.invalid/") is False
+        assert _is_blocked_host("http://does-not-exist.invalid/") is True

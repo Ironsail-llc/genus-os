@@ -51,7 +51,8 @@ export function AppShell() {
   const [chatOpen, setChatOpen] = useState(true);
 
   // Lift data fetching — single source for sidebar badges + views
-  const { tasks, isLoading: tasksLoading, approveTask, rejectTask } = useTasks({ live: true });
+  const { tasks, isLoading: tasksLoading, approveTask, rejectTask, answerQuestion } =
+    useTasks({ live: true });
   const { agents, summary: agentSummary, isLoading: agentsLoading } = useAgents();
 
   const reviewCount = tasks.filter((t) => t.status === "REVIEW").length;
@@ -118,6 +119,7 @@ export function AppShell() {
               isLoading={tasksLoading}
               onApprove={approveTask}
               onReject={rejectTask}
+              onAnswer={answerQuestion}
             />
             <AgentsView
               visible={sidebarView === "agents"}

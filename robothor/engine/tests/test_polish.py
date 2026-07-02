@@ -126,7 +126,9 @@ class TestCostEndpoint:
         from robothor.engine.health import create_health_app
 
         app = create_health_app(engine_config)
-        routes = [r.path for r in app.routes]
+        # Starlette 1.x adds _IncludedRouter mount entries (from include_router)
+        # that have no .path; skip those and match on the real routes.
+        routes = [getattr(r, "path", None) for r in app.routes]
         assert "/costs" in routes
 
 

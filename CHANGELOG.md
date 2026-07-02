@@ -1,3 +1,43 @@
+## [1.6.0](https://github.com/Ironsail-llc/genus-os/compare/v1.5.0...v1.6.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 2 — HA dedup, OTLP observability & SIEM audit ([#155](https://github.com/Ironsail-llc/genus-os/issues/155)) ([98de1ab](https://github.com/Ironsail-llc/genus-os/commit/98de1ab53f267a665cf943d0a87151b0139071c0))
+
+## [1.5.0](https://github.com/Ironsail-llc/genus-os/compare/v1.4.0...v1.5.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 2 — code search, safe-eval, model catalog, tokenizer, memory ([#154](https://github.com/Ironsail-llc/genus-os/issues/154)) ([75615ca](https://github.com/Ironsail-llc/genus-os/commit/75615ca5af8e312cc3e7ca494a24cc3d40de8632))
+
+## [1.4.0](https://github.com/Ironsail-llc/genus-os/compare/v1.3.0...v1.4.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — activate built-but-dark subsystems ([#153](https://github.com/Ironsail-llc/genus-os/issues/153)) ([5eaa868](https://github.com/Ironsail-llc/genus-os/commit/5eaa86890287f802218cd5af6940069fa391621f))
+
+## [1.3.0](https://github.com/Ironsail-llc/genus-os/compare/v1.2.0...v1.3.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — fleet RBAC, sandboxing, approval & injection guards ([#152](https://github.com/Ironsail-llc/genus-os/issues/152)) ([251f0ce](https://github.com/Ironsail-llc/genus-os/commit/251f0ce690d11388c652644ff3689983a60d8989))
+
+## [1.2.0](https://github.com/Ironsail-llc/genus-os/compare/v1.1.1...v1.2.0) (2026-07-02)
+
+### Features
+
+* **engine:** wave 1 — audit substrate, honesty & low-risk security ([#151](https://github.com/Ironsail-llc/genus-os/issues/151)) ([58dd51e](https://github.com/Ironsail-llc/genus-os/commit/58dd51ef525d71999fa94c97c73a48cab1c1b844))
+
+## [1.1.1](https://github.com/Ironsail-llc/genus-os/compare/v1.1.0...v1.1.1) (2026-06-04)
+
+### Bug Fixes
+
+* **tasks:** consolidate + harden task-answer feature, integration suite & deps ([#149](https://github.com/Ironsail-llc/genus-os/issues/149)) ([7c59312](https://github.com/Ironsail-llc/genus-os/commit/7c5931271da25208691dd9d2d0db600f7e0e3b74)), closes [#128](https://github.com/Ironsail-llc/genus-os/issues/128) [#139](https://github.com/Ironsail-llc/genus-os/issues/139) [#140](https://github.com/Ironsail-llc/genus-os/issues/140) [#121](https://github.com/Ironsail-llc/genus-os/issues/121) [#147](https://github.com/Ironsail-llc/genus-os/issues/147) [#128](https://github.com/Ironsail-llc/genus-os/issues/128)
+
+### Tests
+
+* **crm:** integration suite + checkpoint TodoList persistence ([#140](https://github.com/Ironsail-llc/genus-os/issues/140)) ([1c4669d](https://github.com/Ironsail-llc/genus-os/commit/1c4669d2812bc686b23b3cb0317088ae206b60bd))
+
 ## [1.1.0](https://github.com/Ironsail-llc/genus-os/compare/v1.0.0...v1.1.0) (2026-05-29)
 
 ### Features

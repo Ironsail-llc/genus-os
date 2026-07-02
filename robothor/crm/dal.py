@@ -2342,6 +2342,146 @@ def reject_task(
             return False
 
 
+def answer_question(
+    task_id: str,
+    answer: str,
+    by: str,
+    advance_to: str | None = None,
+    channel: str = "helm",
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool | dict[str, Any]:
+    """The operator answered a planner-set question.
+
+    In a single transaction: clears ``question_for_operator``,
+    ``requires_human``, resets ``escalation_count`` to 0, sets
+    ``question_resolved_at`` / ``_by``, and
+    optionally advances the task status (``advance_to`` must satisfy
+    ``VALID_TRANSITIONS`` for the current status). Records one history row
+    with ``metadata={"kind": "answer", "answer": ..., "channel": ..., "advance_to": ...}``.
+
+    Returns (mirrors ``reject_task`` / ``update_task`` so the bridge can map
+    the result to the right HTTP status):
+      - ``True`` on success.
+      - ``False`` if the task is missing (→ 404).
+      - ``{"error": reason}`` if ``advance_to`` is not a valid transition from
+        the current status (→ 422, matching reject_task / update_task): the
+        task exists, so 404 is reserved for a genuinely missing task.
+
+    Sends a ``question_answered`` notification to the assigned agent so the
+    next heartbeat picks it up.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """SELECT status, assigned_to_agent, escalation_count
+                   FROM crm_tasks
+                   WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s""",
+                (task_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            current_status = row["status"]
+            prev_escalation = row.get("escalation_count") or 0
+
+            target_status = current_status
+            if advance_to and advance_to != current_status:
+                # The answer text doubles as the transition resolution (e.g. a
+                # REVIEW -> DONE advance requires a non-empty resolution). The
+                # bridge enforces a non-empty answer (422) before calling us, so
+                # this is always satisfied on the HTTP path.
+                ok_t, reason = _validate_transition(current_status, advance_to, answer)
+                if not ok_t:
+                    logger.warning(
+                        "answer_question: invalid transition %s -> %s on %s (%s)",
+                        current_status,
+                        advance_to,
+                        task_id,
+                        reason,
+                    )
+                    # The task exists; the requested transition is invalid.
+                    # Return an error dict (→ 422) rather than False (→ 404) so
+                    # the client can tell a bad transition from a missing task.
+                    return {
+                        "error": reason or f"Invalid transition {current_status} -> {advance_to}"
+                    }
+                target_status = advance_to
+
+            cur.execute(
+                """UPDATE crm_tasks
+                   SET question_for_operator = NULL,
+                       requires_human = FALSE,
+                       escalation_count = 0,
+                       question_resolved_at = NOW(),
+                       question_resolved_by = %s,
+                       status = %s,
+                       updated_at = NOW()
+                   WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s""",
+                (by, target_status, task_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+
+            if ok:
+                _record_transition(
+                    cur,
+                    task_id,
+                    current_status,
+                    target_status,
+                    changed_by=by,
+                    reason=answer,
+                    metadata={
+                        "kind": "answer",
+                        "answer": answer,
+                        "channel": channel,
+                        "advance_to": target_status if advance_to else None,
+                        "escalation_count_was": prev_escalation,
+                    },
+                    tenant_id=tenant_id,
+                )
+            conn.commit()
+            if ok:
+                _safe_audit(
+                    "answer_question",
+                    "task",
+                    task_id,
+                    details={
+                        "by": by,
+                        "channel": channel,
+                        "advance_to": advance_to,
+                    },
+                )
+                # Tell the assigned agent the question was answered so the
+                # next heartbeat can pick up the thread. Skip when the task has
+                # no assignee — an empty to_agent is a notification nobody reads.
+                assigned_agent = row.get("assigned_to_agent")
+                if assigned_agent:
+                    # Use "info" — an allowed notification_type per the
+                    # crm_agent_notifications check constraint. ("question_answered"
+                    # is not in the allowlist and would raise a constraint
+                    # violation, silently dropping the notification.) The subject
+                    # and metadata carry the "answered" semantics.
+                    send_notification(
+                        from_agent=by,
+                        to_agent=assigned_agent,
+                        notification_type="info",
+                        subject=f"Question answered: {task_id}",
+                        body=answer,
+                        task_id=task_id,
+                        metadata={
+                            "event": "question_answered",
+                            "channel": channel,
+                            "advance_to": advance_to,
+                        },
+                        tenant_id=tenant_id,
+                    )
+            return ok
+        except Exception as e:
+            conn.rollback()
+            logger.error("Failed to answer question on %s: %s", task_id, e)
+            return False
+
+
 def append_task_history(
     task_id: str,
     from_status: str | None,

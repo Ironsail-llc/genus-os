@@ -116,7 +116,29 @@ def log_event(
         )
         row = cur.fetchone()
         conn.commit()
-        return {"id": row[0], "timestamp": row[1].isoformat()}
+        result = {"id": row[0], "timestamp": row[1].isoformat()}
+        # Best-effort fan-out to an external SIEM (env-gated; never blocks).
+        with contextlib.suppress(Exception):
+            from robothor.audit.siem import forward_event, siem_enabled
+
+            if siem_enabled():
+                forward_event(
+                    {
+                        "id": row[0],
+                        "timestamp": result["timestamp"],
+                        "event_type": event_type,
+                        "category": category,
+                        "actor": actor,
+                        "action": action,
+                        "details": details,
+                        "source_channel": source_channel,
+                        "target": target,
+                        "status": status,
+                        "session_key": session_key,
+                        "user_id": user_id,
+                    }
+                )
+        return result
     except Exception as e:
         logger.warning("Audit log_event failed: %s", e)
         if conn is not None:
