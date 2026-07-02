@@ -349,6 +349,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Trigger types that run with no interactive human and are therefore governed by
+# the agent's service_role under the RBAC ladder (see the system-run gate in
+# _run_loop). This is an ALLOWLIST on purpose: interactive surfaces (telegram,
+# webchat, slack, ide, manual, webhook, channel_event) are gated by the dispatch
+# user_role check instead, and any future trigger type defaults to that
+# restrictive path rather than silently inheriting allow-all service_role.
+_SYSTEM_TRIGGER_TYPES = frozenset(
+    {
+        TriggerType.CRON,
+        TriggerType.HOOK,
+        TriggerType.EVENT,
+        TriggerType.WORKFLOW,
+        TriggerType.SUB_AGENT,
+        TriggerType.FEDERATION,
+    }
+)
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -369,6 +386,36 @@ litellm.register_model(
         },
     }
 )
+
+
+def _agent_holds_exec(config: AgentConfig) -> bool:
+    """True if the agent can call the ``exec`` tool (i.e. touches the host shell).
+
+    An empty ``tools_allowed`` means the agent receives the full tool set
+    (including ``exec``); a ``tools_denied`` entry removes it.
+    """
+    denied = set(config.tools_denied or [])
+    if "exec" in denied:
+        return False
+    allowed = config.tools_allowed or []
+    return "exec" in allowed or not allowed
+
+
+def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
+    """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
+
+    'docker' = start a Docker sandbox; 'observe' = an exec-holding agent that
+    WOULD be sandboxed but runs on host (caller logs it); 'host' = run on host.
+    ``mode`` is ``sandbox_default_mode()``. Explicit manifest ``sandbox: docker``
+    always sandboxes; ``sandbox: host`` always opts out.
+    """
+    if config.sandbox == "docker":
+        return "docker"
+    if config.sandbox == "host":
+        return "host"
+    if mode != "off" and _agent_holds_exec(config):
+        return "docker" if mode == "enforce" else "observe"
+    return "host"
 
 
 def _escalate_unfinished_todos(
@@ -775,6 +822,65 @@ class AgentRunner:
             message = f"{warmup_preamble}\n\n{message}"
         watchdog.touch("warmup_complete")
 
+        # ── [INJECTION] Scan the assembled system-run prompt ──
+        # Cron/hook/workflow runs are unattended; recalled memory, skills, or
+        # context files folded into the prompt above could carry an injection.
+        # Gated by ROBOTHOR_INJECTION_SCAN_* (observe logs; enforce aborts).
+        if trigger_type in (
+            TriggerType.CRON,
+            TriggerType.HOOK,
+            TriggerType.WORKFLOW,
+        ):
+            from robothor.engine.cron_safety import (
+                CronPromptInjectionBlockedError,
+                screen_cron_prompt,
+            )
+
+            try:
+                _inj_finding = screen_cron_prompt(
+                    f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
+                )
+            except CronPromptInjectionBlockedError as _inj_exc:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="blocked",
+                        tool_name=None,
+                        reason=str(_inj_exc),
+                        mode="enforce",
+                        step_number=0,
+                    )
+                # Persist a terminal FAILED run rather than letting a bare
+                # exception escape execute() to the scheduler task (which has no
+                # handler). This scan runs before the main create_run below, so
+                # record the run first — otherwise there's no agent_runs row for
+                # the watchdog to reap or the operator to inspect.
+                with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                return self._finish_run(
+                    session.fail(f"Blocked by injection scan: {_inj_exc}"),
+                    trace=None,
+                    agent_config=agent_config,
+                    session=session,
+                    spawn_context=spawn_context,
+                )
+            if _inj_finding:
+                with contextlib.suppress(Exception):
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=session.run.id,
+                        guardrail_name="injection_scan",
+                        action="observed",
+                        tool_name=None,
+                        reason=_inj_finding,
+                        mode="observe",
+                        step_number=0,
+                    )
+
         # ── Warmup phase instrumentation ──────────────────────────────────────
         # Record setup milestones as warmup_phase steps so stalls are visible
         # in agent_run_steps instead of only in watchdog touch logs.
@@ -1064,9 +1170,30 @@ class AgentRunner:
                 if resume_from_run_id:
                     resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
 
-                # ── [SANDBOX] Create sandbox for computer-use agents ──
+                # ── [SANDBOX] Create sandbox for computer-use / exec agents ──
+                # Explicit "docker" always sandboxes; "host" always opts out.
+                # Otherwise, sandbox-by-default applies to exec-holding agents
+                # under the ROBOTHOR_SANDBOX_DEFAULT_* ladder (observe logs which
+                # agents WOULD be sandboxed; enforce sandboxes them). A missing
+                # image degrades to the host via the try/except below.
+                from robothor.engine.feature_flags import sandbox_default_mode
+
+                _sb_decision = _resolve_sandbox_decision(agent_config, sandbox_default_mode())
+                if _sb_decision == "observe":
+                    with contextlib.suppress(Exception):
+                        from robothor.engine.tracking import log_guardrail_event
+
+                        log_guardrail_event(
+                            run_id=session.run.id,
+                            guardrail_name="sandbox_default",
+                            action="observed",
+                            tool_name="exec",
+                            reason="exec-holding agent would run in a Docker sandbox",
+                            mode=sandbox_default_mode(),
+                            step_number=0,
+                        )
                 sandbox = None
-                if agent_config.sandbox == "docker":
+                if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
 
                     sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
@@ -1934,7 +2061,49 @@ class AgentRunner:
                                         scratchpad.record_tool_call(tool_name, error=gr_error_msg)
                                     continue
                             else:
-                                pass  # no manager = auto-approve (autonomous default)
+                                # No approver reachable. Legacy behavior auto-
+                                # approves; ROBOTHOR_APPROVAL_* makes this fail
+                                # closed (observe logs the would-deny; enforce
+                                # denies the tool).
+                                from robothor.engine.feature_flags import approval_mode
+                                from robothor.engine.permission_escalation import (
+                                    fail_closed_on_missing_manager,
+                                )
+
+                                _appr_mode = approval_mode()
+                                if _appr_mode != "off":
+                                    with contextlib.suppress(Exception):
+                                        from robothor.engine.tracking import log_guardrail_event
+
+                                        log_guardrail_event(
+                                            run_id=session.run.id,
+                                            guardrail_name=gr.guardrail_name,
+                                            action="blocked"
+                                            if _appr_mode == "enforce"
+                                            else "observed",
+                                            tool_name=tool_name,
+                                            reason="human approval required but no approver reachable",
+                                            mode=_appr_mode,
+                                            step_number=len(session.run.steps),
+                                        )
+                                if fail_closed_on_missing_manager():
+                                    gr_error_msg = (
+                                        f"Denied — human approval required for "
+                                        f"{gr.guardrail_name} but no approver is reachable"
+                                    )
+                                    session.record_tool_call(
+                                        tool_name=tool_name,
+                                        tool_input=tool_args,
+                                        tool_output={"error": gr_error_msg},
+                                        tool_call_id=tc.id,
+                                        error_message=gr_error_msg,
+                                    )
+                                    if scratchpad:
+                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                                    if escalation:
+                                        escalation.record_error()
+                                    continue
+                                # otherwise auto-approve (legacy) and fall through
                         else:
                             gr_error_msg = (
                                 f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
@@ -1973,6 +2142,56 @@ class AgentRunner:
                                 )
                             if scratchpad:
                                 scratchpad.record_tool_call(tool_name, error=gr_error_msg)
+                            if escalation:
+                                escalation.record_error()
+                            continue
+
+                # ── [RBAC] System-run permission gate ──
+                # Only genuinely autonomous, no-interactive-user runs are governed
+                # by the (permissive) service_role here. Interactive surfaces
+                # (telegram/webchat/slack/ide/manual/webhook/channel) are gated by
+                # the dispatch user_role check instead — an ALLOWLIST so a new
+                # trigger type defaults to the restrictive user path, not
+                # service_role. See _SYSTEM_TRIGGER_TYPES.
+                if agent_config is not None and session.run.trigger_type in _SYSTEM_TRIGGER_TYPES:
+                    from robothor.engine.feature_flags import rbac_enforcement_mode
+                    from robothor.engine.permissions import classify_system_tool_access
+
+                    _rbac_mode = rbac_enforcement_mode()
+                    # check_tool_permission opens a sync DB connection; keep it off
+                    # the event loop so a slow round-trip can't stall the engine.
+                    _rbac_action, _rbac_reason = await asyncio.to_thread(
+                        classify_system_tool_access,
+                        agent_config.service_role,
+                        session.run.tenant_id,
+                        tool_name,
+                        _rbac_mode,
+                    )
+                    if _rbac_action != "allow":
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.tracking import log_guardrail_event
+
+                            log_guardrail_event(
+                                run_id=session.run.id,
+                                guardrail_name="rbac",
+                                action="blocked" if _rbac_action == "block" else "observed",
+                                tool_name=tool_name,
+                                reason=_rbac_reason,
+                                mode=_rbac_mode,
+                                step_number=len(session.run.steps),
+                            )
+                        if _rbac_action == "block":
+                            rbac_msg = f"Blocked by RBAC: {_rbac_reason}"
+                            session.record_tool_call(
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                                tool_output={"error": rbac_msg, "guardrail": "rbac"},
+                                tool_call_id=tc.id,
+                                error_message=rbac_msg,
+                            )
+                            iteration_errors.append((tool_name, rbac_msg, None))
+                            if scratchpad:
+                                scratchpad.record_tool_call(tool_name, error=rbac_msg)
                             if escalation:
                                 escalation.record_error()
                             continue

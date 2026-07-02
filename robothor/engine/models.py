@@ -364,6 +364,11 @@ class AgentConfig:
     todo_list_enabled: bool = False  # In-conversation todo list (Claude Code-style)
     guardrails: list[str] = field(default_factory=list)
     guardrails_opt_out: bool = False  # Skip default guardrails for this agent
+    # RBAC service role for system/cron/heartbeat runs (which have no interactive
+    # user). Resolves against the role_permissions table. Default "service" maps
+    # to (service, *, allow) so the fleet is unconstrained until an operator
+    # tightens a role and enables ROBOTHOR_RBAC_ENABLED (see permissions.py).
+    service_role: str = "service"
     exec_allowlist: list[str] = field(
         default_factory=list
     )  # regex patterns for allowed exec commands
@@ -375,7 +380,7 @@ class AgentConfig:
     verification_prompt: str = ""
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
-    sandbox: str = "local"  # "local" or "docker"
+    sandbox: str = "local"  # "local" (policy default) | "docker" (force) | "host" (opt out)
     # When True, runtime guards refuse every tool outside
     # _BENCHMARK_READONLY_TOOLS (see robothor/engine/tools/handlers/benchmark.py).
     # Set by _benchmark_run on the child_config it passes to runner.execute().

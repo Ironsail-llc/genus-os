@@ -414,6 +414,14 @@ async def main() -> None:
             "ROBOTHOR_TELEGRAM_BOT_TOKEN is empty — Telegram delivery disabled. "
             "Engine API, scheduler, and hooks will still run."
         )
+    else:
+        # Wire human-approval escalations to the operator's Telegram. Without
+        # this, get_permission_manager() returns None and every human_approval
+        # escalation auto-approves (see runner fail-closed branch).
+        from robothor.engine.permission_escalation import init_permission_manager
+
+        init_permission_manager(bot, config.default_chat_id)
+        logger.info("Permission escalation manager wired to Telegram")
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
 

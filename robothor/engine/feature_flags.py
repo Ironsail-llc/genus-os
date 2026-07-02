@@ -158,3 +158,14 @@ def exec_allowlist_mode() -> EnforcementMode:
     return _enforcement_mode(
         "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED", "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE"
     )
+
+
+def injection_scan_mode() -> EnforcementMode:
+    """Rollout mode for prompt-injection scanning of assembled system-run prompts.
+
+    Gated on ``ROBOTHOR_INJECTION_SCAN_ENABLED`` + ``ROBOTHOR_INJECTION_SCAN_MODE``.
+    ``observe``/``alert`` log when an assembled cron/hook prompt (incl. recalled
+    memory + skills) matches an injection signal but run anyway; ``enforce``
+    aborts the run. Default off.
+    """
+    return _enforcement_mode("ROBOTHOR_INJECTION_SCAN_ENABLED", "ROBOTHOR_INJECTION_SCAN_MODE")
