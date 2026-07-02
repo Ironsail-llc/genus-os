@@ -380,7 +380,7 @@ class AgentConfig:
     verification_prompt: str = ""
     difficulty_class: str = ""  # simple, moderate, complex, or empty (auto)
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
-    sandbox: str = "local"  # "local" or "docker"
+    sandbox: str = "local"  # "local" (policy default) | "docker" (force) | "host" (opt out)
     # When True, runtime guards refuse every tool outside
     # _BENCHMARK_READONLY_TOOLS (see robothor/engine/tools/handlers/benchmark.py).
     # Set by _benchmark_run on the child_config it passes to runner.execute().

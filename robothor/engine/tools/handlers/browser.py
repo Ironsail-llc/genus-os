@@ -87,6 +87,10 @@ class BrowserSession:
     created_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
     element_registry: dict[int, ElementRef] = field(default_factory=dict)
+    # CDP endpoint of the per-run sandbox this session drives (empty for a
+    # host-launched browser). Reused to detect a session left over from a
+    # previous run whose sandbox has since been destroyed.
+    sandbox_endpoint: str = ""
 
     def touch(self) -> None:
         self.last_used = time.time()
@@ -355,16 +359,22 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     agent_id = ctx.agent_id or "default"
 
     async with _session_lock:
+        from robothor.engine.sandbox import get_current_sandbox
+
+        sandbox = get_current_sandbox()
+        endpoint = sandbox.browser_endpoint() if sandbox else ""
+
         existing = await _get_session(agent_id)
         if existing is not None:
-            return {"status": "already_running", "agent_id": agent_id}
+            # A session cached against a different (now-destroyed) sandbox must
+            # not be reused — its CDP handle points at a torn-down container,
+            # potentially from another run/tenant. Drop it and start fresh.
+            if existing.sandbox_endpoint == endpoint:
+                return {"status": "already_running", "agent_id": agent_id}
+            await _close_session(agent_id)
 
         try:
-            from robothor.engine.sandbox import get_current_sandbox
-
             pw = await _get_playwright()
-            sandbox = get_current_sandbox()
-            endpoint = sandbox.browser_endpoint() if sandbox else ""
             if endpoint:
                 # Per-run Docker sandbox: drive the container's Chromium over CDP
                 # instead of launching one on the host display.
@@ -392,7 +402,9 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                     user_agent="Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Robothor/1.0",
                 )
                 page = await context.new_page()
-            _sessions[agent_id] = BrowserSession(browser=browser, context=context, page=page)
+            _sessions[agent_id] = BrowserSession(
+                browser=browser, context=context, page=page, sandbox_endpoint=endpoint
+            )
             return {"status": "started", "agent_id": agent_id}
         except Exception as e:
             return {"error": f"Failed to start browser: {e}"}

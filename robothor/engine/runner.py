@@ -349,6 +349,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Trigger types that run with no interactive human and are therefore governed by
+# the agent's service_role under the RBAC ladder (see the system-run gate in
+# _run_loop). This is an ALLOWLIST on purpose: interactive surfaces (telegram,
+# webchat, slack, ide, manual, webhook, channel_event) are gated by the dispatch
+# user_role check instead, and any future trigger type defaults to that
+# restrictive path rather than silently inheriting allow-all service_role.
+_SYSTEM_TRIGGER_TYPES = frozenset(
+    {
+        TriggerType.CRON,
+        TriggerType.HOOK,
+        TriggerType.EVENT,
+        TriggerType.WORKFLOW,
+        TriggerType.SUB_AGENT,
+        TriggerType.FEDERATION,
+    }
+)
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -836,7 +853,20 @@ class AgentRunner:
                         mode="enforce",
                         step_number=0,
                     )
-                raise
+                # Persist a terminal FAILED run rather than letting a bare
+                # exception escape execute() to the scheduler task (which has no
+                # handler). This scan runs before the main create_run below, so
+                # record the run first — otherwise there's no agent_runs row for
+                # the watchdog to reap or the operator to inspect.
+                with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                return self._finish_run(
+                    session.fail(f"Blocked by injection scan: {_inj_exc}"),
+                    trace=None,
+                    agent_config=agent_config,
+                    session=session,
+                    spawn_context=spawn_context,
+                )
             if _inj_finding:
                 with contextlib.suppress(Exception):
                     from robothor.engine.tracking import log_guardrail_event
@@ -2117,20 +2147,21 @@ class AgentRunner:
                             continue
 
                 # ── [RBAC] System-run permission gate ──
-                # Interactive runs (telegram/webchat/channel) are gated by the
-                # dispatch user_role check. System runs (cron/hook/heartbeat/
-                # workflow) have no interactive user, so apply the agent's
-                # service_role here under the ROBOTHOR_RBAC_* ladder.
-                if agent_config is not None and session.run.trigger_type not in (
-                    TriggerType.TELEGRAM,
-                    TriggerType.WEBCHAT,
-                    TriggerType.CHANNEL_EVENT,
-                ):
+                # Only genuinely autonomous, no-interactive-user runs are governed
+                # by the (permissive) service_role here. Interactive surfaces
+                # (telegram/webchat/slack/ide/manual/webhook/channel) are gated by
+                # the dispatch user_role check instead — an ALLOWLIST so a new
+                # trigger type defaults to the restrictive user path, not
+                # service_role. See _SYSTEM_TRIGGER_TYPES.
+                if agent_config is not None and session.run.trigger_type in _SYSTEM_TRIGGER_TYPES:
                     from robothor.engine.feature_flags import rbac_enforcement_mode
                     from robothor.engine.permissions import classify_system_tool_access
 
                     _rbac_mode = rbac_enforcement_mode()
-                    _rbac_action, _rbac_reason = classify_system_tool_access(
+                    # check_tool_permission opens a sync DB connection; keep it off
+                    # the event loop so a slow round-trip can't stall the engine.
+                    _rbac_action, _rbac_reason = await asyncio.to_thread(
+                        classify_system_tool_access,
                         agent_config.service_role,
                         session.run.tenant_id,
                         tool_name,
