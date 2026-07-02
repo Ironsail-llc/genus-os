@@ -45,7 +45,7 @@ from robothor.crm.validation import (
     validate_person_input,
 )
 from robothor.db.connection import get_connection as get_connection
-from robothor.engine.sanitize import sanitize_log
+from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
