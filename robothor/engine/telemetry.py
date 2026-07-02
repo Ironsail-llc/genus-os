@@ -40,11 +40,22 @@ def _otlp_attrs(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"key": k, "value": _otlp_value(v)} for k, v in attrs.items()]
 
 
+def cache_hit_ratio(cache_read_tokens: int, prompt_tokens: int) -> float:
+    """Fraction of prompt tokens served from the prompt cache.
+
+    ``prompt_tokens`` is floored at 1 so a zero-token run (or a run that
+    hasn't accumulated any input tokens yet) never divides by zero.
+    """
+    return (cache_read_tokens or 0) / max(prompt_tokens or 0, 1)
+
+
 def gen_ai_attributes(
     *,
     model: str,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
     finish_reason: str = "",
     system: str = "",
 ) -> dict[str, Any]:
@@ -57,6 +68,12 @@ def gen_ai_attributes(
         attrs["gen_ai.usage.input_tokens"] = int(input_tokens)
     if output_tokens:
         attrs["gen_ai.usage.output_tokens"] = int(output_tokens)
+    if cache_read_tokens:
+        attrs["gen_ai.usage.cache_read_input_tokens"] = int(cache_read_tokens)
+    if cache_creation_tokens:
+        attrs["gen_ai.usage.cache_creation_input_tokens"] = int(cache_creation_tokens)
+    if cache_read_tokens or cache_creation_tokens:
+        attrs["gen_ai.usage.cache_hit_ratio"] = cache_hit_ratio(cache_read_tokens, input_tokens)
     if finish_reason:
         attrs["gen_ai.response.finish_reasons"] = [finish_reason]
     return attrs
@@ -181,6 +198,7 @@ class TraceContext:
                     "output_tokens": str(run_data.get("output_tokens", 0)),
                     "cache_creation_tokens": str(run_data.get("cache_creation_tokens", 0)),
                     "cache_read_tokens": str(run_data.get("cache_read_tokens", 0)),
+                    "cache_hit_ratio": str(run_data.get("cache_hit_ratio", 0)),
                 },
                 maxlen=5000,
             )

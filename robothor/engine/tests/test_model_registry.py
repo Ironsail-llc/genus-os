@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from robothor.engine.model_registry import (
     _FALLBACK,
     THINKING_BUDGET_TOKENS,
@@ -9,6 +11,7 @@ from robothor.engine.model_registry import (
     compute_token_budget,
     get_model_limits,
     get_output_tokens,
+    supports_cache_control,
 )
 
 
@@ -115,6 +118,69 @@ class TestComputeTokenBudget:
     def test_single_iteration(self):
         budget = compute_token_budget("openrouter/anthropic/claude-sonnet-4.6", 1)
         assert budget == 1_000_000
+
+
+class TestSupportsCacheControl:
+    """Catalog-driven cache_control capability (PR 4).
+
+    Pins the *current* fleet behavior of the ``cache_control`` gate that used
+    to be a bare ``model.startswith("anthropic/")`` check in
+    ``LLMClient._build_llm_kwargs``: direct Anthropic models still get it,
+    OpenRouter models (including openrouter/anthropic/*) still don't, and
+    codex/* custom-provider models still don't (litellm has no catalog entry
+    for them, so the capability lookup falls through to False).
+    """
+
+    def test_direct_anthropic_is_true(self):
+        assert supports_cache_control("anthropic/claude-sonnet-4-6") is True
+
+    def test_openrouter_anthropic_is_false(self):
+        """The mixed content-block format breaks tool_use/tool_result pairing
+        on OpenRouter's OpenAI-compatible path — excluded regardless of what
+        litellm's catalog says about the underlying Claude model."""
+        assert supports_cache_control("openrouter/anthropic/claude-sonnet-4.6") is False
+
+    def test_openrouter_non_anthropic_is_false(self):
+        assert supports_cache_control("openrouter/xiaomi/mimo-v2.5-pro") is False
+
+    def test_codex_is_false(self):
+        """codex/* is a custom subscription provider litellm doesn't catalog."""
+        assert supports_cache_control("codex/gpt-5.5") is False
+
+    def test_unknown_model_defaults_false(self):
+        assert supports_cache_control("unknown/model-xyz") is False
+
+    def test_curated_override_beats_litellm(self):
+        """An explicit ``ModelLimits.supports_cache_control`` wins over both
+        the OpenRouter blanket-exclusion and the litellm fallback."""
+        fake_limits = ModelLimits(
+            max_input_tokens=100_000,
+            max_output_tokens=8_192,
+            default_output_tokens=4_096,
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            supports_cache_control=True,
+        )
+        with patch.dict(
+            "robothor.engine.model_registry._MODEL_REGISTRY",
+            {"openrouter/future/pairing-fixed": fake_limits},
+        ):
+            assert supports_cache_control("openrouter/future/pairing-fixed") is True
+
+    def test_curated_override_can_force_false(self):
+        fake_limits = ModelLimits(
+            max_input_tokens=100_000,
+            max_output_tokens=8_192,
+            default_output_tokens=4_096,
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            supports_cache_control=False,
+        )
+        with patch.dict(
+            "robothor.engine.model_registry._MODEL_REGISTRY",
+            {"anthropic/some-future-model": fake_limits},
+        ):
+            assert supports_cache_control("anthropic/some-future-model") is False
 
 
 class TestGetOutputTokens:

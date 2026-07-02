@@ -1162,18 +1162,7 @@ class AgentRunner:
             )
 
         # ── [TELEMETRY] Publish run metrics ──
-        if trace:
-            with contextlib.suppress(Exception):
-                trace.publish_metrics(
-                    {
-                        "status": "completed",
-                        "duration_ms": session.run.duration_ms or 0,
-                        "input_tokens": session.run.input_tokens,
-                        "output_tokens": session.run.output_tokens,
-                        "cache_creation_tokens": session.run.cache_creation_tokens,
-                        "cache_read_tokens": session.run.cache_read_tokens,
-                    }
-                )
+        self._publish_run_telemetry(trace, session.run)
 
         return self._finish_run(
             session.complete(output_text),
@@ -3305,6 +3294,52 @@ class AgentRunner:
                     },
                 ),
                 name=f"primary-unreached-alert:{run.agent_id}",
+            )
+
+    @staticmethod
+    def _publish_run_telemetry(trace: Any, run: AgentRun) -> None:
+        """Emit run-level cache-hit-rate + token metrics (PR 4, observe-only).
+
+        Computes the run's cumulative cache_read/cache_creation/prompt tokens
+        and the derived cache_hit_ratio (cache_read / max(prompt_tokens, 1)),
+        then:
+        - emits them as GenAI semantic-convention attributes on a small
+          ``run_summary`` span so they flow through the existing OTLP export
+          (``TraceContext.build_otlp_payload`` serializes ``trace.spans``);
+        - forwards the same numbers to ``trace.publish_metrics`` (Redis event
+          bus), extending the run_data dict that already carries duration_ms/
+          status/token counts — no new infra, no DB migration.
+
+        Best-effort: telemetry must never break a completed run.
+        """
+        if not trace:
+            return
+        with contextlib.suppress(Exception):
+            from robothor.engine.telemetry import cache_hit_ratio, gen_ai_attributes
+
+            hit_ratio = cache_hit_ratio(run.cache_read_tokens, run.input_tokens)
+            with trace.span(
+                "run_summary",
+                **gen_ai_attributes(
+                    model=run.model_used or "",
+                    input_tokens=run.input_tokens,
+                    output_tokens=run.output_tokens,
+                    cache_read_tokens=run.cache_read_tokens,
+                    cache_creation_tokens=run.cache_creation_tokens,
+                ),
+            ):
+                pass
+
+            trace.publish_metrics(
+                {
+                    "status": "completed",
+                    "duration_ms": run.duration_ms or 0,
+                    "input_tokens": run.input_tokens,
+                    "output_tokens": run.output_tokens,
+                    "cache_creation_tokens": run.cache_creation_tokens,
+                    "cache_read_tokens": run.cache_read_tokens,
+                    "cache_hit_ratio": hit_ratio,
+                }
             )
 
     def _finish_run(

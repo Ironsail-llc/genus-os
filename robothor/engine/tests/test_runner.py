@@ -1131,6 +1131,86 @@ class TestPrimaryModelReached:
         assert run.outcome_notes is None
 
 
+class TestPublishRunTelemetry:
+    """_publish_run_telemetry — PR 4 run-level cache-hit-rate metrics.
+
+    Observe-only: computes cache_read/cache_creation/prompt tokens +
+    cache_hit_ratio from the run's cumulative totals, emits them as GenAI
+    span attributes on a small run-level span, and forwards the same numbers
+    to trace.publish_metrics (Redis + optional OTLP export).
+    """
+
+    def _make_run(self, **kw):
+        from robothor.engine.models import AgentRun
+
+        defaults = {
+            "id": "run-x",
+            "agent_id": "main",
+            "model_used": "anthropic/claude-opus-4-8",
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "cache_creation_tokens": 100,
+            "cache_read_tokens": 400,
+            "duration_ms": 5000,
+        }
+        defaults.update(kw)
+        return AgentRun(**defaults)
+
+    def test_emits_run_summary_span_with_cache_attributes(self):
+        from robothor.engine.telemetry import TraceContext
+
+        trace = TraceContext(run_id="r1", agent_id="main")
+        run = self._make_run()
+
+        AgentRunner._publish_run_telemetry(trace, run)
+
+        assert len(trace.spans) == 1
+        span = trace.spans[0]
+        assert span.name == "run_summary"
+        assert span.attributes["gen_ai.usage.input_tokens"] == 1000
+        assert span.attributes["gen_ai.usage.output_tokens"] == 200
+        assert span.attributes["gen_ai.usage.cache_read_input_tokens"] == 400
+        assert span.attributes["gen_ai.usage.cache_creation_input_tokens"] == 100
+        assert span.attributes["gen_ai.usage.cache_hit_ratio"] == pytest.approx(0.4)
+
+    def test_forwards_cache_hit_ratio_to_publish_metrics(self):
+        trace = MagicMock()
+        run = self._make_run()
+
+        AgentRunner._publish_run_telemetry(trace, run)
+
+        trace.publish_metrics.assert_called_once()
+        run_data = trace.publish_metrics.call_args[0][0]
+        assert run_data["cache_creation_tokens"] == 100
+        assert run_data["cache_read_tokens"] == 400
+        assert run_data["cache_hit_ratio"] == pytest.approx(0.4)
+        assert run_data["input_tokens"] == 1000
+        assert run_data["output_tokens"] == 200
+        assert run_data["status"] == "completed"
+
+    def test_zero_prompt_tokens_does_not_raise(self):
+        """Edge case pinned by the TDD contract: no prompt tokens yet."""
+        trace = MagicMock()
+        run = self._make_run(input_tokens=0, cache_creation_tokens=0, cache_read_tokens=0)
+
+        AgentRunner._publish_run_telemetry(trace, run)
+
+        run_data = trace.publish_metrics.call_args[0][0]
+        assert run_data["cache_hit_ratio"] == 0.0
+
+    def test_none_trace_is_a_noop(self):
+        """Guard mirrors the existing ``if trace:`` check at the call site."""
+        run = self._make_run()
+        AgentRunner._publish_run_telemetry(None, run)  # must not raise
+
+    def test_never_raises_on_broken_trace(self):
+        """Best-effort — telemetry must never break a completed run."""
+        trace = MagicMock()
+        trace.span.side_effect = RuntimeError("boom")
+        run = self._make_run()
+        AgentRunner._publish_run_telemetry(trace, run)  # must not raise
+
+
 class TestActiveWatchdogContextVar:
     """The active watchdog is per-task (ContextVar), not per-singleton — so a
     nested/concurrent run can't clobber another run's stall watchdog

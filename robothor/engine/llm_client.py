@@ -573,18 +573,25 @@ class LLMClient:
         stream: bool = False,
     ) -> dict[str, Any]:
         """Build kwargs dict for litellm.acompletion."""
-        from robothor.engine.model_registry import get_model_limits, get_output_tokens
+        from robothor.engine.model_registry import (
+            get_model_limits,
+            get_output_tokens,
+            supports_cache_control,
+        )
 
         limits = get_model_limits(model)
         actual_model = model
 
-        # For direct Anthropic API models, enable prompt caching on the system
-        # message by converting it to content-block format with cache_control.
-        # OpenRouter models (e.g. "openrouter/anthropic/claude-sonnet-4-6") must
-        # NOT get this conversion — litellm sends them via the OpenAI-compatible
-        # path and the mixed format causes tool_use/tool_result pairing failures.
-        is_direct_anthropic = model.startswith("anthropic/")
-        if is_direct_anthropic and messages and messages[0].get("role") == "system":
+        # For models that support Anthropic-style prompt caching, enable it on
+        # the system message by converting it to content-block format with
+        # cache_control. This is now a catalog-driven capability lookup (see
+        # model_registry's supports_cache_control helper) instead of a bare
+        # provider-prefix string check, so it follows fleet model changes
+        # automatically. See that helper's docstring for why OpenRouter
+        # models (including "openrouter/anthropic/...") are excluded —
+        # litellm sends them via the OpenAI-compatible path and the mixed
+        # content-block format causes tool_use/tool_result pairing failures.
+        if supports_cache_control(model) and messages and messages[0].get("role") == "system":
             messages = list(messages)  # shallow copy to avoid mutating original
             sys_content = messages[0].get("content")
             if isinstance(sys_content, str):

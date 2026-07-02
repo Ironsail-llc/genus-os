@@ -151,6 +151,44 @@ class TestTelemetryCacheTokens:
         assert payload["cache_creation_tokens"] == "100"
         assert payload["cache_read_tokens"] == "300"
 
+    def test_publish_includes_cache_hit_ratio(self):
+        """PR 4: cache_hit_ratio flows through to the Redis telemetry stream
+        alongside the raw cache token counts (observe-only, no new infra)."""
+        mock_redis = MagicMock()
+        mock_r = MagicMock()
+        mock_redis.Redis.return_value = mock_r
+
+        with patch.dict("sys.modules", {"redis": mock_redis}):
+            trace = TraceContext(agent_id="test", run_id="r1")
+            trace.publish_metrics(
+                {
+                    "status": "completed",
+                    "duration_ms": 1000,
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                    "cache_creation_tokens": 100,
+                    "cache_read_tokens": 300,
+                    "cache_hit_ratio": 0.6,
+                }
+            )
+
+        payload = mock_r.xadd.call_args[0][1]
+        assert payload["cache_hit_ratio"] == "0.6"
+
+    def test_publish_cache_hit_ratio_defaults_zero_when_absent(self):
+        """Callers that don't pass cache_hit_ratio (e.g. older call sites)
+        still get a well-formed payload instead of a KeyError."""
+        mock_redis = MagicMock()
+        mock_r = MagicMock()
+        mock_redis.Redis.return_value = mock_r
+
+        with patch.dict("sys.modules", {"redis": mock_redis}):
+            trace = TraceContext(agent_id="test", run_id="r1")
+            trace.publish_metrics({"status": "completed", "duration_ms": 100})
+
+        payload = mock_r.xadd.call_args[0][1]
+        assert payload["cache_hit_ratio"] == "0"
+
 
 # ── Gap 2: Fleet Config Defaults ─────────────────────────────────────
 
