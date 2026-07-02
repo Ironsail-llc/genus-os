@@ -7,9 +7,11 @@ injection-scan + persist) and the scheduler tick that fires due jobs.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from robothor.engine import user_cron
 from robothor.engine.tools.handlers.timing import _register_user_cron
@@ -72,9 +74,108 @@ class TestRegisterTool:
         assert captured["schedule"]["kind"] == "interval"
 
 
-def test_scheduler_ticks_user_cronjobs():
+def test_scheduler_wires_user_cron_tick():
+    """The tick is called from the scheduler loop (behavioral coverage of the
+    tick body is in TestUserCronTick below)."""
     from robothor.engine import scheduler
 
     src = inspect.getsource(scheduler)
-    assert "_tick_user_cronjobs" in src
     assert "await self._tick_user_cronjobs()" in src
+
+
+class TestUserCronTick:
+    """Behavioral tests for the three user-cron correctness fixes:
+    per-job isolation, dedup gating, and mark-before-fire."""
+
+    def _scheduler(self, monkeypatch, due):
+        import robothor.engine.scheduler as sched_mod
+
+        runner = SimpleNamespace(execute=AsyncMock())
+        s = sched_mod.CronScheduler.__new__(sched_mod.CronScheduler)
+        s.config = SimpleNamespace(tenant_id="default")
+        s.runner = runner
+        # _tick_user_cronjobs imports these from user_cron at call time, so patch
+        # there (not on the scheduler module).
+        monkeypatch.setattr(user_cron, "list_due_cronjobs", lambda tenant, now: due)
+        return s, sched_mod
+
+    async def test_poison_job_does_not_starve_siblings(self, monkeypatch):
+        """A job whose schedule can't be computed must not abort the tick and
+        skip the healthy jobs behind it."""
+        import robothor.engine.scheduler as sched_mod
+
+        due = [
+            {"job_id": "bad", "agent_id": "a1", "prompt": "x", "schedule_payload": {}},
+            {"job_id": "good", "agent_id": "a2", "prompt": "y", "schedule_payload": {}},
+        ]
+        s, _ = self._scheduler(monkeypatch, due)
+
+        def _next(payload, now):
+            # First job raises (poison), second computes fine.
+            if not payload.get("ok"):
+                raise ValueError("bad cron payload")
+            return now
+
+        due[1]["schedule_payload"] = {"ok": True}
+        marked = []
+        launched = []
+        monkeypatch.setattr(user_cron, "compute_next_run", _next)
+        monkeypatch.setattr(user_cron, "mark_cronjob_fired", lambda jid, **k: marked.append(jid))
+        monkeypatch.setattr(sched_mod, "try_acquire", AsyncMock(return_value=True))
+        monkeypatch.setattr(sched_mod, "release", AsyncMock())
+
+        async def _fake_run(agent_id, prompt, job_id):
+            launched.append(job_id)
+
+        monkeypatch.setattr(s, "_run_user_cronjob", _fake_run)
+
+        await s._tick_user_cronjobs()
+        # Let the spawned task run.
+        await asyncio.sleep(0)
+
+        assert "good" in marked  # healthy job still advanced
+        assert "good" in launched  # and still launched
+
+    async def test_fire_gated_behind_dedup(self, monkeypatch):
+        """_run_user_cronjob must not execute when the agent lock is held."""
+        import robothor.engine.scheduler as sched_mod
+
+        s, _ = self._scheduler(monkeypatch, [])
+        monkeypatch.setattr(sched_mod, "try_acquire", AsyncMock(return_value=False))
+        released = AsyncMock()
+        monkeypatch.setattr(sched_mod, "release", released)
+
+        await s._run_user_cronjob("a1", "prompt", "job1")
+
+        s.runner.execute.assert_not_called()  # lock held → no double-run
+        released.assert_not_called()  # nothing to release (never acquired)
+
+    async def test_mark_before_fire(self, monkeypatch):
+        """The schedule is advanced before the run is launched, so a failed run
+        can't leave the job due-and-relaunching forever."""
+        import robothor.engine.scheduler as sched_mod
+
+        due = [
+            {
+                "job_id": "j1",
+                "agent_id": "a1",
+                "prompt": "p",
+                "schedule_payload": {"ok": True},
+            }
+        ]
+        s, _ = self._scheduler(monkeypatch, due)
+        order = []
+        monkeypatch.setattr(user_cron, "compute_next_run", lambda payload, now: now)
+        monkeypatch.setattr(user_cron, "mark_cronjob_fired", lambda jid, **k: order.append("mark"))
+        monkeypatch.setattr(sched_mod, "try_acquire", AsyncMock(return_value=True))
+        monkeypatch.setattr(sched_mod, "release", AsyncMock())
+
+        async def _fake_run(agent_id, prompt, job_id):
+            order.append("launch")
+
+        monkeypatch.setattr(s, "_run_user_cronjob", _fake_run)
+
+        await s._tick_user_cronjobs()
+        await asyncio.sleep(0)
+
+        assert order.index("mark") < order.index("launch")

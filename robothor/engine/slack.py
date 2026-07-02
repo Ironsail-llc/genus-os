@@ -28,6 +28,34 @@ class SlackBot:
         self._handler = None
         self._started = False
 
+    @staticmethod
+    def _allowed_users() -> set[str]:
+        return {
+            u.strip()
+            for u in os.environ.get("ROBOTHOR_SLACK_ALLOWED_USERS", "").split(",")
+            if u.strip()
+        }
+
+    @staticmethod
+    def _allowed_channels() -> set[str]:
+        return {
+            c.strip()
+            for c in os.environ.get("ROBOTHOR_SLACK_ALLOWED_CHANNELS", "").split(",")
+            if c.strip()
+        }
+
+    def _authorized(self, user_id: str, channel: str) -> bool:
+        """Inbound authorization for Slack commands.
+
+        When neither allowlist is configured, allow (the bot was deliberately
+        activated; a startup warning already flagged the open surface). When
+        either is set, the message must match a listed user OR channel.
+        """
+        users, channels = self._allowed_users(), self._allowed_channels()
+        if not users and not channels:
+            return True
+        return user_id in users or channel in channels
+
     async def start(self) -> None:
         """Initialize and start the Slack bot."""
         try:
@@ -46,6 +74,13 @@ class SlackBot:
                 "Slack bot not starting."
             )
             return
+
+        if not self._allowed_users() and not self._allowed_channels():
+            logger.warning(
+                "Slack bot has no ROBOTHOR_SLACK_ALLOWED_USERS/CHANNELS allowlist — "
+                "ANY user in a joined workspace/channel can drive the main agent. "
+                "Set an allowlist to restrict inbound commands."
+            )
 
         app = AsyncApp(token=bot_token)
         self._app = app
@@ -114,6 +149,14 @@ class SlackBot:
 
         channel = event.get("channel", "")
         user_id = event.get("user", "")
+
+        if not self._authorized(user_id, channel):
+            logger.warning(
+                "Ignoring Slack message from unauthorized user %s (channel %s)",
+                user_id,
+                channel,
+            )
+            return
 
         logger.info(
             "Slack message from %s (channel %s): %s",

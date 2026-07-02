@@ -1307,6 +1307,18 @@ class AgentRunner:
                 spawn_context=spawn_context,
             )
 
+        # ── [INTERRUPT] Operator halted the run — finalize as CANCELLED ──
+        # Skip the verifier and the COMPLETED finalization; the run was cut short
+        # on purpose.
+        if session.was_interrupted:
+            return self._finish_run(
+                session.cancelled(session._interrupt_note),
+                trace=trace,
+                agent_config=agent_config,
+                session=session,
+                spawn_context=spawn_context,
+            )
+
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
         if self._should_verify(agent_config, route, session):
@@ -1662,6 +1674,9 @@ class AgentRunner:
             if _interrupt_msg is not None:
                 note = _interrupt_msg or "Operator halted the run."
                 session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
+                # Record a distinct terminal state so the run is CANCELLED, not
+                # COMPLETED, and the verifier is skipped for the halted run.
+                session.mark_interrupted(note)
                 logger.info("Run %s interrupted by operator", session.run_id)
                 return
 

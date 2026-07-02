@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from psycopg2.extras import RealDictCursor
 
@@ -51,7 +51,7 @@ def compute_next_run(schedule: dict[str, Any], after: datetime) -> datetime | No
         from apscheduler.triggers.cron import CronTrigger
 
         trigger = CronTrigger.from_crontab(str(schedule["expression"]))
-        return trigger.get_next_fire_time(None, after)
+        return cast("datetime | None", trigger.get_next_fire_time(None, after))
     return None
 
 

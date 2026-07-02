@@ -53,7 +53,7 @@ async def _register_user_cron(args: dict[str, Any], ctx: ToolContext) -> dict[st
         return {"error": f"prompt rejected (injection signal): {finding}"}
 
     raw_max = args.get("max_fires")
-    max_fires = int(raw_max) if raw_max not in (None, "") else None
+    max_fires = int(str(raw_max)) if raw_max not in (None, "") else None
     result = await asyncio.to_thread(
         create_user_cronjob,
         agent_id=ctx.agent_id,

@@ -38,3 +38,33 @@ def test_daemon_wires_slack_env_gated():
     assert "ROBOTHOR_SLACK_BOT_TOKEN" in src
     assert "SlackBot(runner, config)" in src
     assert 'name="slack"' in src
+
+
+class TestSlackAuthorization:
+    def test_open_when_no_allowlist(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_SLACK_ALLOWED_USERS", raising=False)
+        monkeypatch.delenv("ROBOTHOR_SLACK_ALLOWED_CHANNELS", raising=False)
+        # Unconfigured allowlist allows (deliberate activation; warned at start).
+        assert _bot()._authorized("U1", "C1") is True
+
+    def test_user_allowlist_enforced(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_SLACK_ALLOWED_USERS", "U_OK, U_ALSO")
+        monkeypatch.delenv("ROBOTHOR_SLACK_ALLOWED_CHANNELS", raising=False)
+        bot = _bot()
+        assert bot._authorized("U_OK", "any") is True
+        assert bot._authorized("U_NOPE", "any") is False
+
+    def test_channel_allowlist_enforced(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_SLACK_ALLOWED_USERS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_SLACK_ALLOWED_CHANNELS", "C_OPS")
+        bot = _bot()
+        assert bot._authorized("anyone", "C_OPS") is True
+        assert bot._authorized("anyone", "C_RANDOM") is False
+
+    def test_either_list_matches(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_SLACK_ALLOWED_USERS", "U_OK")
+        monkeypatch.setenv("ROBOTHOR_SLACK_ALLOWED_CHANNELS", "C_OPS")
+        bot = _bot()
+        assert bot._authorized("U_OK", "C_RANDOM") is True  # user match
+        assert bot._authorized("U_NOPE", "C_OPS") is True  # channel match
+        assert bot._authorized("U_NOPE", "C_RANDOM") is False
