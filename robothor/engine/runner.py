@@ -636,6 +636,11 @@ class AgentRunner:
             session.start("", message, [])
             return session.fail(f"Agent config not found: {agent_id}")
 
+        # Per-run reasoning effort → extended-thinking budget (task-local).
+        from robothor.engine.model_registry import set_reasoning_effort
+
+        set_reasoning_effort(agent_config.reasoning_effort)
+
         # Create session
         session = AgentSession(
             agent_id=agent_id,
@@ -3583,12 +3588,12 @@ class AgentRunner:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
         if limits.supports_thinking:
-            from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
+            from robothor.engine.model_registry import current_thinking_budget
 
             kwargs["temperature"] = 1.0  # Required by Anthropic API
             kwargs["thinking"] = {
                 "type": "enabled",
-                "budget_tokens": THINKING_BUDGET_TOKENS,
+                "budget_tokens": current_thinking_budget(),
             }
         return kwargs
 

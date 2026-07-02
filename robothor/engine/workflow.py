@@ -20,8 +20,10 @@ Usage:
 
 from __future__ import annotations
 
+import ast as _ast
 import asyncio
 import logging
+import operator as _op
 import re
 import time
 from datetime import UTC, datetime
@@ -53,19 +55,108 @@ from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-class _AttrDict(dict[str, Any]):
-    """Dict subclass that supports attribute access for template expressions."""
+# Safe expression evaluator for workflow templates/conditions. Replaces raw
+# eval(): even with __builtins__={} the old approach allowed attribute chains
+# like value.__class__.__bases__[0].__subclasses__() to escape. This whitelists
+# AST node types, blocks dunder attribute access, and permits only a fixed set
+# of helper functions.
+_SAFE_BINOPS: dict[type, Any] = {
+    _ast.Add: _op.add,
+    _ast.Sub: _op.sub,
+    _ast.Mult: _op.mul,
+    _ast.Div: _op.truediv,
+    _ast.FloorDiv: _op.floordiv,
+    _ast.Mod: _op.mod,
+    _ast.Pow: _op.pow,
+}
+_SAFE_CMP: dict[type, Any] = {
+    _ast.Eq: _op.eq,
+    _ast.NotEq: _op.ne,
+    _ast.Lt: _op.lt,
+    _ast.LtE: _op.le,
+    _ast.Gt: _op.gt,
+    _ast.GtE: _op.ge,
+    _ast.In: lambda a, b: a in b,
+    _ast.NotIn: lambda a, b: a not in b,
+    _ast.Is: _op.is_,
+    _ast.IsNot: _op.is_not,
+}
+_SAFE_FUNCS: dict[str, Any] = {
+    "len": len,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "round": round,
+    "sum": sum,
+}
 
-    def __getattr__(self, name: str) -> Any:
-        try:
-            val = dict.__getitem__(self, name)
-            return _AttrDict(val) if isinstance(val, dict) else val
-        except KeyError:
-            raise AttributeError(name) from None
 
-    def __getitem__(self, key: str) -> Any:
-        val = dict.__getitem__(self, key)
-        return _AttrDict(val) if isinstance(val, dict) else val
+def _safe_eval(expr: str, context: dict[str, Any]) -> Any:
+    """Evaluate a restricted Python expression against ``context`` (no eval())."""
+    return _eval_node(_ast.parse(expr, mode="eval").body, context)
+
+
+def _eval_node(node: Any, ctx: dict[str, Any]) -> Any:  # noqa: PLR0911
+    if isinstance(node, _ast.Constant):
+        return node.value
+    if isinstance(node, _ast.Name):
+        if node.id in ctx:
+            return ctx[node.id]
+        if node.id in _SAFE_FUNCS:
+            return _SAFE_FUNCS[node.id]
+        raise ValueError(f"unknown name: {node.id}")
+    if isinstance(node, _ast.Attribute):
+        if node.attr.startswith("_"):
+            raise ValueError("private attribute access blocked")
+        obj = _eval_node(node.value, ctx)
+        return obj.get(node.attr) if isinstance(obj, dict) else getattr(obj, node.attr)
+    if isinstance(node, _ast.Subscript):
+        return _eval_node(node.value, ctx)[_eval_node(node.slice, ctx)]
+    if isinstance(node, _ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+        return _SAFE_BINOPS[type(node.op)](_eval_node(node.left, ctx), _eval_node(node.right, ctx))
+    if isinstance(node, _ast.UnaryOp):
+        val = _eval_node(node.operand, ctx)
+        if isinstance(node.op, _ast.Not):
+            return not val
+        if isinstance(node.op, _ast.USub):
+            return -val
+        if isinstance(node.op, _ast.UAdd):
+            return +val
+        raise ValueError("unary op not allowed")
+    if isinstance(node, _ast.BoolOp):
+        result: Any = isinstance(node.op, _ast.And)
+        for v in node.values:
+            result = _eval_node(v, ctx)
+            if isinstance(node.op, _ast.And) and not result:
+                return result
+            if isinstance(node.op, _ast.Or) and result:
+                return result
+        return result
+    if isinstance(node, _ast.Compare):
+        left = _eval_node(node.left, ctx)
+        for op, comp in zip(node.ops, node.comparators, strict=False):
+            right = _eval_node(comp, ctx)
+            fn = _SAFE_CMP.get(type(op))
+            if fn is None:
+                raise ValueError("comparison not allowed")
+            if not fn(left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, _ast.Call):
+        fn = _eval_node(node.func, ctx)
+        if fn not in _SAFE_FUNCS.values():
+            raise ValueError("only whitelisted functions may be called")
+        return fn(*[_eval_node(a, ctx) for a in node.args])
+    if isinstance(node, _ast.List):
+        return [_eval_node(e, ctx) for e in node.elts]
+    if isinstance(node, _ast.Tuple):
+        return tuple(_eval_node(e, ctx) for e in node.elts)
+    raise ValueError(f"unsupported expression: {type(node).__name__}")
 
 
 # Template pattern: {{ expr }}
@@ -81,7 +172,7 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
     def _replace(match: re.Match[str]) -> str:
         expr = match.group(1)
         try:
-            result = eval(expr, {"__builtins__": {}}, _AttrDict(context))
+            result = _safe_eval(expr, context)
             return str(result) if result is not None else ""
         except Exception as e:
             logger.warning("Template eval failed for '%s': %s", expr, e)
@@ -93,7 +184,7 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
 def _eval_condition(expression: str, value: Any) -> bool:
     """Evaluate a condition expression with 'value' as the input variable."""
     try:
-        return bool(eval(expression, {"__builtins__": {}}, {"value": value}))
+        return bool(_safe_eval(expression, {"value": value}))
     except Exception as e:
         logger.warning("Condition eval failed for '%s': %s", expression, e)
         return False
