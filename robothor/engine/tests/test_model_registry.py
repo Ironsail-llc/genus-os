@@ -150,6 +150,19 @@ class TestSupportsCacheControl:
     def test_unknown_model_defaults_false(self):
         assert supports_cache_control("unknown/model-xyz") is False
 
+    def test_unmapped_future_anthropic_model_still_true(self):
+        """litellm's ``supports_prompt_caching`` is an exact catalog lookup,
+        not a provider-prefix heuristic — it returns False for any
+        anthropic/* id its bundled JSON hasn't caught up with yet (verified:
+        'anthropic/claude-opus-4-9-20261231' -> False). Anthropic's API
+        supports cache_control on essentially every current model, so a
+        catalog-lag false-negative would silently disable caching for a
+        newly-deployed fleet model — the exact "follows fleet model changes"
+        case this PR exists for. The prefix fallback preserves the historical
+        assumption when litellm has no data, without overriding a curated or
+        litellm-confirmed answer."""
+        assert supports_cache_control("anthropic/claude-opus-4-9-20261231") is True
+
     def test_curated_override_beats_litellm(self):
         """An explicit ``ModelLimits.supports_cache_control`` wins over both
         the OpenRouter blanket-exclusion and the litellm fallback."""

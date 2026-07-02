@@ -307,7 +307,17 @@ def supports_cache_control(model_id: str) -> bool:
     3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
        custom providers (e.g. ``codex/*``, a subscription provider litellm
        doesn't catalog; it reports False rather than raising).
-    4. Default False.
+    4. Direct ``anthropic/*`` ids litellm doesn't have a catalog entry for
+       default True. ``supports_prompt_caching`` is an *exact* catalog
+       lookup, not a provider-prefix heuristic — it reports False for any
+       dated Anthropic model id its bundled JSON hasn't caught up with yet,
+       even though the Anthropic API supports cache_control on essentially
+       every current model. Without this, a newly-released direct-Anthropic
+       fleet model would silently lose caching until litellm ships an update
+       — exactly the catalog-lag scenario this capability lookup exists to
+       avoid, not reproduce. Preserves the historical
+       ``model.startswith("anthropic/")`` assumption as the last resort.
+    5. Default False.
     """
     limits = _MODEL_REGISTRY.get(model_id)
     if limits is not None and limits.supports_cache_control is not None:
@@ -316,7 +326,10 @@ def supports_cache_control(model_id: str) -> bool:
     if model_id.startswith("openrouter/"):
         return False
 
-    return _cache_control_from_litellm(model_id)
+    if _cache_control_from_litellm(model_id):
+        return True
+
+    return model_id.startswith("anthropic/")
 
 
 @lru_cache(maxsize=256)
