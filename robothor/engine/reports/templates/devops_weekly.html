@@ -9,7 +9,7 @@
 <!-- Header -->
 <tr><td style="background:#0052cc;padding:24px 32px;">
   <h1 style="margin:0;color:#fff;font-size:22px;font-weight:600;">Dev Team Operations Report</h1>
-  <p style="margin:6px 0 0;color:#b3d4ff;font-size:14px;">{{ period }} &middot; Generated {{ generated_at }}</p>
+  <p style="margin:6px 0 0;color:#b3d4ff;font-size:14px;">{{ period_label }} &middot; Generated {{ generated_at }}</p>
 </td></tr>
 
 <!-- Report Quality (only shown when anomalies exist) -->
@@ -62,6 +62,9 @@
   </table>
   {% if executive_summary.throughput_rate %}
   <p style="margin:12px 0 0;font-size:13px;color:#6b778c;">Throughput: {{ executive_summary.throughput_rate }}</p>
+  {% endif %}
+  {% if executive_summary.trend %}
+  <p style="margin:4px 0 0;font-size:13px;color:#6b778c;">Trend: {{ executive_summary.trend }}</p>
   {% endif %}
 </td></tr>
 

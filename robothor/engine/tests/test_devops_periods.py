@@ -10,6 +10,7 @@ from datetime import datetime
 
 from robothor.engine.reports.devops_periods import (
     ET,
+    period_label,
     week_windows_github,
     week_windows_jira,
 )
@@ -84,3 +85,31 @@ class TestWeekWindowsJira:
         now = datetime(2026, 5, 17, 22, 0, tzinfo=ET)
         current, _, _ = week_windows_jira(now)
         assert current == "2026-05-11"
+
+
+class TestPeriodLabel:
+    """period_label normalizes the period_block dict (or a string) to a clean label."""
+
+    def test_dict_with_report_label(self):
+        period = {"tz": "America/New_York", "report_label": "Week of 2026-05-11"}
+        assert period_label(period) == "Week of 2026-05-11"
+
+    def test_dict_without_report_label_derives_from_last_week_start(self):
+        # The _PERIOD aggregate fixture omits report_label — the derive branch is load-bearing.
+        period = {
+            "tz": "America/New_York",
+            "last_week_start_et": "2026-05-11T00:00:00-04:00",
+        }
+        assert period_label(period) == "Week of 2026-05-11"
+
+    def test_empty_dict_falls_back(self):
+        assert period_label({}) == "this week"
+
+    def test_string_passthrough(self):
+        assert period_label("Week of April 7, 2026") == "Week of April 7, 2026"
+
+    def test_none_falls_back(self):
+        assert period_label(None) == "this week"
+
+    def test_empty_string_falls_back(self):
+        assert period_label("") == "this week"

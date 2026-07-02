@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from robothor.memory.lifecycle import (
@@ -36,6 +38,35 @@ logger = logging.getLogger(__name__)
 
 # Minimum seconds between autoDream runs (default 30 min).
 COOLDOWN_SECONDS = int(os.environ.get("AUTODREAM_COOLDOWN_SECONDS", "1800"))
+
+# Lock TTL must cover the maximum possible run duration, not just the cooldown.
+# Observed runs can take 90+ minutes; use 4h as a safe upper bound.
+# Configurable via AUTODREAM_LOCK_TTL_SECONDS.
+_LOCK_TTL_SECONDS = int(os.environ.get("AUTODREAM_LOCK_TTL_SECONDS", str(4 * 3600)))
+
+
+# Filesystem fallback for last_run timestamp (survives Redis restarts). Kept
+# under the workspace's private .robothor dir — NOT world-writable /tmp, whose
+# predictable path let a local attacker pre-plant a symlink and have the daemon
+# clobber an arbitrary file / read a spoofed timestamp (CWE-59/377).
+def _default_fallback_path() -> str:
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE") or str(Path.home() / "robothor")
+    return str(Path(workspace) / ".robothor" / "autodream_last_run")
+
+
+_FALLBACK_PATH = os.environ.get("AUTODREAM_FALLBACK_PATH") or _default_fallback_path()
+
+# Clock-skew tolerance: a stored timestamp more than this far in the future is
+# treated as corrupt (clock skew / NTP step-back / a bad write). Rejecting it
+# prevents a future value from wedging is_cooled_down() to False forever.
+_FUTURE_SKEW_TOLERANCE_SECONDS = int(os.environ.get("AUTODREAM_FUTURE_SKEW_SECONDS", "300"))
+
+# Bound how old the no-TTL fallback file may be before it's ignored on read.
+# Slightly larger than the 24h Redis key TTL so the file outlives a Redis
+# restart but a multi-day-old value can't poison cooldown/defer decisions.
+_FALLBACK_MAX_AGE_SECONDS = int(
+    os.environ.get("AUTODREAM_FALLBACK_MAX_AGE_SECONDS", str(25 * 3600))
+)
 
 # Quiet hours: deep mode runs full lifecycle instead of lightweight pass.
 QUIET_HOUR_START = 22  # 10 PM ET
@@ -57,31 +88,111 @@ _LOCK_KEY = "robothor:autodream:lock"
 _LAST_RUN_KEY = "robothor:autodream:last_run"
 
 
-def _get_last_run_ts() -> float | None:
-    """Read the last autoDream run timestamp from Redis. Returns epoch or None."""
+def _validate_ts(ts: float) -> bool:
+    """Reject corrupt timestamps that would wedge cooldown/staleness logic.
+
+    A non-finite value (NaN / ±inf) or a value implausibly far in the future
+    cannot be trusted: NaN/-inf silently break `is_cooled_down()` (a NaN
+    comparison is always False; -inf yields an enormous staleness), and a
+    future value makes `(now - ts)` negative forever. Treat all of these as
+    "no usable timestamp" so callers self-heal.
+    """
+    if not math.isfinite(ts):
+        return False
+    return ts <= time.time() + _FUTURE_SKEW_TOLERANCE_SECONDS
+
+
+def _get_last_run_ts_with_source() -> tuple[float | None, str]:
+    """Read the last autoDream run timestamp and report which tier served it.
+
+    Tries Redis first, then the filesystem fallback. Both candidate values are
+    run through `_validate_ts`; an invalid value yields ``(None, "invalid")``
+    rather than silently poisoning cooldown/staleness. The fallback file is
+    also ignored if it is older than ``_FALLBACK_MAX_AGE_SECONDS``.
+
+    Returns ``(epoch_float, source)`` where source is one of
+    ``"redis" | "file" | "none" | "invalid"``.
+    """
+    # Try Redis first.
     try:
         from robothor.events.bus import _get_redis
 
         r = _get_redis()
-        if r is None:
-            return None
-        val = r.get(_LAST_RUN_KEY)
-        return float(val) if val else None
+        if r is not None:
+            val = r.get(_LAST_RUN_KEY)
+            if val:
+                ts = float(val)
+                if not _validate_ts(ts):
+                    logger.warning("autoDream Redis timestamp invalid/future (%r) — ignoring", val)
+                    return None, "invalid"
+                return ts, "redis"
     except Exception:
-        return None
+        pass
+
+    # Filesystem fallback (survives Redis restarts).
+    try:
+        _fallback = Path(_FALLBACK_PATH)
+        if time.time() - _fallback.stat().st_mtime > _FALLBACK_MAX_AGE_SECONDS:
+            return None, "none"  # too old to trust — bound the no-TTL file
+        with _fallback.open() as f:
+            raw = f.read().strip()
+        if not raw:
+            return None, "none"
+        ts = float(raw)
+        if not _validate_ts(ts):
+            logger.warning("autoDream fallback timestamp invalid/future (%r) — ignoring", raw)
+            return None, "invalid"
+        return ts, "file"
+    except FileNotFoundError:
+        return None, "none"
+    except Exception as e:
+        logger.debug("Failed to read autoDream fallback timestamp: %s", e)
+        return None, "none"
+
+
+def _get_last_run_ts() -> float | None:
+    """Read the last autoDream run timestamp (epoch float, or None).
+
+    Thin wrapper over `_get_last_run_ts_with_source` so existing callers keep
+    their signature while gaining future/corrupt-value rejection.
+    """
+    return _get_last_run_ts_with_source()[0]
 
 
 def _set_last_run_ts() -> None:
-    """Write the current timestamp as the last autoDream run time."""
+    """Write the current timestamp as the last autoDream run time.
+
+    Writes to both Redis and the filesystem fallback so the timestamp
+    survives Redis restarts and the watchdog always has something to read.
+    """
+    ts = str(time.time())
+
+    # Write to Redis
     try:
         from robothor.events.bus import _get_redis
 
         r = _get_redis()
-        if r is None:
-            return
-        r.set(_LAST_RUN_KEY, str(time.time()), ex=86400)
+        if r is not None:
+            r.set(_LAST_RUN_KEY, ts, ex=86400)
     except Exception as e:
-        logger.debug("Failed to set autoDream timestamp: %s", e)
+        logger.debug("Failed to set autoDream Redis timestamp: %s", e)
+
+    # Write filesystem fallback. The file has no TTL, so reads bound its age
+    # (_FALLBACK_MAX_AGE_SECONDS) and reject non-finite/future values. A stale
+    # *past* value is harmless: it only makes is_cooled_down() return True
+    # *sooner* (a run is allowed, which overwrites the value).
+    try:
+        p = Path(_FALLBACK_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # O_NOFOLLOW so a symlink at the path is never followed (no arbitrary
+        # clobber); O_CREAT|O_TRUNC|O_WRONLY to (re)write our own regular file.
+        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, ts.encode())
+        finally:
+            os.close(fd)
+    except Exception as e:
+        logger.debug("Failed to write autoDream fallback timestamp: %s", e)
 
 
 def is_cooled_down() -> bool:
@@ -96,7 +207,9 @@ def try_acquire_lock(run_id: str) -> bool:
     """Acquire a distributed autoDream lock via Redis SET NX.
 
     Prevents overlapping runs across multiple daemon instances.
-    Lock auto-expires after COOLDOWN_SECONDS to prevent deadlocks.
+    Lock TTL is set to _LOCK_TTL_SECONDS (4h by default) — long enough to
+    cover the maximum observed run duration so a slow run can't race with
+    a fresh one when the lock expires before the run completes.
     """
     try:
         from robothor.events.bus import _get_redis
@@ -104,7 +217,7 @@ def try_acquire_lock(run_id: str) -> bool:
         r = _get_redis()
         if r is None:
             return True  # No Redis = single instance, allow
-        acquired: bool = bool(r.set(_LOCK_KEY, run_id, nx=True, ex=COOLDOWN_SECONDS))
+        acquired: bool = bool(r.set(_LOCK_KEY, run_id, nx=True, ex=_LOCK_TTL_SECONDS))
         if not acquired:
             logger.debug("autoDream lock held by another instance")
         return acquired

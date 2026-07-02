@@ -18,9 +18,11 @@ def _base_report() -> dict:
     return {
         "period": "Week of 2026-05-12",
         "executive_summary": {
-            "current_week": {"tickets_resolved": 12, "prs_merged": 30},
-            "last_week": {"tickets_resolved": 10, "prs_merged": 25},
+            "tickets_resolved": 10,
+            "prs_merged": 25,
             "open_backlog": "120",
+            "throughput_rate": "1.4 tickets/day, 3.6 PRs/day (7-day avg)",
+            "last_week": {"tickets_resolved": 10, "prs_merged": 25},
         },
         "github": {"review_coverage": 45, "total_reviews": 18},
         "bottlenecks": [],
@@ -59,9 +61,67 @@ class TestFormatReport:
         assert "Report quality" in out
         assert "1 engineer(s) absent" in out
 
-    def test_executive_summary_uses_nested_week_objects(self):
+    def test_executive_summary_uses_last_week_numbers(self):
         report = _base_report()
         out = _MOD.format_report(report)
-        # Sanity: current week numbers appear
-        assert "12" in out
-        assert "30" in out
+        # Last week numbers appear as primary (10 tickets, 25 PRs)
+        assert "10" in out
+        assert "25" in out
+        # Throughput rate appears
+        assert "1.4 tickets/day" in out
+
+    def test_no_current_week_wow_comparison(self):
+        """The formatter should NOT show 'vs last week' current_week comparisons."""
+        report = _base_report()
+        out = _MOD.format_report(report)
+        assert "vs" not in out.lower()
+
+
+def _period_dict() -> dict:
+    """A realistic period_block dict (what collectors actually stamp)."""
+    return {
+        "tz": "America/New_York",
+        "current_week_start_et": "2026-05-18T00:00:00-04:00",
+        "last_week_start_et": "2026-05-11T00:00:00-04:00",
+        "last_week_end_et": "2026-05-18T00:00:00-04:00",
+        "generated_at_et": "2026-05-18T09:00:00-04:00",
+        "report_label": "Week of 2026-05-11",
+    }
+
+
+class TestPeriodHandling:
+    def test_dict_period_renders_label_not_repr(self):
+        report = _base_report()
+        report["period"] = _period_dict()
+        out = _MOD.format_report(report)
+        assert "Week of 2026-05-11" in out
+        assert "'tz'" not in out
+        assert "America/New_York" not in out
+
+    def test_dict_period_without_report_label_derives_label(self):
+        report = _base_report()
+        period = _period_dict()
+        del period["report_label"]
+        report["period"] = period
+        out = _MOD.format_report(report)
+        assert "Week of 2026-05-11" in out
+        assert "'tz'" not in out
+
+
+class TestOpenBacklog:
+    def test_open_backlog_zero_is_shown(self):
+        report = _base_report()
+        report["executive_summary"]["open_backlog"] = 0
+        out = _MOD.format_report(report)
+        assert "Open backlog: 0" in out
+
+    def test_open_backlog_empty_string_hidden(self):
+        report = _base_report()
+        report["executive_summary"]["open_backlog"] = ""
+        out = _MOD.format_report(report)
+        assert "Open backlog:" not in out
+
+
+class TestDeadCodeRemoved:
+    def test_pct_helper_removed(self):
+        assert not hasattr(_MOD, "_pct")
