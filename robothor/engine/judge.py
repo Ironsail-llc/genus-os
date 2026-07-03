@@ -190,7 +190,8 @@ def _extract_goal_evidence(meta: Any) -> list[dict[str, Any]]:
         {
             "kind": str(item.get("kind", "")),
             "reference": str(item.get("reference", "")),
-            "valid": bool(item.get("valid", True)),
+            # Fail closed: a missing `valid` key must never be assumed valid.
+            "valid": bool(item.get("valid", False)),
         }
         for item in raw
         if isinstance(item, dict)
@@ -244,9 +245,17 @@ def render_bundle_prompt(bundle: EvidenceBundle) -> str:
         lines.append("(no operator-declared objective — judge against role + trigger below)")
     lines.append("")
     if bundle.goal_evidence:
-        lines.append("## Goal evidence (validated)")
+        lines.append("## Goal evidence")
         for e in bundle.goal_evidence:
-            tag = "valid" if e.get("valid") else "INVALID/unverified"
+            # `note` evidence is self-reported and never independently
+            # verified (session_goal.validate_evidence accepts any note with
+            # a summary) — never present it to the judge as "valid".
+            if e.get("kind") == "note":
+                tag = "unverified"
+            elif e.get("valid"):
+                tag = "valid"
+            else:
+                tag = "INVALID/unverified"
             lines.append(f"  - {e.get('kind')}: {e.get('reference')} [{tag}]")
         lines.append("")
     lines.append(f"## Run {r.run_id} (status={r.status})")

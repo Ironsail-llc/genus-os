@@ -341,7 +341,10 @@ async def spawn_curator(
     destructive whitelist is granted. A blocked gate downgrades this pass to
     the dry-run whitelist (skill_archive withheld) rather than aborting it —
     the LLM still runs and proposes, it just cannot apply. When the flag is
-    off, behavior is unchanged from before this wiring existed.
+    off, the apply whitelist is still granted (behavior unchanged from before
+    this wiring existed) but a warning is logged and the pass summary records
+    ``gate_verdict="not consulted"`` — an apply pass with no safety check
+    must never look identical to a passed gate.
     """
     from robothor.engine.skill_provenance import (
         CURATOR,
@@ -358,18 +361,27 @@ async def spawn_curator(
         return {"status": "skipped", "reason": "no_candidates"}
 
     effective_dry_run = requested_dry_run
-    gate_verdict: bool | None = None
+    gate_verdict: bool | str | None = None
     gate_reason: str | None = None
-    if not requested_dry_run and accretion_enabled():
-        gate_verdict, gate_reason = evaluate_accretion_gate(curator_agent_id, tenant_id)
-        if gate_verdict:
-            logger.info("curator accretion gate passed: %s", gate_reason)
+    if not requested_dry_run:
+        if accretion_enabled():
+            gate_verdict, gate_reason = evaluate_accretion_gate(curator_agent_id, tenant_id)
+            if gate_verdict:
+                logger.info("curator accretion gate passed: %s", gate_reason)
+            else:
+                logger.warning(
+                    "curator accretion gate blocked apply pass, downgrading to dry-run: %s",
+                    gate_reason,
+                )
+                effective_dry_run = True
         else:
             logger.warning(
-                "curator accretion gate blocked apply pass, downgrading to dry-run: %s",
-                gate_reason,
+                "curator: apply pass running WITHOUT the accretion gate "
+                "(ROBOTHOR_ACCRETION_ENABLED unset) — no safety check before "
+                "granting the destructive whitelist"
             )
-            effective_dry_run = True
+            gate_verdict = "not consulted"
+            gate_reason = "accretion gate disabled (ROBOTHOR_ACCRETION_ENABLED unset)"
 
     if effective_dry_run:
         logger.info("curator: DRY-RUN — skill_archive withheld, proposals only")

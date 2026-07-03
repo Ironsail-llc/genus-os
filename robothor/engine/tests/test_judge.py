@@ -102,8 +102,19 @@ class TestAssembleEvidenceBundle:
             run=_digest(),
             session_goal_meta={"evidence": ["not-a-dict", {"kind": "note"}, None]},
         )
-        # Only the well-formed dict entry survives, with defaults filled in.
-        assert b.goal_evidence == [{"kind": "note", "reference": "", "valid": True}]
+        # Only the well-formed dict entry survives. A missing `valid` key must
+        # NOT be assumed valid — default to False (fail closed).
+        assert b.goal_evidence == [{"kind": "note", "reference": "", "valid": False}]
+
+    def test_goal_evidence_missing_valid_key_defaults_false(self):
+        b = assemble_evidence_bundle(
+            agent_id="main",
+            run=_digest(),
+            session_goal_meta={"evidence": [{"kind": "test_run", "reference": "pytest:passed:1"}]},
+        )
+        assert b.goal_evidence == [
+            {"kind": "test_run", "reference": "pytest:passed:1", "valid": False}
+        ]
 
     def test_goal_evidence_truncated_to_ten(self):
         evidence = [{"kind": "note", "reference": str(i), "valid": True} for i in range(20)]
@@ -156,6 +167,27 @@ class TestRenderBundlePrompt:
         b = assemble_evidence_bundle(agent_id="main", run=_digest())
         text = render_bundle_prompt(b)
         assert "Goal evidence" not in text
+
+    def test_note_evidence_tagged_unverified_not_valid(self):
+        # `note` evidence is self-reported and never independently verified
+        # (session_goal.validate_evidence accepts any note with a summary) —
+        # the judge prompt must not present it as validated.
+        b = assemble_evidence_bundle(
+            agent_id="main",
+            run=_digest(),
+            session_goal_meta={
+                "objective": "ship it",
+                "evidence": [
+                    {"kind": "note", "reference": "left a note", "valid": True},
+                    {"kind": "test_run", "reference": "pytest:passed:10", "valid": True},
+                ],
+            },
+        )
+        text = render_bundle_prompt(b)
+        assert "note: left a note [unverified]" in text
+        assert "note: left a note [valid]" not in text
+        # Genuinely-validated kinds are unaffected.
+        assert "test_run: pytest:passed:10 [valid]" in text
 
     def test_judges_against_role_and_trigger_when_no_objective(self):
         run = RunDigest(

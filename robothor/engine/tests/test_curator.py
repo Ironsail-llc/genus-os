@@ -493,8 +493,9 @@ class TestSpawnCuratorAccretionGateWiring:
         assert result is not None
         assert result["dry_run"] is True
 
-    def test_accretion_disabled_leaves_apply_mode_unchanged(self):
+    def test_accretion_disabled_leaves_apply_mode_unchanged(self, caplog):
         import asyncio
+        import logging
         from unittest.mock import patch
 
         import robothor.engine.curator as curator_mod
@@ -508,13 +509,31 @@ class TestSpawnCuratorAccretionGateWiring:
                 "_curator_tool_whitelist",
                 wraps=curator_mod._curator_tool_whitelist,
             ) as whitelist_spy,
-            patch.object(curator_mod, "store_curator_pass_summary"),
+            patch.object(curator_mod, "store_curator_pass_summary") as store_mock,
+            caplog.at_level(logging.WARNING),
         ):
             result = asyncio.run(curator_mod.spawn_curator(_FakeScheduler(), dry_run=False))
         gate_mock.assert_not_called()
         whitelist_spy.assert_called_once_with(dry_run=False)
         assert result is not None
         assert result["dry_run"] is False
+        # An apply pass with the accretion gate disabled must not be silent —
+        # it needs a loud warning and a persisted record that the gate was
+        # never consulted, not a None that reads as "gate passed".
+        assert any(
+            "without" in r.message.lower() and "accretion gate" in r.message.lower()
+            for r in caplog.records
+        )
+        assert result["gate_verdict"] == "not consulted"
+        assert result["gate_reason"] == (
+            "accretion gate disabled (ROBOTHOR_ACCRETION_ENABLED unset)"
+        )
+        stored_payload = store_mock.call_args.args[0]
+        assert stored_payload["gate_verdict"] == "not consulted"
+        assert stored_payload["gate_reason"] == (
+            "accretion gate disabled (ROBOTHOR_ACCRETION_ENABLED unset)"
+        )
+        assert stored_payload["mode"] == "apply"
 
     def test_gate_blocks_downgrades_apply_to_dry_run(self):
         import asyncio
