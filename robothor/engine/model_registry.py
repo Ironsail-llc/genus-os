@@ -32,6 +32,11 @@ class ModelLimits:
     cache_read_cost_per_token: float = 0.0  # prompt caching: read (Anthropic: 0.1x input)
     supports_thinking: bool = False
     ttft_hint_ms: int = 3000  # estimated p50 time-to-first-token (ms) for interactive routing
+    # Curated override for the cache_control capability (PR 4). None means
+    # "no override — derive it" (see supports_cache_control()); True/False
+    # forces the answer regardless of the OpenRouter blanket-exclusion or
+    # litellm's catalog, for cases we've specifically verified either way.
+    supports_cache_control: bool | None = None
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -278,6 +283,65 @@ def get_model_limits(model_id: str) -> ModelLimits:
         _FALLBACK.max_input_tokens // 1000,
     )
     return _FALLBACK
+
+
+def supports_cache_control(model_id: str) -> bool:
+    """Whether ``model_id`` should get Anthropic-style prompt-cache content
+    blocks — the ``cache_control`` conversion in ``LLMClient._build_llm_kwargs``.
+
+    Replaces the historical ``model.startswith("anthropic/")`` gate with a
+    catalog-driven capability lookup so caching follows fleet model changes
+    instead of a string prefix.
+
+    Order:
+    1. Curated ``_MODEL_REGISTRY`` override (``ModelLimits.supports_cache_control``,
+       when explicitly set) — always wins, including for OpenRouter ids.
+    2. OpenRouter-prefixed models default to False. OpenRouter proxies models
+       through its OpenAI-compatible completion path, which chokes on mixed
+       text/``cache_control`` content blocks and breaks tool_use/tool_result
+       pairing — this holds even for ``openrouter/anthropic/*``, where
+       litellm's catalog reports the underlying Claude model supports prompt
+       caching, but OpenRouter's transport doesn't accept our content-block
+       format for it. (Historically documented at the old gate's call site in
+       ``llm_client.py``; this is now the single source of truth.)
+    3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
+       custom providers (e.g. ``codex/*``, a subscription provider litellm
+       doesn't catalog; it reports False rather than raising).
+    4. Default False.
+
+    Deliberately NO ``anthropic/``-prefix fallback: litellm returns False
+    both for models explicitly marked unsupported and for ids it simply
+    hasn't mapped, and the two are indistinguishable from the return value —
+    a prefix fallback that treats False as "catalog lag, assume True" would
+    also flip genuinely unsupported models to True, making this an
+    untrustworthy capability oracle. If a newly-released direct-Anthropic
+    fleet model lags litellm's catalog, pin it with a curated
+    ``supports_cache_control=True`` override in ``_MODEL_REGISTRY``.
+    """
+    limits = _MODEL_REGISTRY.get(model_id)
+    if limits is not None and limits.supports_cache_control is not None:
+        return limits.supports_cache_control
+
+    if model_id.startswith("openrouter/"):
+        return False
+
+    return _cache_control_from_litellm(model_id)
+
+
+@lru_cache(maxsize=256)
+def _cache_control_from_litellm(model_id: str) -> bool:
+    """litellm's ``supports_prompt_caching`` lookup, cached and exception-safe."""
+    try:
+        from litellm.utils import supports_prompt_caching
+
+        return bool(supports_prompt_caching(model=model_id))
+    except Exception as e:  # noqa: BLE001 — litellm may raise for unusual ids
+        logger.debug(
+            "supports_prompt_caching lookup failed for '%s': %s",
+            sanitize_log(model_id),
+            e,
+        )
+        return False
 
 
 def register_pricing_with_litellm() -> None:
