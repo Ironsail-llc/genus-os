@@ -351,13 +351,24 @@ class TestModelPickerRegistry:
                 f"AVAILABLE_MODELS[{display_name!r}] = {model_id!r} not found in _MODEL_REGISTRY"
             )
 
-    def test_sonnet_uses_openrouter_prefix(self):
+    def test_picker_is_subscription_only(self):
+        """Operator policy 2026-07-02: only OpenAI subscription (codex/*) models.
+
+        No OpenRouter/Anthropic/Gemini entries — those channels are
+        decommissioned so nothing can spend tokens off-subscription.
+        """
         from robothor.engine.telegram import AVAILABLE_MODELS
 
-        sonnet_id = AVAILABLE_MODELS["Claude Sonnet 4.6"]
-        assert sonnet_id.startswith("openrouter/"), (
-            f"Sonnet should use openrouter/ prefix, got {sonnet_id!r}"
-        )
+        for display_name, model_id in AVAILABLE_MODELS.items():
+            assert model_id.startswith("codex/"), (
+                f"AVAILABLE_MODELS[{display_name!r}] = {model_id!r} is not a "
+                "codex subscription model"
+            )
+
+    def test_fleet_primary_in_picker(self):
+        from robothor.engine.telegram import AVAILABLE_MODELS
+
+        assert "codex/gpt-5.5" in AVAILABLE_MODELS.values()
 
     def test_qwen_removed_from_picker(self):
         from robothor.engine.telegram import AVAILABLE_MODELS

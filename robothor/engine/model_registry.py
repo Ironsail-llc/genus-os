@@ -44,6 +44,15 @@ class ModelLimits:
 _MODEL_REGISTRY: dict[str, ModelLimits] = {
     # Codex via local ChatGPT/Codex subscription auth. Costs are intentionally
     # zero in API-token accounting because usage is governed by Codex plan quota.
+    "codex/gpt-5.4-mini": ModelLimits(
+        max_input_tokens=1_050_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+    ),
     "codex/gpt-5.5": ModelLimits(
         max_input_tokens=1_050_000,
         max_output_tokens=128_000,

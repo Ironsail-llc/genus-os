@@ -34,7 +34,6 @@ chmod 600 "$OUTPUT_FILE"
 
 # ── Validate required keys ──────────────────────────────────────────
 REQUIRED_KEYS=(
-    "OPENROUTER_API_KEY"
     "ROBOTHOR_TELEGRAM_BOT_TOKEN"
     "ROBOTHOR_TELEGRAM_CHAT_ID"
 )

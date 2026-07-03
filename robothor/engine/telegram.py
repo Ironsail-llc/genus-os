@@ -144,11 +144,14 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
+    # Subscription-only (operator policy 2026-07-02): every entry routes
+    # through local Codex auth. OpenRouter/Anthropic/Gemini channels are
+    # decommissioned — keys removed from the secrets bundle. ChatGPT-plan
+    # accounts support gpt-5.5 / gpt-5.4 / gpt-5.4-mini (see
+    # ~/.codex/models_cache.json); gpt-5.6-sol is API-only and rejected.
     "GPT-5.5 (subscription)": "codex/gpt-5.5",
-    "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
-    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
-    "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
-    "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
+    "GPT-5.4 (subscription)": "codex/gpt-5.4",
+    "GPT-5.4 Mini (subscription)": "codex/gpt-5.4-mini",
 }
 
 # Reverse lookup: model id → display name

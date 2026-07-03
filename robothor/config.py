@@ -293,7 +293,6 @@ def validate() -> list[tuple[str, bool, str]]:
 
     # 1. Required env vars
     required_env = {
-        "OPENROUTER_API_KEY": "LLM API access",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN": "Telegram bot",
         "ROBOTHOR_TELEGRAM_CHAT_ID": "Telegram delivery",
     }
