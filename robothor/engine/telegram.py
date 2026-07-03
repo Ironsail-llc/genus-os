@@ -301,6 +301,8 @@ class TelegramBot:
                 "/context — Context window stats\n"
                 "/reset — Reset model + history\n"
                 "/stop — Cancel current response\n"
+                "/agents — List active runs (steer/interrupt)\n"
+                "/steer — Steer a live run: /steer [run_id] text\n"
                 "/status — Engine health\n"
                 "/help — This message",
             )
@@ -660,6 +662,14 @@ class TelegramBot:
             except Exception as e:
                 await message.answer(f"Goals unavailable: {html.escape(str(e))}")
 
+        @self.dp.message(Command("agents"))
+        async def cmd_agents(message: Message) -> None:
+            await self._handle_agents_command(message)
+
+        @self.dp.message(Command("steer"))
+        async def cmd_steer(message: Message) -> None:
+            await self._handle_steer_command(message)
+
         # ── Inline keyboard callbacks ──
 
         @self.dp.callback_query(F.data.startswith("plan:"))
@@ -815,6 +825,12 @@ class TelegramBot:
             with contextlib.suppress(Exception):
                 if msg and hasattr(msg, "edit_reply_markup"):
                     await msg.edit_reply_markup(reply_markup=None)
+
+        # ── Run control callbacks (Steer / Interrupt buttons from /agents) ──
+
+        @self.dp.callback_query(F.data.startswith("runctl:"))
+        async def on_runctl_callback(callback: CallbackQuery) -> None:
+            await self._handle_runctl_callback(callback)
 
         # ── Delphi proposal approval callbacks ──
         # callback_data shape: ``dp:a:<32-hex>`` (approve) or ``dp:r:<32-hex>``
@@ -2752,6 +2768,173 @@ class TelegramBot:
         cfg = load_agent_config("main", self.config.manifest_dir)
         return cfg.model_primary if cfg else ""
 
+    async def _handle_agents_command(self, message: Message) -> None:
+        """List currently-active runs (this engine process) with Steer/Interrupt buttons.
+
+        Reads the in-process session_registry directly — the bot and the
+        runner share a process, so no HTTP round-trip through health.py is
+        needed here (unlike an external dashboard, which would hit
+        GET /api/runs/active).
+        """
+        chat_id = str(message.chat.id)
+        if chat_id != str(self.config.default_chat_id):
+            logger.warning(
+                "Unauthorized /agents attempt from chat_id=%s user_id=%s",
+                chat_id,
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Unauthorized.")
+            return
+
+        from robothor.engine import session_registry
+
+        runs: list[tuple[str, str]] = []
+        for run_id in session_registry.active_run_ids():
+            session = session_registry.lookup(run_id)
+            if session is None:
+                continue
+            runs.append((run_id, session.run.agent_id))
+
+        if not runs:
+            await message.answer("No active runs.")
+            return
+
+        lines = ["<b>Active runs</b>", ""]
+        for run_id, agent_id in runs:
+            lines.append(f"<code>{html.escape(run_id[:8])}</code> — {html.escape(agent_id)}")
+
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=self._build_agents_keyboard(runs),
+        )
+
+    async def _handle_runctl_callback(self, callback: CallbackQuery) -> None:
+        """Handle the Steer/Interrupt inline buttons from /agents.
+
+        callback_data shape: ``runctl:i:<run_id>`` (interrupt) or
+        ``runctl:s:<run_id>`` (steer). Steer can't collect free text from a
+        button tap, so it just replies with the /steer command to send.
+        """
+        msg = callback.message
+        if not msg or not hasattr(msg, "chat"):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+        if str(msg.chat.id) != str(self.config.default_chat_id):
+            logger.warning(
+                "Unauthorized runctl callback from chat_id=%s user_id=%s",
+                msg.chat.id,
+                callback.from_user.id if callback.from_user else "unknown",
+            )
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+
+        if not callback.data:
+            await callback.answer("Invalid callback data")
+            return
+        parts = callback.data.split(":", 2)
+        if len(parts) != 3 or parts[0] != "runctl":
+            await callback.answer("Invalid callback data")
+            return
+
+        action, run_id = parts[1], parts[2]
+
+        if action == "i":
+            from robothor.engine.interrupt_api import interrupt_session
+
+            ok = interrupt_session(run_id)
+            if ok:
+                await callback.answer(f"Interrupt requested for {run_id[:8]}")
+            else:
+                await callback.answer("Run no longer active")
+            with contextlib.suppress(Exception):
+                if hasattr(msg, "edit_reply_markup"):
+                    await msg.edit_reply_markup(reply_markup=None)
+        elif action == "s":
+            await callback.answer(
+                f"Send: /steer {run_id[:8]} <your message>",
+                show_alert=True,
+            )
+        else:
+            await callback.answer("Unknown action")
+
+    async def _handle_steer_command(self, message: Message) -> None:
+        """Inject a steering message into a live run.
+
+        ``/steer [run_id_prefix] <text>`` — resolves the run by a unique
+        run_id prefix among active runs. If the first token doesn't match
+        any active run, the whole argument string is treated as steer text
+        targeting the single active run (only when exactly one is active).
+        """
+        chat_id = str(message.chat.id)
+        if chat_id != str(self.config.default_chat_id):
+            logger.warning(
+                "Unauthorized /steer attempt from chat_id=%s user_id=%s",
+                chat_id,
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Unauthorized.")
+            return
+
+        from robothor.engine import session_registry
+        from robothor.engine.interrupt_api import steer_session
+
+        text = (message.text or "").removeprefix("/steer").strip()
+        if not text:
+            await message.answer("Usage: /steer [run_id_prefix] <text>")
+            return
+
+        run_ids = session_registry.active_run_ids()
+        if not run_ids:
+            await message.answer("No active runs to steer.")
+            return
+
+        first_token, _, rest = text.partition(" ")
+        matches = [rid for rid in run_ids if rid.startswith(first_token)]
+
+        if len(matches) == 1:
+            run_id = matches[0]
+            steer_text = rest.strip()
+            if not steer_text:
+                await message.answer("Usage: /steer <run_id_prefix> <text>")
+                return
+        elif len(matches) > 1:
+            await message.answer(
+                f"Ambiguous run_id prefix {first_token!r} matches {len(matches)} active runs "
+                "— use more characters."
+            )
+            return
+        elif len(run_ids) == 1:
+            run_id = run_ids[0]
+            steer_text = text
+        else:
+            await message.answer(
+                "Multiple active runs — specify a run_id prefix: /steer <run_id_prefix> <text>"
+            )
+            return
+
+        ok = steer_session(run_id, steer_text)
+        if ok:
+            await message.answer(f"Steered {run_id[:8]}: {html.escape(steer_text)}")
+        else:
+            await message.answer(f"Run {run_id[:8]} is no longer active.")
+
+    def _build_agents_keyboard(self, runs: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+        """Build the Steer/Interrupt inline keyboard for /agents.
+
+        callback_data carries the full run_id (needed for lookup); only the
+        display text is truncated. UUIDs comfortably fit Telegram's 64-byte
+        callback_data limit (``runctl:i:`` + 36-char uuid4 = 45 bytes).
+        """
+        buttons: list[list[InlineKeyboardButton]] = []
+        for run_id, _agent_id in runs:
+            buttons.append(
+                [
+                    InlineKeyboardButton(text="Steer", callback_data=f"runctl:s:{run_id}"),
+                    InlineKeyboardButton(text="Interrupt", callback_data=f"runctl:i:{run_id}"),
+                ]
+            )
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
     def _build_model_keyboard(self, current_model: str) -> InlineKeyboardMarkup:
         """Build inline keyboard for model selection."""
         buttons: list[list[InlineKeyboardButton]] = []
@@ -2894,6 +3077,8 @@ class TelegramBot:
                 BotCommand(command="buddy", description="Full buddy profile"),
                 BotCommand(command="reset", description="Reset model + history"),
                 BotCommand(command="stop", description="Cancel current response"),
+                BotCommand(command="agents", description="List active runs (steer/interrupt)"),
+                BotCommand(command="steer", description="Steer a live run: /steer [run_id] text"),
                 BotCommand(command="restart", description="Restart the engine (owner only)"),
                 BotCommand(
                     command="restart_delphi", description="Restart the Delphi engine (owner only)"

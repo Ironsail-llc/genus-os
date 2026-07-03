@@ -794,3 +794,263 @@ class TestUserResolution:
             # Pipe stripped — no extra field injected
             assert "|sender:Foosender:admin" in detail
             assert detail.count("|") == 1  # only the real delimiter
+
+
+@pytest.fixture
+def _clear_session_registry():
+    """Registered sessions are module-global state; reset between tests."""
+    from robothor.engine import session_registry
+
+    for run_id in session_registry.active_run_ids():
+        session_registry.unregister(run_id)
+    yield
+    for run_id in session_registry.active_run_ids():
+        session_registry.unregister(run_id)
+
+
+class TestAgentsCommand:
+    """Tests for /agents — lists active runs with Steer/Interrupt buttons (PR 1)."""
+
+    @pytest.mark.asyncio
+    async def test_no_active_runs(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once()
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_lists_active_runs_with_keyboard(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args.args[0]
+        assert "agent-a" in text
+        assert "agent-b" in text
+        kb = msg.answer.call_args.kwargs["reply_markup"]
+        assert len(kb.inline_keyboard) == 2
+        for row in kb.inline_keyboard:
+            assert len(row) == 2
+            assert row[0].text == "Steer"
+            assert row[1].text == "Interrupt"
+            # callback_data must fit Telegram's 64-byte limit
+            assert len(row[0].callback_data.encode()) <= 64
+            assert len(row[1].callback_data.encode()) <= 64
+
+    @pytest.mark.asyncio
+    async def test_non_owner_refused(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        session_registry.register(AgentSession(agent_id="agent-a"))
+
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+
+class TestRunctlCallback:
+    """Tests for the runctl:i:<run_id> / runctl:s:<run_id> inline-button callbacks."""
+
+    @pytest.mark.asyncio
+    async def test_interrupt_callback_calls_interrupt_session(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:i:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        # interrupt() was requested on the live session
+        assert s._interrupt_requested is True
+        callback.answer.assert_called_once()
+        callback.message.edit_reply_markup.assert_called_once_with(reply_markup=None)
+
+    @pytest.mark.asyncio
+    async def test_interrupt_callback_unknown_run(self, bot, _clear_session_registry):
+        callback = MagicMock()
+        callback.data = "runctl:i:no-such-run"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once()
+        assert "no longer active" in callback.answer.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_steer_button_replies_with_instructions(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:s:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once()
+        args, _kwargs = callback.answer.call_args
+        assert "/steer" in args[0]
+        # steer never mutates the session — only the button reply changes
+        assert s._pending_steer is None
+
+    @pytest.mark.asyncio
+    async def test_non_owner_callback_refused(self, bot, _clear_session_registry):
+        callback = MagicMock()
+        callback.data = "runctl:i:some-run-id"
+        callback.message = MagicMock()
+        callback.message.chat.id = 99999
+        callback.from_user.id = 1
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+
+
+class TestSteerCommand:
+    """Tests for /steer [run_id_prefix] <text> resolution (PR 1)."""
+
+    @pytest.mark.asyncio
+    async def test_no_active_runs(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer hello"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_single_active_run_fallback(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer focus on the budget question"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s.consume_pending_steer() == "focus on the budget question"
+        assert "Steered" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_prefix_match_targets_run(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = f"/steer {s1.run_id[:8]} adjust course"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() == "adjust course"
+        assert s2.consume_pending_steer() is None
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_prefix_asks_to_disambiguate(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s1.run.id = "abcdef12-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        s2 = AgentSession(agent_id="agent-b")
+        s2.run.id = "abcdef12-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer abcdef12 nudge"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() is None
+        assert s2.consume_pending_steer() is None
+        assert "ambiguous" in msg.answer.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_prefix_match_multiple_runs_asks_for_prefix(
+        self, bot, _clear_session_registry
+    ):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer just some text with no matching prefix"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() is None
+        assert s2.consume_pending_steer() is None
+        reply = msg.answer.call_args.args[0].lower()
+        assert "specify" in reply or "multiple" in reply
+
+    @pytest.mark.asyncio
+    async def test_non_owner_refused(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.text = "/steer x"
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
