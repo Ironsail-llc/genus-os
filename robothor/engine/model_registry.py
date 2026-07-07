@@ -7,6 +7,7 @@ so the engine adapts to each model's capabilities instead of hardcoding.
 from __future__ import annotations
 
 import logging
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -269,6 +270,27 @@ def _dynamic_model_limits(model_id: str) -> ModelLimits | None:
     )
 
 
+_DATED_SLUG_RE = re.compile(r"-2\d{7}$")  # e.g. xiaomi/mimo-v2.5-20260422
+
+
+def _registry_candidates(model_id: str) -> list[str]:
+    """Aliases under which a model id may appear in ``_MODEL_REGISTRY``.
+
+    Provider responses differ from request ids two ways: OpenRouter appends a
+    dated release suffix (``xiaomi/mimo-v2.5-20260422``) and drops our
+    ``openrouter/`` routing prefix. Cost fallback and context sizing look up
+    the *response* id, so both variants must resolve to the curated entry.
+    """
+    candidates = [model_id]
+    stripped = _DATED_SLUG_RE.sub("", model_id)
+    if stripped != model_id:
+        candidates.append(stripped)
+    candidates.extend(
+        f"openrouter/{c}" for c in list(candidates) if not c.startswith("openrouter/") and "/" in c
+    )
+    return candidates
+
+
 def get_model_limits(model_id: str) -> ModelLimits:
     """Look up model limits.
 
@@ -277,9 +299,10 @@ def get_model_limits(model_id: str) -> ModelLimits:
     catalog-backed mode (Rip 17 / G6) is on → conservative fallback. The curated
     registry always wins so our hand-tuned pricing and thinking flags stand.
     """
-    limits = _MODEL_REGISTRY.get(model_id)
-    if limits:
-        return limits
+    for candidate in _registry_candidates(model_id):
+        limits = _MODEL_REGISTRY.get(candidate)
+        if limits:
+            return limits
 
     dynamic = _dynamic_model_limits(model_id)
     if dynamic is not None:
