@@ -101,13 +101,22 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_003,  # $3/M
         ttft_hint_ms=3000,
     ),
-    # MiMo-V2.5-Pro via OpenRouter — current fleet fallback
+    # MiMo-V2.5 via OpenRouter — fleet-wide primary (2026-07-07)
+    "openrouter/xiaomi/mimo-v2.5": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_105,  # $0.105/M
+        output_cost_per_token=0.000_000_28,  # $0.28/M
+        ttft_hint_ms=3000,
+    ),
+    # MiMo-V2.5-Pro via OpenRouter — fleet fallback (escalation from v2.5)
     "openrouter/xiaomi/mimo-v2.5-pro": ModelLimits(
         max_input_tokens=1_048_576,
         max_output_tokens=65_536,
         default_output_tokens=8_192,
-        input_cost_per_token=0.000_001,  # $1/M
-        output_cost_per_token=0.000_003,  # $3/M
+        input_cost_per_token=0.000_000_435,  # $0.435/M
+        output_cost_per_token=0.000_000_87,  # $0.87/M
         cache_read_cost_per_token=0.000_000_2,  # $0.20/M
         ttft_hint_ms=3000,
     ),
