@@ -39,8 +39,11 @@ VALID_TYPES = {
 
 
 def test_guardrail_alert_uses_a_type_the_database_accepts(monkeypatch):
+    import robothor.engine.feature_flags as ff
+
     sent: list[dict] = []
     monkeypatch.setattr(dal, "send_notification", lambda **kw: sent.append(kw) or "id-1")
+    monkeypatch.setattr(ff, "_post_telegram", lambda text: True)
 
     assert notify_guardrail_alert(guardrail_name="exec_allowlist", agent_id="a", reason="r")
 
@@ -54,7 +57,11 @@ def test_guardrail_alert_uses_a_type_the_database_accepts(monkeypatch):
 
 def test_guardrail_alert_reports_failure_when_delivery_fails(monkeypatch):
     """send_notification returns None on failure — that must not read as success."""
+    import robothor.engine.feature_flags as ff
+
     monkeypatch.setattr(dal, "send_notification", lambda **kw: None)
+    # Never let a test reach the operator's real Telegram.
+    monkeypatch.setattr(ff, "_post_telegram", lambda text: False)
 
     assert (
         notify_guardrail_alert(guardrail_name="exec_allowlist", agent_id="a", reason="r") is False

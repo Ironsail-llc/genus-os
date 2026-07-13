@@ -36,3 +36,40 @@ def test_every_ladder_consumer_honors_alert():
         "their flag to 'alert' notifies nobody — the middle rung is a silent "
         f"no-op for them: {missing}"
     )
+
+
+class TestAlertIsActuallyDelivered:
+    """A row in a table nobody reads is not a notification.
+
+    The agent-to-agent notification surface is effectively write-only:
+    `send_notification`/`ack_notification` are registered as handlers but are
+    NOT in tools/schemas.py (so no agent is even offered them), there is no
+    read/list tool at all, and nothing in warmup or the heartbeat reads
+    crm_agent_notifications. Only judge.py reads subjects, and the bridge API
+    exposes them to the dashboard.
+
+    So the DB row is an audit record, not delivery. An alert must also reach
+    the operator on the channel they actually watch — the same Telegram path
+    the failure pager and the soak nags already use.
+    """
+
+    def test_alert_reaches_telegram(self, monkeypatch):
+        import robothor.crm.dal as dal
+        import robothor.engine.feature_flags as ff
+
+        monkeypatch.setattr(dal, "send_notification", lambda **kw: "id-1")
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", "tok")
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "42")
+
+        posted: list[str] = []
+        monkeypatch.setattr(ff, "_post_telegram", lambda text: posted.append(text) or True)
+
+        assert ff.notify_guardrail_alert(
+            guardrail_name="exec_allowlist", agent_id="auto-agent", reason="chained shell"
+        )
+
+        assert posted, (
+            "the alert was written to a table nobody reads and never reached the "
+            "operator's channel — that is a record, not a notification"
+        )
+        assert "exec_allowlist" in posted[0]
