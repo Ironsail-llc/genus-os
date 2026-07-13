@@ -282,10 +282,10 @@ class TestBuddyHistoryEndpoint:
         assert data["days"][0]["streak"] == 5
 
 
-class TestKairosDreamsEndpoint:
-    """Test GET /api/kairos/dreams."""
+class TestAutodreamRunsEndpoint:
+    """Test GET /api/dreams (autoDream runs)."""
 
-    def test_kairos_dreams_endpoint(self, client: TestClient) -> None:
+    def test_autodream_runs_endpoint(self, client: TestClient) -> None:
         """Mock get_connection, verify response returns dreams array."""
         import uuid
 
@@ -312,7 +312,7 @@ class TestKairosDreamsEndpoint:
         mock_conn.__exit__ = MagicMock(return_value=False)
 
         with patch("robothor.db.connection.get_connection", return_value=mock_conn):
-            resp = client.get("/api/kairos/dreams?limit=5")
+            resp = client.get("/api/dreams?limit=5")
 
         assert resp.status_code == 200
         data = resp.json()

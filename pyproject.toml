@@ -145,13 +145,5 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 
 # mypy config lives in mypy.ini (pyproject.toml overrides don't work with editable installs)
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-    "integration: requires real database/Redis",
-    "llm: requires Ollama running",
-    "slow: takes more than 10 seconds",
-    "e2e: full system end-to-end",
-    "smoke: health check only",
-]
-asyncio_mode = "auto"
+# pytest config lives in pytest.ini (authoritative — pytest ignores this file
+# when pytest.ini exists, and the two had silently drifted apart)
