@@ -1957,6 +1957,22 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         prior_steps=session.run.steps,
                     )
+                    # ── [OBSERVE] Allowed, but a rollout-gated guardrail would
+                    # have blocked this in enforce mode. Persist it: a soak that
+                    # records nothing cannot distinguish "clean" from "blind".
+                    if gr.allowed and gr.action == "observed":
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.tracking import log_guardrail_event
+
+                            log_guardrail_event(
+                                run_id=session.run.id,
+                                guardrail_name=gr.guardrail_name,
+                                action="observed",
+                                tool_name=tool_name,
+                                reason=gr.reason,
+                                mode="observe",
+                                step_number=len(session.run.steps),
+                            )
                     if not gr.allowed:
                         # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
                         if gr.action == "escalate":
