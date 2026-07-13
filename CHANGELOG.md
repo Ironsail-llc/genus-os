@@ -1,3 +1,10 @@
+## [1.12.0](https://github.com/Ironsail-llc/genus-os/compare/v1.11.1...v1.12.0) (2026-07-13)
+
+### Features
+
+* **connectors:** MCP 2026-07-28 dual-mode client + version-tolerant bridge ([#174](https://github.com/Ironsail-llc/genus-os/issues/174)) ([70e0d3f](https://github.com/Ironsail-llc/genus-os/commit/70e0d3f709c71f659b2db06dff17d80628e04ce4))
+* **engine:** flag manifest with soak-deadline nags in guardrail watch ([#180](https://github.com/Ironsail-llc/genus-os/issues/180)) ([2183357](https://github.com/Ironsail-llc/genus-os/commit/218335776b79cb296221e2bf33724dead5243b60)), closes [#178](https://github.com/Ironsail-llc/genus-os/issues/178)
+
 ## [1.11.1](https://github.com/Ironsail-llc/genus-os/compare/v1.11.0...v1.11.1) (2026-07-13)
 
 ### Bug Fixes
