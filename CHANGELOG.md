@@ -1,3 +1,9 @@
+## [1.15.3](https://github.com/Ironsail-llc/genus-os/compare/v1.15.2...v1.15.3) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** make guardrail alerts reach the operator, from every consumer ([#195](https://github.com/Ironsail-llc/genus-os/issues/195)) ([3f24045](https://github.com/Ironsail-llc/genus-os/commit/3f240459e2d5ca0ce84b68682242282d29b97795)), closes [#190](https://github.com/Ironsail-llc/genus-os/issues/190) [#194](https://github.com/Ironsail-llc/genus-os/issues/194) [#194](https://github.com/Ironsail-llc/genus-os/issues/194) [#179](https://github.com/Ironsail-llc/genus-os/issues/179) [#180](https://github.com/Ironsail-llc/genus-os/issues/180)
+
 ## [1.15.2](https://github.com/Ironsail-llc/genus-os/compare/v1.15.1...v1.15.2) (2026-07-13)
 
 ### Bug Fixes
