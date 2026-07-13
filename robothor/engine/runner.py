@@ -686,11 +686,25 @@ class AgentRunner:
                     f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
                 )
             except CronPromptInjectionBlockedError as _inj_exc:
+                # A blocked run must leave a complete trail. Ordering matters:
+                #   1. mark the run FAILED, then INSERT it — _finish_run's
+                #      persistence is a *background* task, which a short-lived
+                #      caller (CLI) exits before it lands, stranding the row in
+                #      'pending'. Inserting the already-terminal state is the
+                #      one write guaranteed to survive.
+                #   2. log the guardrail event only after the row exists —
+                #      agent_guardrail_events.run_id is an FK to agent_runs, so
+                #      logging first violates it and the audit event is lost.
+                # Both were live defects: enforce-mode blocks were invisible to
+                # the soak report and left 'pending' runs behind.
+                _blocked_run = session.fail(f"Blocked by injection scan: {_inj_exc}")
                 with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, _blocked_run)
+                try:
                     from robothor.engine.tracking import log_guardrail_event
 
                     log_guardrail_event(
-                        run_id=session.run.id,
+                        run_id=_blocked_run.id,
                         guardrail_name="injection_scan",
                         action="blocked",
                         tool_name=None,
@@ -698,15 +712,17 @@ class AgentRunner:
                         mode="enforce",
                         step_number=0,
                     )
-                # Persist a terminal FAILED run rather than letting a bare
-                # exception escape execute() to the scheduler task (which has no
-                # handler). This scan runs before the main create_run below, so
-                # record the run first — otherwise there's no agent_runs row for
-                # the watchdog to reap or the operator to inspect.
-                with contextlib.suppress(Exception):
-                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                except Exception as _audit_exc:
+                    # A security control fired; losing its audit trail is itself
+                    # an incident. Never swallow this silently.
+                    logger.error(
+                        "injection_scan blocked run %s but the guardrail event "
+                        "could not be recorded: %s",
+                        _sanitize(_blocked_run.id),
+                        _sanitize(_audit_exc),
+                    )
                 return self._finish_run(
-                    session.fail(f"Blocked by injection scan: {_inj_exc}"),
+                    _blocked_run,
                     trace=None,
                     agent_config=agent_config,
                     session=session,
