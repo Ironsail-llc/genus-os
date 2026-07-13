@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { env } from "next-runtime-env";
 import { ExternalLink, Download, Trash2, RefreshCw, Package } from "lucide-react";
 
 interface InstalledAgent {
@@ -17,7 +16,9 @@ interface MarketplaceViewProps {
   visible: boolean;
 }
 
-const BRIDGE_URL = env("NEXT_PUBLIC_BRIDGE_URL") || "http://localhost:18820";
+// Browser calls stay on the authenticated same-origin BFF. The BFF alone owns
+// the internal Bridge address and exchanges the signed-in caller's token.
+const BRIDGE_URL = "/api/bridge";
 const PR_URL = "https://programmaticresources.com";
 
 export function MarketplaceView({ visible }: MarketplaceViewProps) {
