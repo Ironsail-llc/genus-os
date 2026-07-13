@@ -1,3 +1,9 @@
+## [1.13.0](https://github.com/Ironsail-llc/genus-os/compare/v1.12.0...v1.13.0) (2026-07-13)
+
+### Features
+
+* **infra:** page operator via Telegram when critical units fail ([#179](https://github.com/Ironsail-llc/genus-os/issues/179)) ([3072b8a](https://github.com/Ironsail-llc/genus-os/commit/3072b8a00ab3e903e6a174c8b56012ffee826048))
+
 ## [1.12.0](https://github.com/Ironsail-llc/genus-os/compare/v1.11.1...v1.12.0) (2026-07-13)
 
 ### Features
