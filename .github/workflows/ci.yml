@@ -30,6 +30,13 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
       - name: Run gitleaks
         run: gitleaks detect --source . --verbose
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Audit release-tooling lock
+        run: npm audit --package-lock-only --audit-level=high
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -85,7 +92,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,api,vision]" opencv-python-headless
+      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
       - name: Run the complete Python unit suite
         run: >-
           pytest tests/ robothor/
@@ -174,6 +181,7 @@ jobs:
           cache: "pnpm"
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
       - run: pnpm lint
       - run: pnpm exec tsc --noEmit
       - run: pnpm test

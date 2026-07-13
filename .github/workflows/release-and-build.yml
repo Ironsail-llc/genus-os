@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev,api,vision]" opencv-python-headless
+      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
       - run: pip install -r crm/bridge/requirements.txt
       - name: Verify Python source and complete unit suite
         run: |
@@ -111,10 +111,13 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - name: Verify product version metadata
         run: node scripts/check-version-consistency.js
+      - name: Audit release-tooling lock
+        run: npm audit --package-lock-only --audit-level=high
       - name: Verify dashboard and browser flows
         working-directory: app
         run: |
           pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
           pnpm lint
           pnpm exec tsc --noEmit
           pnpm test
