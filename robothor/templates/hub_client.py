@@ -25,6 +25,7 @@ from robothor.templates.safety import (
     TemplateSecurityError,
     contained_path,
     safe_relative_path,
+    trusted_directory,
     validate_identifier,
     validate_sha256,
 )
@@ -69,6 +70,33 @@ def _safe_slug(value: object) -> str:
         return validate_identifier(value, label="hub bundle slug")
     except TemplateSecurityError as error:
         raise HubError(str(error)) from error
+
+
+def _prepare_destination_root(value: str | Path) -> Path:
+    """Create/validate an explicit download root without traversing symlinks."""
+
+    requested = Path(value).expanduser().absolute()
+    existing = requested
+    while not existing.exists():
+        parent = existing.parent
+        if parent == existing:
+            raise HubError("Bundle destination has no trusted existing parent")
+        existing = parent
+
+    try:
+        trusted_ancestor = trusted_directory(existing, label="bundle destination ancestor")
+        if requested == existing:
+            return trusted_ancestor
+        relative = requested.relative_to(existing).as_posix()
+        destination = contained_path(
+            trusted_ancestor,
+            relative,
+            label="bundle destination path",
+        )
+        destination.mkdir(parents=True, mode=0o700)
+        return trusted_directory(destination, label="bundle destination")
+    except (TemplateSecurityError, ValueError) as error:
+        raise HubError("Bundle destination must be a trusted directory") from error
 
 
 class HubClient:
@@ -304,16 +332,15 @@ class HubClient:
         if not self._verify_checksum(content, expected_sha256):
             raise HubError(f"Checksum verification failed for bundle '{slug}'")
 
+        # The slug is registry input and must never influence a filesystem
+        # path.  tempfile supplies an unpredictable leaf beneath an explicit
+        # caller-owned root (or the platform temporary root).
         destination: Path
         if dest_dir is None:
-            destination = Path(tempfile.mkdtemp(prefix=f"pr-{slug}-"))
+            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-"))
         else:
-            parent = Path(dest_dir).expanduser()
-            if parent.is_symlink():
-                raise HubError("Bundle destination cannot be a symlink")
-            parent.mkdir(parents=True, exist_ok=True)
-            parent = parent.resolve(strict=True)
-            destination = Path(tempfile.mkdtemp(prefix=f".{slug}-", dir=parent))
+            parent = _prepare_destination_root(dest_dir)
+            destination = Path(tempfile.mkdtemp(prefix=".robothor-hub-", dir=parent))
 
         try:
             self._extract_archive(content, destination)

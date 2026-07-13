@@ -9,23 +9,23 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+from robothor.templates.safety import contained_path, trusted_directory
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _safe_bundle_path(base: Path, name: str) -> Path:
     """Return ``base / <leaf>`` for a single trusted filename.
 
-    ``name`` must be a bare filename — any directory separator or traversal
-    component is rejected (path-injection guard). ``os.path.basename`` strips
-    the directory so the result can never escape ``base``.
+    ``name`` must be a bare relative path under the canonical, non-symlink
+    bundle root. Traversal and symlinked control files are rejected.
     """
-    leaf = Path(name).name
-    if leaf != name or leaf in ("", ".", ".."):
-        raise ValueError(f"unsafe path: {name}")
-    return base / leaf
+    return contained_path(base, name, label="hub-readiness bundle file")
 
 
 @dataclass
@@ -336,7 +336,7 @@ def generate_skill_md(manifest: dict[str, Any], instruction_content: str = "") -
 
 def score_hub_readiness(bundle_path: str | Path) -> HubReadinessReport:
     """Score a template bundle's readiness for hub publishing (0-100)."""
-    bundle = Path(bundle_path)
+    bundle = trusted_directory(bundle_path, label="hub-readiness bundle")
     report = HubReadinessReport()
     report.breakdown = {}
 

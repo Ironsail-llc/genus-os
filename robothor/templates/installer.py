@@ -21,6 +21,7 @@ from robothor.templates.safety import (
     TemplateSecurityError,
     contained_path,
     safe_relative_path,
+    trusted_directory,
     validate_identifier,
     validate_sha256,
     workspace_path,
@@ -134,9 +135,10 @@ def install(
         source_ref = validate_identifier(source_ref, label="hub bundle slug")
         source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
 
-    bundle = Path(template_path).resolve(strict=False)
-    if not bundle.is_dir():
-        raise FileNotFoundError(f"Template bundle not found: {bundle}")
+    try:
+        bundle = trusted_directory(template_path, label="template bundle")
+    except TemplateSecurityError as error:
+        raise FileNotFoundError(f"Template bundle not found or unsafe: {template_path}") from error
 
     # Load setup.yaml
     setup_path = _bundle_file(bundle, "setup.yaml", required=True)
@@ -144,6 +146,10 @@ def install(
     setup = _load_mapping(setup_path, label="bundle setup.yaml")
 
     agent_id = validate_identifier(setup.get("agent_id", bundle.name), label="agent ID")
+    if source == "hub" and agent_id != source_ref:
+        raise TemplateSecurityError(
+            "Downloaded bundle agent ID does not match its trusted registry slug"
+        )
     version = setup.get("version", "0.0.0")
 
     # Check for existing agent (duplicate detection)
@@ -198,7 +204,7 @@ def install(
 
     manifest_template = _bundle_file(bundle, "manifest.template.yaml", required=True)
     if manifest_template is not None:
-        manifest_content = resolver.resolve_file(manifest_template, context)
+        manifest_content = resolver.resolve_file(manifest_template, context, trusted_root=bundle)
         loaded_manifest = yaml.safe_load(manifest_content) or {}
         if not isinstance(loaded_manifest, dict):
             raise TemplateSecurityError("Invalid resolved manifest: expected a YAML mapping")
@@ -229,7 +235,9 @@ def install(
 
     instructions_template = _bundle_file(bundle, "instructions.template.md")
     if instructions_template is not None:
-        instructions_content = resolver.resolve_file(instructions_template, context)
+        instructions_content = resolver.resolve_file(
+            instructions_template, context, trusted_root=bundle
+        )
         # Determine instruction file destination from resolved manifest
         instr_path = setup_instruction or manifest_instruction
         if instr_path:

@@ -135,7 +135,7 @@ def validate_template_resolves(
 
     # Try to resolve
     try:
-        content = resolver.resolve_file(manifest_template, context)
+        content = resolver.resolve_file(manifest_template, context, trusted_root=bundle_path)
     except Exception as e:
         errors.append(ValidationError("error", f"Resolution failed: {e}", "manifest.template.yaml"))
         return errors

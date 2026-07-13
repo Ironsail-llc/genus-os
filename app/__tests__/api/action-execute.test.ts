@@ -6,6 +6,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { NextRequest } from "next/server";
 
+const { mockBridgeAuthHeaders } = vi.hoisted(() => ({
+  mockBridgeAuthHeaders: vi.fn(),
+}));
+
 // Mock config module
 vi.mock("@/lib/config", () => ({
   HELM_AGENT_ID: "helm-user",
@@ -14,7 +18,7 @@ vi.mock("@/lib/config", () => ({
   SESSION_KEY: "agent:main:webchat-user",
 }));
 vi.mock("@/lib/bridge-auth", () => ({
-  bridgeAuthHeaders: async () => ({ Authorization: "Bearer test-bridge-token" }),
+  bridgeAuthHeaders: mockBridgeAuthHeaders,
 }));
 
 // Mock fetch globally
@@ -24,10 +28,12 @@ vi.stubGlobal("fetch", mockFetch);
 // Import after mocking
 const { POST } = await import("@/app/api/actions/execute/route");
 
+let requestSequence = 0;
+
 function makeRequest(body: unknown) {
   return {
     json: () => Promise.resolve(body),
-    headers: new Headers({ "x-forwarded-for": "127.0.0.1" }),
+    headers: new Headers({ "x-forwarded-for": `action-test-${requestSequence++}` }),
     nextUrl: new URL("http://localhost/api/actions/execute"),
   } as unknown as NextRequest;
 }
@@ -35,6 +41,21 @@ function makeRequest(body: unknown) {
 describe("POST /api/actions/execute", () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    mockBridgeAuthHeaders.mockReset();
+    mockBridgeAuthHeaders.mockResolvedValue({
+      Authorization: "Bearer test-bridge-token",
+    });
+  });
+
+  it("rejects an unauthenticated caller before parsing or forwarding actions", async () => {
+    mockBridgeAuthHeaders.mockResolvedValueOnce({});
+    const request = makeRequest({ tool: "list_people", params: {} });
+
+    const res = await POST(request);
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "authentication required" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns 400 for missing tool", async () => {
@@ -160,6 +181,34 @@ describe("POST /api/actions/execute", () => {
 
   it("rejects non-object parameter payloads", async () => {
     const res = await POST(makeRequest({ tool: "list_people", params: ["bad"] }));
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized parameter payloads before contacting Bridge", async () => {
+    const res = await POST(
+      makeRequest({ tool: "create_note", params: { body: "x".repeat(65_537) } }),
+    );
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["__proto__", "prototype", "constructor"])(
+    "rejects a raw %s parameter key",
+    async (key) => {
+      const params = JSON.parse(`{"${key}":"blocked"}`) as Record<string, unknown>;
+      const res = await POST(makeRequest({ tool: "create_note", params }));
+      expect(res.status).toBe(400);
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects nested prototype-sensitive parameter keys", async () => {
+    const params = JSON.parse('{"body":{"safe":{"__proto__":"blocked"}}}') as Record<
+      string,
+      unknown
+    >;
+    const res = await POST(makeRequest({ tool: "create_note", params }));
     expect(res.status).toBe(400);
     expect(mockFetch).not.toHaveBeenCalled();
   });

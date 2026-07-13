@@ -12,6 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 
@@ -24,6 +25,38 @@ const RATE_WINDOW_MS = 60_000;
 let lastCleanup = Date.now();
 
 class ActionInputError extends Error {}
+
+const ActionParamsSchema = z.record(z.string(), z.unknown());
+const FORBIDDEN_PARAM_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function assertSafeParameterTree(value: unknown, depth = 0): void {
+  if (!value || typeof value !== "object") return;
+  if (depth > 32) throw new ActionInputError("Invalid action parameters");
+
+  if (!Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new ActionInputError("Invalid action parameters");
+    }
+  }
+
+  for (const key of Object.keys(value)) {
+    if (FORBIDDEN_PARAM_KEYS.has(key)) {
+      throw new ActionInputError("Invalid action parameters");
+    }
+    assertSafeParameterTree((value as Record<string, unknown>)[key], depth + 1);
+  }
+}
+
+function actionParams(value: unknown): Record<string, unknown> {
+  if (value === undefined) return {};
+  assertSafeParameterTree(value);
+  const parsed = ActionParamsSchema.parse(value);
+  if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > 65_536) {
+    throw new ActionInputError("Invalid action parameters");
+  }
+  return parsed;
+}
 
 function resourceId(params: Record<string, unknown>, key: string): string {
   const value = params[key];
@@ -189,6 +222,14 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
 
 export async function POST(request: NextRequest) {
   try {
+    // Resolve and verify the caller before any user-controlled value can affect
+    // validation, routing, or backend access. Bridge independently verifies the
+    // same signed token and its tenant/role/scope claims.
+    const authHeaders = await bridgeAuthHeaders();
+    if (!authHeaders.Authorization && !authHeaders["X-Agent-Id"]) {
+      return NextResponse.json({ error: "authentication required" }, { status: 401 });
+    }
+
     const ip = request.headers.get("x-forwarded-for") || "unknown";
     if (!checkRateLimit(ip)) {
       return NextResponse.json(
@@ -212,21 +253,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      params !== undefined &&
-      (!params || typeof params !== "object" || Array.isArray(params))
-    ) {
-      return NextResponse.json({ error: "Invalid 'params' field" }, { status: 400 });
-    }
-    const resolvedParams = params || {};
-    if (
-      Object.keys(resolvedParams).some((key) =>
-        ["__proto__", "prototype", "constructor"].includes(key),
-      ) ||
-      JSON.stringify(resolvedParams).length > 65_536
-    ) {
-      return NextResponse.json({ error: "Invalid action parameters" }, { status: 400 });
-    }
+    const resolvedParams = actionParams(params);
     const base = new URL(BRIDGE_URL);
     const pathStr = route.path(resolvedParams);
     const target = new URL(
@@ -238,7 +265,7 @@ export async function POST(request: NextRequest) {
     }
     const url = target.toString();
     const headers: Record<string, string> = {
-      ...(await bridgeAuthHeaders()),
+      ...authHeaders,
       "Content-Type": "application/json",
     };
     let response: Response;
@@ -275,6 +302,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid action parameters" }, { status: 400 });
+    }
     if (error instanceof ActionInputError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }

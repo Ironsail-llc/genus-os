@@ -13,7 +13,7 @@ interface ServiceDef {
   port: number;
   host: string;
   health: string | null;
-  protocol?: string;
+  protocol?: "http" | "https";
   systemd_unit?: string | null;
   tunnel_route?: string | null;
   dependencies: string[];
@@ -36,6 +36,35 @@ const ENV_OVERRIDES: Record<string, string> = {
   searxng: "SEARXNG_URL",
   helm: "HELM_URL",
 };
+
+function validatedServiceUrl(baseValue: string, urlPath = ""): string | null {
+  if (baseValue.length > 2_048) return null;
+
+  try {
+    const base = new URL(baseValue);
+    if (
+      !["http:", "https:"].includes(base.protocol) ||
+      !base.hostname ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    ) {
+      return null;
+    }
+
+    if (!urlPath) return base.toString().replace(/\/$/, "");
+    if (!urlPath.startsWith("/") || urlPath.startsWith("//")) return null;
+
+    const target = new URL(
+      urlPath.replace(/^\/+/, ""),
+      `${base.origin}${base.pathname.replace(/\/?$/, "/")}`,
+    );
+    return target.origin === base.origin ? target.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve only explicit, bounded manifest locations.
@@ -109,8 +138,11 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   if (envKey) {
     const envVal = process.env[envKey];
     if (envVal) {
-      const base = envVal.replace(/\/$/, "");
-      return urlPath ? `${base}${urlPath}` : base;
+      const validated = validatedServiceUrl(envVal, urlPath);
+      if (!validated) {
+        throw new Error(`Invalid ${envKey} service URL configuration`);
+      }
+      return validated;
     }
   }
 
@@ -118,9 +150,18 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   const svc = manifest.services[name];
   if (!svc) return null;
 
-  const protocol = svc.protocol === "ws" ? "ws" : "http";
+  const protocol = svc.protocol ?? "http";
+  if (protocol !== "http" && protocol !== "https") return null;
   const base = `${protocol}://${svc.host}:${svc.port}`;
-  return urlPath ? `${base}${urlPath}` : base;
+  return validatedServiceUrl(base, urlPath);
+}
+
+/** Resolve a health/readiness target from operator runtime configuration only. */
+export function getConfiguredServiceUrl(name: string, urlPath = ""): string | null {
+  const envKey = ENV_OVERRIDES[name];
+  if (!envKey) return null;
+  const value = process.env[envKey];
+  return value ? validatedServiceUrl(value, urlPath) : null;
 }
 
 /**

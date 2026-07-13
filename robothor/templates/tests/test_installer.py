@@ -91,6 +91,35 @@ class TestInstall:
             )
         assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
 
+    def test_remote_install_rejects_registry_slug_mismatch(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        with pytest.raises(TemplateSecurityError, match="registry slug"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+                source="hub",
+                source_ref="different-agent",
+                source_sha256="a" * 64,
+            )
+        assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
+
+    def test_install_rejects_symlinked_bundle_root(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir, tmp_path
+    ):
+        alias = tmp_path / "bundle-alias"
+        alias.symlink_to(tmp_bundle, target_is_directory=True)
+
+        with pytest.raises(FileNotFoundError, match="unsafe"):
+            install(
+                alias,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
     def test_install_missing_bundle(self, tmp_repo, tmp_instance_dir):
         """Install with nonexistent path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):

@@ -23,6 +23,12 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    trusted_directory,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -248,14 +254,35 @@ class TemplateResolver:
 
         return context
 
-    def resolve_file(self, file_path: Path, context: dict[str, Any]) -> str:
-        """Resolve a single template file and return its content."""
-        content = file_path.read_text()
+    def resolve_file(
+        self,
+        file_path: Path,
+        context: dict[str, Any],
+        *,
+        trusted_root: Path,
+    ) -> str:
+        """Resolve one regular, non-symlink file under ``trusted_root``."""
+
+        root = trusted_directory(trusted_root, label="template bundle")
+        try:
+            relative = file_path.relative_to(root).as_posix()
+        except ValueError as error:
+            raise TemplateSecurityError("Template file escapes its trusted bundle root") from error
+        path = contained_path(root, relative, label="template file")
+        if not path.is_file():
+            raise FileNotFoundError(f"Template file not found: {relative}")
+        content = path.read_text()
         return resolve_string(content, context)
 
-    def resolve_yaml_file(self, file_path: Path, context: dict[str, Any]) -> dict[str, Any]:
+    def resolve_yaml_file(
+        self,
+        file_path: Path,
+        context: dict[str, Any],
+        *,
+        trusted_root: Path,
+    ) -> dict[str, Any]:
         """Resolve a YAML template file and return parsed dict."""
-        content = self.resolve_file(file_path, context)
+        content = self.resolve_file(file_path, context, trusted_root=trusted_root)
         return yaml.safe_load(content) or {}
 
     def resolve_bundle(
@@ -270,12 +297,15 @@ class TemplateResolver:
         Returns dict mapping output filenames to resolved content:
           {"manifest.yaml": "...", "instructions.md": "..."}
         """
-        bundle = Path(bundle_path)
-        if not bundle.is_dir():
-            raise FileNotFoundError(f"Template bundle not found: {bundle}")
+        try:
+            bundle = trusted_directory(bundle_path, label="template bundle")
+        except TemplateSecurityError as error:
+            raise FileNotFoundError(
+                f"Template bundle not found or unsafe: {bundle_path}"
+            ) from error
 
         # Load setup.yaml
-        setup_path = bundle / "setup.yaml"
+        setup_path = contained_path(bundle, "setup.yaml", label="bundle setup path")
         if not setup_path.exists():
             raise FileNotFoundError(f"setup.yaml not found in {bundle}")
         setup = yaml.safe_load(setup_path.read_text()) or {}
@@ -298,13 +328,21 @@ class TemplateResolver:
         # Resolve template files
         result = {}
 
-        manifest_template = bundle / "manifest.template.yaml"
+        manifest_template = contained_path(
+            bundle, "manifest.template.yaml", label="bundle manifest template path"
+        )
         if manifest_template.exists():
-            result["manifest.yaml"] = self.resolve_file(manifest_template, context)
+            result["manifest.yaml"] = self.resolve_file(
+                manifest_template, context, trusted_root=bundle
+            )
 
-        instructions_template = bundle / "instructions.template.md"
+        instructions_template = contained_path(
+            bundle, "instructions.template.md", label="bundle instructions template path"
+        )
         if instructions_template.exists():
-            result["instructions.md"] = self.resolve_file(instructions_template, context)
+            result["instructions.md"] = self.resolve_file(
+                instructions_template, context, trusted_root=bundle
+            )
 
         # Validate types
         validate_variable_types(context, setup)

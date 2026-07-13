@@ -32,7 +32,7 @@ describe("dashboard health contracts", () => {
 
     const response = await readyGET();
     const body = await response.json();
-    const urls = mockFetch.mock.calls.map((call: unknown[]) => call[0]);
+    const urls = mockFetch.mock.calls.map((call: unknown[]) => String(call[0]));
 
     expect(response.status).toBe(200);
     expect(body.services.every((service: Record<string, unknown>) => !("url" in service))).toBe(

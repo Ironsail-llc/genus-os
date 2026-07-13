@@ -504,7 +504,9 @@ class AgentRunner:
                     tenant_id=resolved_tenant,
                 )
             except Exception as e:  # noqa: BLE001
-                logger.debug("person_id resolution failed for %s: %s", agent_id, e)
+                logger.debug(
+                    "person_id resolution failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+                )
 
         # Resolve hierarchical tenant access.
         # owner/admin roles see child tenants; others see only their own.
@@ -3232,11 +3234,11 @@ class AgentRunner:
                     session.todo_list = restored
                     logger.info(
                         "checkpoint.resume.todo run_id=%s items=%d",
-                        run_id,
+                        _sanitize(run_id),
                         len(restored.items),
                         extra={
                             "event": "checkpoint.resume.todo",
-                            "run_id": run_id,
+                            "run_id": _sanitize(run_id),
                             "items_count": len(restored.items),
                         },
                     )

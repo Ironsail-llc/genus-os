@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 import yaml
 
 from robothor.templates.description_optimizer import (
@@ -10,6 +11,7 @@ from robothor.templates.description_optimizer import (
     score_hub_readiness,
     suggest_tags,
 )
+from robothor.templates.safety import TemplateSecurityError
 
 
 class TestAnalyzeDescription:
@@ -227,3 +229,13 @@ class TestScoreHubReadiness:
             "instructions_template",
         }
         assert set(report.breakdown.keys()) == expected_keys
+
+    def test_rejects_symlinked_bundle_control_file(self, tmp_path):
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        outside = tmp_path / "outside-skill.md"
+        outside.write_text("secret")
+        (bundle / "SKILL.md").symlink_to(outside)
+
+        with pytest.raises(TemplateSecurityError, match="symlinks"):
+            score_hub_readiness(bundle)

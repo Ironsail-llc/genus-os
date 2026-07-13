@@ -133,11 +133,30 @@ def test_download_rejects_symlink_destination(monkeypatch: pytest.MonkeyPatch, t
     destination = tmp_path / "downloads"
     destination.symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(HubError, match="destination cannot be a symlink"):
+    with pytest.raises(HubError, match="trusted directory"):
         client.download_bundle(
             "bundle",
             expected_sha256=hashlib.sha256(content).hexdigest(),
             dest_dir=destination,
+        )
+    assert list(outside.iterdir()) == []
+
+
+def test_download_rejects_symlinked_destination_ancestor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    content = _archive(("bundle/setup.yaml", b"agent_id: bundle\n", None))
+    client, _ = _client_with_download(monkeypatch, content)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(HubError, match="trusted directory"):
+        client.download_bundle(
+            "bundle",
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+            dest_dir=alias / "downloads",
         )
     assert list(outside.iterdir()) == []
 
@@ -159,3 +178,19 @@ def test_download_extracts_verified_regular_bundle(
 
     assert bundle.name == "bundle"
     assert (bundle / "setup.yaml").read_text() == "agent_id: bundle\n"
+
+
+def test_download_temp_directory_does_not_embed_registry_slug(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    content = _archive(("bundle/setup.yaml", b"agent_id: bundle\n", None))
+    client, _ = _client_with_download(monkeypatch, content)
+
+    bundle = client.download_bundle(
+        "customer-agent",
+        expected_sha256=hashlib.sha256(content).hexdigest(),
+        dest_dir=tmp_path / "downloads",
+    )
+
+    assert bundle.parent.name.startswith(".robothor-hub-")
+    assert "customer-agent" not in bundle.parent.name

@@ -7,6 +7,7 @@ update, removal, archiving, and hub downloads all enforce the same rules.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path, PurePosixPath
 
@@ -15,6 +16,24 @@ _SAFE_IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 
 class TemplateSecurityError(ValueError):
     """An agent bundle requested an unsafe identifier or filesystem path."""
+
+
+def trusted_directory(root: str | Path, *, label: str = "directory") -> Path:
+    """Return an existing directory after resolving and rejecting symlinks.
+
+    The caller supplies the authorization boundary (for example, a downloaded
+    bundle root or the appliance workspace).  We canonicalize that boundary
+    before any child path is derived from it and reject a boundary reached via
+    a symlink, so later containment checks cannot be redirected by an alias.
+    """
+
+    raw_root = os.fspath(Path(root).expanduser().absolute())
+    resolved_root = os.path.realpath(raw_root)
+    if os.path.normcase(raw_root) != os.path.normcase(resolved_root):
+        raise TemplateSecurityError(f"Invalid {label}: symlinks are not allowed")
+    if not Path(resolved_root).is_dir():
+        raise TemplateSecurityError(f"Invalid {label}: expected an existing directory")
+    return Path(resolved_root)
 
 
 def validate_identifier(value: object, *, label: str = "identifier") -> str:
@@ -63,22 +82,19 @@ def contained_path(root: Path, relative: object, *, label: str = "path") -> Path
     resolved path also avoids subsequently traversing a validated symlink path.
     """
 
-    root_resolved = root.resolve(strict=True)
-    if not root_resolved.is_dir():
-        raise TemplateSecurityError(f"Allowed root is not a directory: {root}")
-
+    root_resolved = trusted_directory(root, label="allowed root")
     relative_path = safe_relative_path(relative, label=label)
-    raw_candidate = root_resolved
-    for part in relative_path.parts:
-        raw_candidate /= part
-        if raw_candidate.is_symlink():
-            raise TemplateSecurityError(f"Invalid {label}: symlinks are not allowed")
-    candidate = raw_candidate.resolve(strict=False)
+    raw_candidate = os.fspath(root_resolved.joinpath(*relative_path.parts).absolute())
+    candidate = os.path.realpath(raw_candidate)
+    if os.path.normcase(raw_candidate) != os.path.normcase(candidate):
+        raise TemplateSecurityError(f"Invalid {label}: symlinks are not allowed")
     try:
-        candidate.relative_to(root_resolved)
+        within_root = os.path.commonpath((os.fspath(root_resolved), candidate))
     except ValueError as error:
         raise TemplateSecurityError(f"Invalid {label}: path escapes its allowed root") from error
-    return candidate
+    if os.path.normcase(within_root) != os.path.normcase(os.fspath(root_resolved)):
+        raise TemplateSecurityError(f"Invalid {label}: path escapes its allowed root")
+    return Path(candidate)
 
 
 def workspace_path(
@@ -95,28 +111,29 @@ def workspace_path(
     outside the appliance-owned workspace.
     """
 
-    workspace_resolved = workspace.resolve(strict=True)
-    if not workspace_resolved.is_dir():
-        raise TemplateSecurityError(f"Workspace root is not a directory: {workspace}")
-
+    workspace_resolved = trusted_directory(workspace, label="workspace root")
     relative_path = safe_relative_path(relative, label=label)
     prefix = safe_relative_path(allowed_prefix, label="allowed path root")
     if relative_path.parts[: len(prefix.parts)] != prefix.parts:
         raise TemplateSecurityError(f"Invalid {label}: must be under {prefix.as_posix()}/")
 
-    raw_target = workspace_resolved
-    for part in relative_path.parts:
-        raw_target /= part
-        if raw_target.is_symlink():
-            raise TemplateSecurityError(f"Invalid {label}: symlinks are not allowed")
-
-    target = raw_target.resolve(strict=False)
-    allowed_root = workspace_resolved.joinpath(*prefix.parts).resolve(strict=False)
+    raw_allowed_root = os.fspath(workspace_resolved.joinpath(*prefix.parts).absolute())
+    allowed_root = os.path.realpath(raw_allowed_root)
+    raw_target = os.fspath(workspace_resolved.joinpath(*relative_path.parts).absolute())
+    target = os.path.realpath(raw_target)
+    if os.path.normcase(raw_allowed_root) != os.path.normcase(allowed_root) or os.path.normcase(
+        raw_target
+    ) != os.path.normcase(target):
+        raise TemplateSecurityError(f"Invalid {label}: symlinks are not allowed")
     try:
-        allowed_root.relative_to(workspace_resolved)
-        target.relative_to(allowed_root)
+        allowed_within_workspace = os.path.commonpath((os.fspath(workspace_resolved), allowed_root))
+        target_within_allowed = os.path.commonpath((allowed_root, target))
     except ValueError as error:
         raise TemplateSecurityError(
             f"Invalid {label}: path escapes its allowed workspace root"
         ) from error
-    return target
+    if os.path.normcase(allowed_within_workspace) != os.path.normcase(
+        os.fspath(workspace_resolved)
+    ) or os.path.normcase(target_within_allowed) != os.path.normcase(allowed_root):
+        raise TemplateSecurityError(f"Invalid {label}: path escapes its allowed workspace root")
+    return Path(target)

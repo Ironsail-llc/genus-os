@@ -15,6 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from robothor.engine.sanitize import sanitize_log
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    trusted_directory,
+    validate_identifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,49 @@ MANIFEST_DIR = Path(
 )
 
 
+def _catalog_bundle_for_agent(agent_id: str) -> Path | None:
+    """Resolve an ID to a bundle discovered under the trusted local catalog.
+
+    The URL value is validated as an identifier and used only for equality
+    against directory entries.  It is never interpolated into a filesystem
+    path.  This is intentionally stricter than consulting mutable install
+    records, whose source paths are provenance rather than authorization.
+    """
+
+    from robothor.templates.catalog import Catalog
+
+    safe_agent_id = validate_identifier(agent_id, label="agent ID")
+    configured_root = Path(Catalog().catalog_dir)
+    if not configured_root.exists():
+        return None
+    catalog_root = trusted_directory(configured_root, label="template catalog")
+
+    for department in catalog_root.iterdir():
+        if department.is_symlink() or not department.is_dir():
+            continue
+        for bundle in department.iterdir():
+            if bundle.name != safe_agent_id or bundle.is_symlink() or not bundle.is_dir():
+                continue
+            candidate = trusted_directory(bundle, label="template bundle")
+            return candidate
+    return None
+
+
+def _has_agent_manifest(agent_id: str) -> bool:
+    """Check the canonical manifest root without trusting installed.yaml paths."""
+
+    safe_agent_id = validate_identifier(agent_id, label="installed agent ID")
+    if not MANIFEST_DIR.exists():
+        return False
+    manifest_root = trusted_directory(MANIFEST_DIR, label="agent manifest root")
+    manifest = contained_path(
+        manifest_root,
+        f"{safe_agent_id}.yaml",
+        label="installed agent manifest",
+    )
+    return manifest.is_file()
+
+
 class InstallRequest(BaseModel):
     slug: str
     variables: dict[str, str] = {}
@@ -57,7 +106,7 @@ class UpdateRequest(BaseModel):
 
 
 @router.get("")
-def list_installed_agents():
+def list_installed_agents() -> dict[str, object]:
     """List all installed agents with version and status info."""
     try:
         from robothor.templates.instance import InstanceConfig
@@ -70,23 +119,30 @@ def list_installed_agents():
     # Enrich with manifest data
     agents = []
     for agent_id, meta in installed.items():
+        if not isinstance(meta, dict):
+            logger.warning("Skipping malformed installed-agent record")
+            continue
+        try:
+            safe_agent_id = validate_identifier(agent_id, label="installed agent ID")
+            has_manifest = _has_agent_manifest(safe_agent_id)
+        except TemplateSecurityError:
+            logger.warning("Skipping installed-agent record with unsafe ID or manifest path")
+            continue
         agent_info = {
-            "agent_id": agent_id,
+            "agent_id": safe_agent_id,
             "version": meta.get("version", "unknown"),
             "installed_at": meta.get("installed_at", ""),
             "source": meta.get("source", ""),
             "department": meta.get("department", ""),
         }
-        # Check if manifest exists
-        manifest_path = MANIFEST_DIR / f"{agent_id}.yaml"
-        agent_info["has_manifest"] = manifest_path.exists()
+        agent_info["has_manifest"] = has_manifest
         agents.append(agent_info)
 
     return {"agents": agents, "count": len(agents)}
 
 
 @router.post("/install")
-def install_agent(req: InstallRequest):
+def install_agent(req: InstallRequest) -> dict[str, object]:
     """Install an agent from the Programmatic Resources hub."""
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
@@ -115,12 +171,12 @@ def install_agent(req: InstallRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Install failed for %s: %s", sanitize_log(req.slug), e)
+        logger.error("Install failed for %s: %s", sanitize_log(req.slug), sanitize_log(e))
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.post("/{agent_id}/update")
-def update_agent(agent_id: str):
+def update_agent(agent_id: str) -> dict[str, object]:
     """Update an installed agent to the latest version."""
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
@@ -151,12 +207,12 @@ def update_agent(agent_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Update failed for %s: %s", sanitize_log(agent_id), e)
+        logger.error("Update failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.delete("/{agent_id}")
-def remove_agent(agent_id: str):
+def remove_agent(agent_id: str) -> dict[str, object]:
     """Remove an installed agent."""
     try:
         from robothor.templates.installer import remove
@@ -164,18 +220,27 @@ def remove_agent(agent_id: str):
         remove(agent_id)
         return {"status": "removed", "agent_id": agent_id}
     except Exception as e:
-        logger.error("Remove failed for %s: %s", sanitize_log(agent_id), e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("Remove failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
+        raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.get("/{agent_id}/readiness")
-def check_readiness(agent_id: str):
+def check_readiness(agent_id: str) -> dict[str, object]:
     """Check hub readiness score for an agent."""
     try:
+        from dataclasses import asdict
+
         from robothor.templates.description_optimizer import score_hub_readiness
 
-        score = score_hub_readiness(agent_id)
-        return {"agent_id": agent_id, "readiness": score}
+        bundle = _catalog_bundle_for_agent(agent_id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="Local agent template not found")
+        report = score_hub_readiness(bundle)
+        return {"agent_id": agent_id, "readiness": asdict(report)}
+    except TemplateSecurityError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Readiness check failed for %s: %s", sanitize_log(agent_id), e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("Readiness check failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
+        raise HTTPException(status_code=500, detail="internal error") from e
