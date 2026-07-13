@@ -22,6 +22,8 @@ Adapter YAML format::
     # env: { TOKEN: "${MY_TOKEN}" }
     timeout_seconds: 30
     agents: ["main"]           # or ["*"] for all agents
+    # protocol: "2026-07-28"   # optional — opt this server into the stateless
+    #                          # MCP core once it has upgraded (default legacy)
 """
 
 from __future__ import annotations
@@ -57,6 +59,8 @@ class AdapterConfig:
     # Common
     timeout_seconds: int = 30
     agents: list[str] = field(default_factory=lambda: ["*"])
+    # "legacy" (default) or "2026-07-28" (stateless) — see mcp_client.py.
+    protocol: str = "legacy"
     # Metadata (optional, used by extension management API)
     version: str = ""
     author: str = ""
@@ -100,6 +104,7 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         env=_resolve_dict(data.get("env", {})),
         timeout_seconds=int(data.get("timeout_seconds", 30)),
         agents=data.get("agents", ["*"]),
+        protocol=data.get("protocol", "legacy"),
         version=data.get("version", ""),
         author=data.get("author", ""),
         description=data.get("description", ""),
