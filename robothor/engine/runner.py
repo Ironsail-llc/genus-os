@@ -408,6 +408,16 @@ class AgentRunner:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("completion contract event log failed: %s", exc)
+                if cc_mode == "alert":
+                    # Middle rung: the claim stands, but the operator hears about it.
+                    from robothor.engine.feature_flags import notify_guardrail_alert
+
+                    notify_guardrail_alert(
+                        guardrail_name="completion_contract",
+                        agent_id=run.agent_id,
+                        reason=reason,
+                        tenant_id=getattr(run, "tenant_id", "") or "",
+                    )
                 if cc_mode == "enforce":
                     try:
                         from robothor.crm import dal
