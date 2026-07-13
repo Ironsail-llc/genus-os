@@ -1,3 +1,9 @@
+## [1.15.0](https://github.com/Ironsail-llc/genus-os/compare/v1.14.5...v1.15.0) (2026-07-13)
+
+### Features
+
+* **ops:** replicate backups offsite with verification and paging ([#192](https://github.com/Ironsail-llc/genus-os/issues/192)) ([1717e00](https://github.com/Ironsail-llc/genus-os/commit/1717e00d34cc9dd29318077b54773be304749615)), closes [#179](https://github.com/Ironsail-llc/genus-os/issues/179)
+
 ## [1.14.5](https://github.com/Ironsail-llc/genus-os/compare/v1.14.4...v1.14.5) (2026-07-13)
 
 ### Bug Fixes
