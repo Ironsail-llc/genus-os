@@ -22,9 +22,14 @@ flags:
 
   - name: ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-14"
-    soak: zero observed events 2026-07-02 → 2026-07-13; flip #2, 24h after injection-scan
+    mode: enforce
+    soak: >
+      flipped 2026-07-13. NOTE the original "zero events" evidence was vacuous —
+      observe mode wrote no guardrail-event rows at all until #187. The real
+      evidence is journald: zero "exec_allowlist would block" warnings across
+      14 days. Blast radius is narrow: only auto-agent and email-responder
+      define an exec_allowlist, and their allowlisted commands are simple
+      single invocations that never need shell metacharacters.
 
   - name: ROBOTHOR_APPROVAL_MODE
     owner: ops
