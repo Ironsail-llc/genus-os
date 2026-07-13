@@ -69,3 +69,24 @@ Set `ROBOTHOR_APPROVAL_MODE=observe` (or unset both env vars to fully
 disable the gate) and restart the daemon. This immediately reverts to
 auto-approving escalations when no approver is reachable — the same
 legacy behavior as before this feature existed.
+
+## Status 2026-07-13: the gate is INERT, not clean
+
+A soak audit found **zero escalations have ever occurred** — and the reason is
+not that agents behave well. No agent manifest sets `human_approval_tools`, so
+`runner.py` never calls `set_human_approval_patterns()`, `_human_approval_patterns`
+stays empty for every agent, and `_check_human_approval()` returns an empty
+result for every tool call. **Nothing can escalate, so nothing can be approved
+or denied.**
+
+Consequences:
+- `ROBOTHOR_APPROVAL_MODE=enforce` today would be a **no-op** — zero blast
+  radius, but also zero protection. Promoting it would be security theater.
+- Prerequisite 2 above ("real signal, not silence because nothing ever
+  escalates") is the binding one, and it is unmet.
+
+To make the gate real, decide which tools genuinely warrant a human in the
+loop (candidates: outbound email/SMS, `exec`, payments, calendar writes on
+external attendees, destructive CRM mutations), add them to the relevant
+agents' `human_approval_tools`, verify one real escalation completes the
+Telegram approve/deny round-trip, then soak 48h and promote.
