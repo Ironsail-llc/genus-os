@@ -1,3 +1,9 @@
+## [1.15.5](https://github.com/Ironsail-llc/genus-os/compare/v1.15.4...v1.15.5) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce the human-approval gate, now that it is real ([#197](https://github.com/Ironsail-llc/genus-os/issues/197)) ([16b84ab](https://github.com/Ironsail-llc/genus-os/commit/16b84ab5d9357bb570f9473cb30b2b7da4e81ea7)), closes [#186](https://github.com/Ironsail-llc/genus-os/issues/186)
+
 ## [1.15.4](https://github.com/Ironsail-llc/genus-os/compare/v1.15.3...v1.15.4) (2026-07-13)
 
 ### Bug Fixes
