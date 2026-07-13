@@ -16,7 +16,7 @@ Your infrastructure. Your data. Your rules.
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/tests-9%2C000%2B%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-11%2C000%2B%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---

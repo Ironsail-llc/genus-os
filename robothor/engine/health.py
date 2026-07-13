@@ -597,8 +597,8 @@ def create_health_app(
             logger.warning("Failed to load review summary for %s: %s", sanitize_log(agent_id), e)
             return {"agentId": agent_id, "count": 0, "error": "internal error"}
 
-    @app.get("/api/kairos/dreams")
-    async def kairos_dreams(limit: int = 10) -> dict[str, Any]:
+    @app.get("/api/dreams")
+    async def autodream_runs(limit: int = 10) -> dict[str, Any]:
         """Get recent autoDream runs."""
         limit = max(1, min(limit, 1000))
         from robothor.db.connection import get_connection

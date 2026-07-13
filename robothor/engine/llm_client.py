@@ -12,19 +12,15 @@ Two coexisting surfaces, kept separate on purpose:
 
    - :func:`llm_call` — single-model call with optional retry. (Used by
      ``buddy_critic``.)
-   - :func:`llm_call_with_fallback` — multi-model fallback (non-streaming).
-   - :func:`llm_call_streaming` — multi-model fallback with streaming.
 
-   These are intentionally simpler than ``LLMClient`` (no watchdog/cost/cache
-   wiring) and serve callers that just need a quick completion.
+   This is intentionally simpler than ``LLMClient`` (no watchdog/cost/cache
+   wiring) and serves callers that just need a quick completion.
 
 Convergence note (Phase A / Slice 4): an audit found the originally-anticipated
 "migrate planner/verifier/compaction/PDF onto a shared client" never happened —
-in practice only ``buddy_critic`` calls :func:`llm_call`, and
-:func:`llm_call_with_fallback` / :func:`llm_call_streaming` currently have **no
-production callers** (tests only). Rather than force-converge two layers with
-different contracts, the split is kept and documented; the two unused fallback
-helpers are removal candidates once confirmed dead long-term.
+in practice only ``buddy_critic`` calls :func:`llm_call`. The unused
+``llm_call_with_fallback`` / ``llm_call_streaming`` helpers were removed
+2026-07-13 after a year-class soak with no production callers.
 """
 
 from __future__ import annotations
@@ -66,10 +62,6 @@ STREAM_CHUNK_TIMEOUT = 90
 # the whole request. Ollama gets more headroom for cold-start loads.
 LLM_REQUEST_TIMEOUT = 120
 LLM_REQUEST_TIMEOUT_OLLAMA = 600
-
-
-class AllModelsFailedError(Exception):
-    """All models in a fallback chain failed."""
 
 
 def _safe_token_count(usage: Any, attr: str) -> int:
@@ -155,173 +147,6 @@ async def llm_call(
         retryable_exceptions=_RETRYABLE_EXCEPTIONS,
         backoff_base=1.0,
     )
-
-
-async def llm_call_with_fallback(
-    messages: list[dict[str, Any]],
-    *,
-    models: list[str],
-    tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.3,
-    timeout_budget: int | float = 180,
-    max_tokens: int | None = None,
-) -> Any:
-    """Multi-model fallback LLM call (non-streaming).
-
-    Iterates through *models* in order, moving to the next on failure.
-
-    Args:
-        messages: Chat messages in OpenAI format.
-        models: Ordered list of model identifiers to try.
-        tools: Optional tool definitions (OpenAI function-calling format).
-        temperature: Sampling temperature.
-        timeout_budget: Total wall-clock seconds shared across all models.
-        max_tokens: Optional max output tokens.
-
-    Returns:
-        The ``litellm.ModelResponse``.
-
-    Raises:
-        AllModelsFailedError: When every model in the chain has failed.
-    """
-    if not models:
-        raise AllModelsFailedError("No models provided")
-
-    per_model_timeout = max(30, int(timeout_budget) // len(models))
-    last_error: Exception | None = None
-
-    for model in models:
-        t0 = _time.monotonic()
-        try:
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-            }
-            if tools:
-                kwargs["tools"] = tools
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-
-            call = codex_acompletion if is_codex_model(model) else litellm.acompletion
-            resp = await asyncio.wait_for(call(**kwargs), timeout=per_model_timeout)
-            LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            usage = getattr(resp, "usage", None)
-            if usage:
-                LLM_TOKENS_TOTAL.labels(model=model, direction="input").inc(
-                    _safe_token_count(usage, "prompt_tokens")
-                )
-                LLM_TOKENS_TOTAL.labels(model=model, direction="output").inc(
-                    _safe_token_count(usage, "completion_tokens")
-                )
-            return resp
-        except TimeoutError:
-            LLM_CALLS_TOTAL.labels(model=model, status="error").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            logger.warning("Model %s timed out after %ds, trying next", model, per_model_timeout)
-            last_error = TimeoutError(f"Model {model} timed out after {per_model_timeout}s")
-        except Exception as e:
-            LLM_CALLS_TOTAL.labels(model=model, status="error").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            logger.warning("Model %s failed: %s, trying next", model, e)
-            last_error = e
-
-    raise AllModelsFailedError(f"All models failed. Last error: {last_error}") from last_error
-
-
-async def llm_call_streaming(
-    messages: list[dict[str, Any]],
-    *,
-    models: list[str],
-    tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.3,
-    timeout_budget: int | float = 180,
-    max_tokens: int | None = None,
-    on_chunk: Callable[[Any], Awaitable[None]] | None = None,
-) -> list[Any]:
-    """Streaming multi-model fallback LLM call.
-
-    Same fallback semantics as :func:`llm_call_with_fallback`, but requests
-    ``stream=True`` and optionally invokes *on_chunk* for each chunk.
-
-    Returns a list of all received chunks (for the caller to reconstruct the
-    full response).
-
-    Args:
-        messages: Chat messages in OpenAI format.
-        models: Ordered list of model identifiers to try.
-        tools: Optional tool definitions (OpenAI function-calling format).
-        temperature: Sampling temperature.
-        timeout_budget: Total wall-clock seconds shared across all models.
-        max_tokens: Optional max output tokens.
-        on_chunk: Optional async callback invoked with each stream chunk.
-
-    Returns:
-        List of stream chunks.
-
-    Raises:
-        AllModelsFailedError: When every model in the chain has failed.
-    """
-    if not models:
-        raise AllModelsFailedError("No models provided")
-
-    per_model_timeout = max(30, int(timeout_budget) // len(models))
-    last_error: Exception | None = None
-
-    for model in models:
-        t0 = _time.monotonic()
-        try:
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "stream": True,
-            }
-            if tools:
-                kwargs["tools"] = tools
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-
-            async def _consume_stream(
-                _kw: dict[str, Any] = kwargs,
-                _model: str = model,
-            ) -> list[Any]:
-                if is_codex_model(_model):
-                    resp = await codex_acompletion(**_kw)
-                    if on_chunk is not None:
-                        await on_chunk(resp)
-                    return [resp]
-                s = await litellm.acompletion(**_kw)
-                collected: list[Any] = []
-                async for chunk in s:
-                    collected.append(chunk)
-                    if on_chunk is not None:
-                        await on_chunk(chunk)
-                return collected
-
-            chunks = await asyncio.wait_for(_consume_stream(), timeout=per_model_timeout)
-            LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            return chunks
-        except TimeoutError:
-            LLM_CALLS_TOTAL.labels(model=model, status="error").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            logger.warning(
-                "Model %s timed out after %ds (streaming), trying next",
-                model,
-                per_model_timeout,
-            )
-            last_error = TimeoutError(f"Model {model} timed out after {per_model_timeout}s")
-        except Exception as e:
-            LLM_CALLS_TOTAL.labels(model=model, status="error").inc()
-            LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
-            logger.warning("Model %s failed (streaming): %s, trying next", model, e)
-            last_error = e
-
-    raise AllModelsFailedError(
-        f"All models failed (streaming). Last error: {last_error}"
-    ) from last_error
 
 
 class LLMClient:
