@@ -70,6 +70,25 @@ class TestGetModelLimits:
         assert limits.max_input_tokens == 128_000
         assert limits.max_output_tokens == 8_192
 
+    def test_dated_response_slug_resolves_to_registry_entry(self):
+        """OpenRouter responses carry a dated slug (e.g. xiaomi/mimo-v2.5-20260422)
+        without the openrouter/ prefix. Cost fallback and context sizing look
+        these up — they must resolve to the curated entry, not the 128K/zero-cost
+        fallback."""
+        base = get_model_limits("openrouter/xiaomi/mimo-v2.5")
+        assert base is not _FALLBACK
+        assert get_model_limits("xiaomi/mimo-v2.5-20260422") == base
+        assert get_model_limits("openrouter/xiaomi/mimo-v2.5-20260422") == base
+        pro = get_model_limits("openrouter/xiaomi/mimo-v2.5-pro")
+        assert get_model_limits("xiaomi/mimo-v2.5-pro-20260422") == pro
+
+    def test_unprefixed_response_slug_resolves(self):
+        """A bare provider/model slug from a response resolves to its
+        openrouter/-prefixed registry entry."""
+        assert get_model_limits("xiaomi/mimo-v2.5") == get_model_limits(
+            "openrouter/xiaomi/mimo-v2.5"
+        )
+
     def test_limits_are_frozen(self):
         limits = get_model_limits("openrouter/anthropic/claude-sonnet-4.6")
         assert isinstance(limits, ModelLimits)

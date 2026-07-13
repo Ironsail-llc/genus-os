@@ -352,13 +352,23 @@ class TestModelPickerRegistry:
                 f"AVAILABLE_MODELS[{display_name!r}] = {model_id!r} not found in _MODEL_REGISTRY"
             )
 
-    def test_sonnet_uses_openrouter_prefix(self):
+    def test_picker_is_openrouter_only(self):
+        """Operator policy 2026-07-07: OpenAI account blocked — codex/* is dead.
+
+        Every picker entry must route through OpenRouter so no selection can
+        land on the banned OpenAI subscription auth.
+        """
         from robothor.engine.telegram import AVAILABLE_MODELS
 
-        sonnet_id = AVAILABLE_MODELS["Claude Sonnet 4.6"]
-        assert sonnet_id.startswith("openrouter/"), (
-            f"Sonnet should use openrouter/ prefix, got {sonnet_id!r}"
-        )
+        for display_name, model_id in AVAILABLE_MODELS.items():
+            assert model_id.startswith("openrouter/"), (
+                f"AVAILABLE_MODELS[{display_name!r}] = {model_id!r} is not an openrouter model"
+            )
+
+    def test_fleet_primary_in_picker(self):
+        from robothor.engine.telegram import AVAILABLE_MODELS
+
+        assert "openrouter/xiaomi/mimo-v2.5" in AVAILABLE_MODELS.values()
 
     def test_qwen_removed_from_picker(self):
         from robothor.engine.telegram import AVAILABLE_MODELS

@@ -144,11 +144,15 @@ TEXT_EXTENSIONS = {
 
 # Models available for /model selection (display name → litellm model id)
 AVAILABLE_MODELS: dict[str, str] = {
-    "GPT-5.5 (subscription)": "codex/gpt-5.5",
-    "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
-    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
-    "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
+    # OpenRouter-only (operator policy 2026-07-07): the OpenAI account was
+    # blocked, so codex/* auth is dead — no picker entry may route there.
+    # MiMo V2.5 Pro is the fleet-wide primary; the premium entries are
+    # operator-selectable escalations billed through the same OpenRouter key.
+    "MiMo V2.5": "openrouter/xiaomi/mimo-v2.5",
     "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
+    "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
+    "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
+    "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
 }
 
 # Reverse lookup: model id → display name
