@@ -45,9 +45,15 @@ flags:
     mode: observe
     planned_promotion: "2026-07-16"
     soak: >
-      363 observes triaged 2026-07-13: all legit host-side exec from four
-      host-trusted agents, now opted out via manifest `sandbox: host`.
-      Enforce after 48h clean re-soak (expected zero events).
+      363 observes triaged 2026-07-13: all legitimate host-side exec (local
+      Postgres over the Unix socket, brain/ status files, localhost curls)
+      from four host-trusted agents, now opted out via `sandbox: host` in the
+      v2 block. Zero events since. GATE: 48h clean re-soak, then enforce.
+      Read the events, not a simulation — `_resolve_sandbox_decision` against a
+      *manifest* config says auto-agent would be Dockerized, but its 60 runs
+      are sub-agent spawns with a restricted tool set and they log no events.
+      The observe events are ground truth: the engine records exactly the runs
+      it would sandbox, so a clean 48h means enforce is a genuine no-op.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops

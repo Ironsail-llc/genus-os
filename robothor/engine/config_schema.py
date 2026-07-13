@@ -68,7 +68,10 @@ _KNOWN_GUARDRAILS = frozenset(
 
 _KNOWN_DIFFICULTY_CLASSES = frozenset({"", "simple", "moderate", "complex"})
 
-_KNOWN_SANDBOX_MODES = frozenset({"local", "docker"})
+# "host" is the explicit opt-out from sandbox-by-default for host-trusted
+# agents — honored by runner._resolve_sandbox_decision and documented in
+# docs/agents/schema.yaml. RBAC still gates their tool calls.
+_KNOWN_SANDBOX_MODES = frozenset({"local", "docker", "host"})
 
 _KNOWN_DELIVERY_MODES = frozenset({"none", "announce", "summary", "full"})
 
