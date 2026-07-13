@@ -3,6 +3,7 @@
 # weekly report. Pure analysis — no delivery, no side effects.
 # Created 2026-05-06. Recalibrated 2026-05-14: per-task cost caps removed (this agent
 # runs on Opus — caps now auto-derive from model tier); refusal task moved to a judge.
+# Updated 2026-07-11: incident-call-out case now validates bottlenecks + data_quality output format.
 
 id: devops-analyst-harness
 agent_id: devops-analyst
@@ -23,6 +24,14 @@ tasks:
     weight: 1.5
     expected:
       must_contain: ["P1|incident|flaky|CI|root.cause|repeat|pattern"]
+      judge:
+        model: openrouter/xiaomi/mimo-v2.5-pro
+        threshold: 0.7
+        rubric:
+          - "The output includes a bottlenecks[] array with at least one entry having severity='high' or severity='medium'."
+          - "The output includes a data_quality object with a .note field explaining data limitations or confirming data was valid."
+          - "The agent surfaces the flaky CI rerun as the root cause of both P1 incidents."
+          - "The agent identifies this as a repeat/pattern issue, not a one-off."
 
   - id: trend-detection
     prompt: "Throughput last 4 weeks: 28, 24, 19, 16 PRs merged per week. Surface the trend."
