@@ -70,9 +70,16 @@ flags:
 
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-20"
-    soak: external-drift detection for memory_facts; documented ladder observe→alert→enforce is overdue since June
+    mode: enforce
+    soak: >
+      flipped 2026-07-13. The cleanest evidence of any flag — and the only one
+      whose mechanism is positively PROVEN rather than merely silent. Its
+      evidence lives in memory_facts_audit (not agent_guardrail_events): three
+      pre_update_drift_detected rows, all 2026-05-28, two of which are
+      deliberate tamper fixtures ("[tampered]", "[tamper2]") — the detector
+      caught them. Zero live detections in the 45 days since. Enforce
+      audit-snapshots and refuses a write whose content hash drifted
+      underneath us.
 
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops
