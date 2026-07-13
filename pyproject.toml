@@ -36,7 +36,7 @@ dependencies = [
     # fixed in 1.61.17). No upper cap below 2.0: litellm 1.84+ relaxed its
     # transitive aiohttp pin again, so the latest 1.x (1.87.0) resolves cleanly
     # with aiohttp>=3.13.4.
-    "litellm>=1.61.17,<2.0",
+    "litellm>=1.84.0,<2.0",
     "aiohttp>=3.14.1",
     "aiogram~=3.10",
     "apscheduler~=3.10",
