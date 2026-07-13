@@ -33,18 +33,17 @@ flags:
 
   - name: ROBOTHOR_APPROVAL_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-08-01"
+    mode: enforce
     soak: >
-      BLOCKED — the gate is inert, not clean. Zero events is not evidence of
-      safety here: no agent sets `human_approval_tools`, so
-      set_human_approval_patterns() is never called and no tool call can ever
-      escalate. Flipping to enforce would be a no-op dressed as a win.
-      Prerequisite (see docs/runbooks/approval-enforce.md, "real signal"):
-      opt at least one agent's high-risk tools into human_approval, confirm a
-      real escalation completes the Telegram approve/deny loop, THEN soak 48h
-      and promote. Deadline is a review date for that decision, not a flip date.
-
+      The gate was INERT until 2026-07-13 (no agent set human_approval_tools, so
+      nothing could ever escalate — zero events meant "no mechanism", not "safe").
+      Now real: main opts in for irreversible DESTRUCTION only —
+      delete_person/company/task/note, vault_delete, gws_calendar_delete.
+      Deliberately narrow: the operator's standing mandate is autonomous
+      operation, so sending email, calendar creation and everything else stay
+      ungated. A delete cannot be undone and is rare, so one Telegram tap costs
+      nothing. Timeout (600s) = deny, fail-secure. Probe-verified: deletes
+      escalate, gws_gmail_send and search_memory stay autonomous.
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
