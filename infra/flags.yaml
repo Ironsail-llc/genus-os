@@ -17,9 +17,8 @@ flags:
 
   - name: ROBOTHOR_INJECTION_SCAN_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-13"
-    soak: zero observed events 2026-07-02 → 2026-07-13; flip #1 of the clean three
+    mode: enforce
+    soak: flipped 2026-07-13 after zero observed events 2026-07-02 → 2026-07-13
 
   - name: ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE
     owner: ops
