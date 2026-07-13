@@ -1,3 +1,9 @@
+## [1.15.4](https://github.com/Ironsail-llc/genus-os/compare/v1.15.3...v1.15.4) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** worker runs must keep the agent's guardrails ([#196](https://github.com/Ironsail-llc/genus-os/issues/196)) ([a590f48](https://github.com/Ironsail-llc/genus-os/commit/a590f48b20009792ed6f1283d49cadda8e2a01bd))
+
 ## [1.15.3](https://github.com/Ironsail-llc/genus-os/compare/v1.15.2...v1.15.3) (2026-07-13)
 
 ### Bug Fixes
