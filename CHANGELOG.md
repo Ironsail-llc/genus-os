@@ -1,3 +1,9 @@
+## [1.11.0](https://github.com/Ironsail-llc/genus-os/compare/v1.10.1...v1.11.0) (2026-07-13)
+
+### Features
+
+* **engine:** completion contracts + accretion gate live caller ([#172](https://github.com/Ironsail-llc/genus-os/issues/172)) ([e93b267](https://github.com/Ironsail-llc/genus-os/commit/e93b267b90ad6016ec172f4300fe8466d9a91bfd))
+
 ## [1.10.1](https://github.com/Ironsail-llc/genus-os/compare/v1.10.0...v1.10.1) (2026-07-13)
 
 ### Bug Fixes
