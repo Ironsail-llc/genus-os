@@ -658,3 +658,124 @@ class TestInPlaceGoalEdits:
         payload = next(p for p in params if isinstance(p, str) and "metric_targets" in p)
         assert "passes-its-job" in payload
         assert "low-error" not in payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_step_exists / benchmark_result_exists — backs tool_output/benchmark_run
+# evidence validation in session_goal.validate_evidence (PR-3a).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRunStepExists:
+    @patch("robothor.crm.dal.get_connection")
+    def test_true_when_row_found(self, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=(1,))
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import run_step_exists
+
+        assert (
+            run_step_exists("3fa85f64-5717-4562-b3fc-2c963f66afa6", 3, tenant_id="default") is True
+        )
+        sql = mock_cur.execute.call_args[0][0]
+        params = mock_cur.execute.call_args[0][1]
+        assert "agent_run_steps" in sql
+        assert "3fa85f64-5717-4562-b3fc-2c963f66afa6" in params
+        assert 3 in params
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_filters_by_tenant_via_agent_runs_join(self, mock_get_conn):
+        # agent_run_steps has no tenant column — must join agent_runs and
+        # filter on agent_runs.tenant_id so a step under another tenant's
+        # run never validates.
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=(1,))
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import run_step_exists
+
+        run_step_exists("3fa85f64-5717-4562-b3fc-2c963f66afa6", 3, tenant_id="tenant-a")
+        sql = mock_cur.execute.call_args[0][0]
+        params = mock_cur.execute.call_args[0][1]
+        assert "agent_runs" in sql
+        assert "tenant_id" in sql
+        assert "tenant-a" in params
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_false_when_row_under_other_tenant(self, mock_get_conn):
+        # The join+filter returns no row for a step owned by another tenant.
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=None)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import run_step_exists
+
+        assert (
+            run_step_exists("3fa85f64-5717-4562-b3fc-2c963f66afa6", 3, tenant_id="other-tenant")
+            is False
+        )
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_false_when_no_row(self, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=None)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import run_step_exists
+
+        assert (
+            run_step_exists("3fa85f64-5717-4562-b3fc-2c963f66afa6", 99, tenant_id="default")
+            is False
+        )
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_false_when_run_id_empty(self, mock_get_conn):
+        # No DB round trip for an empty run_id — avoid a bogus UUID query.
+        from robothor.crm.dal import run_step_exists
+
+        assert run_step_exists("", 0, tenant_id="default") is False
+        mock_get_conn.assert_not_called()
+
+
+class TestBenchmarkResultExists:
+    @patch("robothor.crm.dal.get_connection")
+    def test_true_when_row_found(self, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=(1,))
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import benchmark_result_exists
+
+        assert benchmark_result_exists(42, tenant_id="default") is True
+        sql = mock_cur.execute.call_args[0][0]
+        params = mock_cur.execute.call_args[0][1]
+        assert "benchmark_results" in sql
+        assert 42 in params
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_filters_by_tenant(self, mock_get_conn):
+        # benchmark_results HAS a tenant_id column — filter on it directly.
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=(1,))
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import benchmark_result_exists
+
+        benchmark_result_exists(42, tenant_id="tenant-a")
+        sql = mock_cur.execute.call_args[0][0]
+        params = mock_cur.execute.call_args[0][1]
+        assert "tenant_id" in sql
+        assert "tenant-a" in params
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_false_when_row_under_other_tenant(self, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=None)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import benchmark_result_exists
+
+        assert benchmark_result_exists(42, tenant_id="other-tenant") is False
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_false_when_no_row(self, mock_get_conn):
+        mock_conn, mock_cur = _make_mock_conn(fetchone_return=None)
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import benchmark_result_exists
+
+        assert benchmark_result_exists(999, tenant_id="default") is False
