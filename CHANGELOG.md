@@ -1,3 +1,13 @@
+## [1.14.0](https://github.com/Ironsail-llc/genus-os/compare/v1.13.2...v1.14.0) (2026-07-13)
+
+### Features
+
+* **agents:** document sandbox host opt-out in the manifest schema ([#185](https://github.com/Ironsail-llc/genus-os/issues/185)) ([13e251c](https://github.com/Ironsail-llc/genus-os/commit/13e251c81a59fd76f13960598447de57d00c3844))
+
+### Bug Fixes
+
+* **docs:** record that the human-approval gate is inert, not soaked clean ([#186](https://github.com/Ironsail-llc/genus-os/issues/186)) ([ca44448](https://github.com/Ironsail-llc/genus-os/commit/ca444481f3ffb367f1a0480457fa2c93d18f1425)), closes [#3](https://github.com/Ironsail-llc/genus-os/issues/3)
+
 ## [1.13.2](https://github.com/Ironsail-llc/genus-os/compare/v1.13.1...v1.13.2) (2026-07-13)
 
 ### Bug Fixes
