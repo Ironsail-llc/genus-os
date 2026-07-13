@@ -455,6 +455,15 @@ class GuardrailEngine:
                 command[:100],
             )
             observed_reason = reason
+            if mode == "alert":
+                # The middle rung: observe + put it in front of the operator.
+                from robothor.engine.feature_flags import notify_guardrail_alert
+
+                notify_guardrail_alert(
+                    guardrail_name="exec_allowlist",
+                    agent_id=agent_id,
+                    reason=reason,
+                )
 
         for pattern in patterns:
             if pattern.search(command):

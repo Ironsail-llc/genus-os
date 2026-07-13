@@ -18,8 +18,11 @@ are written to disk.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -30,6 +33,13 @@ SymbolicMode = Literal["off", "observe", "enforce"]
 _VALID_SYMBOLIC_MODES = frozenset(("observe", "enforce"))
 # Generic observe→alert→enforce rollout ladder, shared by the Wave-1
 # hardening flags below. Same shape as ``rip_7_enforcement_mode``.
+#
+# "alert" = observe + notify the operator. Consumers call
+# ``notify_guardrail_alert`` when a check would have blocked under enforce;
+# the notification reaches the operator through main's heartbeat. A rung that
+# silently behaved like "observe" would be worse than no rung at all — an
+# operator following the ladder would believe they had escalated when they
+# had not. ``test_alert_mode_contract`` pins this.
 EnforcementMode = Literal["off", "observe", "alert", "enforce"]
 _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 
@@ -302,3 +312,48 @@ def injection_scan_mode() -> EnforcementMode:
     aborts the run. Default off.
     """
     return _enforcement_mode("ROBOTHOR_INJECTION_SCAN_ENABLED", "ROBOTHOR_INJECTION_SCAN_MODE")
+
+
+def notify_guardrail_alert(
+    *,
+    guardrail_name: str,
+    agent_id: str,
+    reason: str,
+    tenant_id: str = "",
+) -> bool:
+    """Notify the operator that a guardrail in ``alert`` mode would have blocked.
+
+    This is what makes the middle rung of the observe→alert→enforce ladder
+    real: ``observe`` records evidence silently, ``alert`` also puts it in
+    front of the operator (via the agent-to-agent notification surface, which
+    main's heartbeat surfaces), and ``enforce`` acts on it.
+
+    Best-effort: a failed notification must never break the run — but it is
+    logged at error level, because an alert nobody receives is the failure
+    mode this rung exists to prevent.
+    """
+    try:
+        from robothor.constants import DEFAULT_TENANT
+        from robothor.crm.dal import send_notification
+
+        send_notification(
+            from_agent="engine",
+            to_agent="main",
+            notification_type="alert",
+            subject=f"Guardrail would block: {guardrail_name}",
+            body=(
+                f"{guardrail_name} is in alert mode and would have BLOCKED this "
+                f"call under enforce.\n\nAgent: {agent_id}\nReason: {reason}\n\n"
+                f"Promote to enforce (docs/runbooks/GUARDRAIL_FLIPS.md) or fix "
+                f"the agent behavior."
+            ),
+            tenant_id=tenant_id or DEFAULT_TENANT,
+        )
+        return True
+    except Exception as exc:
+        logger.error(
+            "guardrail %s is in alert mode but the operator notification failed: %s",
+            guardrail_name,
+            exc,
+        )
+        return False
