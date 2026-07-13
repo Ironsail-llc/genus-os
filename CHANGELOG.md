@@ -1,3 +1,9 @@
+## [1.14.1](https://github.com/Ironsail-llc/genus-os/compare/v1.14.0...v1.14.1) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** persist observe-mode guardrail findings as evidence ([#187](https://github.com/Ironsail-llc/genus-os/issues/187)) ([d414a9a](https://github.com/Ironsail-llc/genus-os/commit/d414a9a3ed40ed1570c60aa73fd275b58332bf3d)), closes [#2](https://github.com/Ironsail-llc/genus-os/issues/2)
+
 ## [1.14.0](https://github.com/Ironsail-llc/genus-os/compare/v1.13.2...v1.14.0) (2026-07-13)
 
 ### Features
