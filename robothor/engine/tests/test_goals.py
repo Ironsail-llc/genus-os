@@ -612,7 +612,11 @@ class TestCorrectiveActions:
             weight=2.0,
             window_days=7,
         )
-        actions = suggest_corrective_actions(breach)
+        # Exercise the built-in production fallback explicitly. Local developer
+        # checkouts usually load the YAML playbook, while packaged/CI runtimes
+        # may not have it at ROBOTHOR_WORKSPACE.
+        with patch("robothor.engine.goals._load_templates", return_value={}):
+            actions = suggest_corrective_actions(breach)
         assert actions, "efficiency breach should still return the default playbook"
         joined = " ".join(actions).lower()
         # Should talk about prompt/tool/iteration diagnostics, NOT caps.
