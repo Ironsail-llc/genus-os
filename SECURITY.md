@@ -28,28 +28,36 @@ Programmatic audit access is available via the Bridge API:
 - `GET /api/audit/guardrails` — query guardrail events (blocked/warned/allowed)
 - `GET /api/audit/stats` — aggregated statistics for rolling time windows
 
-### Summary of Controls
+### Summary of Repository Controls
 
-- **Secrets management**: All secrets are SOPS-encrypted and decrypted to tmpfs at runtime. No secrets in environment files or code.
-- **Pre-commit scanning**: Gitleaks runs on every commit to prevent secret leaks.
-- **Dependency scanning**: Dependabot monitors for known vulnerabilities.
-- **Secret scanning**: GitHub push protection blocks commits containing detected secrets.
-- **Access control**: Branch protection requires reviewed PRs with passing CI for all changes to `main`.
-- **Agent guardrails**: 8 execution safety policies (destructive writes, external HTTP, sensitive data, rate limiting, branch protection, exec allowlists, write path restrictions, desktop safety).
-- **Docker sandbox**: Per-run ephemeral containers isolate computer-use agents.
-- **Lifecycle hooks**: Blocking pre-tool-use hooks can prevent tool execution.
-- **Budget enforcement**: Soft token caps with tool schema stripping after exhaustion.
+- **Secrets boundaries**: Helm supports per-workload Vault projections, while
+  systemd deployments can use SOPS, age, and tmpfs. Provisioning, rotation,
+  revocation, and evidence remain deployment responsibilities.
+- **Security gates**: CI scans repository history with Gitleaks, audits Python
+  dependencies without standing exceptions, and blocks critical image findings
+  in the release workflow.
+- **Access control**: Dashboard OIDC, signed service tokens, route-specific
+  scopes, tenant binding, and Engine tool-dispatch authorization are enforced
+  by repository code. IdP configuration and repository rulesets are external.
+- **Agent containment**: Manifest allowlists, execution guardrails, lifecycle
+  hooks, budget limits, and optional per-run container isolation reduce the
+  agent execution boundary; operators must configure least privilege.
+- **Recovery and payment minimization**: Encrypted, checksummed snapshots and
+  token-only client/operational payment contracts are implemented mechanisms,
+  not evidence of a deployed recovery objective or PCI compliance.
 
-## Acknowledged Advisories
+See the controls inventory for exact implementation evidence, limitations, and
+required operator actions. Repository mechanisms alone do not prove that a
+control is operating in a deployed environment.
 
-Advisories that surface in our scanners but for which we have a documented
-disposition (VEX-style). These are reviewed, not silently ignored.
+## Dependency Advisory Policy
 
-| Advisory | Package | Status | Rationale | Revisit when |
-|----------|---------|--------|-----------|--------------|
-| PYSEC-2025-183 / CVE-2025-45768 | pyjwt (all versions, incl. latest 2.12.1) | **Not Affected** | Disputed by the maintainer — the advisory concerns a caller choosing a weak key length, not a defect in the library, so no fixed version exists or is planned. CVSS 3.1 (low). pyjwt is a transitive dependency (`litellm`, `redis`); we never call it directly (`import jwt` / `jwt.encode` / `jwt.decode` appear nowhere in the codebase), so the vulnerable code path does not exist for us. Suppressed in the `pip-audit` step of `.github/workflows/ci.yml`. | A direct pyjwt usage is introduced, or a fixed pyjwt release ships. |
-| CVE-2026-34993 / GHSA-jg22-mg44-37j8 | aiohttp (all versions installable for us) | **Not Affected** | `CookieJar.load()` deserializing untrusted data may allow code execution (CVSS 3.1 Moderate; local, high-complexity, high-privilege). Fixed in aiohttp 3.14.0, which we **cannot install**: `aiogram` hard-caps `aiohttp<3.14` in every release (incl. latest 3.28.2), so the resolver pins aiohttp 3.13.x. We never call `CookieJar.load()` (the symbol appears nowhere in the codebase), so the vulnerable path does not exist for us. aiohttp is transitive (`litellm`, `aiogram`) plus one direct call in `robothor/engine/hook_registry.py`. Suppressed in the `pip-audit` step of `.github/workflows/ci.yml`. | `aiogram` lifts its `aiohttp<3.14` cap (allowing the 3.14.0 fix), or we drop `aiogram`. |
-| CVE-2026-47265 / GHSA-hg6j-4rv6-33pg | aiohttp (all versions installable for us) | **Not Affected** | Cookies set via the per-request `cookies=` parameter are resent after a cross-origin redirect, potentially leaking them (CVSS 4.0 Moderate; exploit maturity unproven). Fixed in aiohttp 3.14.0, blocked by the same `aiogram` `aiohttp<3.14` cap as above. Our only direct aiohttp client (`robothor/engine/hook_registry.py`) POSTs a JSON payload to an operator-configured hook URL and sets **no** `cookies=` parameter, so the vulnerable path does not exist for us. Suppressed in the `pip-audit` step of `.github/workflows/ci.yml`. | `aiogram` lifts its `aiohttp<3.14` cap (allowing the 3.14.0 fix), or we drop `aiogram`. |
+The Python dependency gate runs `pip-audit` without standing advisory
+exceptions. Dependency floors are raised when a fix is available, and any new
+advisory fails CI and release builds until it is remediated. If an advisory
+cannot be fixed immediately, its temporary, time-bounded disposition must be
+documented here and approved through security review; there are currently no
+such exceptions.
 
 ## Scope
 
