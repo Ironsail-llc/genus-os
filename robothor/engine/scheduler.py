@@ -1032,6 +1032,18 @@ def _build_worker_config(agent_config: AgentConfig) -> AgentConfig:
     tools_allowed = w.tools_allowed or agent_config.tools_allowed
 
     return AgentConfig(
+        # SECURITY POSTURE — carried over verbatim. The worker override exists to
+        # change budget and warmup for a drain cycle; it must never quietly relax
+        # what the agent is allowed to do. These were previously omitted, so the
+        # dataclass defaults applied and every worker run executed with ZERO
+        # guardrails and sandbox="local" (2026-07-13).
+        guardrails=agent_config.guardrails,
+        guardrails_opt_out=agent_config.guardrails_opt_out,
+        sandbox=agent_config.sandbox,
+        exec_allowlist=agent_config.exec_allowlist,
+        write_path_allowlist=agent_config.write_path_allowlist,
+        human_approval_tools=agent_config.human_approval_tools,
+        human_approval_timeout=agent_config.human_approval_timeout,
         id=agent_config.id,
         name=agent_config.name,
         description=agent_config.description,
