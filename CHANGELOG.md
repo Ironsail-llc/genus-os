@@ -1,3 +1,9 @@
+## [1.14.5](https://github.com/Ironsail-llc/genus-os/compare/v1.14.4...v1.14.5) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** make cli runs obey the daemon's guardrails ([#191](https://github.com/Ironsail-llc/genus-os/issues/191)) ([a689438](https://github.com/Ironsail-llc/genus-os/commit/a689438a467158110b6b049de5e75969e482d076))
+
 ## [1.14.4](https://github.com/Ironsail-llc/genus-os/compare/v1.14.3...v1.14.4) (2026-07-13)
 
 ### Bug Fixes
