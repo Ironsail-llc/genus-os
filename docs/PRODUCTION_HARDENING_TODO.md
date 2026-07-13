@@ -10,16 +10,17 @@ or that a deployed environment is certified.
 
 ## Delivery status
 
-- **Workspace:** the reviewed hardening path set is on a clean branch based on
-  current `origin/main`; the complete local gate is green.
-- **Pull request:** not opened yet. The clean draft branch is ready, but the
-  local GitHub CLI and HTTPS Git credentials returned `401 Bad credentials` on
-  2026-07-13; SSH has no authorized key. Reauthentication with repository write
-  access is required before the branch can be pushed and the draft PR opened.
+- **Workspace:** the reviewed hardening path set is on a pushed branch based on
+  current `origin/main`. The original complete gate and the post-submission
+  remediation gate are green locally; the refreshed GitHub gates are pending.
+- **Pull request:** draft [#176](https://github.com/Ironsail-llc/genus-os/pull/176)
+  is open. CODEOWNERS validates without errors, independent maintainer/security,
+  operations/recovery, QA/frontend, and application-owner reviews are requested,
+  and GitHub Actions is running. Keep the PR in draft while checks and reviews
+  are pending.
 - **Production:** blocked by every unchecked P0 item below.
-- **Authorization:** prepare and submit the draft PR for review. Do not merge,
-  deploy, promote an image, or change a production environment as part of this
-  work.
+- **Authorization:** the draft PR is submitted for review. Do not merge, deploy,
+  promote an image, or change a production environment as part of this work.
 
 Priority meanings:
 
@@ -120,6 +121,25 @@ that require measured deployment evidence. They are not current service claims.
 - [x] Repair the invalid CODEOWNERS route so this PR requests an independent,
   write-authorized repository maintainer instead of the nonexistent
   `@genusos/maintainers` team.
+- [x] Remediate the dependency inventory exposed by the first draft-PR audit
+  and make regression audits release-blocking.
+  - The reviewed Python lock, root release-tooling lock, and dashboard lock now
+    report zero known vulnerabilities. The two critical and all high/medium
+    findings represented in the default-branch alert inventory are absent from
+    the hardening branch's exact audits.
+  - Vite 8.1.4 and its declared-compatible esbuild 0.28.1 remove the final
+    Windows development-server advisory rather than accepting a standing
+    exception. The unsupported `next-runtime-env` peer is replaced by an
+    explicit, one-value request-time provider; marketplace traffic is fixed to
+    the authenticated same-origin Bridge BFF.
+- [x] Repair isolated CI assumptions revealed by the first draft-PR run: install
+  the TUI extra in every full Python lane and resolve the Bridge capabilities
+  manifest from the checkout instead of a runner-specific home directory.
+- [x] Remediate the draft PR's CodeQL trust-boundary findings with authenticated
+  action validation, environment-only HTTP(S) health targets, manual redirect
+  handling, catalog-discovered agent bundles, canonical realpath/commonpath
+  containment, symlink rejection, explicit resolver roots, and centralized
+  C0/C1-safe log sanitization.
 
 ## P0 implementation/integration completed
 
@@ -172,7 +192,7 @@ open and block a production go-live.
   - Clean-branch result: all 9 workflow files parsed and passed actionlint;
     every external action is pinned to a full commit SHA; product version
     `1.10.0` is consistent; Gitleaks scanned 1.03 GB with no findings; the
-    final 248-path diff matched the reviewed hardening allowlist plus only the
+    original 248-path diff matched the reviewed hardening allowlist plus only the
     narrow pre-commit metadata and CODEOWNERS corrections; the user-owned path
     denylist remained empty.
 - [x] Exercise snapshot create/list/verify/restore-dry-run/prune against a
@@ -191,6 +211,21 @@ open and block a production go-live.
     114 strict schema validations, and kube-linter passed; the encrypted
     snapshot drill completed in 0.40s at 52.5 KiB with verify/restore dry-runs,
     retention, and unsafe-boundary checks passing.
+- [x] Run the focused post-submission remediation gate after dependency, CI, and
+  CodeQL changes.
+  - Result: 4,506 Python tests passed, 27 skipped, and 184 deselected at 64.31%
+    coverage; 241 Bridge tests passed and 2 skipped; Ruff and mypy (605 files)
+    passed; root npm, dashboard pnpm, and Python dependency audits reported zero
+    known vulnerabilities; 46 Vitest files/423 tests, TypeScript, a production
+    build, and 23 isolated standalone Playwright flows passed; all workflows
+    parsed and passed actionlint and immutable-action-pin validation; strict
+    Helm lint passed for all four values layers. The final 268-path branch diff
+    remains within the reviewed hardening set and the user-owned path denylist
+    remains empty.
+- [ ] Confirm the refreshed Python matrix, Bridge, frontend, integration,
+  security, Helm, and production release-gate checks in GitHub Actions.
+- [ ] Confirm the refreshed CodeQL PR gate closes the 29 high and 10 medium
+  findings reported by the first run without suppressing or dismissing alerts.
 - [ ] Confirm both Docker images build in CI. Local Docker validation is not
   available in the current shell because it cannot access the Docker socket.
 
@@ -333,18 +368,24 @@ The implemented boundary deliberately treats two cases separately:
   6. `feat(entity): enforce treasury and payment authority boundaries`;
   7. `ci(release): enforce production gates and align versions`;
   8. `docs(ops): document production and compliance controls`;
-  9. `fix(governance): repair code ownership routing`.
+  9. `fix(governance): repair code ownership routing`;
+  10. `fix(ci): repair and extend production gates`;
+  11. `fix(security): enforce canonical trust boundaries`;
+  12. `fix(deps): eliminate npm advisories and unsupported runtime shim`;
+  13. `docs(ops): record PR remediation evidence`.
 - [x] Re-run the full gate on the clean PR branch and attach exact command/result
   evidence to the PR.
-- [ ] Open a **draft** umbrella PR titled
+- [x] Open a **draft** umbrella PR titled
   `feat(platform): harden Genus OS production foundation`.
-- [ ] Include architecture/security notes, migration behavior, deployment
+- [x] Include architecture/security notes, migration behavior, deployment
   prerequisites, test evidence, rollout sequence, rollback procedure, known
   residual risks, AI-assistance disclosure, and a link to this checklist in the
   PR body.
-- [ ] Request CODEOWNERS, security, and operations review. Leave the PR draft
-  until every required check and reviewer is green.
-- [ ] Do **not** apply a deployment label, auto-merge, merge manually, deploy,
+- [x] Request CODEOWNERS/maintainer/security (`@danylo-ironsail`), operations
+  and recovery (`@BhalPunia`), QA/frontend (`@rizzi-dotcom`), and application
+  (`@jawadatironsail`) review. Leave the PR draft until every required check and
+  reviewer is green.
+- [x] Do **not** apply a deployment label, auto-merge, merge manually, deploy,
   or promote production as part of submitting this PR.
 
 ## Definition of done
