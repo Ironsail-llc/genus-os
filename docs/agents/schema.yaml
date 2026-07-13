@@ -345,12 +345,15 @@ optional:
       description: Manual difficulty override (empty = auto)
     sandbox:
       type: string
-      enum: [local, docker]
+      enum: [local, docker, host]
       default: local
       description: >
         Execution sandbox mode. "local" uses the host Xvfb :99 display.
         "docker" creates a per-run ephemeral container with isolated
-        Xvfb + Chromium + xdotool.
+        Xvfb + Chromium + xdotool. "host" is an explicit opt-out from
+        sandbox-by-default for host-trusted agents (RBAC + exec allowlist
+        still apply); under ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce,
+        exec-holding agents without "host" get a Docker sandbox.
     lifecycle_hooks:
       type: list[LifecycleHook]
       description: >
