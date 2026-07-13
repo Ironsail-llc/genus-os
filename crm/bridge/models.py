@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from robothor.entity.payments import Identifier, ProviderName, validate_provider_token
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
@@ -246,15 +248,26 @@ class VaultCreateLoginRequest(BaseModel):
     notes: str | None = None
 
 
-class VaultCreateCardRequest(BaseModel):
+class VaultCreateVirtualCardReferenceRequest(BaseModel):
+    """Store metadata for a provider-issued operational virtual card.
+
+    The bridge never accepts PAN, expiry, or a card verification value.  The
+    opaque provider reference is treated as a credential and must be persisted
+    through the existing encrypted-vault boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     name: str
-    number: str
-    expMonth: str
-    expYear: str
-    cardholderName: str = ""
-    code: str | None = None
+    virtualCardId: Identifier
+    provider: ProviderName
+    providerReference: SecretStr = Field(repr=False)
+    lastFour: str | None = Field(default=None, pattern=r"^\d{4}$", repr=False)
     brand: str | None = None
-    notes: str | None = None
+
+    _validate_reference = field_validator("providerReference", mode="before")(
+        validate_provider_token
+    )
 
 
 # ─── Impetus ─────────────────────────────────────────────────────────────

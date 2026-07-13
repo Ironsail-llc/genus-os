@@ -37,42 +37,65 @@ def client():
 
 
 class TestControlRouteAuth:
-    """steer/interrupt/resume mutate a live run and must require the shared
-    control token when one is configured."""
+    """Control mutations require a signed owner/admin Engine capability."""
 
-    def test_open_when_token_unset(self, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", raising=False)
-        c = TestClient(_make_app(), raise_server_exceptions=False)
-        # No token configured → route reachable (not 401).
-        r = c.post("/api/runs/run-x/steer", json={"text": "hi"})
-        assert r.status_code != 401
+    @staticmethod
+    def _secure_client(monkeypatch):
+        monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+        monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
+        monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "engine-test-signing-key-32-bytes-minimum")
+        from robothor.auth.tokens import reset_signing_key_cache
 
-    def test_rejects_missing_token_when_configured(self, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
-        c = TestClient(_make_app(), raise_server_exceptions=False)
+        reset_signing_key_cache()
+        return TestClient(_make_app(), raise_server_exceptions=False)
+
+    @staticmethod
+    def _token(role="owner", scopes=("engine:*",), audience="genus-bridge"):
+        from robothor.auth.tokens import issue_access_token
+
+        return issue_access_token(
+            "user-1",
+            "test-tenant",
+            role,
+            audience=audience,
+            scopes=scopes,
+        )
+
+    def test_rejects_missing_signed_identity(self, monkeypatch):
+        c = self._secure_client(monkeypatch)
         for path in ("steer", "interrupt", "resume"):
             r = c.post(f"/api/runs/run-x/{path}", json={"text": "hi"})
-            assert r.status_code == 401, f"{path} allowed without token"
+            assert r.status_code == 401, f"{path} allowed without identity"
 
-    def test_rejects_wrong_token(self, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
-        c = TestClient(_make_app(), raise_server_exceptions=False)
+    def test_rejects_chat_only_identity(self, monkeypatch):
+        c = self._secure_client(monkeypatch)
+        token = self._token(role="member", scopes=("engine:chat", "engine:read"))
         r = c.post(
             "/api/runs/run-x/steer",
             json={"text": "hi"},
-            headers={"X-Robothor-Control-Token": "wrong"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    def test_rejects_wrong_audience(self, monkeypatch):
+        c = self._secure_client(monkeypatch)
+        token = self._token(audience="some-other-service")
+        r = c.post(
+            "/api/runs/run-x/steer",
+            json={"text": "hi"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 401
 
-    def test_accepts_correct_token(self, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
-        c = TestClient(_make_app(), raise_server_exceptions=False)
+    def test_accepts_signed_control_identity(self, monkeypatch):
+        c = self._secure_client(monkeypatch)
+        token = self._token()
         r = c.post(
             "/api/runs/run-x/steer",
             json={"text": "hi"},
-            headers={"X-Robothor-Control-Token": "s3cr3t"},
+            headers={"Authorization": f"Bearer {token}"},
         )
-        assert r.status_code != 401  # authorized (200 with found=False)
+        assert r.status_code == 200
 
 
 class TestBuddyStatsEndpoint:
@@ -409,17 +432,16 @@ class TestActiveRunsEndpoint:
         assert run["started_at"] is not None
         assert run["iterations"] == 1
 
-    def test_requires_control_token_when_configured(self, monkeypatch) -> None:
-        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
-        c = TestClient(_make_app(), raise_server_exceptions=False)
+    def test_requires_signed_control_identity(self, monkeypatch) -> None:
+        c = TestControlRouteAuth._secure_client(monkeypatch)
         resp = c.get("/api/runs/active")
         assert resp.status_code == 401
 
-    def test_accepts_correct_control_token(self, monkeypatch) -> None:
-        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
-        c = TestClient(_make_app(), raise_server_exceptions=False)
+    def test_accepts_signed_control_identity(self, monkeypatch) -> None:
+        c = TestControlRouteAuth._secure_client(monkeypatch)
+        token = TestControlRouteAuth._token()
         resp = c.get(
             "/api/runs/active",
-            headers={"X-Robothor-Control-Token": "s3cr3t"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200

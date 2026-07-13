@@ -26,6 +26,53 @@ if TYPE_CHECKING:
 # test_prefix is inherited from the root conftest.py
 
 
+@pytest.fixture(autouse=True)
+def explicit_loopback_engine_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy unit apps mount Engine routers without the production middleware.
+
+    Keep those tests in the one supported compatibility mode: explicit,
+    non-production, loopback-only development.  Security tests delete this
+    variable and exercise signed-token enforcement directly.
+    """
+
+    monkeypatch.setenv("GENUS_INSECURE_DEV_MODE", "true")
+    monkeypatch.setenv("GENUS_ENVIRONMENT", "test")
+    monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+
+
+@pytest.fixture(autouse=True)
+def seeded_unit_test_permissions(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Keep Engine unit tests independent from a live RBAC database.
+
+    Direct permission tests exercise the real database-backed evaluator with
+    their own fake connections.  Other Engine unit tests run with the same
+    effective defaults installed by ``seed_default_permissions``.  Missing
+    roles remain denied, so the security invariant is still exercised.
+    """
+
+    if request.path.name in {"test_permissions.py", "test_rbac_service_role.py"}:
+        return
+
+    from robothor.engine import permissions
+
+    def _seeded_check(user_role: str, tenant_id: str, tool_name: str) -> str | None:
+        del tenant_id
+        if not user_role:
+            return "Missing execution role — access denied"
+        if user_role in {"service", "user", "member", "admin", "owner"}:
+            return None
+        if user_role == "viewer" and (
+            tool_name.startswith(("search_", "get_", "list_"))
+            or tool_name in {"memory_block_read", "memory_block_list"}
+        ):
+            return None
+        return f"No permission rules for role '{user_role}' — access denied"
+
+    monkeypatch.setattr(permissions, "check_tool_permission", _seeded_check)
+
+
 @pytest.fixture
 def engine_config(tmp_path: Path) -> EngineConfig:
     """Engine config pointing to temp workspace."""

@@ -14,6 +14,18 @@ from robothor.engine.tools.dispatch import (
 )
 
 
+@pytest.fixture(autouse=True)
+def seeded_service_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise whitelist ordering without depending on the RBAC database."""
+
+    monkeypatch.setattr(
+        "robothor.engine.permissions.check_tool_permission",
+        lambda role, tenant, tool: (
+            None if role == "service" else "Missing execution role — access denied"
+        ),
+    )
+
+
 class TestWhitelistContextVar:
     def test_default_is_none(self) -> None:
         assert get_tool_whitelist() is None
@@ -64,7 +76,7 @@ class TestExecuteToolEnforcesWhitelist:
         first."""
         token = set_tool_whitelist(frozenset({"memory_search"}))
         try:
-            result = await _execute_tool("send_telegram", {})
+            result = await _execute_tool("send_telegram", {}, user_role="service")
         finally:
             clear_tool_whitelist(token)
 
@@ -78,7 +90,7 @@ class TestExecuteToolEnforcesWhitelist:
         the handler lookup — proving the gate let it through."""
         token = set_tool_whitelist(frozenset({"some_made_up_tool"}))
         try:
-            result = await _execute_tool("some_made_up_tool", {})
+            result = await _execute_tool("some_made_up_tool", {}, user_role="service")
         finally:
             clear_tool_whitelist(token)
 
@@ -92,6 +104,6 @@ class TestExecuteToolEnforcesWhitelist:
         """When no whitelist is installed, the gate is invisible —
         execution falls through to whatever the normal path would do."""
         assert get_tool_whitelist() is None
-        result = await _execute_tool("some_made_up_tool", {})
+        result = await _execute_tool("some_made_up_tool", {}, user_role="service")
         # Standard 'Unknown tool' path; no denied_by_whitelist flag.
         assert "denied_by_whitelist" not in result

@@ -3,20 +3,22 @@
 Checks whether a user's role permits a given tool call, and resolves
 which tenants a user can access based on the tenant hierarchy.
 
-Enforcement is opt-in: if ``user_role`` is empty (cron, hooks, system
-triggers), all tools are allowed.  This preserves backward compatibility
-for single-tenant instances and automated agent runs.
+Every tool call must carry a concrete role.  Automated runs use the agent's
+explicit ``service_role``; a missing role is denied instead of being treated as
+an implicit all-powerful system identity.
 
 Permission rules live in the ``role_permissions`` database table, with
 a ``__default__`` tenant providing platform-wide defaults that any
 tenant can override.
 
-Evaluation order (first match wins):
-    1. Tenant-specific DENY  →  blocked
-    2. Tenant-specific ALLOW →  allowed
-    3. ``__default__`` DENY  →  blocked
-    4. ``__default__`` ALLOW →  allowed
-    5. No match              →  denied (fail-closed for unconfigured roles)
+Evaluation order:
+    1. Tenant-specific matching rules (most-specific pattern wins; DENY wins ties)
+    2. ``__default__`` matching rules (same specificity rule)
+    3. No match → denied (fail-closed for unconfigured roles)
+
+Specificity matters because read-only roles use explicit allow patterns such as
+``search_*`` plus a catch-all ``*`` deny.  Treating the catch-all deny as the
+first match would accidentally block the entire allowlist.
 
 Hierarchical tenant access resolution:
     Given a user's current tenant and role, determines which tenants they
@@ -45,8 +47,8 @@ def check_tool_permission(
     """Check if a user role is allowed to execute a tool.
 
     Args:
-        user_role: The user's role (viewer, user, admin, owner).
-            Empty string means system/automated — always allowed.
+        user_role: The user's role (viewer, user, admin, owner, service).
+            Empty strings are invalid and fail closed.
         tenant_id: The tenant to check permissions for.
         tool_name: The tool being invoked.
 
@@ -54,7 +56,7 @@ def check_tool_permission(
         Denial reason string, or None if allowed.
     """
     if not user_role:
-        return None  # System/automated — no user-level enforcement
+        return "Missing execution role — access denied"
 
     try:
         from robothor.db.connection import get_connection
@@ -62,29 +64,45 @@ def check_tool_permission(
         with get_connection() as conn:
             cur = conn.cursor()
 
-            # Fetch matching rules: tenant-specific first, then __default__
+            # Fetch both policy levels.  Precedence is evaluated below rather
+            # than delegated to SQL ordering because pattern specificity must
+            # beat a catch-all rule of the opposite access type.
             cur.execute(
                 """
                 SELECT tool_pattern, access, tenant_id
                 FROM role_permissions
                 WHERE role = %s AND tenant_id IN (%s, '__default__')
-                ORDER BY
-                    CASE WHEN tenant_id = %s THEN 0 ELSE 1 END,
-                    access DESC
                 """,
-                (user_role, tenant_id, tenant_id),
+                (user_role, tenant_id),
             )
             rules = cur.fetchall()
 
         if not rules:
             return f"No permission rules for role '{user_role}' — access denied"
 
-        # Evaluate rules in priority order (tenant-specific before __default__)
-        for pattern, access, _rule_tenant in rules:
-            if fnmatch.fnmatch(tool_name, pattern):
-                if access == "deny":
-                    return f"Role '{user_role}' denied '{tool_name}' (pattern: {pattern})"
-                return None  # Explicitly allowed
+        # Evaluate tenant-specific policy before platform defaults.  Within a
+        # level, choose the most-specific glob; an exact/specific allow can
+        # therefore carve permitted operations out of a catch-all deny while
+        # an equally specific deny remains authoritative.
+        for policy_tenant in (tenant_id, "__default__"):
+            matching = [
+                (pattern, access)
+                for pattern, access, rule_tenant in rules
+                if rule_tenant == policy_tenant and fnmatch.fnmatch(tool_name, pattern)
+            ]
+            if not matching:
+                continue
+            pattern, access = max(
+                matching,
+                key=lambda rule: (
+                    rule[0] == tool_name,
+                    sum(character not in "*?[]" for character in rule[0]),
+                    rule[1] == "deny",
+                ),
+            )
+            if access == "deny":
+                return f"Role '{user_role}' denied '{tool_name}' (pattern: {pattern})"
+            return None
 
         return f"No permission rule matched for role '{user_role}' on '{tool_name}' — access denied"
 
@@ -205,12 +223,13 @@ def seed_default_permissions() -> None:
         ("viewer", "memory_block_read", "allow"),
         ("viewer", "memory_block_list", "allow"),
         ("viewer", "*", "deny"),
-        # service: system/cron/heartbeat runs (no interactive user). Allow-all by
-        # default so the fleet is unconstrained until an operator tightens it and
-        # enables RBAC enforcement (see rbac_enforcement_mode / PR-8).
+        # service: system/cron/heartbeat runs (no interactive user). Explicitly
+        # allow all by default; operators can replace this with narrower rules.
         ("service", "*", "allow"),
         # user: full access
         ("user", "*", "allow"),
+        # member: canonical human role used by account-backed sessions
+        ("member", "*", "allow"),
         # admin: full access
         ("admin", "*", "allow"),
         # owner: full access

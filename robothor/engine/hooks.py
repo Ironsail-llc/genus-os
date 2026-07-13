@@ -421,6 +421,8 @@ class EventHooks:
                 workflow_id=workflow_id,
                 trigger_type="hook",
                 trigger_detail=f"{stream}:{event_type}",
+                user_id=f"service:workflow:{workflow_id}",
+                user_role="service",
             )
         except Exception as e:
             logger.error(

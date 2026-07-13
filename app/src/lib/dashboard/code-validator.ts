@@ -4,6 +4,21 @@
  */
 
 const BLOCKED_PATTERNS = [
+  /<\s*script\b/i,
+  /<\s*canvas\b/i,
+  /<\s*(?:iframe|object|embed|link|meta|base)\b/i,
+  /<\s*(?:a|form|input|button|select|textarea|option|fieldset)\b/i,
+  /\bon\w+\s*=/i,
+  /javascript\s*:/i,
+  /\bpostMessage\s*\(/i,
+  /\brobothor\s*\./i,
+  /@import\b/i,
+  /url\s*\(\s*["']?https?:/i,
+  /\bfetch\s*\(/i,
+  /\bsetTimeout\s*\(/i,
+  /\bsetInterval\s*\(/i,
+  /\bdata-chart\s*=/i,
+  /\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\b/i,
   /\beval\s*\(/i,
   /\bFunction\s*\(/,
   /\bnew\s+Function\b/,
@@ -11,7 +26,6 @@ const BLOCKED_PATTERNS = [
   /\blocalStorage\b/i,
   /\bsessionStorage\b/i,
   /\bwindow\.location\b/i,
-  /\bfetch\s*\(\s*["']https?:\/\/(?!localhost|127\.0\.0\.1)/i,
   /\bimport\s*\(\s*["']https?:\/\//i,
   /\b__proto__\b/,
   /\bconstructor\s*\[/,
@@ -19,8 +33,6 @@ const BLOCKED_PATTERNS = [
   /\bdangerouslySetInnerHTML\b/,
   /\bsetTimeout\s*\(\s*["'`]/i,
   /\bsetInterval\s*\(\s*["'`]/i,
-  // Allow onclick/onsubmit for robothor.action() calls, block other inline handlers
-  /\bon(?!click|submit)\w+\s*=\s*["']/i,
   /\bwindow\s*\[\s*["']/,
   /\(\s*0\s*,\s*eval\s*\)/,
   /\bXMLHttpRequest\b/i,
@@ -52,6 +64,13 @@ export function validateDashboardCode(code: string): ValidationResult {
   // Strip markdown fences if the LLM wrapped the code
   normalized = normalized.replace(/^```(?:tsx?|jsx?|html)?\n?/m, "");
   normalized = normalized.replace(/\n?```\s*$/m, "");
+
+  if (normalized.length > 24_000) {
+    errors.push("Dashboard HTML exceeds the 24,000 character limit");
+  }
+  if (!normalized.trimStart().startsWith("<")) {
+    errors.push("Dashboard output must be a static HTML fragment");
+  }
 
   // Attempt to repair double-quoted data-chart attributes
   normalized = normalizeChartQuotes(normalized);

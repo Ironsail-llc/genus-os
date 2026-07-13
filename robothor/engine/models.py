@@ -736,6 +736,8 @@ class WorkflowRun:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     workflow_id: str = ""
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
+    user_id: str = ""
+    user_role: str = ""
     trigger_type: str = "manual"
     trigger_detail: str = ""
     correlation_id: str | None = None

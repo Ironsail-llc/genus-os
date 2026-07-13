@@ -10,14 +10,31 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/installed-agents", tags=["installed-agents"])
+
+def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
+    """Installed-agent state is appliance-global, so deny secondary tenants."""
+    from robothor.constants import DEFAULT_TENANT
+
+    if tenant_id != DEFAULT_TENANT:
+        raise HTTPException(
+            status_code=403,
+            detail="appliance administration not authorized for tenant",
+        )
+
+
+router = APIRouter(
+    prefix="/api/installed-agents",
+    tags=["installed-agents"],
+    dependencies=[Depends(_require_primary_tenant)],
+)
 
 _WORKSPACE = os.environ.get("ROBOTHOR_WORKSPACE", str(Path("~/robothor").expanduser()))
 MANIFEST_DIR = Path(
@@ -40,7 +57,7 @@ class UpdateRequest(BaseModel):
 
 
 @router.get("")
-async def list_installed_agents():
+def list_installed_agents():
     """List all installed agents with version and status info."""
     try:
         from robothor.templates.instance import InstanceConfig
@@ -69,18 +86,27 @@ async def list_installed_agents():
 
 
 @router.post("/install")
-async def install_agent(req: InstallRequest):
+def install_agent(req: InstallRequest):
     """Install an agent from the Programmatic Resources hub."""
     try:
-        from robothor.templates.hub_client import HubClient
+        from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import install
 
-        client = HubClient()
-        bundle = client.download_bundle(req.slug)
-        if not bundle:
-            raise HTTPException(status_code=404, detail=f"Bundle not found: {req.slug}")
+        with HubClient() as client:
+            metadata = client.get_bundle(req.slug)
+            if metadata is None:
+                raise HTTPException(status_code=404, detail=f"Bundle not found: {req.slug}")
+            expected_sha256 = trusted_bundle_sha256(metadata)
+            bundle = client.download_bundle(req.slug, expected_sha256=expected_sha256)
 
-        result = install(bundle, variables=req.variables)
+        result = install(
+            bundle,
+            overrides=req.variables,
+            auto_yes=True,
+            source="hub",
+            source_ref=req.slug,
+            source_sha256=expected_sha256,
+        )
         return {
             "status": "installed",
             "agent_id": result.get("agent_id", req.slug),
@@ -94,24 +120,43 @@ async def install_agent(req: InstallRequest):
 
 
 @router.post("/{agent_id}/update")
-async def update_agent(agent_id: str):
+def update_agent(agent_id: str):
     """Update an installed agent to the latest version."""
     try:
+        from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import update
 
-        result = update(agent_id)
+        with HubClient() as client:
+            metadata = client.get_bundle(agent_id)
+            if metadata is None:
+                raise HTTPException(status_code=404, detail=f"Bundle not found: {agent_id}")
+            expected_sha256 = trusted_bundle_sha256(metadata)
+            bundle = client.download_bundle(agent_id, expected_sha256=expected_sha256)
+
+        result = update(
+            agent_id,
+            new_template_path=bundle,
+            auto_yes=True,
+            source="hub",
+            source_ref=agent_id,
+            source_sha256=expected_sha256,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Agent not installed: {agent_id}")
         return {
             "status": "updated",
             "agent_id": agent_id,
             "new_version": result.get("version", ""),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Update failed for %s: %s", sanitize_log(agent_id), e)
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.delete("/{agent_id}")
-async def remove_agent(agent_id: str):
+def remove_agent(agent_id: str):
     """Remove an installed agent."""
     try:
         from robothor.templates.installer import remove
@@ -124,7 +169,7 @@ async def remove_agent(agent_id: str):
 
 
 @router.get("/{agent_id}/readiness")
-async def check_readiness(agent_id: str):
+def check_readiness(agent_id: str):
     """Check hub readiness score for an agent."""
     try:
         from robothor.templates.description_optimizer import score_hub_readiness

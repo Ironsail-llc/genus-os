@@ -14,14 +14,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends
+
+from robothor.constants import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
 # Cache for agent status (30s TTL)
-_cache: dict = {"data": None, "expires": 0.0}
+_cache: dict = {"data": None, "expires": 0.0, "tenant_id": None}
 CACHE_TTL = 30
 
 # Agent status markdown files
@@ -213,7 +216,7 @@ def _load_display_names() -> dict[str, str]:
     return names
 
 
-def _build_agent_status() -> dict:
+def _build_agent_status(tenant_id: str = DEFAULT_TENANT) -> dict:
     """Build agent status from the engine's agent_schedules table and status files."""
     agents: list[dict] = []
     summary = {"healthy": 0, "degraded": 0, "failed": 0, "sleeping": 0, "unknown": 0, "total": 0}
@@ -226,7 +229,7 @@ def _build_agent_status() -> dict:
     try:
         from robothor.engine.tracking import list_schedules
 
-        schedules = list_schedules(enabled_only=False)
+        schedules = list_schedules(enabled_only=False, tenant_id=tenant_id)
     except Exception as e:
         logger.warning("Failed to read agent_schedules: %s", e)
 
@@ -242,8 +245,10 @@ def _build_agent_status() -> dict:
             cur.execute(
                 "SELECT agent_id, COUNT(*) as cnt "
                 "FROM agent_runs "
-                "WHERE created_at > NOW() - INTERVAL '7 days' "
-                "GROUP BY agent_id"
+                "WHERE tenant_id = %s "
+                "AND created_at > NOW() - INTERVAL '7 days' "
+                "GROUP BY agent_id",
+                (tenant_id,),
             )
             for row in cur.fetchall():
                 run_counts[row["agent_id"]] = row["cnt"]
@@ -353,13 +358,19 @@ def _build_agent_status() -> dict:
 
 
 @router.get("/agents/status")
-async def api_agent_status():
+def api_agent_status(tenant_id: str = Depends(get_tenant_id)):
     """Get status of all agent cron jobs with health tiers and RPG scores."""
     now = time.time()
-    if _cache["data"] and now < _cache["expires"]:
+    cache_tenant = _cache.get("tenant_id")
+    if (
+        _cache["data"]
+        and now < _cache["expires"]
+        and (cache_tenant is None or cache_tenant == tenant_id)
+    ):
         return _cache["data"]
 
-    result = _build_agent_status()
+    result = _build_agent_status(tenant_id=tenant_id)
     _cache["data"] = result
     _cache["expires"] = now + CACHE_TTL
+    _cache["tenant_id"] = tenant_id
     return result

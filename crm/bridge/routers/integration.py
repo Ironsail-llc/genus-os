@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from models import (  # noqa: TC002 — used at runtime by FastAPI
     LogInteractionRequest,
@@ -23,13 +24,16 @@ router = APIRouter(tags=["integration"])
 
 
 @router.post("/resolve-contact")
-async def resolve_contact(body: ResolveContactRequest):
+def resolve_contact(
+    body: ResolveContactRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
     if not body.channel or not body.identifier:
         return JSONResponse({"error": "channel and identifier required"}, status_code=400)
 
     from robothor.crm.dal import resolve_contact as _resolve
 
-    result = _resolve(body.channel, body.identifier, body.name)
+    result = _resolve(body.channel, body.identifier, body.name, tenant_id=tenant_id)
     for k, v in result.items():
         if hasattr(v, "isoformat"):
             result[k] = v.isoformat()
@@ -37,17 +41,28 @@ async def resolve_contact(body: ResolveContactRequest):
 
 
 @router.get("/timeline/{identifier}")
-async def timeline(identifier: str):
+def timeline(identifier: str, tenant_id: str = Depends(get_tenant_id)):
     from robothor.crm.dal import get_timeline
 
-    return get_timeline(identifier)
+    result = get_timeline(identifier, tenant_id=tenant_id)
+    # The legacy DAL helper historically queried identifier mappings without a
+    # tenant predicate.  Do not expose those rows across the bridge boundary.
+    result["mappings"] = [
+        mapping
+        for mapping in result.get("mappings", [])
+        if str(mapping.get("tenant_id", tenant_id)) == tenant_id
+    ]
+    return result
 
 
 # ─── Webhooks ────────────────────────────────────────────────────────────
 
 
 @router.post("/log-interaction")
-async def log_interaction(body: LogInteractionRequest):
+def log_interaction(
+    body: LogInteractionRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
     from robothor.crm.dal import (
         create_conversation,
         get_conversations_for_contact,
@@ -58,17 +73,17 @@ async def log_interaction(body: LogInteractionRequest):
     )
 
     channel_id = body.channel_identifier or body.contact_name
-    resolved = _resolve(body.channel, channel_id, body.contact_name)
+    resolved = _resolve(body.channel, channel_id, body.contact_name, tenant_id=tenant_id)
     person_id = resolved.get("person_id")
     if person_id and body.content_summary:
-        convos = get_conversations_for_contact(str(person_id))
+        convos = get_conversations_for_contact(str(person_id), tenant_id=tenant_id)
         convo_id = convos[0].get("id") if convos else None
         if not convo_id:
-            convo = create_conversation(str(person_id))
+            convo = create_conversation(str(person_id), tenant_id=tenant_id)
             convo_id = convo.get("id") if convo else None
         if convo_id:
             msg_type = "incoming" if body.direction == "incoming" else "outgoing"
-            send_message(convo_id, body.content_summary, msg_type)
+            send_message(convo_id, body.content_summary, msg_type, tenant_id=tenant_id)
 
     log_event(
         "ipc.interaction",
@@ -81,6 +96,7 @@ async def log_interaction(body: LogInteractionRequest):
             "channel": body.channel,
             "direction": body.direction,
             "resolved": bool(person_id),
+            "tenant_id": tenant_id,
         },
     )
     publish(
@@ -93,6 +109,7 @@ async def log_interaction(body: LogInteractionRequest):
             "person_id": person_id,
         },
         source="bridge",
+        tenant_id=tenant_id,
     )
     return {"status": "ok", "contact": body.contact_name, "resolved": bool(person_id)}
 
@@ -101,22 +118,29 @@ async def log_interaction(body: LogInteractionRequest):
 
 
 @router.get("/api/vault/list")
-async def api_vault_list(category: str | None = None):
+def api_vault_list(
+    category: str | None = None,
+    tenant_id: str = Depends(get_tenant_id),
+):
     try:
         from robothor.vault import list as vault_list
 
-        keys = vault_list(category=category)
+        keys = vault_list(category=category, tenant_id=tenant_id)
         return {"keys": keys}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception:
+        logger.exception("vault list failed")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
 @router.get("/api/vault/get")
-async def api_vault_get(key: str = Query(..., description="Secret key")):
+def api_vault_get(
+    key: str = Query(..., description="Secret key"),
+    tenant_id: str = Depends(get_tenant_id),
+):
     try:
         from robothor.vault import get as vault_get
 
-        value = vault_get(key)
+        value = vault_get(key, tenant_id=tenant_id)
         if value is not None:
             return {"key": key, "value": value}
         return JSONResponse({"error": f"No secret with key '{key}'"}, status_code=404)

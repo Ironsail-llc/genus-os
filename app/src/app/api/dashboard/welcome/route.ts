@@ -1,15 +1,12 @@
 import { fetchWelcomeContext } from "@/lib/dashboard/welcome-context";
 import { getDashboardSystemPrompt, getTimeAwarePrompt } from "@/lib/dashboard/system-prompt";
 import { validateDashboardCode, detectCodeType } from "@/lib/dashboard/code-validator";
+import { getEngineClient } from "@/lib/engine/server-client";
 import DOMPurify from "isomorphic-dompurify";
 import { SANITIZE_CONFIG } from "../generate/route";
 
-const OPENROUTER_API_KEY = () => process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = process.env.DASHBOARD_MODEL || "google/gemini-2.5-flash-lite";
-
 /**
- * Build a data-bound welcome prompt that gives Gemini explicit values to use.
+ * Build a data-bound welcome prompt that gives the model explicit values to use.
  * This prevents hallucination — the model only sees real numbers.
  */
 function buildWelcomeUserPrompt(context: Awaited<ReturnType<typeof fetchWelcomeContext>>): string {
@@ -68,100 +65,42 @@ export async function POST() {
 
   const stream = new ReadableStream({
     async start(controller) {
+      const keepalive = setInterval(() => {
+        controller.enqueue(encoder.encode(" "));
+      }, 10_000);
+
       try {
         const context = await fetchWelcomeContext();
         const systemPrompt = getDashboardSystemPrompt();
         const userPrompt = buildWelcomeUserPrompt(context);
+        const fullCode = await getEngineClient().dashboardCompletion(
+          "render",
+          systemPrompt,
+          userPrompt,
+        );
+        const validation = validateDashboardCode(fullCode);
+        const codeType = detectCodeType(validation.code);
 
-        const response = await fetch(OPENROUTER_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://localhost:3004",
-            "X-Title": "Genus OS Welcome Dashboard",
-          },
-          body: JSON.stringify({
-            model: MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-            stream: true,
-            max_tokens: 4096,
-            temperature: 0.3,
-          }),
-        });
-
-        if (!response.ok || !response.body) {
-          console.error("[welcome] OpenRouter error:", await response.text().catch(() => "Unknown"));
+        if (!validation.valid) {
+          console.error("[dashboard-error] source=welcome-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
           controller.enqueue(encoder.encode(
-            JSON.stringify({ error: "Dashboard service temporarily unavailable" })
+            JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
           ));
-          controller.close();
-          return;
+        } else {
+          const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
+          controller.enqueue(encoder.encode(
+            JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
+          ));
         }
-
-        // Keepalive: send a space every 10s while reading from OpenRouter
-        const keepalive = setInterval(() => {
-          controller.enqueue(encoder.encode(" "));
-        }, 10_000);
-
-        try {
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          let fullCode = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const data = line.slice(6).trim();
-              if (data === "[DONE]") continue;
-
-              try {
-                const parsed = JSON.parse(data);
-                const chunk = parsed.choices?.[0]?.delta?.content || "";
-                if (chunk) {
-                  fullCode += chunk;
-                }
-              } catch {
-                // Skip malformed chunks
-              }
-            }
-          }
-
-          const validation = validateDashboardCode(fullCode);
-          const codeType = detectCodeType(validation.code);
-
-          if (!validation.valid) {
-            console.error("[dashboard-error] source=welcome-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
-            ));
-          } else {
-            const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
-            ));
-          }
-        } finally {
-          clearInterval(keepalive);
-        }
-      } catch (err) {
-        console.error("[welcome] Generation error:", err);
+      } catch {
+        console.error("[welcome] Generation failed");
         controller.enqueue(encoder.encode(
-          JSON.stringify({ error: "Dashboard generation failed" })
+          JSON.stringify({ error: "Dashboard service temporarily unavailable" })
         ));
+      } finally {
+        clearInterval(keepalive);
+        controller.close();
       }
-      controller.close();
     },
   });
 

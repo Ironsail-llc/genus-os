@@ -8,6 +8,9 @@ vi.stubGlobal("fetch", mockFetch);
 describe("GET /api/health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.BRIDGE_URL = "http://localhost:9100";
+    process.env.ORCHESTRATOR_URL = "http://localhost:9099";
+    process.env.VISION_URL = "http://localhost:8600";
   });
 
   it("returns ok when all services healthy", async () => {

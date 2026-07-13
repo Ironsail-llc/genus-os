@@ -848,6 +848,8 @@ class CronScheduler:
                 workflow_id=workflow_id,
                 trigger_type="cron",
                 trigger_detail=f"cron:{workflow_id}",
+                user_id=f"service:workflow:{workflow_id}",
+                user_role="service",
             )
             logger.info(
                 "Workflow cron complete: %s status=%s duration=%dms",

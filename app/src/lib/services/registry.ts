@@ -27,6 +27,7 @@ interface Manifest {
 
 /** Environment variable overrides per service */
 const ENV_OVERRIDES: Record<string, string> = {
+  engine: "ROBOTHOR_ENGINE_URL",
   bridge: "BRIDGE_URL",
   orchestrator: "ORCHESTRATOR_URL",
   vision: "VISION_URL",
@@ -36,19 +37,56 @@ const ENV_OVERRIDES: Record<string, string> = {
   helm: "HELM_URL",
 };
 
-const MANIFEST_PATHS = [
-  path.resolve(__dirname, "../../../../robothor-services.json"),
-  path.join(process.env.ROBOTHOR_WORKSPACE || path.join(process.env.HOME || "", "robothor"), "robothor-services.json"),
-];
+/**
+ * Resolve only explicit, bounded manifest locations.
+ *
+ * The previous `__dirname/../../..` and `$HOME/robothor` search caused Next's
+ * output tracer to conservatively copy the whole application tree into the
+ * production standalone image. Operators can provide either the exact file or
+ * the workspace root; the container deployment normally uses service URL
+ * environment overrides and does not need a filesystem manifest.
+ */
+function manifestPaths(): string[] {
+  const paths = [
+    path.join(
+      /* turbopackIgnore: true */ process.cwd(),
+      "robothor-services.json"
+    ),
+  ];
+  const explicitManifest = process.env.ROBOTHOR_SERVICES_MANIFEST;
+  const workspace = process.env.ROBOTHOR_WORKSPACE;
+
+  if (explicitManifest) {
+    paths.unshift(path.resolve(/* turbopackIgnore: true */ explicitManifest));
+  }
+  if (workspace) {
+    paths.push(
+      path.join(/* turbopackIgnore: true */ workspace, "robothor-services.json")
+    );
+  }
+  if (process.env.NODE_ENV !== "production") {
+    // Local development and tests run from app/ while the repository manifest
+    // lives one directory above it. This branch is removed from production
+    // builds, keeping the standalone output trace bounded to app/.
+    paths.push(
+      path.resolve(
+        /* turbopackIgnore: true */ process.cwd(),
+        "..",
+        "robothor-services.json"
+      )
+    );
+  }
+  return paths;
+}
 
 let _manifest: Manifest | null = null;
 
 function loadManifest(): Manifest {
   if (_manifest) return _manifest;
 
-  for (const p of MANIFEST_PATHS) {
+  for (const p of manifestPaths()) {
     try {
-      const content = fs.readFileSync(p, "utf-8");
+      const content = fs.readFileSync(/* turbopackIgnore: true */ p, "utf-8");
       _manifest = JSON.parse(content) as Manifest;
       return _manifest;
     } catch {

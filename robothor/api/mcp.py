@@ -35,9 +35,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import httpx
+
+_MCPDecoratorFactory = Callable[
+    [],
+    Callable[[Callable[..., Any]], Callable[..., Any]],
+]
 
 # ─── Service URL Resolution ──────────────────────────────────────────
 
@@ -1529,15 +1535,17 @@ def create_server() -> Any:
     from mcp.server import Server
 
     server = Server("robothor-memory")
+    list_tools_decorator = cast("_MCPDecoratorFactory", server.list_tools)
+    call_tool_decorator = cast("_MCPDecoratorFactory", server.call_tool)
 
-    @server.list_tools()  # type: ignore[untyped-decorator]
+    @list_tools_decorator()
     async def list_tools() -> list[types.Tool]:
         return [
             types.Tool(name=d["name"], description=d["description"], inputSchema=d["inputSchema"])
             for d in get_tool_definitions()
         ]
 
-    @server.call_tool()  # type: ignore[untyped-decorator]
+    @call_tool_decorator()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         result = await handle_tool_call(name, arguments or {})
         return [types.TextContent(type="text", text=json.dumps(result, default=str))]

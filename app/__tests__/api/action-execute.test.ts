@@ -13,6 +13,9 @@ vi.mock("@/lib/config", () => ({
   AI_NAME: "Robothor",
   SESSION_KEY: "agent:main:webchat-user",
 }));
+vi.mock("@/lib/bridge-auth", () => ({
+  bridgeAuthHeaders: async () => ({ Authorization: "Bearer test-bridge-token" }),
+}));
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -64,7 +67,7 @@ describe("POST /api/actions/execute", () => {
 
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/people?limit=5");
-    expect(opts.headers["X-Agent-Id"]).toBe("helm-user");
+    expect(opts.headers.Authorization).toBe("Bearer test-bridge-token");
   });
 
   it("proxies POST tool to bridge with body keys", async () => {
@@ -92,9 +95,9 @@ describe("POST /api/actions/execute", () => {
     expect(sent.extraField).toBeUndefined(); // Not in bodyKeys
   });
 
-  it("routes answer_question to the bridge answer endpoint with X-Agent-Id", async () => {
+  it("routes answer_question to the bridge answer endpoint with verified auth", async () => {
     // Regression guard: the answer flow must go through the TOOL_ROUTES
-    // allowlist (so the bridge gets X-Agent-Id + rate limiting), not a direct
+    // allowlist (so the bridge gets authentication + rate limiting), not a direct
     // POST to /api/tasks/{id}/answer. Without the answer_question entry this
     // returns 400 "Unknown tool".
     mockFetch.mockResolvedValueOnce({
@@ -124,7 +127,7 @@ describe("POST /api/actions/execute", () => {
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/tasks/42/answer");
     expect(opts.method).toBe("POST");
-    expect(opts.headers["X-Agent-Id"]).toBe("helm-user");
+    expect(opts.headers.Authorization).toBe("Bearer test-bridge-token");
     const sent = JSON.parse(opts.body);
     expect(sent.answer).toBe("yes, proceed");
     expect(sent.advanceTo).toBe("IN_PROGRESS");
@@ -147,14 +150,43 @@ describe("POST /api/actions/execute", () => {
     expect(body.error).toContain("not authorized");
   });
 
+  it("rejects path traversal in resource identifiers", async () => {
+    const res = await POST(
+      makeRequest({ tool: "resolve_task", params: { task_id: "../../api/vault/get" } }),
+    );
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-object parameter payloads", async () => {
+    const res = await POST(makeRequest({ tool: "list_people", params: ["bad"] }));
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("never forwards a caller-selected tenant header", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ people: [] }),
+    });
+    const res = await POST(
+      makeRequest({ tool: "list_people", params: {}, tenantId: "victim-tenant" }),
+    );
+    expect(res.status).toBe(200);
+    const [, options] = mockFetch.mock.calls[0];
+    expect(options.headers["X-Tenant-Id"]).toBeUndefined();
+  });
+
   it("handles fetch errors gracefully", async () => {
     mockFetch.mockRejectedValueOnce(new Error("Connection refused"));
 
     const res = await POST(makeRequest({ tool: "crm_health", params: {} }));
     const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body.error).toContain("Connection refused");
+    expect(res.status).toBe(502);
+    expect(body.error).toBe("Action service temporarily unavailable");
+    expect(JSON.stringify(body)).not.toContain("Connection refused");
   });
 
   it("rate limits after 10 requests", async () => {

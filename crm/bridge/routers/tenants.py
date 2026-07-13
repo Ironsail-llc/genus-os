@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
 
 @router.get("")
-async def api_list_tenants(
+def api_list_tenants(
     parentId: str | None = Query(None),
     activeOnly: bool = Query(True),
 ):
@@ -25,7 +25,7 @@ async def api_list_tenants(
 
 
 @router.post("")
-async def api_create_tenant(body: CreateTenantRequest):
+def api_create_tenant(body: CreateTenantRequest):
     if not body.id or not body.displayName:
         return JSONResponse(
             {"error": "id and displayName required"},
@@ -43,7 +43,7 @@ async def api_create_tenant(body: CreateTenantRequest):
 
 
 @router.get("/{tenant_id}")
-async def api_get_tenant(tenant_id: str):
+def api_get_tenant(tenant_id: str):
     result = get_tenant(tenant_id)
     if not result:
         return JSONResponse({"error": "tenant not found"}, status_code=404)
@@ -51,7 +51,7 @@ async def api_get_tenant(tenant_id: str):
 
 
 @router.patch("/{tenant_id}")
-async def api_update_tenant(tenant_id: str, body: UpdateTenantRequest):
+def api_update_tenant(tenant_id: str, body: UpdateTenantRequest):
     kwargs = {}
     if body.displayName is not None:
         kwargs["display_name"] = body.displayName

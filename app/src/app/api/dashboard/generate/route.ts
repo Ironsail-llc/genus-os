@@ -4,20 +4,33 @@ import { fetchDataForNeeds } from "@/lib/dashboard/conversation-context";
 import { triageDashboard } from "@/lib/dashboard/triage-prompt";
 import { isTrivialResponse } from "@/lib/dashboard/topic-detector";
 import type { ConversationMessage } from "@/lib/dashboard/topic-detector";
+import { getEngineClient } from "@/lib/engine/server-client";
 import DOMPurify from "isomorphic-dompurify";
 
 export const SANITIZE_CONFIG = {
-  ADD_TAGS: ["canvas", "svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop", "form", "textarea", "select", "input"],
-  ADD_ATTR: ["data-chart", "data-testid", "data-tab", "data-sort-dir", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width", "onclick", "onsubmit", "placeholder", "rows", "required", "disabled"],
-  ALLOW_DATA_ATTR: true,
+  ADD_TAGS: ["svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop"],
+  ADD_ATTR: ["data-testid", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width"],
+  ALLOW_DATA_ATTR: false,
   ALLOW_UNKNOWN_PROTOCOLS: false,
-  FORBID_TAGS: ["iframe", "object", "embed", "meta"],
-  FORBID_ATTR: ["onerror", "onload", "onmouseover", "onfocus", "onblur"],
+  FORBID_TAGS: [
+    "script",
+    "iframe",
+    "object",
+    "embed",
+    "link",
+    "meta",
+    "base",
+    "a",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea",
+    "option",
+    "fieldset",
+  ],
+  FORBID_ATTR: ["srcdoc"],
 };
-
-const OPENROUTER_API_KEY = () => process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = process.env.DASHBOARD_MODEL || "google/gemini-2.5-flash-lite";
 
 const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 10;
@@ -103,9 +116,8 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
   // Phase 1: Triage + speculative data fetch in parallel.
   // Start fetching commonly-needed data ("overview" = health + inbox) while
   // triage runs, saving ~1s when triage decides it needs health/inbox/overview.
-  const apiKey = OPENROUTER_API_KEY();
   const [triage, speculativeData] = await Promise.all([
-    triageDashboard(messages, apiKey),
+    triageDashboard(messages),
     fetchDataForNeeds(["health", "conversations"]).catch(() => ({})),
   ]);
   console.log("[dashboard] Triage:", JSON.stringify({ shouldUpdate: triage.shouldUpdate, dataNeeds: triage.dataNeeds, summary: triage.summary }));
@@ -131,108 +143,51 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
 }
 
 /**
- * Generate dashboard HTML via OpenRouter and return as chunked JSON.
+ * Generate dashboard HTML through the authenticated Engine and return as
+ * chunked JSON.
  *
- * Sends whitespace padding every ~10s while the LLM streams, keeping the
- * Cloudflare proxy alive (its idle timeout is 100s). The final chunk is
- * the real JSON payload. Clients ignore leading whitespace when parsing JSON.
+ * Sends whitespace padding every ~10s while the Engine waits on its provider,
+ * preserving the existing keepalive contract. The final chunk is the real
+ * JSON payload; clients ignore leading whitespace when parsing JSON.
  */
 async function generateBuffered(systemPrompt: string, userPrompt: string) {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
+      const keepalive = setInterval(() => {
+        controller.enqueue(encoder.encode(" "));
+      }, 10_000);
+
       try {
-        const response = await fetch(OPENROUTER_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${OPENROUTER_API_KEY()}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://localhost:3004",
-            "X-Title": "Genus OS Dashboard",
-          },
-          body: JSON.stringify({
-            model: MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-            stream: true,
-            max_tokens: 4096,
-            temperature: 0.3,
-          }),
-        });
+        const fullCode = await getEngineClient().dashboardCompletion(
+          "render",
+          systemPrompt,
+          userPrompt,
+        );
+        const validation = validateDashboardCode(fullCode);
+        const codeType = detectCodeType(validation.code);
 
-        if (!response.ok || !response.body) {
-          console.error("[dashboard] OpenRouter error:", await response.text().catch(() => "Unknown"));
+        if (!validation.valid) {
+          console.error("[dashboard-error] source=server-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
           controller.enqueue(encoder.encode(
-            JSON.stringify({ error: "Dashboard service temporarily unavailable" })
+            JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
           ));
-          controller.close();
-          return;
+        } else {
+          const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
+          controller.enqueue(encoder.encode(
+            JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
+          ));
         }
-
-        // Keepalive: send a space every 10s while reading from OpenRouter
-        const keepalive = setInterval(() => {
-          controller.enqueue(encoder.encode(" "));
-        }, 10_000);
-
-        try {
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          let fullCode = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const data = line.slice(6).trim();
-              if (data === "[DONE]") continue;
-
-              try {
-                const parsed = JSON.parse(data);
-                const chunk = parsed.choices?.[0]?.delta?.content || "";
-                if (chunk) {
-                  fullCode += chunk;
-                }
-              } catch {
-                // Skip malformed chunks
-              }
-            }
-          }
-
-          // Validate the generated code
-          const validation = validateDashboardCode(fullCode);
-          const codeType = detectCodeType(validation.code);
-
-          if (!validation.valid) {
-            console.error("[dashboard-error] source=server-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
-            ));
-          } else {
-            const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
-            ));
-          }
-        } finally {
-          clearInterval(keepalive);
-        }
-      } catch (err) {
-        console.error("[dashboard] Generation error:", err);
+      } catch {
+        console.error("[dashboard] Generation failed");
         controller.enqueue(encoder.encode(
-          JSON.stringify({ error: "Dashboard generation failed" })
+          JSON.stringify({ error: "Dashboard service temporarily unavailable" })
         ));
+      } finally {
+        clearInterval(keepalive);
+        controller.close();
       }
-      controller.close();
     },
   });
 

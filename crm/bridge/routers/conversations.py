@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api", tags=["conversations"])
 
 
 @router.get("/conversations")
-async def api_list_conversations(
+def api_list_conversations(
     status: str = Query("open"),
     page: int = Query(1),
     tenant_id: str = Depends(get_tenant_id),
@@ -28,7 +28,7 @@ async def api_list_conversations(
 
 
 @router.get("/conversations/{conversation_id}")
-async def api_get_conversation(
+def api_get_conversation(
     conversation_id: int,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -39,7 +39,7 @@ async def api_get_conversation(
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def api_list_messages(
+def api_list_messages(
     conversation_id: int,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -48,7 +48,7 @@ async def api_list_messages(
 
 
 @router.post("/conversations/{conversation_id}/messages")
-async def api_create_message(
+def api_create_message(
     conversation_id: int,
     body: CreateMessageRequest,
     tenant_id: str = Depends(get_tenant_id),
@@ -66,7 +66,7 @@ async def api_create_message(
 
 
 @router.post("/conversations/{conversation_id}/toggle_status")
-async def api_toggle_conversation_status(
+def api_toggle_conversation_status(
     conversation_id: int,
     body: ToggleStatusRequest,
     tenant_id: str = Depends(get_tenant_id),

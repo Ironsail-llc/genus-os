@@ -22,6 +22,15 @@ import bridge_service  # noqa: E402
 from bridge_service import app  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def insecure_loopback_dev_mode(monkeypatch):
+    """Legacy bridge tests opt into the only supported trusted-header mode."""
+    monkeypatch.setenv("GENUS_INSECURE_DEV_MODE", "true")
+    monkeypatch.setenv("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+    monkeypatch.delenv("GENUS_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ROBOTHOR_ENVIRONMENT", raising=False)
+
+
 @pytest.fixture
 def test_prefix():
     """Unique prefix to tag all test data for isolation and cleanup."""

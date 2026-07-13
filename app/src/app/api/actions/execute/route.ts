@@ -5,8 +5,10 @@
  * Body: { tool: string, params: Record<string, unknown> }
  *
  * Forwards the signed-in user's bridge token (Authorization: Bearer) for RBAC
- * enforcement at Bridge, falling back to the legacy "helm-user" identity in
- * shadow mode. Rate-limited to 10 actions per minute per IP.
+ * enforcement at Bridge. A legacy agent header exists only in the explicit
+ * loopback-only insecure development mode. Rate-limited to 10 actions per
+ * minute per apparent client IP; production ingress must overwrite forwarded
+ * IP headers and apply a distributed limit as defense in depth.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -20,6 +22,24 @@ const rateLimiter = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT = 10;
 const RATE_WINDOW_MS = 60_000;
 let lastCleanup = Date.now();
+
+class ActionInputError extends Error {}
+
+function resourceId(params: Record<string, unknown>, key: string): string {
+  const value = params[key];
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new ActionInputError(`Missing or invalid '${key}'`);
+  }
+  const id = String(value);
+  if (
+    id.length > 128 ||
+    id.includes("..") ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(id)
+  ) {
+    throw new ActionInputError(`Invalid '${key}'`);
+  }
+  return encodeURIComponent(id);
+}
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -44,15 +64,21 @@ function checkRateLimit(ip: string): boolean {
 const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unknown>) => string; bodyKeys?: string[] }> = {
   list_conversations: {
     method: "GET",
-    path: (p) => `/api/conversations?status=${p.status || "open"}&page=${p.page || 1}`,
+    path: (p) => {
+      const query = new URLSearchParams({
+        status: String(p.status || "open"),
+        page: String(p.page || 1),
+      });
+      return `/api/conversations?${query.toString()}`;
+    },
   },
   get_conversation: {
     method: "GET",
-    path: (p) => `/api/conversations/${p.conversation_id}`,
+    path: (p) => `/api/conversations/${resourceId(p, "conversation_id")}`,
   },
   list_messages: {
     method: "GET",
-    path: (p) => `/api/conversations/${p.conversation_id}/messages`,
+    path: (p) => `/api/conversations/${resourceId(p, "conversation_id")}/messages`,
   },
   list_people: {
     method: "GET",
@@ -69,12 +95,12 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
   },
   create_message: {
     method: "POST",
-    path: (p) => `/api/conversations/${p.conversation_id}/messages`,
+    path: (p) => `/api/conversations/${resourceId(p, "conversation_id")}/messages`,
     bodyKeys: ["content", "message_type", "private"],
   },
   toggle_conversation_status: {
     method: "POST",
-    path: (p) => `/api/conversations/${p.conversation_id}/toggle_status`,
+    path: (p) => `/api/conversations/${resourceId(p, "conversation_id")}/toggle_status`,
     bodyKeys: ["status"],
   },
   log_interaction: {
@@ -97,17 +123,17 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
   },
   update_task: {
     method: "PATCH",
-    path: (p) => `/api/tasks/${p.task_id}`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}`,
     bodyKeys: ["status", "priority", "resolution", "assignedToAgent", "tags"],
   },
   resolve_task: {
     method: "POST",
-    path: (p) => `/api/tasks/${p.task_id}/resolve`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}/resolve`,
     bodyKeys: ["resolution"],
   },
   get_task_history: {
     method: "GET",
-    path: (p) => `/api/tasks/${p.task_id}/history`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}/history`,
   },
   agent_status: {
     method: "GET",
@@ -124,26 +150,26 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
   },
   update_routine: {
     method: "PATCH",
-    path: (p) => `/api/routines/${p.routine_id}`,
+    path: (p) => `/api/routines/${resourceId(p, "routine_id")}`,
     bodyKeys: ["title", "body", "cronExpr", "timezone", "assignedToAgent", "priority", "tags", "active"],
   },
   delete_routine: {
     method: "DELETE",
-    path: (p) => `/api/routines/${p.routine_id}`,
+    path: (p) => `/api/routines/${resourceId(p, "routine_id")}`,
   },
   approve_task: {
     method: "POST",
-    path: (p) => `/api/tasks/${p.task_id}/approve`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}/approve`,
     bodyKeys: ["resolution"],
   },
   reject_task: {
     method: "POST",
-    path: (p) => `/api/tasks/${p.task_id}/reject`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}/reject`,
     bodyKeys: ["reason", "changeRequests"],
   },
   answer_question: {
     method: "POST",
-    path: (p) => `/api/tasks/${p.task_id}/answer`,
+    path: (p) => `/api/tasks/${resourceId(p, "task_id")}/answer`,
     bodyKeys: ["answer", "advanceTo", "channel"],
   },
   list_tenants: {
@@ -157,7 +183,7 @@ const TOOL_ROUTES: Record<string, { method: string; path: (p: Record<string, unk
   },
   get_inbox: {
     method: "GET",
-    path: (p) => `/api/notifications/inbox/${p.agent_id}?unreadOnly=${p.unreadOnly ?? true}&limit=${p.limit || 50}`,
+    path: (p) => `/api/notifications/inbox/${resourceId(p, "agent_id")}?unreadOnly=${p.unreadOnly ?? true}&limit=${p.limit || 50}`,
   },
 };
 
@@ -172,7 +198,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { tool, params, tenantId } = body as { tool?: string; params?: Record<string, unknown>; tenantId?: string };
+    const { tool, params } = body as { tool?: string; params?: Record<string, unknown> };
 
     if (!tool || typeof tool !== "string") {
       return NextResponse.json({ error: "Missing 'tool' field" }, { status: 400 });
@@ -186,7 +212,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (
+      params !== undefined &&
+      (!params || typeof params !== "object" || Array.isArray(params))
+    ) {
+      return NextResponse.json({ error: "Invalid 'params' field" }, { status: 400 });
+    }
     const resolvedParams = params || {};
+    if (
+      Object.keys(resolvedParams).some((key) =>
+        ["__proto__", "prototype", "constructor"].includes(key),
+      ) ||
+      JSON.stringify(resolvedParams).length > 65_536
+    ) {
+      return NextResponse.json({ error: "Invalid action parameters" }, { status: 400 });
+    }
     const base = new URL(BRIDGE_URL);
     const pathStr = route.path(resolvedParams);
     const target = new URL(
@@ -201,10 +241,6 @@ export async function POST(request: NextRequest) {
       ...(await bridgeAuthHeaders()),
       "Content-Type": "application/json",
     };
-    if (tenantId) {
-      headers["X-Tenant-Id"] = tenantId;
-    }
-
     let response: Response;
     const fetchOpts = { headers, signal: AbortSignal.timeout(10_000) };
     if (route.method === "GET") {
@@ -227,15 +263,25 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     if (!response.ok) {
+      const publicError =
+        data && typeof data.error === "string"
+          ? data.error.slice(0, 500)
+          : `Bridge returned ${response.status}`;
       return NextResponse.json(
-        { error: data.error || `Bridge returned ${response.status}`, data },
+        { error: publicError },
         { status: response.status }
       );
     }
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (error instanceof ActionInputError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    console.error("[action-execute] backend request failed");
+    return NextResponse.json(
+      { error: "Action service temporarily unavailable" },
+      { status: 502 },
+    );
   }
 }

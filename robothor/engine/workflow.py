@@ -318,18 +318,59 @@ class WorkflowEngine:
         trigger_detail: str = "",
         initial_context: dict[str, Any] | None = None,
         correlation_id: str | None = None,
+        user_id: str = "",
+        user_role: str = "",
     ) -> WorkflowRun:
-        """Execute a workflow by ID."""
+        """Execute a workflow by ID under an explicit caller identity.
+
+        Cron and hook executions are trusted Engine workloads and receive a
+        narrow, auditable service identity.  Interactive/manual callers must
+        propagate their verified user identity; a missing identity fails
+        closed outside the explicit loopback development mode.
+        """
         from robothor.engine.dedup import release, try_acquire
 
         wf = self._workflows.get(workflow_id)
         if not wf:
             run = WorkflowRun(
                 workflow_id=workflow_id,
+                user_id=user_id,
+                user_role=user_role,
                 status=RunStatus.FAILED,
                 error_message=f"Workflow not found: {workflow_id}",
             )
             return run
+
+        effective_user_id = user_id
+        effective_user_role = user_role
+        if trigger_type in {"cron", "hook"}:
+            effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
+            effective_user_role = effective_user_role or "service"
+        elif not effective_user_id or not effective_user_role:
+            import os
+
+            from robothor.auth.runtime import auth_required
+
+            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+            if not auth_required(bind_host=bind_host):
+                effective_user_id = effective_user_id or "loopback-development-operator"
+                effective_user_role = effective_user_role or "owner"
+            else:
+                logger.warning(
+                    "Rejected workflow without verified identity: workflow=%s trigger=%s",
+                    _sanitize(workflow_id),
+                    _sanitize(trigger_type),
+                )
+                return WorkflowRun(
+                    workflow_id=workflow_id,
+                    tenant_id=self.config.tenant_id,
+                    trigger_type=trigger_type,
+                    trigger_detail=trigger_detail,
+                    user_id=effective_user_id,
+                    user_role=effective_user_role,
+                    status=RunStatus.FAILED,
+                    error_message="Authentication identity required for workflow execution",
+                )
 
         # Prevent concurrent runs of the same workflow
         dedup_key = f"workflow:{workflow_id}"
@@ -340,6 +381,11 @@ class WorkflowEngine:
             )
             run = WorkflowRun(
                 workflow_id=workflow_id,
+                tenant_id=self.config.tenant_id,
+                user_id=effective_user_id,
+                user_role=effective_user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
                 status=RunStatus.SKIPPED,
                 error_message="Skipped: workflow already running",
             )
@@ -349,6 +395,8 @@ class WorkflowEngine:
         run = WorkflowRun(
             workflow_id=workflow_id,
             tenant_id=self.config.tenant_id,
+            user_id=effective_user_id,
+            user_role=effective_user_role,
             trigger_type=trigger_type,
             trigger_detail=trigger_detail,
             correlation_id=correlation_id,
@@ -532,6 +580,9 @@ class WorkflowEngine:
                 trigger_detail=f"workflow:{run.workflow_id}:{step.id}",
                 correlation_id=run.correlation_id or run.id,
                 agent_config=agent_config,
+                tenant_id=run.tenant_id,
+                user_id=run.user_id,
+                user_role=run.user_role,
             )
 
             # Deliver agent output (delivery.py now handles its own DB persistence)
@@ -599,6 +650,8 @@ class WorkflowEngine:
             agent_id=f"workflow:{run.workflow_id}",
             tenant_id=run.tenant_id,
             workspace=str(self.config.workspace),
+            user_id=run.user_id,
+            user_role=run.user_role,
         )
 
         # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──

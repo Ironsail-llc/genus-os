@@ -5,6 +5,7 @@ import yaml
 
 from robothor.templates.installer import import_agent, install, remove, update
 from robothor.templates.instance import InstanceConfig
+from robothor.templates.safety import TemplateSecurityError
 
 
 class TestInstall:
@@ -58,6 +59,38 @@ class TestInstall:
         assert "test-agent" in agents
         assert agents["test-agent"]["source"] == "local"
 
+    def test_remote_install_records_integrity_provenance(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        install(
+            tmp_bundle,
+            auto_yes=True,
+            instance_dir=tmp_instance_dir,
+            repo_root=tmp_repo,
+            source="hub",
+            source_ref="test-agent",
+            source_sha256="a" * 64,
+        )
+
+        record = InstanceConfig.load(tmp_instance_dir).installed_agents["test-agent"]
+        assert record["source"] == "hub"
+        assert record["source_path"] == "test-agent"
+        assert record["source_sha256"] == "a" * 64
+
+    def test_remote_install_requires_integrity_before_writes(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        with pytest.raises(TemplateSecurityError, match="SHA-256"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+                source="hub",
+                source_ref="test-agent",
+            )
+        assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
+
     def test_install_missing_bundle(self, tmp_repo, tmp_instance_dir):
         """Install with nonexistent path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
@@ -67,6 +100,88 @@ class TestInstall:
                 instance_dir=tmp_instance_dir,
                 repo_root=tmp_repo,
             )
+
+    @pytest.mark.parametrize("agent_id", ["../escape", "/absolute", "UPPER", "a/b"])
+    def test_install_rejects_unsafe_agent_id(
+        self, agent_id, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        setup_path = tmp_bundle / "setup.yaml"
+        setup = yaml.safe_load(setup_path.read_text())
+        setup["agent_id"] = agent_id
+        setup_path.write_text(yaml.safe_dump(setup))
+
+        with pytest.raises(TemplateSecurityError, match="agent ID"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
+    @pytest.mark.parametrize(
+        "instruction_path", ["../../victim.md", "/tmp/victim.md", "brain/../victim.md"]
+    )
+    def test_install_rejects_escaping_instruction_path(
+        self, instruction_path, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        setup_path = tmp_bundle / "setup.yaml"
+        setup = yaml.safe_load(setup_path.read_text())
+        setup["instruction_file_path"] = instruction_path
+        setup_path.write_text(yaml.safe_dump(setup))
+
+        with pytest.raises(TemplateSecurityError, match="instruction"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
+    def test_install_rejects_malicious_manifest_id(self, tmp_bundle, tmp_repo, tmp_instance_dir):
+        manifest_path = tmp_bundle / "manifest.template.yaml"
+        manifest_path.write_text(
+            manifest_path.read_text().replace("id: test-agent", "id: ../escape")
+        )
+
+        with pytest.raises(TemplateSecurityError, match="manifest agent ID"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
+    def test_install_rejects_symlink_escape(self, tmp_bundle, tmp_repo, tmp_instance_dir, tmp_path):
+        victim = tmp_path / "victim.md"
+        victim.write_text("do not overwrite")
+        instruction = tmp_repo / "brain" / "TEST_AGENT.md"
+        instruction.unlink()
+        instruction.symlink_to(victim)
+
+        with pytest.raises(TemplateSecurityError, match="symlinks"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+        assert victim.read_text() == "do not overwrite"
+
+    def test_install_rejects_manifest_destination_symlink(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir, tmp_path
+    ):
+        victim = tmp_path / "victim.yaml"
+        victim.write_text("safe: true\n")
+        (tmp_repo / "docs" / "agents" / "test-agent.yaml").symlink_to(victim)
+
+        with pytest.raises(TemplateSecurityError, match="symlinks"):
+            install(
+                tmp_bundle,
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+        assert victim.read_text() == "safe: true\n"
 
 
 class TestRemove:
@@ -116,6 +231,29 @@ class TestRemove:
         archive = tmp_instance_dir / "archive" / "test-agent"
         assert archive.exists()
 
+    def test_remove_ignores_persisted_file_paths(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir, tmp_path
+    ):
+        install(
+            tmp_bundle,
+            auto_yes=True,
+            instance_dir=tmp_instance_dir,
+            repo_root=tmp_repo,
+        )
+        victim = tmp_path / "outside.txt"
+        victim.write_text("must survive")
+        installed_path = tmp_instance_dir / "installed.yaml"
+        registry = yaml.safe_load(installed_path.read_text())
+        registry["agents"]["test-agent"]["files"] = {
+            "manifest": str(victim),
+            "instruction": "../../outside.txt",
+        }
+        installed_path.write_text(yaml.safe_dump(registry))
+
+        assert remove("test-agent", instance_dir=tmp_instance_dir, repo_root=tmp_repo)
+        assert victim.read_text() == "must survive"
+        assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
+
 
 class TestUpdate:
     def test_update_agent(self, tmp_bundle, tmp_repo, tmp_instance_dir):
@@ -132,6 +270,7 @@ class TestUpdate:
         # Update with new model
         result = update(
             "test-agent",
+            new_template_path=tmp_bundle,
             overrides={"model_primary": "new-model"},
             auto_yes=True,
             instance_dir=tmp_instance_dir,
@@ -152,6 +291,28 @@ class TestUpdate:
             repo_root=tmp_repo,
         )
         assert result is None
+
+    def test_update_never_executes_persisted_source_path(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir, tmp_path
+    ):
+        install(
+            tmp_bundle,
+            auto_yes=True,
+            instance_dir=tmp_instance_dir,
+            repo_root=tmp_repo,
+        )
+        registry_path = tmp_instance_dir / "installed.yaml"
+        registry = yaml.safe_load(registry_path.read_text())
+        registry["agents"]["test-agent"]["source_path"] = str(tmp_path / "untrusted")
+        registry_path.write_text(yaml.safe_dump(registry))
+
+        with pytest.raises(TemplateSecurityError, match="explicit update template"):
+            update(
+                "test-agent",
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
 
 
 class TestImport:
@@ -206,3 +367,23 @@ class TestImport:
                 output_dir=str(tmp_path / "output"),
                 repo_root=tmp_repo,
             )
+
+    def test_import_rejects_escaping_manifest_instruction(self, tmp_repo, tmp_path):
+        manifest_path = tmp_repo / "docs" / "agents" / "bad-agent.yaml"
+        manifest_path.write_text(
+            yaml.safe_dump(
+                {
+                    "id": "bad-agent",
+                    "name": "Bad Agent",
+                    "description": "bad path",
+                    "version": "1.0.0",
+                    "department": "custom",
+                    "instruction_file": "../../victim.md",
+                }
+            )
+        )
+
+        output = tmp_path / "output"
+        with pytest.raises(TemplateSecurityError, match="instruction"):
+            import_agent("bad-agent", output_dir=output, repo_root=tmp_repo)
+        assert not output.exists()

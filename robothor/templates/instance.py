@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from robothor.templates.safety import contained_path, validate_identifier, validate_sha256
+
 
 def _find_instance_dir() -> Path:
     """Find the .robothor/ directory (workspace root)."""
@@ -34,44 +36,61 @@ class InstanceConfig:
         self.overrides_dir = self.base_dir / "overrides"
         self.archive_dir = self.base_dir / "archive"
 
+    def _path(self, relative: str, *, label: str) -> Path:
+        """Resolve an instance-owned path without following an escaping symlink."""
+
+        return contained_path(self.base_dir, relative, label=label)
+
     @classmethod
     def load(cls, base_dir: Path | None = None) -> InstanceConfig:
         """Load or create instance config."""
         instance = cls(base_dir)
         instance.base_dir.mkdir(parents=True, exist_ok=True)
+        instance.base_dir = instance.base_dir.resolve(strict=True)
+        instance.config_path = instance._path("config.yaml", label="instance config path")
+        instance.installed_path = instance._path("installed.yaml", label="install registry path")
+        instance.overrides_dir = instance._path("overrides", label="override directory")
+        instance.archive_dir = instance._path("archive", label="archive directory")
         instance.overrides_dir.mkdir(exist_ok=True)
         return instance
 
     @property
     def exists(self) -> bool:
         """Check if instance config exists."""
-        return self.config_path.exists()
+        return self._path("config.yaml", label="instance config path").exists()
 
     @property
     def config(self) -> dict[str, Any]:
         """Load config.yaml."""
-        if self.config_path.exists():
-            return yaml.safe_load(self.config_path.read_text()) or {}
+        config_path = self._path("config.yaml", label="instance config path")
+        if config_path.exists():
+            return yaml.safe_load(config_path.read_text()) or {}
         return {}
 
     @config.setter
     def config(self, data: dict[str, Any]) -> None:
         """Write config.yaml."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        self._path("config.yaml", label="instance config path").write_text(
+            yaml.dump(data, default_flow_style=False, sort_keys=False)
+        )
 
     @property
     def installed_agents(self) -> dict[str, Any]:
         """Load installed.yaml agents section."""
-        if self.installed_path.exists():
-            data = yaml.safe_load(self.installed_path.read_text()) or {}
-            return dict(data.get("agents", {}))
+        installed_path = self._path("installed.yaml", label="install registry path")
+        if installed_path.exists():
+            data = yaml.safe_load(installed_path.read_text()) or {}
+            agents = data.get("agents", {})
+            if not isinstance(agents, dict):
+                raise ValueError("Invalid installed agent registry: agents must be a mapping")
+            return dict(agents)
         return {}
 
     def _save_installed(self, agents: dict[str, Any]) -> None:
         """Write installed.yaml."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.installed_path.write_text(
+        self._path("installed.yaml", label="install registry path").write_text(
             yaml.dump({"agents": agents}, default_flow_style=False, sort_keys=False)
         )
 
@@ -84,8 +103,16 @@ class InstanceConfig:
         variables: dict[str, Any],
         manifest_path: str,
         instruction_path: str,
+        source_sha256: str | None = None,
     ) -> None:
         """Record an agent installation."""
+        agent_id = validate_identifier(agent_id, label="agent ID")
+        if source not in {"local", "hub"}:
+            raise ValueError(f"Unsupported agent source: {source}")
+        if source == "hub":
+            validate_identifier(source_path, label="hub bundle slug")
+            source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
+
         agents = self.installed_agents
         agents[agent_id] = {
             "source": source,
@@ -98,10 +125,13 @@ class InstanceConfig:
                 "instruction": instruction_path,
             },
         }
+        if source_sha256 is not None:
+            agents[agent_id]["source_sha256"] = source_sha256
         self._save_installed(agents)
 
     def record_remove(self, agent_id: str) -> dict[str, Any] | None:
         """Remove an agent from installed.yaml. Returns the removed record or None."""
+        agent_id = validate_identifier(agent_id, label="agent ID")
         agents = self.installed_agents
         record: dict[str, Any] | None = agents.pop(agent_id, None)
         if record is not None:
@@ -110,24 +140,32 @@ class InstanceConfig:
 
     def get_agent_overrides(self, agent_id: str) -> dict[str, Any]:
         """Load per-agent overrides from overrides/<agent_id>.yaml."""
-        override_path = self.overrides_dir / f"{agent_id}.yaml"
+        agent_id = validate_identifier(agent_id, label="agent ID")
+        override_path = self._path(f"overrides/{agent_id}.yaml", label="agent override path")
         if override_path.exists():
             return yaml.safe_load(override_path.read_text()) or {}
         return {}
 
     def save_agent_overrides(self, agent_id: str, overrides: dict[str, Any]) -> None:
         """Save per-agent overrides."""
+        agent_id = validate_identifier(agent_id, label="agent ID")
         self.overrides_dir.mkdir(parents=True, exist_ok=True)
-        override_path = self.overrides_dir / f"{agent_id}.yaml"
+        override_path = self._path(f"overrides/{agent_id}.yaml", label="agent override path")
         override_path.write_text(yaml.dump(overrides, default_flow_style=False, sort_keys=False))
 
     def archive_agent(self, agent_id: str, files: dict[str, Path]) -> Path:
         """Archive agent files to .robothor/archive/<agent_id>/."""
-        archive_path = self.archive_dir / agent_id
+        agent_id = validate_identifier(agent_id, label="agent ID")
+        archive_path = self._path(f"archive/{agent_id}", label="agent archive path")
         archive_path.mkdir(parents=True, exist_ok=True)
         for src in files.values():
-            if src.exists():
-                dst = archive_path / src.name
+            if src.is_symlink():
+                raise ValueError(f"Refusing to archive symlink: {src}")
+            if src.is_file():
+                raw_destination = archive_path / src.name
+                if raw_destination.is_symlink():
+                    raise ValueError(f"Refusing to overwrite archive symlink: {raw_destination}")
+                dst = contained_path(archive_path, src.name, label="archived file path")
                 shutil.copy2(src, dst)
         return archive_path
 

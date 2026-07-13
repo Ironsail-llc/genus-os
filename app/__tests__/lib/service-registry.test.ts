@@ -47,7 +47,10 @@ beforeEach(() => {
   // Clear env overrides
   delete process.env.BRIDGE_URL;
   delete process.env.ORCHESTRATOR_URL;
+  delete process.env.ROBOTHOR_ENGINE_URL;
   delete process.env.VISION_URL;
+  delete process.env.ROBOTHOR_SERVICES_MANIFEST;
+  delete process.env.ROBOTHOR_WORKSPACE;
 });
 
 afterEach(() => {
@@ -57,6 +60,11 @@ afterEach(() => {
 describe("getServiceUrl", () => {
   it("returns bridge URL from manifest", () => {
     expect(getServiceUrl("bridge")).toBe("http://127.0.0.1:9100");
+  });
+
+  it("uses the engine runtime override", () => {
+    process.env.ROBOTHOR_ENGINE_URL = "http://engine:18800";
+    expect(getServiceUrl("engine")).toBe("http://engine:18800");
   });
 
   it("returns orchestrator URL", () => {
@@ -106,5 +114,20 @@ describe("listServices", () => {
     expect(Object.keys(services)).toContain("bridge");
     expect(Object.keys(services)).toContain("orchestrator");
     expect(Object.keys(services)).toContain("vision");
+  });
+
+  it("uses an explicitly configured manifest without searching the home directory", () => {
+    process.env.ROBOTHOR_SERVICES_MANIFEST = "/run/genus/services.json";
+    _resetCache();
+
+    listServices();
+
+    expect(fs.readFileSync).toHaveBeenCalledWith(
+      "/run/genus/services.json",
+      "utf-8"
+    );
+    expect(vi.mocked(fs.readFileSync).mock.calls.flat()).not.toContain(
+      `${process.env.HOME}/robothor/robothor-services.json`
+    );
   });
 });

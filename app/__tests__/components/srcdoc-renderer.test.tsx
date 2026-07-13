@@ -1,164 +1,130 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { SrcdocRenderer } from "@/components/canvas/srcdoc-renderer";
 
+async function renderSanitized(html: string) {
+  render(<SrcdocRenderer html={html} />);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  return screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
+}
+
 describe("SrcdocRenderer", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
-  it("renders iframe with sandbox allow-scripts", () => {
-    render(<SrcdocRenderer html="<div>Hello</div>" />);
+  it("uses a unique-origin script sandbox and no referrer", () => {
+    render(<SrcdocRenderer html="<section>Hello</section>" />);
     const iframe = screen.getByTestId("srcdoc-renderer");
-    expect(iframe).toBeTruthy();
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-  });
-
-  it("renders iframe with referrerpolicy no-referrer", () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer");
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
-  it("contains CSP meta tag in srcdoc", () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).toContain("Content-Security-Policy");
+  it("ships a deny-default CSP with no remote script or network source", () => {
+    render(<SrcdocRenderer html="<section>Test</section>" />);
+    const srcdoc = screen.getByTestId("srcdoc-renderer").getAttribute("srcdoc") || "";
     expect(srcdoc).toContain("default-src 'none'");
-    expect(srcdoc).toContain("https://cdn.tailwindcss.com");
-    expect(srcdoc).toContain("https://cdn.jsdelivr.net");
+    expect(srcdoc).toContain("connect-src 'none'");
+    expect(srcdoc).toContain("form-action 'none'");
+    expect(srcdoc).not.toContain("https://cdn.");
   });
 
-  it("contains Chart.js CDN script tag", () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).toContain("chart.js@4");
-    expect(srcdoc).toContain("chartjs-plugin-datalabels");
+  it("sanitizes the model output before first render", () => {
+    render(<SrcdocRenderer html="<section>UNTRUSTED_SENTINEL</section>" />);
+    const srcdoc = screen.getByTestId("srcdoc-renderer").getAttribute("srcdoc") || "";
+    expect(srcdoc).toContain("UNTRUSTED_SENTINEL");
   });
 
-  it("contains chart hydration script for data-chart", () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
+  it("strips scripts, event handlers, remote links, and nested frames", async () => {
+    const iframe = await renderSanitized(
+      `<section>Safe</section><script>alert(1)</script>
+       <button onclick="alert(2)">Bad</button><iframe src="https://evil.test"></iframe>
+       <link rel="stylesheet" href="https://evil.test/x.css">`,
+    );
     const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).toContain("hydrateCharts");
-    expect(srcdoc).toContain("data-chart");
-    expect(srcdoc).toContain("resolveColor");
-  });
-
-  it("strips dangerous iframe tags via DOMPurify", async () => {
-    render(<SrcdocRenderer html='<div>OK</div><iframe src="evil.com"></iframe>' />);
-    // Wait for async DOMPurify import to complete and re-render
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).not.toContain("<iframe src=");
-    expect(srcdoc).toContain("OK");
-  });
-
-  it("strips event handler attributes via DOMPurify", async () => {
-    render(<SrcdocRenderer html='<img onerror="alert(1)" src="x">' />);
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    // The malicious onerror attribute on the <img> should be stripped by DOMPurify.
-    // Note: window.onerror in the trusted wrapper script is intentional (error observability).
-    expect(srcdoc).not.toContain('onerror="alert');
-  });
-
-  it("strips iframe tags via DOMPurify", async () => {
-    render(<SrcdocRenderer html='<div>Safe</div><iframe src="evil.com">inside</iframe>' />);
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    // DOMPurify removes the forbidden <iframe> tag but preserves safe content
-    expect(srcdoc).not.toContain("evil.com");
     expect(srcdoc).toContain("Safe");
+    expect(srcdoc).not.toContain("alert(1)");
+    expect(srcdoc).not.toContain("onclick=");
+    expect(srcdoc).not.toContain("evil.test");
   });
 
-  it("preserves canvas and svg tags", () => {
-    render(<SrcdocRenderer html='<canvas id="c1"></canvas><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="40"/></svg>' />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
+  it("strips navigation, forms, and every interactive form control", async () => {
+    const iframe = await renderSanitized(
+      `<a href="/api/actions/execute">Navigate</a>
+       <form action="/api/actions/execute"><fieldset>
+         <input value="secret"><textarea>text</textarea>
+         <select><option>one</option></select><button>Submit</button>
+       </fieldset></form><section>Static metric</section>`,
+    );
     const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).toContain("<canvas");
+    expect(srcdoc).toContain("Static metric");
+    expect(srcdoc).not.toMatch(
+      /<\/?(?:a|form|fieldset|input|textarea|select|option|button)\b/i,
+    );
+    expect(srcdoc).not.toContain("/api/actions/execute");
+  });
+
+  it("preserves safe semantic HTML, scoped style, and SVG", async () => {
+    const iframe = await renderSanitized(
+      `<section><style>.metric{color:#fff}</style><table><tbody><tr><td>42</td></tr></tbody></table>
+       <svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"></circle></svg></section>`,
+    );
+    const srcdoc = iframe.getAttribute("srcdoc") || "";
+    expect(srcdoc).toContain("metric");
+    expect(srcdoc).toContain("<table>");
     expect(srcdoc).toContain("<svg");
     expect(srcdoc).toContain("<circle");
   });
 
-  it("preserves data-chart attributes", () => {
-    const chartHtml = `<div data-chart='{"type":"bar","datasets":[{"data":[1,2,3]}]}'></div>`;
-    render(<SrcdocRenderer html={chartHtml} />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-    const srcdoc = iframe.getAttribute("srcdoc") || "";
-    expect(srcdoc).toContain("data-chart");
-  });
-
-  it("responds to postMessage height updates", async () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
+  it("accepts bounded height only from the exact iframe window", async () => {
+    render(<SrcdocRenderer html="<section>Test</section>" />);
     const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
 
-    // Initial height
-    expect(iframe.style.height).toBe("400px");
-
-    // Simulate postMessage
     await act(async () => {
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "srcdoc-height", height: 600 },
           origin: "null",
-        })
+          source: iframe.contentWindow,
+        }),
       );
     });
-
-    expect(iframe.style.height).toBe("632px"); // 600 + 32
-  });
-
-  it("ignores postMessage with wrong type", async () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
-
-    await act(async () => {
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          data: { type: "other-type", height: 9999 },
-          origin: "null",
-        })
-      );
-    });
-
-    expect(iframe.style.height).toBe("400px"); // unchanged
-  });
-
-  it("caps max height at 5000px", async () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
-    const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
+    expect(iframe.style.height).toBe("632px");
 
     await act(async () => {
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "srcdoc-height", height: 10000 },
           origin: "null",
-        })
+          source: iframe.contentWindow,
+        }),
       );
     });
-
     expect(iframe.style.height).toBe("5000px");
   });
 
-  it("enforces minimum height of 200px", async () => {
-    render(<SrcdocRenderer html="<div>Test</div>" />);
+  it("rejects wrong source and wrong origin messages", async () => {
+    render(<SrcdocRenderer html="<section>Test</section>" />);
     const iframe = screen.getByTestId("srcdoc-renderer") as HTMLIFrameElement;
 
     await act(async () => {
       window.dispatchEvent(
         new MessageEvent("message", {
-          data: { type: "srcdoc-height", height: 10 },
+          data: { type: "srcdoc-height", height: 900 },
+          origin: window.location.origin,
+          source: iframe.contentWindow,
+        }),
+      );
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "srcdoc-height", height: 900 },
           origin: "null",
-        })
+          source: window,
+        }),
       );
     });
-
-    expect(iframe.style.height).toBe("200px");
+    expect(iframe.style.height).toBe("400px");
   });
 });

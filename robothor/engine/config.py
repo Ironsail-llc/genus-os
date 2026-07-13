@@ -78,6 +78,13 @@ class EngineConfig:
     # Default agent for interactive chat (Telegram + webchat)
     default_chat_agent: str = "main"
 
+    # Fleet readiness. Development can explicitly tolerate an empty workspace;
+    # production deployments should set allow_empty_fleet=false and declare
+    # any control agents that must be present before the pod receives traffic.
+    allow_empty_fleet: bool = True
+    min_agent_count: int = 1
+    required_agent_ids: tuple[str, ...] = ()
+
     # Canonical session key shared by Telegram + Helm webchat
     main_session_key: str = "agent:main:primary"
 
@@ -109,6 +116,14 @@ class EngineConfig:
             default_timezone=os.environ.get("ROBOTHOR_TIMEZONE", "America/New_York"),
             max_iterations=int(os.environ.get("ROBOTHOR_MAX_ITERATIONS", "20")),
             default_chat_agent=os.environ.get("ROBOTHOR_DEFAULT_CHAT_AGENT", "main"),
+            allow_empty_fleet=os.environ.get("ROBOTHOR_ALLOW_EMPTY_FLEET", "true").lower()
+            in {"1", "true", "yes", "on"},
+            min_agent_count=max(1, int(os.environ.get("ROBOTHOR_MIN_AGENT_COUNT", "1"))),
+            required_agent_ids=tuple(
+                agent_id.strip()
+                for agent_id in os.environ.get("ROBOTHOR_REQUIRED_AGENT_IDS", "").split(",")
+                if agent_id.strip()
+            ),
             main_session_key=os.environ.get("ROBOTHOR_MAIN_SESSION_KEY", "agent:main:primary"),
             operator_name=os.environ.get("ROBOTHOR_OPERATOR_NAME", ""),
             instance_id=os.environ.get("ROBOTHOR_INSTANCE_ID", ""),
@@ -306,7 +321,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         model_fallbacks=model.get("fallbacks", []),
         cron_expr=schedule.get("cron", ""),
         timezone=schedule.get("timezone", "America/New_York"),
-        timeout_seconds=schedule.get("timeout_seconds", 0),
+        timeout_seconds=schedule.get("timeout_seconds", 600),
         max_iterations=schedule.get("max_iterations", 20),
         stall_timeout_seconds=int(schedule.get("stall_timeout_seconds", 0)),
         early_stall_timeout_seconds=int(schedule.get("early_stall_timeout_seconds", 0)),

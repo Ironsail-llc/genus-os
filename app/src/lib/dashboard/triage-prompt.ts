@@ -1,12 +1,11 @@
 /**
- * Dashboard triage — quick Gemini Flash call (~256 tokens, ~1s) that decides
+ * Dashboard triage — a small Engine-owned completion that decides
  * whether the dashboard needs updating and what data to fetch.
  *
  * Replaces the regex-based topic detection in topic-detector.ts.
  */
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = process.env.DASHBOARD_MODEL || "google/gemini-2.5-flash-lite";
+import { getEngineClient } from "@/lib/engine/server-client";
 
 export interface TriageResult {
   shouldUpdate: boolean;
@@ -61,43 +60,20 @@ export function buildTriageUserPrompt(
 }
 
 /**
- * Call Gemini Flash for a quick triage decision.
+ * Ask the authenticated Engine for a quick triage decision.
  * Returns structured TriageResult.
  */
 export async function triageDashboard(
   messages: Array<{ role: string; content: string }>,
-  apiKey: string
 ): Promise<TriageResult> {
   const userPrompt = buildTriageUserPrompt(messages);
 
   try {
-    const response = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://app.robothor.ai",
-        "X-Title": "Genus OS Dashboard Triage",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: TRIAGE_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 256,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-
-    if (!response.ok) {
-      return { shouldUpdate: false, dataNeeds: [], summary: "" };
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    const content = await getEngineClient().dashboardCompletion(
+      "triage",
+      TRIAGE_SYSTEM_PROMPT,
+      userPrompt,
+    );
 
     // Parse JSON from response (strip markdown fences if present)
     const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
@@ -110,9 +86,9 @@ export async function triageDashboard(
         : [],
       summary: String(parsed.summary || "").replace(/[^\w\s\-.,():/]/g, "").slice(0, 200),
     };
-  } catch (err) {
+  } catch {
     // On triage error, default to updating — better to show something than silently skip
-    console.warn("[dashboard triage] Error, defaulting to update:", String(err));
+    console.warn("[dashboard triage] Engine completion failed; defaulting to update");
     // Extract a reasonable summary from the last assistant message for the fallback
     const lastAssistant = messages.filter((m) => m.role === "assistant").pop();
     const fallbackSummary = lastAssistant

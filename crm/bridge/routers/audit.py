@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
 @router.get("/events")
-async def get_audit_events(
+def get_audit_events(
     since: str | None = Query(None, description="ISO timestamp lower bound"),
     until: str | None = Query(None, description="ISO timestamp upper bound"),
     event_type: str | None = Query(None, description="Filter by event_type"),
@@ -48,7 +48,7 @@ async def get_audit_events(
 
 
 @router.get("/guardrails")
-async def get_guardrail_events(
+def get_guardrail_events(
     since: str | None = Query(None, description="ISO timestamp lower bound"),
     until: str | None = Query(None, description="ISO timestamp upper bound"),
     policy: str | None = Query(None, description="Filter by guardrail_name"),
@@ -109,7 +109,7 @@ async def get_guardrail_events(
 
 
 @router.get("/stats")
-async def get_audit_stats(
+def get_audit_stats(
     hours: int = Query(24, ge=1, le=720, description="Rolling window in hours"),
 ) -> dict[str, Any]:
     """Aggregated audit statistics for the given time window."""

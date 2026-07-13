@@ -51,7 +51,7 @@ export async function GET() {
       if (res.status === 404) {
         return NextResponse.json({ html: null });
       }
-      return NextResponse.json({ error: "Failed to read session" }, { status: 500 });
+      return NextResponse.json({ error: "Session backend unavailable" }, { status: 502 });
     }
 
     const data = await res.json();
@@ -71,9 +71,8 @@ export async function GET() {
       // Content is not JSON — treat as raw HTML (backward compat)
       return NextResponse.json({ html: content });
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Session backend unavailable" }, { status: 502 });
   }
 }
 
@@ -118,16 +117,11 @@ export async function POST(request: NextRequest) {
     );
 
     if (!res.ok) {
-      const text = await res.text();
-      return NextResponse.json(
-        { error: `Bridge returned ${res.status}: ${text}` },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Session backend unavailable" }, { status: 502 });
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Session backend unavailable" }, { status: 502 });
   }
 }

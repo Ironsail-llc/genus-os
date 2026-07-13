@@ -35,20 +35,22 @@ class TestAgentRunnerExecute:
         assert "not found" in run.error_message
 
     @pytest.mark.asyncio
-    async def test_no_models_configured(self, runner, sample_agent_config):
-        """Fails when agent has no models."""
+    async def test_no_models_configured(self, runner, sample_agent_config, mock_litellm_response):
+        """A missing model declaration uses the availability fallback."""
         sample_agent_config.model_primary = ""
         sample_agent_config.model_fallbacks = []
-        with patch("robothor.engine.runner.create_run"):
-            with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
-                    run = await runner.execute(
-                        "test-agent",
-                        "hello",
-                        agent_config=sample_agent_config,
-                    )
-        assert run.status == RunStatus.FAILED
-        assert "No models" in run.error_message
+        response = mock_litellm_response(content="Fallback completed")
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as call:
+            with patch("robothor.engine.runner.create_run"):
+                with patch("robothor.engine.runner.update_run"):
+                    with patch("robothor.engine.runner.create_step"):
+                        run = await runner.execute(
+                            "test-agent",
+                            "hello",
+                            agent_config=sample_agent_config,
+                        )
+        assert run.status == RunStatus.COMPLETED
+        assert call.call_args.kwargs["model"] == "openrouter/deepseek/deepseek-v4-pro"
 
     @pytest.mark.asyncio
     async def test_successful_simple_run(self, runner, sample_agent_config, mock_litellm_response):
@@ -70,7 +72,9 @@ class TestAgentRunnerExecute:
         assert run.status == RunStatus.COMPLETED
         assert run.output_text == "Hello! I'm done."
         assert run.model_used == "test-model"
-        assert len(run.steps) == 1  # one LLM call
+        llm_steps = [step for step in run.steps if step.step_type.value == "llm_call"]
+        assert len(llm_steps) == 1
+        assert llm_steps[0].model == "test-model"
 
     @pytest.mark.asyncio
     async def test_tool_call_loop(self, runner, sample_agent_config, mock_litellm_response):
