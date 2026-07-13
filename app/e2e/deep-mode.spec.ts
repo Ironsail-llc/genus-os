@@ -4,7 +4,7 @@
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
-const BASE_URL = "http://localhost:3004";
+const BASE_URL = "/";
 
 /** Build a mock SSE stream from event objects */
 function buildSSE(events: Array<{ event: string; data: unknown }>): string {

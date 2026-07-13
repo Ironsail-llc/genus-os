@@ -29,7 +29,11 @@ ROBOTHOR_WORKSPACE
 # Operational email addresses used in scripts (not test data)
 support@impetusrx.com
 robothor@ironsail.ai
+platform@ironsail.ai
 impetusrx.com
+
+# Package-manager metadata syntax (not an email address)
+pnpm@10.34.5
 
 # Systemd service paths (template uses hardcoded paths by design)
 /home/philip/robothor
