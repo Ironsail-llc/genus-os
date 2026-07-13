@@ -11,6 +11,7 @@ Usage:
     robothor mcp            # Start the MCP server
     robothor version        # Show version
     robothor migrate        # Run database migrations
+    robothor snapshot       # Backup, verify, restore, and retain instance state
     robothor auth           # Manage user accounts / identity
     robothor pipeline       # (coming in v0.2)
 """
@@ -66,6 +67,95 @@ def main(argv: list[str] | None = None) -> int:
     migrate_parser.add_argument(
         "--check", action="store_true", help="Check if required tables exist"
     )
+
+    # snapshot — versioned disaster recovery for PostgreSQL + workspace state
+    snapshot_parser = subparsers.add_parser(
+        "snapshot", help="Create, verify, restore, and retain instance snapshots"
+    )
+    snapshot_sub = snapshot_parser.add_subparsers(dest="snapshot_command")
+
+    snapshot_create = snapshot_sub.add_parser("create", help="Create an atomic snapshot")
+    snapshot_create.add_argument("--repository", help="Snapshot repository directory")
+    snapshot_create.add_argument("--output", help="Exact output file path")
+    snapshot_create.add_argument("--workspace", help="Workspace to snapshot")
+    snapshot_create.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help=(
+            "Include .vault-key and existing federation identity key "
+            "(requires encryption; never includes env secrets)"
+        ),
+    )
+    snapshot_create.add_argument(
+        "--plaintext",
+        action="store_true",
+        help="Explicitly disable encryption (forbidden with --include-secrets)",
+    )
+    snapshot_create.add_argument(
+        "--passphrase-env",
+        default="GENUS_SNAPSHOT_PASSPHRASE",
+        help="Environment variable holding the encryption passphrase",
+    )
+    snapshot_create.add_argument(
+        "--skip-database", action="store_true", help="Create a workspace-only snapshot"
+    )
+    snapshot_create.add_argument(
+        "--skip-workspace", action="store_true", help="Create a database-only snapshot"
+    )
+    snapshot_create.add_argument(
+        "--force", action="store_true", help="Replace the exact --output path atomically"
+    )
+
+    snapshot_list = snapshot_sub.add_parser("list", help="List managed snapshots")
+    snapshot_list.add_argument("--repository", help="Snapshot repository directory")
+
+    snapshot_verify = snapshot_sub.add_parser(
+        "verify", help="Authenticate, checksum, inspect, and compatibility-check a snapshot"
+    )
+    snapshot_verify.add_argument("snapshot", help="Snapshot file")
+    snapshot_verify.add_argument(
+        "--passphrase-env",
+        default="GENUS_SNAPSHOT_PASSPHRASE",
+        help="Environment variable holding the decryption passphrase",
+    )
+
+    snapshot_restore = snapshot_sub.add_parser(
+        "restore", help="Verify/dry-run by default; restore only with explicit confirmation"
+    )
+    snapshot_restore.add_argument("snapshot", help="Snapshot file")
+    snapshot_restore.add_argument("--workspace", help="Target workspace")
+    snapshot_restore.add_argument(
+        "--passphrase-env",
+        default="GENUS_SNAPSHOT_PASSPHRASE",
+        help="Environment variable holding the decryption passphrase",
+    )
+    restore_selection = snapshot_restore.add_mutually_exclusive_group()
+    restore_selection.add_argument(
+        "--database-only", action="store_true", help="Restore only PostgreSQL"
+    )
+    restore_selection.add_argument(
+        "--workspace-only", action="store_true", help="Restore only workspace state"
+    )
+    snapshot_restore.add_argument(
+        "--confirm", action="store_true", help="Execute the restore instead of a dry run"
+    )
+    snapshot_restore.add_argument(
+        "--force",
+        action="store_true",
+        help="Authorize destructive DB cleaning and workspace replacement",
+    )
+
+    snapshot_prune = snapshot_sub.add_parser(
+        "prune", help="Apply retention policy (dry-run unless --confirm)"
+    )
+    snapshot_prune.add_argument("--repository", help="Snapshot repository directory")
+    snapshot_prune.add_argument(
+        "--keep", type=int, default=7, help="Always keep at least this many newest snapshots"
+    )
+    snapshot_prune.add_argument(
+        "--older-than-days", type=int, default=None, help="Delete only snapshots older than N days"
+    )
+    snapshot_prune.add_argument("--confirm", action="store_true", help="Delete selected snapshots")
 
     # config
     config_parser = subparsers.add_parser("config", help="Configuration management")
@@ -450,6 +540,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_migrate
 
         return cmd_migrate(args)
+    if args.command == "snapshot":
+        from robothor.cli.snapshot import cmd_snapshot
+
+        return cmd_snapshot(args)
     if args.command == "memory-eval":
         from robothor.cli.memory_eval import cmd_memory_eval
 
