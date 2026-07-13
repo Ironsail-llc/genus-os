@@ -1,3 +1,9 @@
+## [1.15.1](https://github.com/Ironsail-llc/genus-os/compare/v1.15.0...v1.15.1) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce memory-fact drift detection (rip 7) ([#193](https://github.com/Ironsail-llc/genus-os/issues/193)) ([49181e1](https://github.com/Ironsail-llc/genus-os/commit/49181e18184fd0877e205e88f21fd3f9e2860518)), closes [#3](https://github.com/Ironsail-llc/genus-os/issues/3) [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#186](https://github.com/Ironsail-llc/genus-os/issues/186) [#190](https://github.com/Ironsail-llc/genus-os/issues/190)
+
 ## [1.15.0](https://github.com/Ironsail-llc/genus-os/compare/v1.14.5...v1.15.0) (2026-07-13)
 
 ### Features
