@@ -1,3 +1,9 @@
+## [1.14.3](https://github.com/Ironsail-llc/genus-os/compare/v1.14.2...v1.14.3) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** make the alert rung of the enforcement ladder real ([#190](https://github.com/Ironsail-llc/genus-os/issues/190)) ([ce2b74c](https://github.com/Ironsail-llc/genus-os/commit/ce2b74c8ff5b10fe196eb534452f4c52b77f43d7)), closes [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#186](https://github.com/Ironsail-llc/genus-os/issues/186)
+
 ## [1.14.2](https://github.com/Ironsail-llc/genus-os/compare/v1.14.1...v1.14.2) (2026-07-13)
 
 ### Bug Fixes
