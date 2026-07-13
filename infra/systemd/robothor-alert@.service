@@ -1,0 +1,14 @@
+# Pages the operator on Telegram when the instantiating unit fails.
+#
+# Install:
+#   1. Copy to /etc/systemd/system/ and adjust the two paths below to your
+#      instance workspace (ROBOTHOR_WORKSPACE).
+#   2. Wire units up: scripts/install_onfailure_alerts.sh robothor-engine.service ...
+[Unit]
+Description=Robothor failure alert for %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/env bash /opt/robothor/scripts/send_failure_alert.sh %i
