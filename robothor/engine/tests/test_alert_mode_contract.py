@@ -73,7 +73,7 @@ class TestAlertNotifiesOperator:
 
         assert result.allowed is True, "alert must not block (that is enforce)"
         assert len(sent) == 1, "alert mode did not notify the operator"
-        assert sent[0]["notification_type"] == "alert"
+        assert sent[0]["notification_type"] == "escalation"  # "alert" is DB-invalid
         assert "exec_allowlist" in sent[0]["subject"]
 
     def test_observe_mode_does_not_notify(self, monkeypatch):
