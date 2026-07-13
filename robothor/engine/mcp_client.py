@@ -21,6 +21,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# MCP 2026-07-28 (RC, locked 2026-05-21; final ships 2026-07-28) eliminates the
+# initialize/initialized handshake and Mcp-Session-Id tracking — the core goes
+# stateless ("any request can land on any server instance"). Per-server opt-in
+# via McpServerConfig.protocol; legacy stays the untouched default until a
+# server is known to have upgraded.
+PROTOCOL_LEGACY = "legacy"
+PROTOCOL_STATELESS = "2026-07-28"
+_KNOWN_PROTOCOLS = (PROTOCOL_LEGACY, PROTOCOL_STATELESS)
+
 
 @dataclass(frozen=True)
 class McpServerConfig:
@@ -38,10 +47,27 @@ class McpServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     # Common
     timeout_seconds: int = 30
+    # "legacy" (default, today's 2024-11-05 handshake+session behavior) or
+    # "2026-07-28" (stateless — see PROTOCOL_STATELESS).
+    protocol: str = PROTOCOL_LEGACY
+
+    def __post_init__(self) -> None:
+        if self.protocol not in _KNOWN_PROTOCOLS:
+            logger.warning(
+                "MCP server '%s' has unrecognized protocol %r (expected one of %s); "
+                "treating as legacy",
+                self.name,
+                self.protocol,
+                _KNOWN_PROTOCOLS,
+            )
 
     @property
     def transport(self) -> str:
         return "http" if self.url else "stdio"
+
+    @property
+    def stateless(self) -> bool:
+        return self.protocol == PROTOCOL_STATELESS
 
 
 class McpClientSession:
@@ -152,6 +178,10 @@ class McpClientSession:
         return result
 
     async def _ensure_initialized(self) -> None:
+        # Stateless (2026-07-28) servers have no initialize/initialized
+        # handshake at all — never gate on it.
+        if self.config.stateless:
+            return
         if not self._initialized:
             await self.initialize()
 
@@ -208,13 +238,17 @@ class McpHttpSession:
             "Content-Type": "application/json",
             **self.config.headers,
         }
-        if self._session_id:
+        if self.config.stateless:
+            # RC pattern: the version rides a header on every request instead
+            # of a negotiated (and now-eliminated) initialize handshake.
+            headers["MCP-Protocol-Version"] = PROTOCOL_STATELESS
+        elif self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
         async with httpx.AsyncClient(timeout=float(self.config.timeout_seconds)) as client:
             r = await client.post(self.config.url, headers=headers, json=message)
 
-        if sid := r.headers.get("Mcp-Session-Id"):
+        if not self.config.stateless and (sid := r.headers.get("Mcp-Session-Id")):
             self._session_id = sid
 
         content_type = r.headers.get("content-type", "")
@@ -253,6 +287,10 @@ class McpHttpSession:
         return result
 
     async def _ensure_initialized(self) -> None:
+        # Stateless (2026-07-28) servers have no initialize/initialized
+        # handshake at all — never gate on it.
+        if self.config.stateless:
+            return
         if not self._initialized:
             await self.initialize()
 
@@ -274,8 +312,9 @@ class McpHttpSession:
                 "params": {"name": name, "arguments": arguments or {}},
             }
         )
-        # Auto-recover from expired MCP sessions
-        if self._is_session_error(result):
+        # Auto-recover from expired MCP sessions — stateless servers have no
+        # session to expire, so any error there is just a plain error.
+        if not self.config.stateless and self._is_session_error(result):
             self._session_id = None
             self._initialized = False
             await self._ensure_initialized()
@@ -384,6 +423,7 @@ class McpClientPool:
                     "url": config.url or None,
                     "running": running,
                     "initialized": bool(session and session._initialized) if session else False,
+                    "protocol": config.protocol,
                 }
             )
         return result
@@ -425,6 +465,7 @@ def configure_mcp_servers(servers: list[dict[str, Any]]) -> None:
                 url=srv.get("url", ""),
                 headers=srv.get("headers", {}),
                 timeout_seconds=srv.get("timeout_seconds", 30),
+                protocol=srv.get("protocol", PROTOCOL_LEGACY),
             )
         )
 
@@ -432,6 +473,7 @@ def configure_mcp_servers(servers: list[dict[str, Any]]) -> None:
 def register_adapter(adapter: Any) -> None:
     """Register a single AdapterConfig in the MCP client pool."""
     pool = get_mcp_client_pool()
+    protocol = getattr(adapter, "protocol", PROTOCOL_LEGACY)
     if adapter.transport == "http":
         pool.register(
             McpServerConfig(
@@ -439,6 +481,7 @@ def register_adapter(adapter: Any) -> None:
                 url=adapter.url,
                 headers=dict(adapter.headers),
                 timeout_seconds=adapter.timeout_seconds,
+                protocol=protocol,
             )
         )
     else:
@@ -448,5 +491,6 @@ def register_adapter(adapter: Any) -> None:
                 command=list(adapter.command),
                 env=dict(adapter.env),
                 timeout_seconds=adapter.timeout_seconds,
+                protocol=protocol,
             )
         )

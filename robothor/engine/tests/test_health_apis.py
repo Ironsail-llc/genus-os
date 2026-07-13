@@ -370,3 +370,56 @@ class TestExtensionsReloadEndpoint:
         data = resp.json()
         assert data["reloaded"] is True
         assert data["count"] == 1
+
+
+class TestActiveRunsEndpoint:
+    """Test GET /api/runs/active — live sessions from the in-process registry (PR 1)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_registry(self):
+        from robothor.engine import session_registry
+
+        for run_id in session_registry.active_run_ids():
+            session_registry.unregister(run_id)
+        yield
+        for run_id in session_registry.active_run_ids():
+            session_registry.unregister(run_id)
+
+    def test_empty_when_no_active_runs(self, client: TestClient) -> None:
+        resp = client.get("/api/runs/active")
+        assert resp.status_code == 200
+        assert resp.json() == {"runs": []}
+
+    def test_registered_session_appears(self, client: TestClient) -> None:
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        session = AgentSession(agent_id="test-agent")
+        session.start("system prompt", "hello", [])
+        session.record_llm_call(model="test/model")
+        session_registry.register(session)
+
+        resp = client.get("/api/runs/active")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["runs"]) == 1
+        run = data["runs"][0]
+        assert run["run_id"] == session.run_id
+        assert run["agent_id"] == "test-agent"
+        assert run["started_at"] is not None
+        assert run["iterations"] == 1
+
+    def test_requires_control_token_when_configured(self, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        resp = c.get("/api/runs/active")
+        assert resp.status_code == 401
+
+    def test_accepts_correct_control_token(self, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_ENGINE_CONTROL_TOKEN", "s3cr3t")
+        c = TestClient(_make_app(), raise_server_exceptions=False)
+        resp = c.get(
+            "/api/runs/active",
+            headers={"X-Robothor-Control-Token": "s3cr3t"},
+        )
+        assert resp.status_code == 200
