@@ -15,7 +15,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _clean_task_state(db_conn, test_prefix):
     """Wipe prefixed task rows, their spawned subtasks, and all their history.
 

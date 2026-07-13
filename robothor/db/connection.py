@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -60,6 +61,7 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
             _pool = psycopg2.pool.ThreadedConnectionPool(
                 minconn=minconn,
                 maxconn=maxconn,
+                connect_timeout=int(os.environ.get("ROBOTHOR_DB_CONNECT_TIMEOUT", "5")),
                 **cfg.dict,
             )
         except psycopg2.OperationalError as e:
@@ -86,23 +88,55 @@ def get_connection(
     pool = get_pool()
     # Use a threading timeout to avoid blocking indefinitely when pool is exhausted
     conn = None
+    acquisition_error: Exception | None = None
     acquired = threading.Event()
+    state_lock = threading.Lock()
+    cancelled = False
 
     def _get() -> None:
-        nonlocal conn
+        nonlocal conn, acquisition_error
         try:
-            conn = pool.getconn()
+            candidate = pool.getconn()
+        except Exception as exc:
+            with state_lock:
+                acquisition_error = exc
             acquired.set()
-        except Exception:
+            return
+
+        # A timed-out caller cannot consume the eventual result. Coordinate
+        # cancellation under a lock so a connection obtained at the timeout
+        # boundary is always returned to the pool instead of being orphaned.
+        return_late_connection = False
+        with state_lock:
+            if cancelled:
+                return_late_connection = True
+            else:
+                conn = candidate
             acquired.set()
+        if return_late_connection:
+            pool.putconn(candidate)
 
     t = threading.Thread(target=_get, daemon=True)
     t.start()
     if not acquired.wait(timeout=_POOL_GETCONN_TIMEOUT):
+        late_connection = None
+        with state_lock:
+            cancelled = True
+            # Cover the boundary race where the worker published a connection
+            # immediately after Event.wait returned false.
+            if conn is not None:
+                late_connection = conn
+                conn = None
+        if late_connection is not None:
+            pool.putconn(late_connection)
         raise ConnectionError(
             f"Could not acquire DB connection within {_POOL_GETCONN_TIMEOUT}s — pool exhausted"
         )
     if conn is None:
+        if acquisition_error is not None:
+            raise ConnectionError(
+                "Failed to acquire DB connection from pool"
+            ) from acquisition_error
         raise ConnectionError("Failed to acquire DB connection from pool")
     try:
         if autocommit:

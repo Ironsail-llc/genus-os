@@ -201,13 +201,14 @@ class TestRunMigration:
 
         with (
             patch("psycopg2.connect", return_value=mock_conn),
-            patch("robothor.cli._find_migration_sql", return_value="CREATE TABLE t (id int);"),
+            patch("robothor.db.migrate.apply", return_value=["001_init"]) as mock_apply,
         ):
             db = DatabaseConfig(host="localhost", password="test")
             count = run_migration(db)
 
         assert count == 17
-        assert mock_cur.execute.call_count == 2  # SQL + count query
+        mock_apply.assert_called_once_with(connection=mock_conn)
+        assert mock_cur.execute.call_count == 1  # table count query
 
     def test_connection_failure_returns_negative(self):
         """If DB is unreachable, should return -1."""
@@ -219,12 +220,17 @@ class TestRunMigration:
             count = run_migration(db)
         assert count == -1
 
-    def test_no_migration_sql_returns_negative(self):
-        """If migration SQL is missing, should return -1."""
-        with patch("robothor.cli._find_migration_sql", return_value=None):
+    def test_migration_runner_failure_returns_negative(self):
+        """If the canonical runner fails, setup should return -1."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", side_effect=RuntimeError("drift")),
+        ):
             db = DatabaseConfig()
             count = run_migration(db)
         assert count == -1
+        mock_conn.close.assert_called_once()
 
 
 class TestPullModels:

@@ -20,6 +20,50 @@
 
 BEGIN;
 
+-- Enforce the documented cutover prerequisite when this is a real upgrade.
+-- Empty tables on a fresh installation are safe; populated tables must have
+-- at least 30 distinct days of the replacement achievement score.
+DO $$
+DECLARE
+    populated BOOLEAN;
+    achievement_days INTEGER;
+BEGIN
+    SELECT EXISTS (SELECT 1 FROM agent_buddy_stats LIMIT 1)
+      INTO populated;
+    IF populated THEN
+        SELECT COUNT(DISTINCT stat_date)
+          INTO achievement_days
+          FROM agent_buddy_stats
+         WHERE achievement_score IS NOT NULL;
+        IF achievement_days < 30 THEN
+            RAISE EXCEPTION
+              'migration 035 requires >=30 achievement-score days for populated agent_buddy_stats (found %)',
+              achievement_days;
+        END IF;
+    END IF;
+END $$;
+
+-- Preserve a complete JSON representation before dropping any columns.  This
+-- archive is intentionally retained for operator-verified rollback/retention;
+-- it is not read by the runtime.
+CREATE TABLE IF NOT EXISTS migration_archive_035_buddy_rpg (
+    source_table TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source_table, row_key)
+);
+
+INSERT INTO migration_archive_035_buddy_rpg (source_table, row_key, payload)
+SELECT 'agent_buddy_stats', agent_id || ':' || stat_date::TEXT, to_jsonb(s)
+  FROM agent_buddy_stats AS s
+ON CONFLICT (source_table, row_key) DO NOTHING;
+
+INSERT INTO migration_archive_035_buddy_rpg (source_table, row_key, payload)
+SELECT 'buddy_stats', stat_date::TEXT, to_jsonb(s)
+  FROM buddy_stats AS s
+ON CONFLICT (source_table, row_key) DO NOTHING;
+
 -- ══════════════════════════════════════════════════════════════════
 -- agent_buddy_stats — drop per-agent RPG columns
 -- ══════════════════════════════════════════════════════════════════

@@ -1,12 +1,31 @@
 -- Memory v4 schema consolidation
--- Drops legacy short/long-term tables (frozen since Feb 3, 2026),
+-- Archives legacy short/long-term tables (frozen since Feb 3, 2026),
 -- adds tsv column for BM25, switches to HNSW index, drops dead function.
 -- Idempotent — safe to run on both fresh and existing databases.
 BEGIN;
 
--- Drop legacy tier tables (data was frozen, never queried)
-DROP TABLE IF EXISTS short_term_memory CASCADE;
-DROP TABLE IF EXISTS long_term_memory CASCADE;
+-- Preserve legacy rows under explicit archive names.  The old migration used
+-- destructive table removal with CASCADE based only on an operational comment, which could
+-- destroy an upgraded installation's memory without a machine-enforced gate.
+-- Renaming removes the obsolete runtime names while making recovery possible.
+DO $$
+BEGIN
+  IF to_regclass('public.short_term_memory') IS NOT NULL THEN
+    IF to_regclass('public.migration_archive_023_short_term_memory') IS NOT NULL THEN
+      RAISE EXCEPTION
+        'both short_term_memory and migration_archive_023_short_term_memory exist; refusing ambiguous migration';
+    END IF;
+    ALTER TABLE short_term_memory RENAME TO migration_archive_023_short_term_memory;
+  END IF;
+
+  IF to_regclass('public.long_term_memory') IS NOT NULL THEN
+    IF to_regclass('public.migration_archive_023_long_term_memory') IS NOT NULL THEN
+      RAISE EXCEPTION
+        'both long_term_memory and migration_archive_023_long_term_memory exist; refusing ambiguous migration';
+    END IF;
+    ALTER TABLE long_term_memory RENAME TO migration_archive_023_long_term_memory;
+  END IF;
+END $$;
 
 -- Add tsvector column for BM25 keyword search
 ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS tsv tsvector
