@@ -1,0 +1,15 @@
+# Replicate the recoverable core offsite, after the local SSD backup runs.
+# Paths below use the generic /opt/robothor convention — adjust to your
+# instance workspace on install.
+[Unit]
+Description=Robothor — offsite backup replication
+After=network-online.target
+Wants=network-online.target
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/env bash /opt/robothor/scripts/backup-offsite.sh

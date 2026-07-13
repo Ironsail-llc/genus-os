@@ -1,0 +1,10 @@
+[Unit]
+Description=Robothor — offsite backup replication (nightly, after local backup)
+
+[Timer]
+# backup-ssd.sh runs at 04:30; give it time to finish the dumps.
+OnCalendar=*-*-* 05:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
