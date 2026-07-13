@@ -1,3 +1,9 @@
+## [1.13.1](https://github.com/Ironsail-llc/genus-os/compare/v1.13.0...v1.13.1) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce prompt-injection scan guardrail ([#182](https://github.com/Ironsail-llc/genus-os/issues/182)) ([7802d01](https://github.com/Ironsail-llc/genus-os/commit/7802d017afa79030e3d9e4753c32156b554396be)), closes [#1](https://github.com/Ironsail-llc/genus-os/issues/1)
+
 ## [1.13.0](https://github.com/Ironsail-llc/genus-os/compare/v1.12.0...v1.13.0) (2026-07-13)
 
 ### Features
