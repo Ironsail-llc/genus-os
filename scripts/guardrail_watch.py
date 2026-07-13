@@ -11,11 +11,27 @@ or a hand-verified true-positive set (exec_allowlist). RBAC is already enforce.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 from robothor.db.connection import get_connection
 
 WINDOW_HOURS = int(os.environ.get("GUARDRAIL_WATCH_HOURS", "48"))
+
+
+def check_dropin_drift() -> None:
+    """Surface divergence between the live systemd drop-in and its repo mirror.
+
+    The drop-in is the production guardrail posture; an unversioned live edit
+    must show up in the daily report rather than silently persist.
+    """
+    script = Path(__file__).resolve().parent / "check_dropin_drift.sh"
+    if not script.exists():
+        return
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
+    print("\n=== drop-in drift check ===")
+    print(result.stdout.rstrip())
 
 
 def main() -> int:
@@ -58,6 +74,7 @@ def main() -> int:
             print(f"  {status:12} {n}")
         if total:
             print(f"  error+timeout rate: {100 * bad / total:.1f}%  ({bad}/{total})")
+    check_dropin_drift()
     return 0
 
 

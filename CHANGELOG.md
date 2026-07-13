@@ -1,3 +1,16 @@
+## [1.10.1](https://github.com/Ironsail-llc/genus-os/compare/v1.10.0...v1.10.1) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** approval-manager e2e coverage + dropped-keyboard bug ([#171](https://github.com/Ironsail-llc/genus-os/issues/171)) ([07e534d](https://github.com/Ironsail-llc/genus-os/commit/07e534d7032956a76bd2eba652d5a3e118f7f0d2))
+
+## [1.10.0](https://github.com/Ironsail-llc/genus-os/compare/v1.9.0...v1.10.0) (2026-07-03)
+
+### Features
+
+* **engine:** cache-hit-rate metrics + catalog-driven prompt caching ([#173](https://github.com/Ironsail-llc/genus-os/issues/173)) ([8a9833f](https://github.com/Ironsail-llc/genus-os/commit/8a9833f24fe2a379e9fe97896d2c14130bda5d5e))
+* **engine:** live-run visibility + Telegram steer/interrupt ([#170](https://github.com/Ironsail-llc/genus-os/issues/170)) ([58b1d93](https://github.com/Ironsail-llc/genus-os/commit/58b1d9384657b39da42ae77b4e97fb6277e97b0b))
+
 ## [1.9.0](https://github.com/Ironsail-llc/genus-os/compare/v1.8.0...v1.9.0) (2026-07-02)
 
 ### Features

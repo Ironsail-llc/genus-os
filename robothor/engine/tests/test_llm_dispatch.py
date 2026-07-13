@@ -205,6 +205,21 @@ class TestBuildLLMKwargs:
         assert kwargs["temperature"] == 1.0
         assert kwargs["thinking"]["type"] == "enabled"
 
+    def test_codex_model_no_cache_control(self):
+        """Pinned case 3 (PR 4): codex/* never gets cache_control — litellm
+        has no catalog entry for the custom subscription provider, so the
+        catalog-driven ``supports_cache_control`` gate falls through to False,
+        matching the prior ``model.startswith("anthropic/")`` behavior."""
+        kwargs = self._build(
+            "codex/gpt-5.5",
+            [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+        sys_msg = kwargs["messages"][0]
+        assert isinstance(sys_msg["content"], str)
+
 
 class TestMessageHygiene:
     def test_validate_tool_pairs_drops_orphan_tool_result(self):

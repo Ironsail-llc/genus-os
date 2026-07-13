@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramRetryAfter
 
 from robothor.engine.chat import _sessions, get_shared_session
 from robothor.engine.config import EngineConfig
+from robothor.engine.permission_escalation import init_permission_manager
 from robothor.engine.telegram import MAX_MESSAGE_LENGTH, TelegramBot
 
 
@@ -794,3 +795,506 @@ class TestUserResolution:
             # Pipe stripped — no extra field injected
             assert "|sender:Foosender:admin" in detail
             assert detail.count("|") == 1  # only the real delimiter
+
+
+@pytest.fixture
+def _clear_session_registry():
+    """Registered sessions are module-global state; reset between tests."""
+    from robothor.engine import session_registry
+
+    for run_id in session_registry.active_run_ids():
+        session_registry.unregister(run_id)
+    yield
+    for run_id in session_registry.active_run_ids():
+        session_registry.unregister(run_id)
+
+
+class TestAgentsCommand:
+    """Tests for /agents — lists active runs with Steer/Interrupt buttons (PR 1)."""
+
+    @pytest.mark.asyncio
+    async def test_no_active_runs(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once()
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_lists_active_runs_with_keyboard(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args.args[0]
+        assert "agent-a" in text
+        assert "agent-b" in text
+        kb = msg.answer.call_args.kwargs["reply_markup"]
+        assert len(kb.inline_keyboard) == 2
+        for row in kb.inline_keyboard:
+            assert len(row) == 2
+            assert row[0].text == "Steer"
+            assert row[1].text == "Interrupt"
+            # callback_data must fit Telegram's 64-byte limit
+            assert len(row[0].callback_data.encode()) <= 64
+            assert len(row[1].callback_data.encode()) <= 64
+
+    @pytest.mark.asyncio
+    async def test_non_owner_refused(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        session_registry.register(AgentSession(agent_id="agent-a"))
+
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+
+class TestRunctlCallback:
+    """Tests for the runctl:i:<run_id> / runctl:s:<run_id> inline-button callbacks."""
+
+    @pytest.mark.asyncio
+    async def test_interrupt_callback_calls_interrupt_session(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:i:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        # interrupt() was requested on the live session
+        assert s._interrupt_requested is True
+        callback.answer.assert_called_once()
+        callback.message.edit_reply_markup.assert_called_once_with(reply_markup=None)
+
+    @pytest.mark.asyncio
+    async def test_interrupt_callback_unknown_run(self, bot, _clear_session_registry):
+        callback = MagicMock()
+        callback.data = "runctl:i:no-such-run"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once()
+        assert "no longer active" in callback.answer.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_steer_button_replies_with_instructions(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:s:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once()
+        args, _kwargs = callback.answer.call_args
+        assert "/steer" in args[0]
+        # steer never mutates the session — only the button reply changes
+        assert s._pending_steer is None
+
+    @pytest.mark.asyncio
+    async def test_non_owner_callback_refused(self, bot, _clear_session_registry):
+        callback = MagicMock()
+        callback.data = "runctl:i:some-run-id"
+        callback.message = MagicMock()
+        callback.message.chat.id = 99999
+        callback.from_user.id = 1
+        callback.answer = AsyncMock()
+
+        await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+
+
+class TestSteerCommand:
+    """Tests for /steer [run_id_prefix] <text> resolution (PR 1)."""
+
+    @pytest.mark.asyncio
+    async def test_no_active_runs(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer hello"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_single_active_run_fallback(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer focus on the budget question"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s.consume_pending_steer() == "focus on the budget question"
+        assert "Steered" in msg.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_prefix_match_targets_run(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = f"/steer {s1.run_id[:8]} adjust course"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() == "adjust course"
+        assert s2.consume_pending_steer() is None
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_prefix_asks_to_disambiguate(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s1.run.id = "abcdef12-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        s2 = AgentSession(agent_id="agent-b")
+        s2.run.id = "abcdef12-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer abcdef12 nudge"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() is None
+        assert s2.consume_pending_steer() is None
+        assert "ambiguous" in msg.answer.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_prefix_match_multiple_runs_asks_for_prefix(
+        self, bot, _clear_session_registry
+    ):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s1 = AgentSession(agent_id="agent-a")
+        s2 = AgentSession(agent_id="agent-b")
+        session_registry.register(s1)
+        session_registry.register(s2)
+
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer just some text with no matching prefix"
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        assert s1.consume_pending_steer() is None
+        assert s2.consume_pending_steer() is None
+        reply = msg.answer.call_args.args[0].lower()
+        assert "specify" in reply or "multiple" in reply
+
+    @pytest.mark.asyncio
+    async def test_non_owner_refused(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.text = "/steer x"
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        await bot._handle_steer_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+
+class TestPermissionEscalationWiring:
+    """Regression coverage for the seam between `PermissionEscalationManager`
+    and the `TelegramBot` wrapper daemon.py actually wires it to.
+
+    `daemon.py` calls `init_permission_manager(bot, ...)` with the
+    `TelegramBot` instance, not the raw aiogram `Bot`. `TelegramBot.
+    send_message` is a chunking/markdown-conversion helper for plain chat
+    delivery — it silently drops unknown kwargs (`reply_markup`,
+    `parse_mode`) via `**_ignored` and returns a `list[Message]` instead of
+    one. Sent straight through, `_send_prompt` would deliver a prompt with
+    no inline keyboard and then raise `AttributeError` on `msg.message_id`
+    (a `list` has none) — silently denying every escalation without ever
+    giving the operator a way to approve it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_prompt_delivers_keyboard_via_wrapped_telegram_bot(self, bot):
+        from robothor.engine.permission_escalation import (
+            EscalationRequest,
+            PermissionEscalationManager,
+        )
+
+        sent_msg = MagicMock()
+        sent_msg.message_id = 777
+        bot.bot.send_message = AsyncMock(return_value=sent_msg)
+
+        mgr = PermissionEscalationManager(bot=bot, chat_id="12345")
+        request = EscalationRequest(
+            request_id="req-x",
+            agent_id="test-agent",
+            run_id="run-1",
+            tool_name="exec_command",
+            tool_args={"command": "ls"},
+            guardrail_name="destructive_write",
+            reason="test",
+            created_at=0.0,
+        )
+
+        await mgr._send_prompt(request, timeout_seconds=30.0)
+
+        # message_id must come from the real, single Message — not blow up
+        # on a list returned by the wrapper's chunking send_message().
+        assert request.telegram_message_id == 777
+        # The inline keyboard must have reached the raw bot, not been
+        # dropped by the wrapper's **_ignored kwargs.
+        call_kwargs = bot.bot.send_message.call_args.kwargs
+        assert call_kwargs.get("reply_markup") is not None
+        callback_data = [
+            btn.callback_data for row in call_kwargs["reply_markup"].inline_keyboard for btn in row
+        ]
+        assert callback_data == [
+            "perm:approve:req-x",
+            "perm:all:req-x",
+            "perm:deny:req-x",
+        ]
+
+
+class TestPermissionCallbacks:
+    """Tests for the `perm:` callback consumer (`on_permission_decision`) —
+    the Telegram-side half of the human-approval escalation loop.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self):
+        from robothor.engine import permission_escalation as pe_mod
+
+        pe_mod._escalation_manager = None
+        yield
+        pe_mod._escalation_manager = None
+
+    @staticmethod
+    def _get_handler(bot):
+        """Recover the raw `on_permission_decision` coroutine.
+
+        `Dispatcher` is mocked in the `bot` fixture, so `self.dp.
+        callback_query(some_filter)` returns the same MagicMock
+        (`bot.dp.callback_query.return_value`) regardless of the filter it
+        was called with. Each `@self.dp.callback_query(...)` application
+        then calls that MagicMock with the real handler function, so every
+        registered callback handler shows up in its `call_args_list` in
+        registration order — find ours by name.
+        """
+        for call in bot.dp.callback_query.return_value.call_args_list:
+            func = call.args[0]
+            if func.__name__ == "on_permission_decision":
+                return func
+        raise AssertionError("on_permission_decision handler was not registered")
+
+    @staticmethod
+    def _make_callback(data: str, *, chat_id: str = "12345", user_id: int = 999) -> MagicMock:
+        callback = MagicMock()
+        callback.data = data
+        callback.message = MagicMock()
+        callback.message.chat.id = int(chat_id)
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.from_user = MagicMock(id=user_id)
+        callback.answer = AsyncMock()
+        return callback
+
+    @pytest.mark.asyncio
+    async def test_approve_resolves_pending_request_as_approved(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="test-agent",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "ls"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.sleep(0)  # let request_approval send the prompt and start waiting
+        request_id = next(iter(mgr._pending))
+
+        callback = self._make_callback(f"perm:approve:{request_id}")
+        await handler(callback)
+
+        assert await task is True
+        callback.answer.assert_called_once_with("Approved")
+        callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+
+    @pytest.mark.asyncio
+    async def test_deny_resolves_pending_request_as_denied(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="test-agent",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "rm -rf /tmp/x"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.sleep(0)
+        request_id = next(iter(mgr._pending))
+
+        callback = self._make_callback(f"perm:deny:{request_id}")
+        await handler(callback)
+
+        assert await task is False
+        callback.answer.assert_called_once_with("Denied")
+
+    @pytest.mark.asyncio
+    async def test_all_callback_grants_session_and_fast_paths_next_request(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="agent-1",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "ls"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.sleep(0)
+        request_id = next(iter(mgr._pending))
+
+        callback = self._make_callback(f"perm:all:{request_id}")
+        await handler(callback)
+
+        assert await task is True
+        callback.answer.assert_called_once_with("Approved for session")
+
+        # Second request for the same agent+guardrail+tool must fast-path
+        # off the session grant — no new Telegram prompt sent.
+        bot.bot.send_message.reset_mock()
+        result = await mgr.request_approval(
+            agent_id="agent-1",
+            run_id="run-2",
+            tool_name="exec_command",
+            tool_args={"command": "ls -la"},
+            guardrail_name="destructive_write",
+            reason="test again",
+            timeout_seconds=5.0,
+        )
+        assert result is True
+        bot.bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_owner_chat_refused_and_does_not_resolve(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="test-agent",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "ls"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=0.15,
+            )
+        )
+        await asyncio.sleep(0)
+        request_id = next(iter(mgr._pending))
+
+        callback = self._make_callback(f"perm:approve:{request_id}", chat_id="99999")
+        await handler(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+        # The request must still be pending — an unauthorized chat cannot resolve it.
+        assert request_id in mgr._pending
+
+        # Left unresolved, it denies via the normal timeout path.
+        assert await task is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_callback_data_answers_gracefully(self, bot):
+        init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        callback = self._make_callback("perm:approve")  # missing request_id segment
+
+        await handler(callback)  # must not raise
+
+        callback.answer.assert_called_once_with("Invalid callback data")
+
+    @pytest.mark.asyncio
+    async def test_unknown_request_id_answers_gracefully_without_resolving(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        callback = self._make_callback("perm:approve:does-not-exist")
+
+        await handler(callback)  # must not raise despite the unknown request_id
+
+        callback.answer.assert_called_once_with("Approved")
+        assert mgr._pending == {}

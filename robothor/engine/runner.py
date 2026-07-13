@@ -379,6 +379,51 @@ class AgentRunner:
         except Exception as exc:  # noqa: BLE001 — never block run finalization
             logger.debug("trajectory: post-response save raised: %s", exc)
 
+        # PR-3a: evidence-based completion contracts. Flag-gated
+        # off→observe→enforce (default off). When the run's final output
+        # claims a session goal is done, verify the claim against recorded,
+        # validated evidence rather than trusting the model's say-so.
+        from robothor.engine.feature_flags import completion_contract_mode
+
+        cc_mode = completion_contract_mode()
+        if cc_mode != "off":
+            try:
+                from robothor.engine.completion_contract import check_completion_contract
+
+                verdict = check_completion_contract(run, self.config)
+            except Exception as exc:  # noqa: BLE001 — never block run finalization
+                logger.debug("completion contract check raised: %s", exc)
+                verdict = None
+            if verdict is not None and verdict.status == "missing":
+                reason = "; ".join(verdict.missing)
+                try:
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=run.id,
+                        guardrail_name="completion_contract",
+                        action="blocked" if cc_mode == "enforce" else "observed",
+                        reason=reason,
+                        mode=cc_mode,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("completion contract event log failed: %s", exc)
+                if cc_mode == "enforce":
+                    try:
+                        from robothor.crm import dal
+
+                        dal.set_next_action(
+                            task_id=verdict.goal_id,
+                            next_action=f"Provide evidence: {reason}"[:500],
+                            agent=run.agent_id,
+                            by="completion_contract",
+                            tenant_id=run.tenant_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "completion contract enforce set_next_action failed: %s", exc
+                        )
+
     async def execute(
         self,
         agent_id: str,
@@ -1162,18 +1207,7 @@ class AgentRunner:
             )
 
         # ── [TELEMETRY] Publish run metrics ──
-        if trace:
-            with contextlib.suppress(Exception):
-                trace.publish_metrics(
-                    {
-                        "status": "completed",
-                        "duration_ms": session.run.duration_ms or 0,
-                        "input_tokens": session.run.input_tokens,
-                        "output_tokens": session.run.output_tokens,
-                        "cache_creation_tokens": session.run.cache_creation_tokens,
-                        "cache_read_tokens": session.run.cache_read_tokens,
-                    }
-                )
+        self._publish_run_telemetry(trace, session.run)
 
         return self._finish_run(
             session.complete(output_text),
@@ -3305,6 +3339,52 @@ class AgentRunner:
                     },
                 ),
                 name=f"primary-unreached-alert:{run.agent_id}",
+            )
+
+    @staticmethod
+    def _publish_run_telemetry(trace: Any, run: AgentRun) -> None:
+        """Emit run-level cache-hit-rate + token metrics (PR 4, observe-only).
+
+        Computes the run's cumulative cache_read/cache_creation/prompt tokens
+        and the derived cache_hit_ratio (cache_read / max(prompt_tokens, 1)),
+        then:
+        - emits them as GenAI semantic-convention attributes on a small
+          ``run_summary`` span so they flow through the existing OTLP export
+          (``TraceContext.build_otlp_payload`` serializes ``trace.spans``);
+        - forwards the same numbers to ``trace.publish_metrics`` (Redis event
+          bus), extending the run_data dict that already carries duration_ms/
+          status/token counts — no new infra, no DB migration.
+
+        Best-effort: telemetry must never break a completed run.
+        """
+        if not trace:
+            return
+        with contextlib.suppress(Exception):
+            from robothor.engine.telemetry import cache_hit_ratio, gen_ai_attributes
+
+            hit_ratio = cache_hit_ratio(run.cache_read_tokens, run.input_tokens)
+            with trace.span(
+                "run_summary",
+                **gen_ai_attributes(
+                    model=run.model_used or "",
+                    input_tokens=run.input_tokens,
+                    output_tokens=run.output_tokens,
+                    cache_read_tokens=run.cache_read_tokens,
+                    cache_creation_tokens=run.cache_creation_tokens,
+                ),
+            ):
+                pass
+
+            trace.publish_metrics(
+                {
+                    "status": "completed",
+                    "duration_ms": run.duration_ms or 0,
+                    "input_tokens": run.input_tokens,
+                    "output_tokens": run.output_tokens,
+                    "cache_creation_tokens": run.cache_creation_tokens,
+                    "cache_read_tokens": run.cache_read_tokens,
+                    "cache_hit_ratio": hit_ratio,
+                }
             )
 
     def _finish_run(

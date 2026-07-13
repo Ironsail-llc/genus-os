@@ -12,6 +12,7 @@ import pytest
 
 from robothor.engine.feature_flags import (
     approval_mode,
+    completion_contract_mode,
     rbac_enforcement_mode,
     sandbox_default_mode,
 )
@@ -21,6 +22,11 @@ MODE_FLAGS = [
     (sandbox_default_mode, "ROBOTHOR_SANDBOX_DEFAULT_ENABLED", "ROBOTHOR_SANDBOX_DEFAULT_MODE"),
     (rbac_enforcement_mode, "ROBOTHOR_RBAC_ENABLED", "ROBOTHOR_RBAC_MODE"),
     (approval_mode, "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE"),
+    (
+        completion_contract_mode,
+        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",
+        "ROBOTHOR_COMPLETION_CONTRACTS_MODE",
+    ),
 ]
 
 
