@@ -15,6 +15,8 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
+from robothor.engine.reports.devops_periods import period_label
+
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 _env = Environment(
@@ -39,12 +41,15 @@ def render_report(report_type: str, data: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:
         return {"error": f"Template '{template_name}' not found: {e}"}
 
-    generated_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M ET")
-    html = template.render(**data, generated_at=generated_at)
+    # Normalize the period to a clean label once; pass it to the template as
+    # an explicit context var so every surface (HTML header, subject, plain
+    # summary) derives from the same normalizer and never renders a dict-repr.
+    label = period_label(data.get("period"))
 
-    # Try to extract subject from a {% block subject %} in the template
-    period = data.get("period", "Report")
-    subject = f"{report_type.replace('_', ' ').title()} — {period}"
+    generated_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M ET")
+    html = template.render(**data, generated_at=generated_at, period_label=label)
+
+    subject = f"{report_type.replace('_', ' ').title()} — {label}"
 
     # Build plain text summary
     plain_summary = _build_plain_summary(report_type, data)
@@ -60,19 +65,22 @@ def render_devops_report(data: dict[str, Any]) -> dict[str, Any]:
     """Render the devops weekly report (convenience wrapper)."""
     result = render_report("devops_weekly", data)
     if "error" not in result:
-        period = data.get("period", "Weekly Report")
-        result["subject"] = f"Dev Team Operations Report — {period}"
+        result["subject"] = f"Dev Team Operations Report — {period_label(data.get('period'))}"
     return result
 
 
 def _build_plain_summary(report_type: str, data: dict[str, Any]) -> str:
     """Build a plain text summary suitable for Telegram delivery."""
-    period = data.get("period", "Report")
-    lines = [f"{report_type.replace('_', ' ').title()} — {period}", ""]
+    period_str = period_label(data.get("period"))
+    lines = [f"{report_type.replace('_', ' ').title()} — {period_str}", ""]
 
     es = data.get("executive_summary", {})
     if es:
         for key, val in es.items():
+            # Skip nested objects (e.g. a nested last_week dict) so we never
+            # dump a raw dict/list repr into the plain-text summary.
+            if isinstance(val, (dict, list)):
+                continue
             label = key.replace("_", " ").title()
             lines.append(f"{label}: {val}")
         lines.append("")

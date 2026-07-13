@@ -27,39 +27,61 @@ IN_PATH = Path("/tmp/devops_report.json")
 TELEGRAM_MAX_CHARS = 4000  # Leave slack under 4096 limit
 
 
-def _pct(current: float, last: float) -> str:
-    if not last:
-        return ""
-    delta = (current - last) / last * 100
-    return f"{delta:+.0f}%"
+def _period_label(period) -> str:
+    """Normalize the report period (period_block dict OR string) to a label.
+
+    Mirrors robothor.engine.reports.devops_periods.period_label. Inlined to
+    keep this delivery script pure-stdlib and standalone (no robothor import,
+    no sys.path bootstrap — the test loads it via importlib).
+    """
+    if isinstance(period, dict):
+        label = period.get("report_label")
+        if label:
+            return str(label)
+        start = period.get("last_week_start_et")
+        if isinstance(start, str) and start:
+            return f"Week of {start[:10]}"
+        return "this week"
+    if isinstance(period, str) and period.strip():
+        return period
+    return "this week"
 
 
 def format_report(data: dict) -> str:
-    """Format the structured JSON as a plain-text Telegram message."""
+    """Format the structured JSON as a plain-text Telegram message.
+
+    Primary window is last_week (the completed full week). The executive
+    summary flat fields already carry last_week data. If current_week
+    data is present in the period block, we show it as a footnote labeled
+    "Mon only" — never as a WoW comparison.
+    """
     es = data.get("executive_summary", {})
-    cw = es.get("current_week", {})
     lw = es.get("last_week", {})
 
+    # Flat fields (from analyst) carry last_week totals
+    tickets = es.get("tickets_resolved", lw.get("tickets_resolved", 0))
+    prs = es.get("prs_merged", lw.get("prs_merged", 0))
+    throughput = es.get("throughput_rate", "")
+    trend = es.get("trend", "")
+
     lines: list[str] = []
-    lines.append(f"Dev Team Ops Report — {data.get('period', 'this week')}")
+    lines.append(f"Dev Team Ops Report — {_period_label(data.get('period'))}")
     lines.append("")
 
-    # Key numbers
-    tickets_cw = cw.get("tickets_resolved", 0)
-    tickets_lw = lw.get("tickets_resolved", 0)
-    prs_cw = cw.get("prs_merged", 0)
-    prs_lw = lw.get("prs_merged", 0)
-    lines.append(
-        f"▸ Tickets resolved: {tickets_cw} (vs {tickets_lw} last week, {_pct(tickets_cw, tickets_lw)})"
-    )
-    lines.append(f"▸ PRs merged: {prs_cw} (vs {prs_lw} last week, {_pct(prs_cw, prs_lw)})")
+    # Key numbers — last_week (completed full week)
+    lines.append(f"▸ Tickets resolved: {tickets}")
+    lines.append(f"▸ PRs merged: {prs}")
+    if throughput:
+        lines.append(f"▸ Throughput: {throughput}")
+    if trend:
+        lines.append(f"▸ Trend: {trend}")
 
     review_cov = data.get("github", {}).get("review_coverage")
     total_reviews = data.get("github", {}).get("total_reviews")
     if review_cov is not None:
         flag = " ⚠" if review_cov < 30 else ""
         lines.append(f"▸ Review coverage: {review_cov}%{flag} ({total_reviews} reviews)")
-    if es.get("open_backlog"):
+    if es.get("open_backlog") not in (None, ""):
         lines.append(f"▸ Open backlog: {es['open_backlog']}")
 
     # Bottlenecks (show high severity first, up to 5)

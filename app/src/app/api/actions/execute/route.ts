@@ -4,13 +4,14 @@
  * POST /api/actions/execute
  * Body: { tool: string, params: Record<string, unknown> }
  *
- * Uses the "helm-user" agent identity for RBAC enforcement at Bridge.
- * Rate-limited to 10 actions per minute per IP.
+ * Forwards the signed-in user's bridge token (Authorization: Bearer) for RBAC
+ * enforcement at Bridge, falling back to the legacy "helm-user" identity in
+ * shadow mode. Rate-limited to 10 actions per minute per IP.
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
-import { HELM_AGENT_ID } from "@/lib/config";
 
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 
@@ -197,7 +198,7 @@ export async function POST(request: NextRequest) {
     }
     const url = target.toString();
     const headers: Record<string, string> = {
-      "X-Agent-Id": HELM_AGENT_ID,
+      ...(await bridgeAuthHeaders()),
       "Content-Type": "application/json",
     };
     if (tenantId) {

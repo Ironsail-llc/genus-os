@@ -35,9 +35,10 @@ def _default_tenant() -> str:
     return DEFAULT_TENANT
 
 
-from middleware import CorrelationMiddleware, RBACMiddleware, TenantMiddleware
+from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agents import router as agents_router
 from routers.audit import router as audit_router
+from routers.auth import router as auth_router
 from routers.conversations import router as conversations_router
 from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
@@ -121,13 +122,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware (applied in reverse order — correlation runs first, then tenant, then RBAC)
+# Middleware (applied in reverse order — correlation runs first, then auth,
+# then tenant, then RBAC). AuthMiddleware verifies a bridge-issued token and
+# sets request.state.auth; it ships in shadow mode (GENUS_AUTH_ENFORCE off).
 app.add_middleware(RBACMiddleware)
 app.add_middleware(TenantMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(CorrelationMiddleware)
 
 # Routers
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(agents_router)
 app.include_router(people_router)
 app.include_router(conversations_router)

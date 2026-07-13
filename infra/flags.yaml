@@ -1,0 +1,89 @@
+# Flag manifest — the single inventory of guardrail/RIP rollout flags.
+#
+# Live values ship via the systemd drop-in (see
+# infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf and
+# docs/runbooks/GUARDRAIL_FLIPS.md). This file records intent: who owns each
+# flag, what mode production runs, when the next promotion is due, and what
+# evidence gates it. guardrail_watch.py nags daily for any flag sitting in
+# observe/alert past its planned_promotion date.
+#
+# mode: off | observe | alert | enforce | on   (on = enabled, no mode ladder)
+
+flags:
+  - name: ROBOTHOR_RBAC_MODE
+    owner: ops
+    mode: enforce
+    soak: enforced 2026-07-02; 46 blocks day one (allow-all service default), quiet since
+
+  - name: ROBOTHOR_INJECTION_SCAN_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-13"
+    soak: zero observed events 2026-07-02 → 2026-07-13; flip #1 of the clean three
+
+  - name: ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-14"
+    soak: zero observed events 2026-07-02 → 2026-07-13; flip #2, 24h after injection-scan
+
+  - name: ROBOTHOR_APPROVAL_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-15"
+    soak: >
+      zero observed events; flip #3 on a watched day — verify approval-channel-down
+      behavior first (docs/runbooks/approval-enforce.md)
+
+  - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-16"
+    soak: >
+      363 observes triaged 2026-07-13: all legit host-side exec from four
+      host-trusted agents, now opted out via manifest `sandbox: host`.
+      Enforce after 48h clean re-soak (expected zero events).
+
+  - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-20"
+    soak: >
+      3 events, all email-analyst "no evidence recorded" — move to alert, fix
+      the agent's evidence wiring, enforce after 7 clean days
+
+  - name: ROBOTHOR_RIP_7_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-20"
+    soak: external-drift detection for memory_facts; documented ladder observe→alert→enforce is overdue since June
+
+  - name: ROBOTHOR_RIP_13_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-07-20"
+    soak: symbolic short-term memory; same overdue ladder as RIP 7
+
+  - name: ROBOTHOR_RIP_1_ENABLED
+    owner: ops
+    mode: "on"
+    soak: accretion fork, main-only via ROBOTHOR_RIP_1_AGENTS; fleet expansion pending clean soak
+
+  - name: ROBOTHOR_RIP_4_ENABLED
+    owner: ops
+    mode: "off"
+    planned_promotion: "2026-07-27"
+    soak: staged-soak comment in drop-in since May — run the documented soak or delete the rip
+
+  - name: ROBOTHOR_RIP_5_ENABLED
+    owner: ops
+    mode: "off"
+    planned_promotion: "2026-07-27"
+    soak: >
+      destructive LLM curator — deliberately OFF; requires proven restore
+      drill + dry-run diffs before any enablement
+
+  - name: ROBOTHOR_JUDGE_ENABLED
+    owner: ops
+    mode: "on"
+    soak: goal-judge observe since May; compare against benchmark_pass_rate before weighting grades
