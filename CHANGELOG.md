@@ -1,3 +1,9 @@
+## [1.14.4](https://github.com/Ironsail-llc/genus-os/compare/v1.14.3...v1.14.4) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce exec allowlist shell-metacharacter block ([#189](https://github.com/Ironsail-llc/genus-os/issues/189)) ([124dc1f](https://github.com/Ironsail-llc/genus-os/commit/124dc1f1baf8f850f93d5208d8e69422ed8251a4)), closes [#2](https://github.com/Ironsail-llc/genus-os/issues/2) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#187](https://github.com/Ironsail-llc/genus-os/issues/187)
+
 ## [1.14.3](https://github.com/Ironsail-llc/genus-os/compare/v1.14.2...v1.14.3) (2026-07-13)
 
 ### Bug Fixes
