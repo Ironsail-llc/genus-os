@@ -334,12 +334,16 @@ def notify_guardrail_alert(
     """
     try:
         from robothor.constants import DEFAULT_TENANT
-        from robothor.crm.dal import send_notification
+        from robothor.crm import dal
 
-        send_notification(
+        # "escalation" — NOT "alert": the crm_agent_notifications check
+        # constraint rejects "alert", so that INSERT is refused and the
+        # operator is never told. send_notification swallows the failure and
+        # returns None, so the returned id is the only proof of delivery.
+        notif_id = dal.send_notification(
             from_agent="engine",
             to_agent="main",
-            notification_type="alert",
+            notification_type="escalation",
             subject=f"Guardrail would block: {guardrail_name}",
             body=(
                 f"{guardrail_name} is in alert mode and would have BLOCKED this "
@@ -349,6 +353,13 @@ def notify_guardrail_alert(
             ),
             tenant_id=tenant_id or DEFAULT_TENANT,
         )
+        if not notif_id:
+            logger.error(
+                "guardrail %s is in alert mode but the operator notification was "
+                "dropped — the alert rung is not delivering",
+                guardrail_name,
+            )
+            return False
         return True
     except Exception as exc:
         logger.error(
