@@ -1,3 +1,9 @@
+## [1.14.2](https://github.com/Ironsail-llc/genus-os/compare/v1.14.1...v1.14.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** accept sandbox host in the config validator ([#188](https://github.com/Ironsail-llc/genus-os/issues/188)) ([af88742](https://github.com/Ironsail-llc/genus-os/commit/af887428d6435f07c33631632dcc530ffac17dfd)), closes [#185](https://github.com/Ironsail-llc/genus-os/issues/185)
+
 ## [1.14.1](https://github.com/Ironsail-llc/genus-os/compare/v1.14.0...v1.14.1) (2026-07-13)
 
 ### Bug Fixes
