@@ -117,6 +117,9 @@ that require measured deployment evidence. They are not current service claims.
   rollback.
 - [x] Synchronize product version `1.10.0` across Python, Helm, dashboard,
   runtime health responses, and release automation.
+- [x] Repair the invalid CODEOWNERS route so this PR requests an independent,
+  write-authorized repository maintainer instead of the nonexistent
+  `@genusos/maintainers` team.
 
 ## P0 implementation/integration completed
 
@@ -169,9 +172,9 @@ open and block a production go-live.
   - Clean-branch result: all 9 workflow files parsed and passed actionlint;
     every external action is pinned to a full commit SHA; product version
     `1.10.0` is consistent; Gitleaks scanned 1.03 GB with no findings; the
-    initial 247-path transfer matched the reviewed allowlist; the final path set
-    adds only the narrow pre-commit metadata allowlist correction, and the
-    owner-path denylist remained empty.
+    final 248-path diff matched the reviewed hardening allowlist plus only the
+    narrow pre-commit metadata and CODEOWNERS corrections; the user-owned path
+    denylist remained empty.
 - [x] Exercise snapshot create/list/verify/restore-dry-run/prune against a
   representative database and workspace; record duration and archive size.
   - Integrated-workspace result: an AES-256-GCM snapshot completed in 0.35s at
@@ -272,6 +275,9 @@ repository tests alone.
   signature policy at admission.
 - [ ] P1 — Add immutable/off-platform audit export, retention controls, and
   coverage tests proving which material actions are recorded.
+- [ ] P1 — Create repository-scoped maintainer, security, operations, and QA
+  review teams with explicit least-privilege access, then replace the temporary
+  individual CODEOWNER with role-based team ownership and required approvals.
 - [ ] P1 — Add database row-level security or an equivalent independently tested
   defense-in-depth layer for tenant isolation.
 - [ ] P1 — Replace the local Entity Kernel decision store/ledger with durable,
@@ -326,7 +332,8 @@ The implemented boundary deliberately treats two cases separately:
   5. `feat(backup): add encrypted snapshot and restore workflows`;
   6. `feat(entity): enforce treasury and payment authority boundaries`;
   7. `ci(release): enforce production gates and align versions`;
-  8. `docs(ops): document production and compliance controls`.
+  8. `docs(ops): document production and compliance controls`;
+  9. `fix(governance): repair code ownership routing`.
 - [x] Re-run the full gate on the clean PR branch and attach exact command/result
   evidence to the PR.
 - [ ] Open a **draft** umbrella PR titled
