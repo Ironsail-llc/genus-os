@@ -198,3 +198,21 @@ def mock_db():
         cur.fetchall.return_value = []
         mock_conn.return_value = conn
         yield {"connection": mock_conn, "conn": conn, "cursor": cur}
+
+
+@pytest.fixture
+def _mock_run_persistence():
+    """Isolate execution-loop unit tests from the tracking database.
+
+    Runner persistence has three distinct phases: initial run creation,
+    per-iteration step batches (lazily imported by ``AgentSession``), and the
+    final background persistence task.  Mock each phase at the symbol its
+    caller actually resolves so these unit tests remain deterministic when
+    PostgreSQL is unavailable.
+    """
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.tracking.create_steps_batch", return_value=0),
+        patch("robothor.engine.runner.AgentRunner._persist_run"),
+    ):
+        yield
