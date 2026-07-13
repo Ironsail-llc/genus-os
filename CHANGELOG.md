@@ -1,3 +1,9 @@
+## [1.13.2](https://github.com/Ironsail-llc/genus-os/compare/v1.13.1...v1.13.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** record audit trail when injection scan blocks a run ([#184](https://github.com/Ironsail-llc/genus-os/issues/184)) ([e3d16bc](https://github.com/Ironsail-llc/genus-os/commit/e3d16bc13d6fd3ac60b603c6aa3c02c7e5d98dd7)), closes [#182](https://github.com/Ironsail-llc/genus-os/issues/182)
+
 ## [1.13.1](https://github.com/Ironsail-llc/genus-os/compare/v1.13.0...v1.13.1) (2026-07-13)
 
 ### Bug Fixes
