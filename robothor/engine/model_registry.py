@@ -7,6 +7,7 @@ so the engine adapts to each model's capabilities instead of hardcoding.
 from __future__ import annotations
 
 import logging
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -32,6 +33,11 @@ class ModelLimits:
     cache_read_cost_per_token: float = 0.0  # prompt caching: read (Anthropic: 0.1x input)
     supports_thinking: bool = False
     ttft_hint_ms: int = 3000  # estimated p50 time-to-first-token (ms) for interactive routing
+    # Curated override for the cache_control capability (PR 4). None means
+    # "no override — derive it" (see supports_cache_control()); True/False
+    # forces the answer regardless of the OpenRouter blanket-exclusion or
+    # litellm's catalog, for cases we've specifically verified either way.
+    supports_cache_control: bool | None = None
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -96,13 +102,22 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.000_003,  # $3/M
         ttft_hint_ms=3000,
     ),
-    # MiMo-V2.5-Pro via OpenRouter — current fleet fallback
+    # MiMo-V2.5 via OpenRouter — fleet-wide primary (2026-07-07)
+    "openrouter/xiaomi/mimo-v2.5": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_105,  # $0.105/M
+        output_cost_per_token=0.000_000_28,  # $0.28/M
+        ttft_hint_ms=3000,
+    ),
+    # MiMo-V2.5-Pro via OpenRouter — fleet fallback (escalation from v2.5)
     "openrouter/xiaomi/mimo-v2.5-pro": ModelLimits(
         max_input_tokens=1_048_576,
         max_output_tokens=65_536,
         default_output_tokens=8_192,
-        input_cost_per_token=0.000_001,  # $1/M
-        output_cost_per_token=0.000_003,  # $3/M
+        input_cost_per_token=0.000_000_435,  # $0.435/M
+        output_cost_per_token=0.000_000_87,  # $0.87/M
         cache_read_cost_per_token=0.000_000_2,  # $0.20/M
         ttft_hint_ms=3000,
     ),
@@ -255,6 +270,27 @@ def _dynamic_model_limits(model_id: str) -> ModelLimits | None:
     )
 
 
+_DATED_SLUG_RE = re.compile(r"-2\d{7}$")  # e.g. xiaomi/mimo-v2.5-20260422
+
+
+def _registry_candidates(model_id: str) -> list[str]:
+    """Aliases under which a model id may appear in ``_MODEL_REGISTRY``.
+
+    Provider responses differ from request ids two ways: OpenRouter appends a
+    dated release suffix (``xiaomi/mimo-v2.5-20260422``) and drops our
+    ``openrouter/`` routing prefix. Cost fallback and context sizing look up
+    the *response* id, so both variants must resolve to the curated entry.
+    """
+    candidates = [model_id]
+    stripped = _DATED_SLUG_RE.sub("", model_id)
+    if stripped != model_id:
+        candidates.append(stripped)
+    candidates.extend(
+        f"openrouter/{c}" for c in list(candidates) if not c.startswith("openrouter/") and "/" in c
+    )
+    return candidates
+
+
 def get_model_limits(model_id: str) -> ModelLimits:
     """Look up model limits.
 
@@ -263,9 +299,10 @@ def get_model_limits(model_id: str) -> ModelLimits:
     catalog-backed mode (Rip 17 / G6) is on → conservative fallback. The curated
     registry always wins so our hand-tuned pricing and thinking flags stand.
     """
-    limits = _MODEL_REGISTRY.get(model_id)
-    if limits:
-        return limits
+    for candidate in _registry_candidates(model_id):
+        limits = _MODEL_REGISTRY.get(candidate)
+        if limits:
+            return limits
 
     dynamic = _dynamic_model_limits(model_id)
     if dynamic is not None:
@@ -278,6 +315,65 @@ def get_model_limits(model_id: str) -> ModelLimits:
         _FALLBACK.max_input_tokens // 1000,
     )
     return _FALLBACK
+
+
+def supports_cache_control(model_id: str) -> bool:
+    """Whether ``model_id`` should get Anthropic-style prompt-cache content
+    blocks — the ``cache_control`` conversion in ``LLMClient._build_llm_kwargs``.
+
+    Replaces the historical ``model.startswith("anthropic/")`` gate with a
+    catalog-driven capability lookup so caching follows fleet model changes
+    instead of a string prefix.
+
+    Order:
+    1. Curated ``_MODEL_REGISTRY`` override (``ModelLimits.supports_cache_control``,
+       when explicitly set) — always wins, including for OpenRouter ids.
+    2. OpenRouter-prefixed models default to False. OpenRouter proxies models
+       through its OpenAI-compatible completion path, which chokes on mixed
+       text/``cache_control`` content blocks and breaks tool_use/tool_result
+       pairing — this holds even for ``openrouter/anthropic/*``, where
+       litellm's catalog reports the underlying Claude model supports prompt
+       caching, but OpenRouter's transport doesn't accept our content-block
+       format for it. (Historically documented at the old gate's call site in
+       ``llm_client.py``; this is now the single source of truth.)
+    3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
+       custom providers (e.g. ``codex/*``, a subscription provider litellm
+       doesn't catalog; it reports False rather than raising).
+    4. Default False.
+
+    Deliberately NO ``anthropic/``-prefix fallback: litellm returns False
+    both for models explicitly marked unsupported and for ids it simply
+    hasn't mapped, and the two are indistinguishable from the return value —
+    a prefix fallback that treats False as "catalog lag, assume True" would
+    also flip genuinely unsupported models to True, making this an
+    untrustworthy capability oracle. If a newly-released direct-Anthropic
+    fleet model lags litellm's catalog, pin it with a curated
+    ``supports_cache_control=True`` override in ``_MODEL_REGISTRY``.
+    """
+    limits = _MODEL_REGISTRY.get(model_id)
+    if limits is not None and limits.supports_cache_control is not None:
+        return limits.supports_cache_control
+
+    if model_id.startswith("openrouter/"):
+        return False
+
+    return _cache_control_from_litellm(model_id)
+
+
+@lru_cache(maxsize=256)
+def _cache_control_from_litellm(model_id: str) -> bool:
+    """litellm's ``supports_prompt_caching`` lookup, cached and exception-safe."""
+    try:
+        from litellm.utils import supports_prompt_caching
+
+        return bool(supports_prompt_caching(model=model_id))
+    except Exception as e:  # noqa: BLE001 — litellm may raise for unusual ids
+        logger.debug(
+            "supports_prompt_caching lookup failed for '%s': %s",
+            sanitize_log(model_id),
+            e,
+        )
+        return False
 
 
 def register_pricing_with_litellm() -> None:

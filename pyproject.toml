@@ -67,6 +67,15 @@ vision = [
 federation = [
     "nats-py>=2.0",
 ]
+mcp = [
+    # Official MCP Python SDK, used by robothor/api/mcp.py (session negotiation
+    # only — our own client/bridge in robothor/engine + robothor/connectors
+    # implement JSON-RPC directly and don't depend on this package). Floor is
+    # the version installed ad-hoc today; ceiling excludes the next major so a
+    # breaking SDK release (e.g. for 2026-07-28 support) is a deliberate bump,
+    # not a surprise upgrade.
+    "mcp>=1.26,<2",
+]
 rlm = [
     "rlms>=0.1.1",
 ]
@@ -84,7 +93,7 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "genusos[api,vision,rlm,tui,federation,dev]",
+    "genusos[api,vision,rlm,tui,federation,mcp,dev]",
 ]
 
 [project.scripts]

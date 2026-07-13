@@ -502,3 +502,68 @@ class TestStdioFraming:
         await _server().serve(_reader(reqs), writer)
         msg = json.loads(bytes(writer.buf).splitlines()[0])
         assert msg["error"]["code"] == -32601
+
+
+# ── MCP 2026-07-28 version tolerance (accept-but-don't-require initialize) ──
+
+
+class TestVersionTolerantInitialize:
+    @pytest.mark.asyncio
+    async def test_echoes_known_stateless_protocol_version(self):
+        reqs = (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2026-07-28"},
+                }
+            ).encode()
+            + b"\n"
+        )
+        writer = _FakeWriter()
+        await _server().serve(_reader(reqs), writer)
+        msg = json.loads(bytes(writer.buf).splitlines()[0])
+        assert msg["result"]["protocolVersion"] == "2026-07-28"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_legacy_for_unknown_protocol_version(self):
+        reqs = (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "1999-01-01"},
+                }
+            ).encode()
+            + b"\n"
+        )
+        writer = _FakeWriter()
+        await _server().serve(_reader(reqs), writer)
+        msg = json.loads(bytes(writer.buf).splitlines()[0])
+        assert msg["result"]["protocolVersion"] == "2024-11-05"
+
+    @pytest.mark.asyncio
+    async def test_stateless_client_skips_initialize_and_is_still_served(self):
+        """A 2026-07-28 client never sends initialize at all — tools/list and
+        tools/call must work with no prior handshake."""
+        reqs = (
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+            + b"\n"
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "t", "arguments": {}},
+                }
+            ).encode()
+            + b"\n"
+        )
+        writer = _FakeWriter()
+        await _server().serve(_reader(reqs), writer)
+        lines = [json.loads(line) for line in bytes(writer.buf).splitlines() if line.strip()]
+        assert len(lines) == 2
+        assert lines[0]["result"]["tools"][0]["name"] == "t"
+        assert json.loads(lines[1]["result"]["content"][0]["text"]) == {"ok": "t"}
