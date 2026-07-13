@@ -137,7 +137,7 @@ def _collect_handles(
         occurrences: int
         sources: set[str]  — "<repo>/authors", "<project>/by_assignee", etc.
         is_bot: bool
-        per_repo: set[str] — repos touched (for repos_touched aggregation)
+        per_repo: set[str]  — repos touched (for repos_touched aggregation)
     """
     seen: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -311,6 +311,10 @@ def aggregate_people(
     matches one of `engineer_role_keywords` (default: Engineer / Developer
     / SRE / DevOps). QA / PM / stakeholders who have github handles for
     permissions but aren't expected to merge PRs don't appear there.
+
+    Sort order: primary sort by last_week activity (the completed full
+    week), not current_week (which is always a partial day at Monday 9 AM
+    report time).
     """
     keywords = (
         tuple(engineer_role_keywords)
@@ -444,8 +448,10 @@ def aggregate_people(
         "period": github_data.get("period") or jira_data.get("period") or {},
         "people": sorted(
             people,
+            # Primary sort: last_week activity (completed full week).
+            # current_week is always partial at Monday 9 AM report time.
             key=lambda p: (
-                -(p["current_week"]["prs_merged"] + p["current_week"]["tickets_resolved"]),
+                -(p["last_week"]["prs_merged"] + p["last_week"]["tickets_resolved"]),
                 p["name"],
             ),
         ),

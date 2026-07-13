@@ -735,21 +735,19 @@ List each pattern on its own line with a priority tag [HIGH/MED/LOW]. Be specifi
 
 
 async def phase_5_housekeeping(llm_client) -> dict[str, Any]:
-    """Run lifecycle maintenance and quality tests."""
-    results = {"maintenance": {}, "quality": {}}
+    """Run memory quality tests.
 
-    # Lifecycle maintenance
-    try:
-        from robothor.memory.lifecycle import run_lifecycle_maintenance
-
-        maintenance_results = await run_lifecycle_maintenance()
-        results["maintenance"] = {"success": True, "details": str(maintenance_results)}
-    except ImportError as e:
-        logger.warning("lifecycle module not available: %s", e)
-        results["maintenance"] = {"success": False, "details": f"import error: {e}"}
-    except Exception as e:
-        logger.error("Lifecycle maintenance error: %s", e)
-        results["maintenance"] = {"success": False, "details": str(e)}
+    Lifecycle maintenance (importance scoring, decay, prune, consolidation, insights) is
+    NOT run here. It is owned solely by autoDream deep mode
+    (robothor/engine/autodream.py), which fires during quiet hours (22:00-06:00 ET) and
+    iterates every tenant's facts under its own distributed lock. Calling it here as well
+    raced the same lock and double-scheduled the nightly pass — see the autoDream
+    consolidation fix. This phase keeps only the independent retrieval-quality checks.
+    """
+    results = {
+        "maintenance": {"success": True, "details": "delegated to autoDream deep mode"},
+        "quality": {},
+    }
 
     # Quality tests
     try:

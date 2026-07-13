@@ -1160,6 +1160,37 @@ def create_health_app(
             logger.exception("Failed to resume run")
             return {"error": "Internal server error"}
 
+    @app.get("/api/runs/active")
+    async def list_active_runs(_: None = Depends(_require_control_token)) -> dict[str, Any]:
+        """List currently-registered live sessions (this worker process only).
+
+        Sourced from the in-process session_registry (Rip 9) — sessions
+        don't survive a restart and this reflects only runs live in this
+        engine process, not historical runs (see GET /runs for those).
+        """
+        try:
+            from robothor.engine import session_registry
+
+            runs: list[dict[str, Any]] = []
+            for run_id in session_registry.active_run_ids():
+                session = session_registry.lookup(run_id)
+                if session is None:
+                    continue
+                runs.append(
+                    {
+                        "run_id": session.run_id,
+                        "agent_id": session.run.agent_id,
+                        "started_at": session.run.started_at.isoformat()
+                        if session.run.started_at
+                        else None,
+                        "iterations": session._step_counter,
+                    }
+                )
+            return {"runs": runs}
+        except Exception:
+            logger.exception("Failed to list active runs")
+            return {"error": "Internal server error"}
+
     @app.post("/api/runs/{run_id}/steer")
     async def steer_run(
         run_id: str, body: dict[str, Any], _: None = Depends(_require_control_token)

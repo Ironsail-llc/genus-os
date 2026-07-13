@@ -58,6 +58,10 @@ def period_block(now: datetime) -> dict[str, Any]:
 
     Lets downstream steps (analyst, renderer, Telegram) quote the exact
     window the report covers, without re-computing it themselves.
+
+    The `report_label` uses last_week_start — that's the Monday the report
+    actually covers (the completed full week). At Monday 9 AM, current_week
+    is only 9 hours of data; last_week is the meaningful window.
     """
     current, last = _et_monday_boundaries(now)
     return {
@@ -66,4 +70,28 @@ def period_block(now: datetime) -> dict[str, Any]:
         "last_week_start_et": last.isoformat(),
         "last_week_end_et": current.isoformat(),
         "generated_at_et": now.astimezone(ET).isoformat(),
+        "report_label": f"Week of {last.strftime('%Y-%m-%d')}",
     }
+
+
+def period_label(period: Any) -> str:
+    """Normalize a report period to a clean human-readable label.
+
+    `data["period"]` may arrive as the `period_block` dict (collectors stamp
+    it; the analyst is told to copy it verbatim) or as a pre-formatted string.
+    This is the single source of truth so no consumer ever f-strings the raw
+    dict and leaks a Python dict-repr into operator-facing output.
+    """
+    if isinstance(period, dict):
+        label = period.get("report_label")
+        if label:
+            return str(label)
+        # Older/aggregate payloads may omit report_label — derive from the
+        # Monday the report covers (last_week_start_et is an ISO datetime).
+        start = period.get("last_week_start_et")
+        if isinstance(start, str) and start:
+            return f"Week of {start[:10]}"
+        return "this week"
+    if isinstance(period, str) and period.strip():
+        return period
+    return "this week"

@@ -278,6 +278,21 @@ def exec_allowlist_mode() -> EnforcementMode:
     )
 
 
+def completion_contract_mode() -> EnforcementMode:
+    """Rollout mode for evidence-based completion contracts.
+
+    Gated on ``ROBOTHOR_COMPLETION_CONTRACTS_ENABLED`` + ``ROBOTHOR_COMPLETION_CONTRACTS_MODE``.
+    When an agent's final output claims a session goal is done, ``observe``
+    logs the completion verdict (satisfied/missing evidence) but never blocks;
+    ``enforce`` keeps the task open and writes a next_action describing the
+    missing evidence when the claim isn't backed by validated evidence.
+    Default off.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED", "ROBOTHOR_COMPLETION_CONTRACTS_MODE"
+    )
+
+
 def injection_scan_mode() -> EnforcementMode:
     """Rollout mode for prompt-injection scanning of assembled system-run prompts.
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
 
@@ -21,6 +22,7 @@ async function proxy(
   try {
     const headers: Record<string, string> = {
       "Content-Type": req.headers.get("content-type") || "application/json",
+      ...(await bridgeAuthHeaders()),
     };
 
     const res = await fetch(target.toString(), {

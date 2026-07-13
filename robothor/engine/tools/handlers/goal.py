@@ -52,7 +52,7 @@ async def _create_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         )
     except ValueError as exc:
         return {"error": str(exc)}
-    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id)}
 
 
 @_handler("get_goal")
@@ -66,7 +66,7 @@ async def _get_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if goal is None:
         return {"goal": None, "status": "none"}
-    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id)}
 
 
 @_handler("update_goal")
@@ -103,21 +103,33 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 agent_id=agent_id,
                 workspace=ctx.workspace or None,
             )
-            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+            return {
+                "goal": summarize_goal(
+                    goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id
+                )
+            }
 
         if edit_op == "objective":
             objective = str(args.get("objective") or "").strip()
             if not objective:
                 return {"error": "objective is required for edit_op='objective'"}
             goal = edit_objective(tenant_id=ctx.tenant_id, agent_id=agent_id, objective=objective)
-            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+            return {
+                "goal": summarize_goal(
+                    goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id
+                )
+            }
 
         if edit_op == "criterion":
             text = str(args.get("text") or "").strip()
             if not text:
                 return {"error": "text is required for edit_op='criterion'"}
             goal = add_criterion(tenant_id=ctx.tenant_id, agent_id=agent_id, text=text)
-            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+            return {
+                "goal": summarize_goal(
+                    goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id
+                )
+            }
 
         if edit_op == "metric_target":
             metric = str(args.get("metric") or "").strip()
@@ -134,7 +146,11 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 category=str(args.get("category") or "correctness"),
                 target_id=str(args.get("target_id") or metric),
             )
-            return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+            return {
+                "goal": summarize_goal(
+                    goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id
+                )
+            }
 
         kind = str(args.get("kind") or args.get("evidence_kind") or "").strip()
         summary = str(args.get("summary") or args.get("evidence_summary") or "").strip()
@@ -158,4 +174,4 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         )
     except ValueError as exc:
         return {"error": str(exc)}
-    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None)}
+    return {"goal": summarize_goal(goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id)}
