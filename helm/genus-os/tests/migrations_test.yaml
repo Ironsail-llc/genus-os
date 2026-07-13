@@ -25,14 +25,32 @@ tests:
           path: metadata.name
           pattern: "^gos-genus-os-migrate-[a-f0-9]{8}$"
 
-  - it: Job has wait-for-credentials initContainer
+  - it: Job receives only the database secret class
     template: migrations/job.yaml
     asserts:
       - contains:
-          path: spec.template.spec.initContainers
+          path: spec.template.spec.containers[0].envFrom
           content:
-            name: wait-for-credentials
-          any: true
+            secretRef:
+              name: gos-genus-os-database
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-auth-signing
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-engine-providers
+
+  - it: Job rejects any non-database secret class
+    template: migrations/job.yaml
+    set:
+      migrations.secretRefs: [database, auth-signing]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'migrations.secretRefs is DB-only and forbids secret class "auth-signing"'
 
   - it: Job has wait-for-postgres initContainer when postgres.enabled
     template: migrations/job.yaml
@@ -49,23 +67,18 @@ tests:
       postgres.enabled: false
       database.host: rds.example.com
     asserts:
-      - contains:
+      - notExists:
           path: spec.template.spec.initContainers
-          content:
-            name: wait-for-credentials
-          any: true
-      - notContains:
-          path: spec.template.spec.initContainers
-          content:
-            name: wait-for-postgres
-          any: true
 
-  - it: Job pod mounts SA token
+  - it: Job pod does not mount an API token
     template: migrations/job.yaml
     asserts:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
-          value: true
+          value: false
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: gos-genus-os-migrations
 
   - it: Job propagates global.imagePullSecrets (private GHCR image)
     template: migrations/job.yaml
@@ -97,7 +110,7 @@ tests:
           any: true
 
   # ─── RBAC is scoped via resourceNames ──────────────────────────────────────
-  - it: Role exists with scoped jobs+secrets verbs
+  - it: Role permits only get on the release migration Job
     template: migrations/rbac.yaml
     documentIndex: 0
     asserts:
@@ -108,11 +121,11 @@ tests:
           content:
             apiGroups: ["batch"]
             resources: ["jobs"]
-            verbs: ["get", "list", "watch"]
+            verbs: ["get"]
             resourceNames:
               - gos-genus-os-migrate-908f5ee7
 
-  - it: RoleBinding targets the chart ServiceAccount
+  - it: RoleBinding targets separate Python ServiceAccounts
     template: migrations/rbac.yaml
     documentIndex: 1
     asserts:
@@ -120,7 +133,13 @@ tests:
           of: RoleBinding
       - equal:
           path: subjects[0].name
-          value: gos-genus-os
+          value: gos-genus-os-engine
+      - equal:
+          path: subjects[1].name
+          value: gos-genus-os-bridge
+      - equal:
+          path: subjects[2].name
+          value: gos-genus-os-orchestrator
       - equal:
           path: roleRef.name
           value: gos-genus-os-migration-watcher
@@ -142,6 +161,16 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: RBAC is not rendered when no workload watches migrations
+    template: migrations/rbac.yaml
+    set:
+      engine.enabled: false
+      bridge.enabled: false
+      orchestrator.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
   # ─── wait-for-migrations initContainer on app pods ─────────────────────────
   - it: engine pod has wait-for-migrations initContainer
     template: engine/workload.yaml
@@ -153,13 +182,44 @@ tests:
             name: wait-for-migrations
           any: true
 
-  - it: engine pod mounts SA token when migrations.enabled
+  - it: engine projects a short-lived API token only into migration watcher
     template: engine/workload.yaml
     documentIndex: 0
     asserts:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
-          value: true
+          value: false
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: migration-api-token
+            mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: migration-api-token
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration-api-token
+            projected:
+              defaultMode: 256
+              sources:
+                - serviceAccountToken:
+                    path: token
+                    expirationSeconds: 600
+                - configMap:
+                    name: kube-root-ca.crt
+                    items:
+                      - key: ca.crt
+                        path: ca.crt
+                - downwardAPI:
+                    items:
+                      - path: namespace
+                        fieldRef:
+                          fieldPath: metadata.namespace
 
   - it: engine pod does NOT mount SA token when migrations disabled
     template: engine/workload.yaml

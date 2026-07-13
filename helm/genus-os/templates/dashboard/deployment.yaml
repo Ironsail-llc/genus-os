@@ -1,6 +1,15 @@
 {{- if .Values.dashboard.enabled -}}
 {{- $cv := .Values.dashboard -}}
 {{- $fullName := printf "%s-dashboard" (include "genus-os.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $serviceEnv := dict
+      "BRIDGE_URL" (printf "http://%s-bridge:%v" (include "genus-os.fullname" .) .Values.bridge.service.port)
+      "ORCHESTRATOR_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" .) .Values.orchestrator.service.port)
+      "ROBOTHOR_ENGINE_URL" (printf "http://%s-engine:%v" (include "genus-os.fullname" .) .Values.engine.service.port)
+      "NEXT_PUBLIC_BRIDGE_URL" "/api/bridge"
+      "GENUS_ENVIRONMENT" .Values.global.environment
+      "GENUS_AUTH_ENFORCE" (toString .Values.global.authEnforce)
+    -}}
+{{- $dashboardEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,7 +38,8 @@ spec:
         checksum/config: {{ .Values.global.imageTag | sha256sum }}
         {{- with .Values.global.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
-      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" . "component" "dashboard") }}
+      automountServiceAccountToken: false
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -46,6 +56,11 @@ spec:
       tolerations:
         {{- $tols | nindent 8 }}
       {{- end }}
+      {{- $aff := include "genus-os.affinity" (dict "root" . "component" "dashboard") }}
+      {{- if $aff | trim }}
+      affinity:
+        {{- $aff | nindent 8 }}
+      {{- end }}
       containers:
         - name: dashboard
           image: {{ include "genus-os.image" (dict "root" . "component" "dashboard") }}
@@ -57,16 +72,16 @@ spec:
               containerPort: {{ $cv.service.port }}
               protocol: TCP
           env:
-            - name: NEXT_PUBLIC_BRIDGE_URL
-              value: "http://{{ include "genus-os.fullname" . }}-bridge:{{ .Values.bridge.service.port }}"
             - name: PORT
               value: {{ $cv.service.port | quote }}
             - name: HOSTNAME
               value: "0.0.0.0"
-            {{- range $k, $v := $cv.env }}
+            {{- range $k, $v := $dashboardEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          envFrom:
+            {{- include "genus-os.envFromSecret" (dict "root" . "component" "dashboard") | nindent 12 }}
           {{- $liveness := include "genus-os.httpProbe" (dict "root" . "component" "dashboard" "probe" "liveness" "port" "http") }}
           {{- if $liveness | trim }}
           livenessProbe:
@@ -77,6 +92,16 @@ spec:
           readinessProbe:
             {{- $readiness | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
 {{- end }}

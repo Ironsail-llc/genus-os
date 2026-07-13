@@ -18,9 +18,8 @@ spec:
       labels:
         {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
-      # wait-for-credentials initContainer needs kubectl access.
-      automountServiceAccountToken: true
+      serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" . "component" "migrations") }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -38,8 +37,8 @@ spec:
       tolerations:
         {{- $tols | nindent 8 }}
       {{- end }}
+      {{- if .Values.postgres.enabled }}
       initContainers:
-        {{- if .Values.postgres.enabled }}
         - name: wait-for-postgres
           image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           command:
@@ -52,25 +51,12 @@ spec:
               done
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-        {{- end }}
-        # envFrom on the migrate container will CreateContainerConfigError
-        # if this Secret doesn't exist yet — VSO may still be reconciling
-        # the VaultStaticSecret → K8s Secret materialization on first
-        # install. Block here until the Secret appears.
-        - name: wait-for-credentials
-          image: "{{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}"
-          imagePullPolicy: {{ .Values.kubectl.image.pullPolicy }}
-          command:
-            - sh
-            - -c
-            - |
-              SECRET={{ include "genus-os.fullname" . }}-credentials
-              until kubectl get secret "$SECRET" >/dev/null 2>&1; do
-                echo "Waiting for secret $SECRET..."
-                sleep 2
-              done
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.global.initContainerResources | nindent 12 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "genus-os.image" (dict "root" . "component" "migrations") }}
@@ -82,7 +68,13 @@ spec:
           env:
             {{- include "genus-os.commonEnv" . | nindent 12 }}
           envFrom:
-            {{- include "genus-os.envFromSecret" . | nindent 12 }}
+            {{- include "genus-os.envFromSecret" (dict "root" . "component" "migrations") | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}

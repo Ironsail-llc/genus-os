@@ -1,0 +1,67 @@
+# `helm test` smoke check from an independent pod. It verifies ClusterIP/DNS
+# reachability and both the process-only and dependency-aware health contracts.
+# Runs in-cluster after the release reaches a Ready state.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "genus-os.fullname" . }}-helm-test"
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "helm-test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" . "component" "helm-test") }}
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.global.podSecurityContext | nindent 4 }}
+  {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "engine") }}
+  {{- if $tols | trim }}
+  tolerations:
+    {{- $tols | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      securityContext:
+        {{- toYaml .Values.global.securityContext | nindent 8 }}
+      command:
+        - sh
+        - -ec
+        - |
+          set -e
+          {{- if .Values.engine.enabled }}
+          echo "→ engine"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-engine:{{ .Values.engine.service.port }}/live"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-engine:{{ .Values.engine.service.port }}/ready"
+          {{- end }}
+          {{- if .Values.bridge.enabled }}
+          echo "→ bridge"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-bridge:{{ .Values.bridge.service.port }}/live"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-bridge:{{ .Values.bridge.service.port }}/ready"
+          {{- end }}
+          {{- if .Values.orchestrator.enabled }}
+          echo "→ orchestrator"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}/live"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}/ready"
+          {{- end }}
+          {{- if .Values.dashboard.enabled }}
+          echo "→ dashboard"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-dashboard:{{ .Values.dashboard.service.port }}/api/live"
+          curl -sf --max-time 10 "http://{{ include "genus-os.fullname" . }}-dashboard:{{ .Values.dashboard.service.port }}/api/ready"
+          {{- end }}
+          echo "OK"
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+  volumes:
+    - name: tmp
+      emptyDir: {}

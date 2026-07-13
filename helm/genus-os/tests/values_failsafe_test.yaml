@@ -11,6 +11,7 @@ tests:
     values:
       - ../values-production.yaml
     template: vaultstaticsecret.yaml
+    documentIndex: 0
     set:
       # Provide database.host so the chart resolves to something concrete
       # without depending on layer 3.
@@ -23,14 +24,15 @@ tests:
     values:
       - ../values-staging.yaml
     template: vaultstaticsecret.yaml
+    documentIndex: 0
     asserts:
       - isKind:
           of: VaultStaticSecret
 
-  - it: engine workload under values-production omits explicit DB env
+  - it: engine workload under values-production omits connection identity but enforces TLS
     # Under values-production (postgres.enabled=false) the chart no longer
-    # emits explicit ROBOTHOR_DB_* env vars — they come from the VSO
-    # envFrom Secret instead. This test ensures the gate works.
+    # emits no host/user entries; those arrive through the VSO envFrom Secret,
+    # while sslmode remains a non-secret chart policy.
     values:
       - ../values-production.yaml
     template: engine/workload.yaml
@@ -41,6 +43,122 @@ tests:
           content:
             name: ROBOTHOR_DB_HOST
           any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_SSLMODE
+            value: verify-full
+
+  - it: production requires a persistent non-empty main-agent workspace
+    values:
+      - ../values-production.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: gos-genus-os-workspace
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ALLOW_EMPTY_FLEET
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REQUIRED_AGENT_IDS
+            value: main
+
+  - it: production enables ingress and egress network policy
+    values:
+      - ../values-production.yaml
+    template: networkpolicy.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.policyTypes
+          content: Egress
+
+  - it: production cannot disable NetworkPolicy
+    values:
+      - ../values-production.yaml
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy.enabled must be true in staging/production
+
+  - it: production cannot disable egress isolation
+    values:
+      - ../values-production.yaml
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.egress.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy.egress.enabled must be true in staging/production
+
+  - it: production dashboard receives no DB signing or provider Secret
+    values:
+      - ../values-production.yaml
+    template: dashboard/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: gos-genus-os-dashboard-auth
+            - secretRef:
+                name: gos-genus-os-bridge-sso
+
+  - it: production Engine is the only model-provider Secret consumer
+    values:
+      - ../values-production.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: gos-genus-os-database
+            - secretRef:
+                name: gos-genus-os-cache
+            - secretRef:
+                name: gos-genus-os-auth-signing
+            - secretRef:
+                name: gos-genus-os-engine-providers
+
+  - it: Bridge rejects the Engine model-provider Secret class
+    template: bridge/workload.yaml
+    set:
+      bridge.secretRefs: [database, engine-providers]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bridge.secretRefs forbids secret class "engine-providers"'
+
+  - it: Orchestrator rejects the Engine model-provider Secret class
+    template: orchestrator/workload.yaml
+    set:
+      orchestrator.secretRefs: [database, engine-providers]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'orchestrator.secretRefs forbids secret class "engine-providers"'
+
+  - it: production migration Job receives only the DB Secret
+    values:
+      - ../values-production.yaml
+    template: migrations/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: gos-genus-os-database
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
 
   - it: engine workload under values-production does NOT default to gos-postgres
     values:

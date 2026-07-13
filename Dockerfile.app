@@ -13,11 +13,13 @@
 # ─── deps — pnpm install, no source ──────────────────────────────────────────
 FROM node:22-alpine AS deps
 
+ARG PNPM_VERSION=10.34.5
+
 ENV PNPM_HOME=/pnpm \
     PATH="/pnpm:$PATH" \
     NEXT_TELEMETRY_DISABLED=1
 
-RUN corepack enable && corepack prepare pnpm@9.4.0 --activate
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 WORKDIR /app
 

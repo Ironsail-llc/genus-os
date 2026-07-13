@@ -120,6 +120,8 @@ class TestAppConfig:
     def test_app_has_routes(self):
         route_paths = [r.path for r in app.routes]
         assert "/health" in route_paths
+        assert "/live" in route_paths
+        assert "/ready" in route_paths
         assert "/query" in route_paths
         assert "/v1/chat/completions" in route_paths
         assert "/v1/models" in route_paths

@@ -17,6 +17,31 @@ Renders:
 {{- if $cv.enabled -}}
 {{- $fullName := printf "%s-%s" (include "genus-os.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- $port := $cv.service.port | int -}}
+{{- $serviceEnv := dict -}}
+{{- if eq $component "engine" -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_HOST" "0.0.0.0" -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_WORKSPACE" $root.Values.workspace.mountPath -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_MANIFEST_DIR" (printf "%s/docs/agents" $root.Values.workspace.mountPath) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ALLOW_EMPTY_FLEET" (toString $root.Values.workspace.allowEmptyFleet) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_MIN_AGENT_COUNT" (toString $root.Values.workspace.minAgentCount) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_REQUIRED_AGENT_IDS" (join "," $root.Values.workspace.requiredAgentIds) -}}
+{{- if $root.Values.bridge.enabled -}}
+{{- $_ := set $serviceEnv "BRIDGE_URL" (printf "http://%s-bridge:%v" (include "genus-os.fullname" $root) $root.Values.bridge.service.port) -}}
+{{- end -}}
+{{- if $root.Values.orchestrator.enabled -}}
+{{- $_ := set $serviceEnv "ORCHESTRATOR_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $component "bridge" -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_BRIDGE_HOST" "0.0.0.0" -}}
+{{- if $root.Values.orchestrator.enabled -}}
+{{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
+{{- end -}}
+{{- end -}}
+{{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) -}}
+{{- if and (eq $component "engine") $root.Values.workspace.configMap.name $root.Values.workspace.persistence.enabled -}}
+{{- fail "workspace.configMap.name and workspace.persistence.enabled are mutually exclusive" -}}
+{{- end -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -50,9 +75,11 @@ spec:
         {{- with $root.Values.global.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
         {{- with $cv.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
-      serviceAccountName: {{ include "genus-os.serviceAccountName" $root }}
-      # wait-for-migrations initContainer needs the SA token to call kubectl.
-      automountServiceAccountToken: {{ $root.Values.migrations.enabled }}
+      serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" $root "component" $component) }}
+      # Never auto-mount the API token into the privileged application
+      # container. A short-lived projected token is mounted only into the
+      # migration watcher init container below.
+      automountServiceAccountToken: false
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -102,6 +129,14 @@ spec:
                 fi
                 sleep 3
               done
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: migration-api-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          resources:
+            {{- toYaml $root.Values.global.initContainerResources | nindent 12 }}
       {{- end }}
       containers:
         - name: {{ $component }}
@@ -122,12 +157,12 @@ spec:
               protocol: TCP
           env:
             {{- include "genus-os.commonEnv" $root | nindent 12 }}
-            {{- range $k, $v := $cv.env }}
+            {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
           envFrom:
-            {{- include "genus-os.envFromSecret" $root | nindent 12 }}
+            {{- include "genus-os.envFromSecret" (dict "root" $root "component" $component) | nindent 12 }}
           {{- $liveness := include "genus-os.httpProbe" (dict "root" $root "component" $component "probe" "liveness" "port" "http") }}
           {{- if $liveness | trim }}
           livenessProbe:
@@ -138,8 +173,58 @@ spec:
           readinessProbe:
             {{- $readiness | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            {{- if eq $component "engine" }}
+            - name: workspace
+              mountPath: {{ $root.Values.workspace.mountPath | quote }}
+              readOnly: {{ or $root.Values.workspace.readOnly (ne $root.Values.workspace.configMap.name "") }}
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: runtime-cache
+              mountPath: /app/.cache
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
+      volumes:
+        {{- if eq $component "engine" }}
+        - name: workspace
+          {{- if $root.Values.workspace.configMap.name }}
+          configMap:
+            name: {{ $root.Values.workspace.configMap.name }}
+            {{- with $root.Values.workspace.configMap.items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+          {{- else if $root.Values.workspace.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "genus-os.workspaceClaimName" $root }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: runtime-cache
+          emptyDir: {}
+        {{- if $root.Values.migrations.enabled }}
+        - name: migration-api-token
+          projected:
+            defaultMode: 0400
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -200,6 +285,7 @@ metadata:
     {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
 spec:
   minAvailable: {{ $cv.podDisruptionBudget.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:
       {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}

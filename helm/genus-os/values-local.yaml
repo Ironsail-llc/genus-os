@@ -9,9 +9,9 @@ global:
   tolerations: []
 
 vault:
-  # Provide `<release>-genus-os-credentials` out-of-band before installing
-  # (e.g. `kubectl create secret generic gos-genus-os-credentials ...` for
-  # release `gos`). See helm/genus-os/README.md for the install snippet.
+  # Provide one out-of-band Secret per component `secretRefs` class (for
+  # example `gos-genus-os-database`), never one chart-wide credential Secret.
+  # See helm/genus-os/README.md for the trust-boundary contract.
   enabled: false
 
 postgres:
