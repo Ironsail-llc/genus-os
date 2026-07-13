@@ -1,0 +1,13 @@
+# Weekly proof that the offsite copy is still intact and restorable-looking.
+# An unverified backup is a hope, not a backup.
+[Unit]
+Description=Robothor — verify the offsite backup copy
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+Environment=ROBOTHOR_OFFSITE_VERIFY_ONLY=1
+ExecStart=/usr/bin/env bash /opt/robothor/scripts/backup-offsite.sh
