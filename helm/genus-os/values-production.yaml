@@ -3,7 +3,7 @@
 # scripts/update-helm-values.sh on each release on main.
 
 global:
-  imageTag: "v1.11.0"
+  imageTag: "v1.11.1"
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
 postgres:
   enabled: false

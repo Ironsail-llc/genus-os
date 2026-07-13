@@ -1,3 +1,9 @@
+## [1.11.1](https://github.com/Ironsail-llc/genus-os/compare/v1.11.0...v1.11.1) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** restore OpenRouter + resolve dated response slugs ([#177](https://github.com/Ironsail-llc/genus-os/issues/177)) ([b0ac85b](https://github.com/Ironsail-llc/genus-os/commit/b0ac85beda74be97cc9886fc335a032692a168f5))
+
 ## [1.11.0](https://github.com/Ironsail-llc/genus-os/compare/v1.10.1...v1.11.0) (2026-07-13)
 
 ### Features
