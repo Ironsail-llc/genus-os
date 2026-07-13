@@ -1,3 +1,9 @@
+## [1.15.2](https://github.com/Ironsail-llc/genus-os/compare/v1.15.1...v1.15.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** deliver operator alerts the database will actually accept ([#194](https://github.com/Ironsail-llc/genus-os/issues/194)) ([0d4227e](https://github.com/Ironsail-llc/genus-os/commit/0d4227ecf5540ad0f691692891b208effc2b64be)), closes [#190](https://github.com/Ironsail-llc/genus-os/issues/190)
+
 ## [1.15.1](https://github.com/Ironsail-llc/genus-os/compare/v1.15.0...v1.15.1) (2026-07-13)
 
 ### Bug Fixes
