@@ -176,7 +176,19 @@ def _from_env() -> OwnerConfig | None:
 def load_owner_config(path: Path | None = None) -> OwnerConfig | None:
     """Load the operator identity. ``None`` when nothing is configured."""
     target = path or owner_config_path()
+    # An existing owner.yaml is authoritative, including when it is malformed.
+    # Silently falling through to legacy environment variables in that case can
+    # start the system under a different identity than the operator intended.
+    # The deprecated env fallback is only for installations that have not yet
+    # created owner.yaml at all.
+    try:
+        yaml_exists = target.exists()
+    except OSError:
+        # Treat an unstatable path as configured-but-broken and fail closed.
+        yaml_exists = True
     config = _from_yaml(target)
     if config is not None:
         return config
+    if yaml_exists:
+        return None
     return _from_env()
