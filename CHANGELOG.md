@@ -1,3 +1,9 @@
+## [1.20.0](https://github.com/Ironsail-llc/genus-os/compare/v1.19.1...v1.20.0) (2026-07-14)
+
+### Features
+
+* **engine:** make the sandbox actually sandbox exec ([#207](https://github.com/Ironsail-llc/genus-os/issues/207)) ([2d7cd70](https://github.com/Ironsail-llc/genus-os/commit/2d7cd7086de0310aa17e03151cda3deb1da37287)), closes [#205](https://github.com/Ironsail-llc/genus-os/issues/205) [#201](https://github.com/Ironsail-llc/genus-os/issues/201) [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+
 ## [1.19.1](https://github.com/Ironsail-llc/genus-os/compare/v1.19.0...v1.19.1) (2026-07-14)
 
 ### Bug Fixes
