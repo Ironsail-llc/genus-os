@@ -34,6 +34,15 @@ def _cmd_agent_setup() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Adopt the instance's systemd environment before anything reads a flag.
+    # Without this a CLI run inherits only the caller's shell, so every
+    # rollout-gated guardrail reads back as off/observe while the daemon
+    # enforces it — a shell (or an agent shelling out) would silently bypass
+    # the controls. Explicitly-set variables still win.
+    from robothor.engine.instance_env import load_instance_env
+
+    load_instance_env()
+
     parser = argparse.ArgumentParser(
         prog="robothor",
         description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",

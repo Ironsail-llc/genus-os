@@ -124,7 +124,8 @@ def emit_critical_notification(message: str, *, tenant_id: str = DEFAULT_TENANT)
     """Drop a critical notification so the operator sees it on next heartbeat.
 
     Uses the agent-to-agent notification surface (`send_notification`) addressed
-    to `main`, with `notification_type='alert'`. Main's heartbeat surfaces
+    to `main`, with `notification_type='escalation'` (the DB's check constraint
+    rejects 'alert', so that alert was silently dropped). Main's heartbeat surfaces
     unread notifications in the next delivery cycle — that's how the operator
     learns the pipeline auto-paused.
     """
@@ -134,7 +135,7 @@ def emit_critical_notification(message: str, *, tenant_id: str = DEFAULT_TENANT)
         send_notification(
             from_agent="buddy-auditor",
             to_agent="main",
-            notification_type="alert",
+            notification_type="escalation",
             subject="Buddy self-improvement pipeline paused",
             body=message,
             tenant_id=tenant_id,

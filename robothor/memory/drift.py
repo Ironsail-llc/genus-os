@@ -102,6 +102,20 @@ def evaluate_drift(
         return DriftDecision(action="proceed", drift_detected=False, mode=mode)
     if mode == "enforce":
         return DriftDecision(action="refuse", drift_detected=True, mode=mode)
+    if mode == "alert":
+        # The middle rung: allow the write, but put it in front of the operator.
+        # Without this, promoting RIP 7 to "alert" would notify nobody.
+        from robothor.engine.feature_flags import notify_guardrail_alert
+
+        notify_guardrail_alert(
+            guardrail_name="memory_drift",
+            agent_id="memory",
+            reason=(
+                f"a memory_facts row changed underneath the engine (content-hash "
+                f"drift, category={category!r}); enforce would refuse this write"
+            ),
+            tenant_id=tenant_id,
+        )
     return DriftDecision(action="proceed", drift_detected=True, mode=mode)
 
 

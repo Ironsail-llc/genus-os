@@ -157,5 +157,8 @@ class TestEmitCriticalNotification:
         kwargs = mock_send.call_args.kwargs
         assert kwargs["from_agent"] == "buddy-auditor"
         assert kwargs["to_agent"] == "main"
-        assert kwargs["notification_type"] == "alert"
+        # "escalation", not "alert": the crm_agent_notifications check
+        # constraint rejects "alert", so that INSERT was refused in
+        # production and this critical alert never reached the operator.
+        assert kwargs["notification_type"] == "escalation"
         assert "hold-rate" in kwargs["body"]

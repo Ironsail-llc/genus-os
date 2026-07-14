@@ -101,3 +101,23 @@ def test_overdue_nag_message_names_flag_and_days():
 def test_no_nag_when_nothing_overdue():
     msg = guardrail_watch.format_nag([], today=dt.date(2026, 7, 13))
     assert msg == ""
+
+
+def test_manifest_modes_match_dropin_mirror():
+    """For every *_MODE flag present in both the drop-in mirror and the
+    manifest, the recorded modes must agree — a flip PR must update both."""
+    dropin = (
+        REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d" / "upgrade-rip-flags.conf"
+    ).read_text()
+    manifest_modes = {e["name"]: e["mode"] for e in yaml.safe_load(MANIFEST.read_text())["flags"]}
+    checked = 0
+    for line in dropin.splitlines():
+        line = line.strip()
+        if line.startswith("Environment=") and "_MODE=" in line:
+            flag, value = line.removeprefix("Environment=").split("=", 1)
+            assert manifest_modes.get(flag) == value, (
+                f"{flag}: drop-in mirror says {value!r}, manifest says "
+                f"{manifest_modes.get(flag)!r} — update both in the flip PR"
+            )
+            checked += 1
+    assert checked >= 5, "expected several *_MODE flags in the drop-in"

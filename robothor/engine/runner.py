@@ -408,6 +408,16 @@ class AgentRunner:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("completion contract event log failed: %s", exc)
+                if cc_mode == "alert":
+                    # Middle rung: the claim stands, but the operator hears about it.
+                    from robothor.engine.feature_flags import notify_guardrail_alert
+
+                    notify_guardrail_alert(
+                        guardrail_name="completion_contract",
+                        agent_id=run.agent_id,
+                        reason=reason,
+                        tenant_id=getattr(run, "tenant_id", "") or "",
+                    )
                 if cc_mode == "enforce":
                     try:
                         from robothor.crm import dal
@@ -686,11 +696,25 @@ class AgentRunner:
                     f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
                 )
             except CronPromptInjectionBlockedError as _inj_exc:
+                # A blocked run must leave a complete trail. Ordering matters:
+                #   1. mark the run FAILED, then INSERT it — _finish_run's
+                #      persistence is a *background* task, which a short-lived
+                #      caller (CLI) exits before it lands, stranding the row in
+                #      'pending'. Inserting the already-terminal state is the
+                #      one write guaranteed to survive.
+                #   2. log the guardrail event only after the row exists —
+                #      agent_guardrail_events.run_id is an FK to agent_runs, so
+                #      logging first violates it and the audit event is lost.
+                # Both were live defects: enforce-mode blocks were invisible to
+                # the soak report and left 'pending' runs behind.
+                _blocked_run = session.fail(f"Blocked by injection scan: {_inj_exc}")
                 with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, create_run, _blocked_run)
+                try:
                     from robothor.engine.tracking import log_guardrail_event
 
                     log_guardrail_event(
-                        run_id=session.run.id,
+                        run_id=_blocked_run.id,
                         guardrail_name="injection_scan",
                         action="blocked",
                         tool_name=None,
@@ -698,22 +722,24 @@ class AgentRunner:
                         mode="enforce",
                         step_number=0,
                     )
-                # Persist a terminal FAILED run rather than letting a bare
-                # exception escape execute() to the scheduler task (which has no
-                # handler). This scan runs before the main create_run below, so
-                # record the run first — otherwise there's no agent_runs row for
-                # the watchdog to reap or the operator to inspect.
-                with contextlib.suppress(Exception):
-                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                except Exception as _audit_exc:
+                    # A security control fired; losing its audit trail is itself
+                    # an incident. Never swallow this silently.
+                    logger.error(
+                        "injection_scan blocked run %s but the guardrail event "
+                        "could not be recorded: %s",
+                        _sanitize(_blocked_run.id),
+                        _sanitize(_audit_exc),
+                    )
                 return self._finish_run(
-                    session.fail(f"Blocked by injection scan: {_inj_exc}"),
+                    _blocked_run,
                     trace=None,
                     agent_config=agent_config,
                     session=session,
                     spawn_context=spawn_context,
                 )
             if _inj_finding:
-                with contextlib.suppress(Exception):
+                try:
                     from robothor.engine.tracking import log_guardrail_event
 
                     log_guardrail_event(
@@ -724,6 +750,13 @@ class AgentRunner:
                         reason=_inj_finding,
                         mode="observe",
                         step_number=0,
+                    )
+                except Exception as _audit_exc:  # noqa: BLE001
+                    # A control fired; losing its audit trail is itself an
+                    # incident. Never let this write fail silently.
+                    logger.error(
+                        "guardrail event could not be recorded: %s",
+                        _sanitize(_audit_exc),
                     )
 
         # ── Warmup phase instrumentation ──────────────────────────────────────
@@ -1025,7 +1058,7 @@ class AgentRunner:
 
                 _sb_decision = _resolve_sandbox_decision(agent_config, sandbox_default_mode())
                 if _sb_decision == "observe":
-                    with contextlib.suppress(Exception):
+                    try:
                         from robothor.engine.tracking import log_guardrail_event
 
                         log_guardrail_event(
@@ -1036,6 +1069,13 @@ class AgentRunner:
                             reason="exec-holding agent would run in a Docker sandbox",
                             mode=sandbox_default_mode(),
                             step_number=0,
+                        )
+                    except Exception as _audit_exc:  # noqa: BLE001
+                        # A control fired; losing its audit trail is itself an
+                        # incident. Never let this write fail silently.
+                        logger.error(
+                            "guardrail event could not be recorded: %s",
+                            _sanitize(_audit_exc),
                         )
                 sandbox = None
                 if _sb_decision == "docker":
@@ -1050,6 +1090,40 @@ class AgentRunner:
                             "Sandbox start failed for %s: %s", _sanitize(agent_id), _sanitize(e)
                         )
                         sandbox = None
+                        # FAIL CLOSED. Under enforce the operator has been told
+                        # that exec-holding agents run contained; quietly falling
+                        # back to the host would give them containment they do
+                        # not have. (On this box the engine user is not in the
+                        # docker group, so start() cannot succeed at all — the
+                        # old behavior turned "enforce" into pure theater.)
+                        # Under observe, degrading to the host IS the contract.
+                        if sandbox_default_mode() == "enforce":
+                            _sb_reason = f"sandbox required but could not be started: {e}"
+                            try:
+                                from robothor.engine.tracking import log_guardrail_event
+
+                                log_guardrail_event(
+                                    run_id=session.run.id,
+                                    guardrail_name="sandbox_default",
+                                    action="blocked",
+                                    tool_name="exec",
+                                    reason=_sb_reason,
+                                    mode="enforce",
+                                    step_number=0,
+                                )
+                            except Exception as _audit_exc:  # noqa: BLE001
+                                logger.error(
+                                    "sandbox_default blocked a run but the guardrail "
+                                    "event could not be recorded: %s",
+                                    _sanitize(_audit_exc),
+                                )
+                            return self._finish_run(
+                                session.fail(f"Blocked by sandbox_default: {_sb_reason}"),
+                                trace=trace,
+                                agent_config=agent_config,
+                                session=session,
+                                spawn_context=spawn_context,
+                            )
 
                 # Watchdog already started before setup phase (see above).
 
@@ -1941,6 +2015,29 @@ class AgentRunner:
                         agent_id=agent_config.id,
                         prior_steps=session.run.steps,
                     )
+                    # ── [OBSERVE] Allowed, but a rollout-gated guardrail would
+                    # have blocked this in enforce mode. Persist it: a soak that
+                    # records nothing cannot distinguish "clean" from "blind".
+                    if gr.allowed and gr.action == "observed":
+                        try:
+                            from robothor.engine.tracking import log_guardrail_event
+
+                            log_guardrail_event(
+                                run_id=session.run.id,
+                                guardrail_name=gr.guardrail_name,
+                                action="observed",
+                                tool_name=tool_name,
+                                reason=gr.reason,
+                                mode="observe",
+                                step_number=len(session.run.steps),
+                            )
+                        except Exception as _audit_exc:  # noqa: BLE001
+                            # A control fired; losing its audit trail is itself an
+                            # incident. Never let this write fail silently.
+                            logger.error(
+                                "guardrail event could not be recorded: %s",
+                                _sanitize(_audit_exc),
+                            )
                     if not gr.allowed:
                         # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
                         if gr.action == "escalate":
@@ -1989,7 +2086,7 @@ class AgentRunner:
 
                                 _appr_mode = approval_mode()
                                 if _appr_mode != "off":
-                                    with contextlib.suppress(Exception):
+                                    try:
                                         from robothor.engine.tracking import log_guardrail_event
 
                                         log_guardrail_event(
@@ -2002,6 +2099,13 @@ class AgentRunner:
                                             reason="human approval required but no approver reachable",
                                             mode=_appr_mode,
                                             step_number=len(session.run.steps),
+                                        )
+                                    except Exception as _audit_exc:  # noqa: BLE001
+                                        # A control fired; losing its audit trail is itself an
+                                        # incident. Never let this write fail silently.
+                                        logger.error(
+                                            "guardrail event could not be recorded: %s",
+                                            _sanitize(_audit_exc),
                                         )
                                 if fail_closed_on_missing_manager():
                                     gr_error_msg = (
@@ -2033,7 +2137,7 @@ class AgentRunner:
                                 error_message=gr_error_msg,
                             )
                             iteration_errors.append((tool_name, gr_error_msg, None))
-                            with contextlib.suppress(Exception):
+                            try:
                                 from robothor.engine.tracking import (
                                     log_guardrail_event,
                                     log_tool_event,
@@ -2056,6 +2160,13 @@ class AgentRunner:
                                     reason=gr.reason,
                                     mode="enforce",
                                     step_number=len(session.run.steps),
+                                )
+                            except Exception as _audit_exc:  # noqa: BLE001
+                                # A control fired; losing its audit trail is itself an
+                                # incident. Never let this write fail silently.
+                                logger.error(
+                                    "guardrail event could not be recorded: %s",
+                                    _sanitize(_audit_exc),
                                 )
                             if scratchpad:
                                 scratchpad.record_tool_call(tool_name, error=gr_error_msg)
@@ -2085,7 +2196,7 @@ class AgentRunner:
                         _rbac_mode,
                     )
                     if _rbac_action != "allow":
-                        with contextlib.suppress(Exception):
+                        try:
                             from robothor.engine.tracking import log_guardrail_event
 
                             log_guardrail_event(
@@ -2096,6 +2207,13 @@ class AgentRunner:
                                 reason=_rbac_reason,
                                 mode=_rbac_mode,
                                 step_number=len(session.run.steps),
+                            )
+                        except Exception as _audit_exc:  # noqa: BLE001
+                            # A control fired; losing its audit trail is itself an
+                            # incident. Never let this write fail silently.
+                            logger.error(
+                                "guardrail event could not be recorded: %s",
+                                _sanitize(_audit_exc),
                             )
                         if _rbac_action == "block":
                             rbac_msg = f"Blocked by RBAC: {_rbac_reason}"

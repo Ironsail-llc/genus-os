@@ -17,32 +17,47 @@ flags:
 
   - name: ROBOTHOR_INJECTION_SCAN_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-13"
-    soak: zero observed events 2026-07-02 → 2026-07-13; flip #1 of the clean three
+    mode: enforce
+    soak: flipped 2026-07-13 after zero observed events 2026-07-02 → 2026-07-13
 
   - name: ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-14"
-    soak: zero observed events 2026-07-02 → 2026-07-13; flip #2, 24h after injection-scan
+    mode: enforce
+    soak: >
+      flipped 2026-07-13. NOTE the original "zero events" evidence was vacuous —
+      observe mode wrote no guardrail-event rows at all until #187. The real
+      evidence is journald: zero "exec_allowlist would block" warnings across
+      14 days. Blast radius is narrow: only auto-agent and email-responder
+      define an exec_allowlist, and their allowlisted commands are simple
+      single invocations that never need shell metacharacters.
 
   - name: ROBOTHOR_APPROVAL_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-15"
+    mode: enforce
     soak: >
-      zero observed events; flip #3 on a watched day — verify approval-channel-down
-      behavior first (docs/runbooks/approval-enforce.md)
-
+      The gate was INERT until 2026-07-13 (no agent set human_approval_tools, so
+      nothing could ever escalate — zero events meant "no mechanism", not "safe").
+      Now real: main opts in for irreversible DESTRUCTION only —
+      delete_person/company/task/note, vault_delete, gws_calendar_delete.
+      Deliberately narrow: the operator's standing mandate is autonomous
+      operation, so sending email, calendar creation and everything else stay
+      ungated. A delete cannot be undone and is rare, so one Telegram tap costs
+      nothing. Timeout (600s) = deny, fail-secure. Probe-verified: deletes
+      escalate, gws_gmail_send and search_memory stay autonomous.
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
     planned_promotion: "2026-07-16"
     soak: >
-      363 observes triaged 2026-07-13: all legit host-side exec from four
-      host-trusted agents, now opted out via manifest `sandbox: host`.
-      Enforce after 48h clean re-soak (expected zero events).
+      363 observes triaged 2026-07-13: all legitimate host-side exec (local
+      Postgres over the Unix socket, brain/ status files, localhost curls)
+      from four host-trusted agents, now opted out via `sandbox: host` in the
+      v2 block. Zero events since. GATE: 48h clean re-soak, then enforce.
+      Read the events, not a simulation — `_resolve_sandbox_decision` against a
+      *manifest* config says auto-agent would be Dockerized, but its 60 runs
+      are sub-agent spawns with a restricted tool set and they log no events.
+      The observe events are ground truth: the engine records exactly the runs
+      it would sandbox, so a clean 48h means enforce is a genuine no-op.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops
@@ -54,9 +69,16 @@ flags:
 
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-20"
-    soak: external-drift detection for memory_facts; documented ladder observe→alert→enforce is overdue since June
+    mode: enforce
+    soak: >
+      flipped 2026-07-13. The cleanest evidence of any flag — and the only one
+      whose mechanism is positively PROVEN rather than merely silent. Its
+      evidence lives in memory_facts_audit (not agent_guardrail_events): three
+      pre_update_drift_detected rows, all 2026-05-28, two of which are
+      deliberate tamper fixtures ("[tampered]", "[tamper2]") — the detector
+      caught them. Zero live detections in the 45 days since. Enforce
+      audit-snapshots and refuses a write whose content hash drifted
+      underneath us.
 
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops

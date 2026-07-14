@@ -1,3 +1,134 @@
+## [1.17.0](https://github.com/Ironsail-llc/genus-os/compare/v1.16.2...v1.17.0) (2026-07-14)
+
+### Features
+
+* **engine:** circuit breaker on the LLM fallback chain ([#202](https://github.com/Ironsail-llc/genus-os/issues/202)) ([18ab730](https://github.com/Ironsail-llc/genus-os/commit/18ab730c9fd5d74d1dde08b8e7610b0f0801a1ef))
+
+## [1.16.2](https://github.com/Ironsail-llc/genus-os/compare/v1.16.1...v1.16.2) (2026-07-14)
+
+### Bug Fixes
+
+* **security:** sandbox fails closed under enforce ([#201](https://github.com/Ironsail-llc/genus-os/issues/201)) ([803cd30](https://github.com/Ironsail-llc/genus-os/commit/803cd30c2578aa38105a171adf16a626856ffbfb))
+
+## [1.16.1](https://github.com/Ironsail-llc/genus-os/compare/v1.16.0...v1.16.1) (2026-07-14)
+
+### Bug Fixes
+
+* **engine:** never silently drop a guardrail audit write ([#200](https://github.com/Ironsail-llc/genus-os/issues/200)) ([ed34be1](https://github.com/Ironsail-llc/genus-os/commit/ed34be14180701a0a5cee4a98e415ed1cd6a3b23)), closes [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187)
+
+## [1.16.0](https://github.com/Ironsail-llc/genus-os/compare/v1.15.6...v1.16.0) (2026-07-14)
+
+### Features
+
+* **ops:** nag on session goals that have stopped moving ([#199](https://github.com/Ironsail-llc/genus-os/issues/199)) ([caaa735](https://github.com/Ironsail-llc/genus-os/commit/caaa7355ff06efd0d6b183f982dda548f67b0795))
+
+## [1.15.6](https://github.com/Ironsail-llc/genus-os/compare/v1.15.5...v1.15.6) (2026-07-14)
+
+### Bug Fixes
+
+* **ops:** upload only the retained backup generations ([#198](https://github.com/Ironsail-llc/genus-os/issues/198)) ([f81ce3a](https://github.com/Ironsail-llc/genus-os/commit/f81ce3a33f692bdaf11783a9a21bd3a47db71305)), closes [#192](https://github.com/Ironsail-llc/genus-os/issues/192)
+
+## [1.15.5](https://github.com/Ironsail-llc/genus-os/compare/v1.15.4...v1.15.5) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce the human-approval gate, now that it is real ([#197](https://github.com/Ironsail-llc/genus-os/issues/197)) ([16b84ab](https://github.com/Ironsail-llc/genus-os/commit/16b84ab5d9357bb570f9473cb30b2b7da4e81ea7)), closes [#186](https://github.com/Ironsail-llc/genus-os/issues/186)
+
+## [1.15.4](https://github.com/Ironsail-llc/genus-os/compare/v1.15.3...v1.15.4) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** worker runs must keep the agent's guardrails ([#196](https://github.com/Ironsail-llc/genus-os/issues/196)) ([a590f48](https://github.com/Ironsail-llc/genus-os/commit/a590f48b20009792ed6f1283d49cadda8e2a01bd))
+
+## [1.15.3](https://github.com/Ironsail-llc/genus-os/compare/v1.15.2...v1.15.3) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** make guardrail alerts reach the operator, from every consumer ([#195](https://github.com/Ironsail-llc/genus-os/issues/195)) ([3f24045](https://github.com/Ironsail-llc/genus-os/commit/3f240459e2d5ca0ce84b68682242282d29b97795)), closes [#190](https://github.com/Ironsail-llc/genus-os/issues/190) [#194](https://github.com/Ironsail-llc/genus-os/issues/194) [#194](https://github.com/Ironsail-llc/genus-os/issues/194) [#179](https://github.com/Ironsail-llc/genus-os/issues/179) [#180](https://github.com/Ironsail-llc/genus-os/issues/180)
+
+## [1.15.2](https://github.com/Ironsail-llc/genus-os/compare/v1.15.1...v1.15.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** deliver operator alerts the database will actually accept ([#194](https://github.com/Ironsail-llc/genus-os/issues/194)) ([0d4227e](https://github.com/Ironsail-llc/genus-os/commit/0d4227ecf5540ad0f691692891b208effc2b64be)), closes [#190](https://github.com/Ironsail-llc/genus-os/issues/190)
+
+## [1.15.1](https://github.com/Ironsail-llc/genus-os/compare/v1.15.0...v1.15.1) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce memory-fact drift detection (rip 7) ([#193](https://github.com/Ironsail-llc/genus-os/issues/193)) ([49181e1](https://github.com/Ironsail-llc/genus-os/commit/49181e18184fd0877e205e88f21fd3f9e2860518)), closes [#3](https://github.com/Ironsail-llc/genus-os/issues/3) [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#186](https://github.com/Ironsail-llc/genus-os/issues/186) [#190](https://github.com/Ironsail-llc/genus-os/issues/190)
+
+## [1.15.0](https://github.com/Ironsail-llc/genus-os/compare/v1.14.5...v1.15.0) (2026-07-13)
+
+### Features
+
+* **ops:** replicate backups offsite with verification and paging ([#192](https://github.com/Ironsail-llc/genus-os/issues/192)) ([1717e00](https://github.com/Ironsail-llc/genus-os/commit/1717e00d34cc9dd29318077b54773be304749615)), closes [#179](https://github.com/Ironsail-llc/genus-os/issues/179)
+
+## [1.14.5](https://github.com/Ironsail-llc/genus-os/compare/v1.14.4...v1.14.5) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** make cli runs obey the daemon's guardrails ([#191](https://github.com/Ironsail-llc/genus-os/issues/191)) ([a689438](https://github.com/Ironsail-llc/genus-os/commit/a689438a467158110b6b049de5e75969e482d076))
+
+## [1.14.4](https://github.com/Ironsail-llc/genus-os/compare/v1.14.3...v1.14.4) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce exec allowlist shell-metacharacter block ([#189](https://github.com/Ironsail-llc/genus-os/issues/189)) ([124dc1f](https://github.com/Ironsail-llc/genus-os/commit/124dc1f1baf8f850f93d5208d8e69422ed8251a4)), closes [#2](https://github.com/Ironsail-llc/genus-os/issues/2) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#187](https://github.com/Ironsail-llc/genus-os/issues/187)
+
+## [1.14.3](https://github.com/Ironsail-llc/genus-os/compare/v1.14.2...v1.14.3) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** make the alert rung of the enforcement ladder real ([#190](https://github.com/Ironsail-llc/genus-os/issues/190)) ([ce2b74c](https://github.com/Ironsail-llc/genus-os/commit/ce2b74c8ff5b10fe196eb534452f4c52b77f43d7)), closes [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187) [#186](https://github.com/Ironsail-llc/genus-os/issues/186)
+
+## [1.14.2](https://github.com/Ironsail-llc/genus-os/compare/v1.14.1...v1.14.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** accept sandbox host in the config validator ([#188](https://github.com/Ironsail-llc/genus-os/issues/188)) ([af88742](https://github.com/Ironsail-llc/genus-os/commit/af887428d6435f07c33631632dcc530ffac17dfd)), closes [#185](https://github.com/Ironsail-llc/genus-os/issues/185)
+
+## [1.14.1](https://github.com/Ironsail-llc/genus-os/compare/v1.14.0...v1.14.1) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** persist observe-mode guardrail findings as evidence ([#187](https://github.com/Ironsail-llc/genus-os/issues/187)) ([d414a9a](https://github.com/Ironsail-llc/genus-os/commit/d414a9a3ed40ed1570c60aa73fd275b58332bf3d)), closes [#2](https://github.com/Ironsail-llc/genus-os/issues/2)
+
+## [1.14.0](https://github.com/Ironsail-llc/genus-os/compare/v1.13.2...v1.14.0) (2026-07-13)
+
+### Features
+
+* **agents:** document sandbox host opt-out in the manifest schema ([#185](https://github.com/Ironsail-llc/genus-os/issues/185)) ([13e251c](https://github.com/Ironsail-llc/genus-os/commit/13e251c81a59fd76f13960598447de57d00c3844))
+
+### Bug Fixes
+
+* **docs:** record that the human-approval gate is inert, not soaked clean ([#186](https://github.com/Ironsail-llc/genus-os/issues/186)) ([ca44448](https://github.com/Ironsail-llc/genus-os/commit/ca444481f3ffb367f1a0480457fa2c93d18f1425)), closes [#3](https://github.com/Ironsail-llc/genus-os/issues/3)
+
+## [1.13.2](https://github.com/Ironsail-llc/genus-os/compare/v1.13.1...v1.13.2) (2026-07-13)
+
+### Bug Fixes
+
+* **engine:** record audit trail when injection scan blocks a run ([#184](https://github.com/Ironsail-llc/genus-os/issues/184)) ([e3d16bc](https://github.com/Ironsail-llc/genus-os/commit/e3d16bc13d6fd3ac60b603c6aa3c02c7e5d98dd7)), closes [#182](https://github.com/Ironsail-llc/genus-os/issues/182)
+
+## [1.13.1](https://github.com/Ironsail-llc/genus-os/compare/v1.13.0...v1.13.1) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce prompt-injection scan guardrail ([#182](https://github.com/Ironsail-llc/genus-os/issues/182)) ([7802d01](https://github.com/Ironsail-llc/genus-os/commit/7802d017afa79030e3d9e4753c32156b554396be)), closes [#1](https://github.com/Ironsail-llc/genus-os/issues/1)
+
+## [1.13.0](https://github.com/Ironsail-llc/genus-os/compare/v1.12.0...v1.13.0) (2026-07-13)
+
+### Features
+
+* **infra:** page operator via Telegram when critical units fail ([#179](https://github.com/Ironsail-llc/genus-os/issues/179)) ([3072b8a](https://github.com/Ironsail-llc/genus-os/commit/3072b8a00ab3e903e6a174c8b56012ffee826048))
+
+## [1.12.0](https://github.com/Ironsail-llc/genus-os/compare/v1.11.1...v1.12.0) (2026-07-13)
+
+### Features
+
+* **connectors:** MCP 2026-07-28 dual-mode client + version-tolerant bridge ([#174](https://github.com/Ironsail-llc/genus-os/issues/174)) ([70e0d3f](https://github.com/Ironsail-llc/genus-os/commit/70e0d3f709c71f659b2db06dff17d80628e04ce4))
+* **engine:** flag manifest with soak-deadline nags in guardrail watch ([#180](https://github.com/Ironsail-llc/genus-os/issues/180)) ([2183357](https://github.com/Ironsail-llc/genus-os/commit/218335776b79cb296221e2bf33724dead5243b60)), closes [#178](https://github.com/Ironsail-llc/genus-os/issues/178)
+
 ## [1.11.1](https://github.com/Ironsail-llc/genus-os/compare/v1.11.0...v1.11.1) (2026-07-13)
 
 ### Bug Fixes

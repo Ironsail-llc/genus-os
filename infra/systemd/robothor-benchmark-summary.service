@@ -1,15 +1,18 @@
+# NOTE: paths/user below use the generic /opt/robothor + robothor-user
+# convention. On install, adjust to your instance workspace and user
+# (this box: /home/<user>/robothor). See templates/ for onboarding.
 [Unit]
 Description=Robothor — daily benchmark summary (Telegram)
 After=postgresql.service robothor-engine.service
 
 [Service]
 Type=oneshot
-User=philip
-Group=philip
+User=robothor
+Group=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 Environment=ROBOTHOR_TENANT_ID=robothor-primary
-Environment=HOME=/home/philip
+Environment=HOME=/opt/robothor
 TimeoutStartSec=120
-WorkingDirectory=/home/philip/robothor
-ExecStart=/home/philip/robothor/venv/bin/python /home/philip/robothor/scripts/daily_benchmark_summary.py
+WorkingDirectory=/opt/robothor
+ExecStart=/opt/robothor/venv/bin/python /opt/robothor/scripts/daily_benchmark_summary.py

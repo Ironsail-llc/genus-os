@@ -18,8 +18,11 @@ are written to disk.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -30,6 +33,13 @@ SymbolicMode = Literal["off", "observe", "enforce"]
 _VALID_SYMBOLIC_MODES = frozenset(("observe", "enforce"))
 # Generic observe→alert→enforce rollout ladder, shared by the Wave-1
 # hardening flags below. Same shape as ``rip_7_enforcement_mode``.
+#
+# "alert" = observe + notify the operator. Consumers call
+# ``notify_guardrail_alert`` when a check would have blocked under enforce;
+# the notification reaches the operator through main's heartbeat. A rung that
+# silently behaved like "observe" would be worse than no rung at all — an
+# operator following the ladder would believe they had escalated when they
+# had not. ``test_alert_mode_contract`` pins this.
 EnforcementMode = Literal["off", "observe", "alert", "enforce"]
 _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 
@@ -302,3 +312,99 @@ def injection_scan_mode() -> EnforcementMode:
     aborts the run. Default off.
     """
     return _enforcement_mode("ROBOTHOR_INJECTION_SCAN_ENABLED", "ROBOTHOR_INJECTION_SCAN_MODE")
+
+
+def _post_telegram(text: str) -> bool:
+    """Deliver to the operator's actual channel. Best-effort, never raises.
+
+    The DB notification is an audit *record*, not delivery: the agent-to-agent
+    surface is write-only in practice — ``send_notification``/``ack_notification``
+    are registered handlers but are not in ``tools/schemas.py`` (so no agent is
+    even offered them), there is no read/list tool, and nothing in warmup or the
+    heartbeat reads ``crm_agent_notifications``. A row alone reaches nobody.
+    Telegram is the channel the operator actually watches — the same one the
+    failure pager and the soak nags use.
+    """
+    import urllib.parse
+    import urllib.request
+
+    token = os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return False
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return bool(resp.status == 200)
+    except Exception as exc:
+        logger.error("guardrail alert could not be delivered to Telegram: %s", exc)
+        return False
+
+
+def notify_guardrail_alert(
+    *,
+    guardrail_name: str,
+    agent_id: str,
+    reason: str,
+    tenant_id: str = "",
+) -> bool:
+    """Notify the operator that a guardrail in ``alert`` mode would have blocked.
+
+    This is what makes the middle rung of the observe→alert→enforce ladder
+    real: ``observe`` records evidence silently, ``alert`` also puts it in
+    front of the operator (via the agent-to-agent notification surface, which
+    main's heartbeat surfaces), and ``enforce`` acts on it.
+
+    Best-effort: a failed notification must never break the run — but it is
+    logged at error level, because an alert nobody receives is the failure
+    mode this rung exists to prevent.
+    """
+    try:
+        from robothor.constants import DEFAULT_TENANT
+        from robothor.crm import dal
+
+        # "escalation" — NOT "alert": the crm_agent_notifications check
+        # constraint rejects "alert", so that INSERT is refused and the
+        # operator is never told. send_notification swallows the failure and
+        # returns None, so the returned id is the only proof of delivery.
+        notif_id = dal.send_notification(
+            from_agent="engine",
+            to_agent="main",
+            notification_type="escalation",
+            subject=f"Guardrail would block: {guardrail_name}",
+            body=(
+                f"{guardrail_name} is in alert mode and would have BLOCKED this "
+                f"call under enforce.\n\nAgent: {agent_id}\nReason: {reason}\n\n"
+                f"Promote to enforce (docs/runbooks/GUARDRAIL_FLIPS.md) or fix "
+                f"the agent behavior."
+            ),
+            tenant_id=tenant_id or DEFAULT_TENANT,
+        )
+        if not notif_id:
+            logger.error(
+                "guardrail %s is in alert mode but the operator notification was "
+                "dropped — the alert rung is not delivering",
+                guardrail_name,
+            )
+
+        # The DB row is the audit record; Telegram is the delivery. The rung is
+        # only real if it lands where the operator actually looks.
+        delivered = _post_telegram(
+            f"\u26a0\ufe0f {guardrail_name} would BLOCK under enforce\n\n"
+            f"Agent: {agent_id}\nReason: {reason}\n\n"
+            "Promote to enforce or fix the agent (docs/runbooks/GUARDRAIL_FLIPS.md)."
+        )
+        if not delivered:
+            logger.error(
+                "guardrail %s alert was not delivered to the operator's channel",
+                guardrail_name,
+            )
+        return bool(notif_id) or delivered
+    except Exception as exc:
+        logger.error(
+            "guardrail %s is in alert mode but the operator notification failed: %s",
+            guardrail_name,
+            exc,
+        )
+        return False

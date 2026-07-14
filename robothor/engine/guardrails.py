@@ -214,7 +214,11 @@ class GuardrailResult:
     """Result of a guardrail check."""
 
     allowed: bool = True
-    action: str = "allowed"  # allowed, blocked, warned
+    # allowed, blocked, warned, escalate, observed
+    # "observed" = allowed, but a rollout-gated guardrail WOULD have blocked the
+    # call in enforce mode. The caller must persist it (agent_guardrail_events)
+    # so an observe-mode soak yields real promotion evidence rather than silence.
+    action: str = "allowed"
     reason: str = ""
     guardrail_name: str = ""
 
@@ -257,11 +261,17 @@ class GuardrailEngine:
         (in order). Guardrails that need to inspect context from earlier in the
         run (e.g. "did we already propose the time via email?") read it.
         """
+        observation: GuardrailResult | None = None
         for policy in self.enabled_policies:
             result = self._run_pre_policy(policy, tool_name, tool_args, agent_id, prior_steps or [])
             if not result.allowed:
                 return result
-        return GuardrailResult()
+            # A rollout-gated guardrail in observe mode allows the call but flags
+            # it. Carry the first such observation out so the caller can record
+            # it; dropping it here is what made observe-mode soaks look silent.
+            if observation is None and result.action == "observed":
+                observation = result
+        return observation or GuardrailResult()
 
     def check_post_execution(
         self,
@@ -428,12 +438,14 @@ class GuardrailEngine:
         from robothor.engine.feature_flags import exec_allowlist_mode
 
         mode = exec_allowlist_mode()
+        observed_reason = ""
         if mode != "off" and _SHELL_CONTROL.search(command):
+            reason = f"shell control characters not permitted in allowlisted exec: {command[:100]}"
             if mode == "enforce":
                 return GuardrailResult(
                     allowed=False,
                     action="blocked",
-                    reason=f"shell control characters not permitted in allowlisted exec: {command[:100]}",
+                    reason=reason,
                     guardrail_name="exec_allowlist",
                 )
             logger.warning(
@@ -442,8 +454,29 @@ class GuardrailEngine:
                 mode,
                 command[:100],
             )
+            observed_reason = reason
+            if mode == "alert":
+                # The middle rung: observe + put it in front of the operator.
+                from robothor.engine.feature_flags import notify_guardrail_alert
+
+                notify_guardrail_alert(
+                    guardrail_name="exec_allowlist",
+                    agent_id=agent_id,
+                    reason=reason,
+                )
+
         for pattern in patterns:
             if pattern.search(command):
+                # Command clears the allowlist. If strict mode would have blocked
+                # it, surface that as an "observed" event so the soak has real
+                # evidence — silence must not be mistakable for cleanliness.
+                if observed_reason:
+                    return GuardrailResult(
+                        allowed=True,
+                        action="observed",
+                        reason=observed_reason,
+                        guardrail_name="exec_allowlist",
+                    )
                 return GuardrailResult()
         return GuardrailResult(
             allowed=False,

@@ -36,12 +36,12 @@ dependencies = [
     # fixed in 1.61.17). No upper cap below 2.0: litellm 1.84+ relaxed its
     # transitive aiohttp pin again, so the latest 1.x (1.87.0) resolves cleanly
     # with aiohttp>=3.13.4.
-    "litellm>=1.61.17,<2.0",
-    "aiohttp>=3.13.4",
+    "litellm>=1.84.0,<2.0",
+    "aiohttp>=3.14.1",
     "aiogram~=3.10",
     "apscheduler~=3.10",
     "html2text~=2024.2",
-    "cryptography>=46.0.6",
+    "cryptography>=48.0.1",
     "structlog~=24.0",
     "prometheus-client~=0.21",
 ]
@@ -55,7 +55,7 @@ api = [
     "uvicorn[standard]>=0.32",
     # Auth: bridge-issued JWT sessions + password hashing (break-glass admin).
     # pyjwt/bcrypt already resolve transitively; declare them as first-class.
-    "pyjwt>=2.10",
+    "pyjwt>=2.13.0",
     "argon2-cffi>=23.1",
 ]
 vision = [
@@ -145,13 +145,5 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 
 # mypy config lives in mypy.ini (pyproject.toml overrides don't work with editable installs)
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-    "integration: requires real database/Redis",
-    "llm: requires Ollama running",
-    "slow: takes more than 10 seconds",
-    "e2e: full system end-to-end",
-    "smoke: health check only",
-]
-asyncio_mode = "auto"
+# pytest config lives in pytest.ini (authoritative — pytest ignores this file
+# when pytest.ini exists, and the two had silently drifted apart)
