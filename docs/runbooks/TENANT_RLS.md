@@ -102,13 +102,37 @@ Proper fix: move that DDL into `crm/migrations/`, then
 code, and the failure only surfaced because `systemctl is-system-running` went
 `degraded`.
 
-## What is NOT yet isolated
+## Every DB-touching service is now scoped (2026-07-14)
 
-`robothor-app` (dashboard), `robothor-orchestrator` and `robothor-vision` use a
-different variable set — `PG_USER=philip` over TCP — so they still connect as a
-**superuser and bypass RLS**. They are read-mostly, but until they are switched the
-isolation is real for the agent-execution path and *not* for the dashboard. Moving
-them needs either a `robothor_app` password (they connect to `127.0.0.1`, not the
-socket) or a switch to the socket + peer map above.
+`robothor-orchestrator` and `robothor-vision` **bypassed RLS for their entire
+existence**, and nothing said so. Two independent reasons, stacked:
 
-Do not describe this instance as tenant-isolated end-to-end until that is done.
+1. Their units never loaded `/etc/robothor/robothor.env`, so they had neither
+   `ROBOTHOR_DB_USER` nor `ROBOTHOR_RLS_ENABLED`.
+2. `robothor/config.py` then falls back to `$USER` — i.e. `philip`, **a
+   superuser**, which bypasses row-level security unconditionally. And with
+   `app.tenant_id` never set, migration 081's policy goes *permissive* as well.
+
+So the instance reported RLS "enabled" while two services read every tenant's rows.
+
+Fixed by giving them the main config. Verified: **zero superuser app backends**
+(`SELECT usename, count(*) FROM pg_stat_activity WHERE application_name = ''`),
+both services healthy, isolation query returns one tenant.
+
+`robothor-app` (the dashboard) is **not** affected — it has no `pg` dependency at
+all and reaches data through the bridge/engine API. Its `PG_*` env vars are dead
+config.
+
+## The guardrail that would have caught it
+
+`_apply_tenant_scope` now checks `rolsuper` once per process and logs a loud
+`RLS IS INERT` error when `ROBOTHOR_RLS_ENABLED` is set but the connection is a
+superuser. It is never fatal — it cannot take the instance down, only stop it
+lying about its isolation.
+
+**Grep for this in the logs before believing any RLS claim:**
+
+```bash
+journalctl -u robothor-engine -u robothor-bridge -u robothor-orchestrator \
+           -u robothor-vision -u robothor-delphi-engine | grep "RLS IS INERT"
+```
