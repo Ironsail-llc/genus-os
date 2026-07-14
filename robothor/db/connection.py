@@ -71,7 +71,6 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
-@contextmanager
 def _rls_enabled() -> bool:
     """Whether connections should scope themselves to a tenant via RLS.
 
@@ -114,6 +113,7 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
         raise
 
 
+@contextmanager
 def get_connection(
     autocommit: bool = False,
 ) -> Generator[psycopg2.extensions.connection, None, None]:
