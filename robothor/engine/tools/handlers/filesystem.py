@@ -28,6 +28,24 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not command:
         return {"error": "No command provided"}
 
+    timeout = int(args.get("timeout", 30))
+
+    # An agent configured `sandbox: docker` must actually have its shell
+    # commands run in the container. This used to go straight to subprocess.run
+    # on the host, so the sandbox setting was decoration: only browser/desktop
+    # routed into the container, and no sandboxed agent uses those tools.
+    #
+    # Fail closed: if the container is active but unusable, surface the error
+    # rather than quietly running the command on the host (#201).
+    from robothor.engine.sandbox import SandboxMode, get_current_sandbox
+
+    sandbox = get_current_sandbox()
+    if sandbox is not None and sandbox.mode != SandboxMode.LOCAL:
+        try:
+            return await sandbox.exec_shell(command, timeout=timeout)
+        except Exception as e:
+            return {"error": f"Sandboxed exec failed: {e}"}
+
     def _run() -> dict[str, Any]:
         try:
             proc = subprocess.run(

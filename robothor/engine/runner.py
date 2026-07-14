@@ -1081,7 +1081,13 @@ class AgentRunner:
                 if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
 
-                    sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
+                    sandbox = Sandbox(
+                        mode=SandboxMode.DOCKER,
+                        run_id=session.run.id,
+                        # Without this the container mounts nothing and every
+                        # `exec` inside it lands in an empty filesystem.
+                        workspace=str(self.config.workspace),
+                    )
                     try:
                         await sandbox.start()
                         set_current_sandbox(sandbox)
@@ -1097,7 +1103,17 @@ class AgentRunner:
                         # docker group, so start() cannot succeed at all — the
                         # old behavior turned "enforce" into pure theater.)
                         # Under observe, degrading to the host IS the contract.
-                        if sandbox_default_mode() == "enforce":
+                        #
+                        # But the global mode is only a *default*, for agents that
+                        # never expressed a preference. An agent whose manifest
+                        # explicitly says `sandbox: docker` DID express one, and
+                        # dropping it onto the host because some unrelated global
+                        # flag says "observe" silently gives it none of the
+                        # containment it asked for. Observed live: auto-agent,
+                        # manifest `sandbox: docker`, container failed to start,
+                        # run continued on the host, nothing surfaced.
+                        _sb_explicit = agent_config.sandbox == "docker"
+                        if _sb_explicit or sandbox_default_mode() == "enforce":
                             _sb_reason = f"sandbox required but could not be started: {e}"
                             try:
                                 from robothor.engine.tracking import log_guardrail_event
@@ -1108,7 +1124,10 @@ class AgentRunner:
                                     action="blocked",
                                     tool_name="exec",
                                     reason=_sb_reason,
-                                    mode="enforce",
+                                    # Say which rule blocked it. Labelling an
+                                    # explicit-manifest block as "enforce" would
+                                    # send whoever reads this to the wrong flag.
+                                    mode="explicit" if _sb_explicit else "enforce",
                                     step_number=0,
                                 )
                             except Exception as _audit_exc:  # noqa: BLE001
