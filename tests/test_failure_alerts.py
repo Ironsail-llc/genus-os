@@ -71,7 +71,17 @@ def test_send_posts_unit_name_to_telegram(tmp_path: Path):
 
 def test_send_fails_loudly_without_token(tmp_path: Path):
     fake_curl(tmp_path)
-    result = run_send(tmp_path, "robothor-engine.service", {})
+    # Point the secrets lookup at a path that does not exist. The sender now
+    # recovers its credentials from /run/robothor/secrets.env when they are absent
+    # from the environment (so it can page during a cold-boot failure, when that is
+    # the ONLY place the token lives). On the live box that file is real — without
+    # this override the test would source the operator's actual credentials and send
+    # a genuine Telegram message.
+    result = run_send(
+        tmp_path,
+        "robothor-engine.service",
+        {"ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env")},
+    )
     assert result.returncode != 0
     assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stdout + result.stderr
 
