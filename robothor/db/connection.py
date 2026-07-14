@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -70,6 +71,48 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
+def _rls_enabled() -> bool:
+    """Whether connections should scope themselves to a tenant via RLS.
+
+    Off by default: migration 081 leaves the policy permissive when
+    ``app.tenant_id`` is unset, so nothing changes until this is turned on.
+    """
+    return os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
+    """Bind this connection to the instance's tenant for RLS.
+
+    Postgres then refuses to serve another tenant's rows *at the database*, so a
+    DAL that forgets its WHERE clause — the bridge's crm_dal.py has zero tenant
+    predicates — cannot leak across tenants.
+
+    Inert while the app connects as a SUPERUSER: superusers bypass RLS
+    unconditionally. Migration 082 creates the non-superuser ``robothor_app``
+    role the engine should connect as. See docs/runbooks/TENANT_RLS.md.
+    """
+    if not _rls_enabled():
+        return
+    tenant = os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get(
+        "ROBOTHOR_DEFAULT_TENANT", ""
+    )
+    if not tenant:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant,))
+    except Exception as exc:
+        # Fail loudly: a connection that silently forgets its tenant scope has
+        # no isolation at all.
+        logger.error("could not bind connection to tenant %s for RLS: %s", tenant, exc)
+        raise
+
+
 @contextmanager
 def get_connection(
     autocommit: bool = False,
@@ -107,6 +150,7 @@ def get_connection(
     try:
         if autocommit:
             conn.autocommit = True
+        _apply_tenant_scope(conn)
         yield conn
         if not autocommit:
             conn.commit()
