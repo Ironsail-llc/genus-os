@@ -30,7 +30,7 @@
 - Produces two tables:
   - `feature_flags(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_by TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), reason TEXT)` — `value` holds the mode string (`off`/`observe`/`alert`/`enforce`) for ladder flags or `true`/`false` for booleans.
   - `feature_flag_audit(id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, from_value TEXT, to_value TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now())`.
-  - Seeds `feature_flags` with the 12 governed flag names, each `value` copied from the current live env value (so the cutover changes nothing on day one).
+  - Seeds `feature_flags` with the 12 governed flag names at behaviour-preserving CODED defaults (`observe` / `false`), tagged `updated_by='migration-084'`. A migration cannot read the engine's runtime env, so the store treats a seed row as "unset" (env still wins) until an operator writes a value — that is what makes the cutover a day-one no-op. Pinned by Task 2's `test_env_wins_when_only_a_seed_row_exists`.
 
 - [ ] **Step 1: Write the failing test**
 
