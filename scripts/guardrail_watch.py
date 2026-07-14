@@ -101,6 +101,83 @@ def check_soak_deadlines() -> None:
         print("  (nag sent to Telegram)")
 
 
+# A session goal that has not moved in this long is finished, wrong, or
+# abandoned — all three deserve the operator's attention. Six of them sat in
+# REVIEW for 2-5 weeks before anyone noticed (2026-07-13).
+STALE_GOAL_DAYS = int(os.environ.get("GUARDRAIL_WATCH_STALE_GOAL_DAYS", "14"))
+
+
+def stale_goals(
+    goals: list[dict], today: dt.date | None = None, max_age_days: int = STALE_GOAL_DAYS
+) -> list[dict]:
+    """Session goals whose last update is older than the staleness window."""
+    today = today or _today()
+    out = []
+    for g in goals:
+        updated = g.get("updated")
+        if not updated:
+            continue
+        if (today - updated).days > max_age_days:
+            out.append(g)
+    return out
+
+
+def format_stale_goal_nag(stale: list[dict], today: dt.date | None = None) -> str:
+    if not stale:
+        return ""
+    today = today or _today()
+    lines = ["\u26a0\ufe0f STALE SESSION GOALS — finish, re-scope, or close:"]
+    for g in stale:
+        age = (today - g["updated"]).days
+        lines.append(
+            f"  [{g.get('agent', '?')}] {g.get('title', '?')[:60]} — "
+            f"{age}d without movement ({g.get('status', '?')})"
+        )
+    return "\n".join(lines)
+
+
+def check_stale_goals() -> None:
+    """Surface session goals that have stopped moving."""
+    from robothor.db.connection import get_connection
+
+    print("\n=== stale session goals ===")
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT title,
+                       COALESCE((SELECT t FROM unnest(tags) t WHERE t LIKE 'agent:%' LIMIT 1), '?'),
+                       status,
+                       updated_at::date
+                FROM crm_tasks
+                WHERE tags @> ARRAY['session_goal']
+                  AND status NOT IN ('DONE', 'CANCELED')
+                  AND deleted_at IS NULL
+                """
+            )
+            goals = [
+                {
+                    "title": r[0],
+                    "agent": str(r[1]).removeprefix("agent:"),
+                    "status": r[2],
+                    "updated": r[3],
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception as exc:
+        print(f"  (could not read session goals: {exc})")
+        return
+
+    nag = format_stale_goal_nag(stale_goals(goals))
+    if not nag:
+        print(f"  OK — no goal has been idle more than {STALE_GOAL_DAYS} days")
+        return
+    print(nag)
+    if send_telegram(nag):
+        print("  (nag sent to Telegram)")
+
+
 def check_dropin_drift() -> None:
     """Surface divergence between the live systemd drop-in and its repo mirror.
 
@@ -158,6 +235,7 @@ def main() -> int:
         if total:
             print(f"  error+timeout rate: {100 * bad / total:.1f}%  ({bad}/{total})")
     check_soak_deadlines()
+    check_stale_goals()
     check_dropin_drift()
     return 0
 
