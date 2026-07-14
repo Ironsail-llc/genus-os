@@ -26,6 +26,10 @@ Their EvidenceSource entries point at ``agent_guardrail_events`` with a
 wrong-table bug — it is an honest zero: whichever real table you query, there
 is genuinely no record proving these ran, so the detector correctly reports
 INERT rather than inventing a signal that does not exist.
+
+RIP-1 (background-review fork) is the one predicate NOT keyed by an
+unambiguous ``guardrail_name``: see the note on its EvidenceSource entry
+below.
 """
 
 from __future__ import annotations
@@ -86,6 +90,13 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_RIP_13_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'rip_13_symbolic_memory'"
     ),
+    # NOTE: best-effort signature match for the background-review fork, not
+    # an unambiguous guardrail_name like every other entry above. It could
+    # over-count if some other code path ever spawns a sub_agent targeting
+    # agent_id='main' (no such path exists today, so this is not live-wrong,
+    # just an undocumented latent imprecision). Tightening it — e.g. keying
+    # off a persisted spawn mode='background_review' column — is a tracked
+    # follow-up.
     "ROBOTHOR_RIP_1_ENABLED": EvidenceSource(
         "agent_runs",
         "trigger_type = 'sub_agent' AND trigger_detail LIKE 'spawned_by:%' AND agent_id = 'main'",
