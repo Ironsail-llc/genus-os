@@ -432,8 +432,22 @@ class GuardrailEngine:
         if not patterns:  # No allowlist configured = no restriction (backward compat)
             return GuardrailResult()
         command = str(tool_args.get("command", ""))
+
+        # A pattern that matches the WHOLE command is a different, stronger
+        # contract than a prefix: `^git diff$` can never match
+        # `git diff; rm -rf /`, so chaining cannot extend it and the
+        # metacharacter ban below is unnecessary. That matters: the ban is
+        # exactly what stops the six agents holding arbitrary host shell
+        # (main, conversation-inbox, crm-hygiene, vision-monitor,
+        # auto-researcher, email-analyst) from being given an allowlist at all,
+        # because their real commands need `2>/dev/null` and `|| true`.
+        #
+        # So: approve the exact command shape, keep the ban for prefixes.
+        if any(p.fullmatch(command) for p in patterns):
+            return GuardrailResult()
+
         # Reject shell-chaining metacharacters that let a command ride past an
-        # allowlisted prefix (e.g. "git checkout -- f; rm -rf /"). Flag-gated:
+        # allowlisted *prefix* (e.g. "git checkout -- f; rm -rf /"). Flag-gated:
         # off = legacy behavior; observe = log-only; enforce = block.
         from robothor.engine.feature_flags import exec_allowlist_mode
 
