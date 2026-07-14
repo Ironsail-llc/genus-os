@@ -72,12 +72,42 @@ flags:
       podman also works under NoNewPrivileges=yes, so #205's containment and the
       sandbox coexist.
 
-      STILL A GATE, NOT A DATE. Before flipping, the engine unit needs podman's
-      state dirs writable (#205 set ProtectHome=read-only) and
-      ROBOTHOR_SANDBOX_BINARY=podman, then ONE REAL auto-agent run must complete
-      INSIDE the container — confirmed working, not merely not-erroring. "Zero
-      events" remains a false negative: the observe event fires at step 0 of every
-      exec-holding agent's run, and auto-agent/auto-researcher are disabled.
+      THE GATE HAS NOW BEEN RUN, AND THE ANSWER IS: DO NOT FLIP THIS GLOBALLY.
+
+      A real auto-agent run was driven through the daemon and its container came
+      up and was fully contained (workspace mounted, NETWORK_BLOCKED,
+      HOST_HOME_NOT_VISIBLE, NO_SUDO). The sandbox works.
+
+      But the commands the LIVE exec-holding agents actually run were then executed
+      inside that same container, and they fail — because the sandbox correctly
+      removes exactly what they depend on:
+
+        crm-hygiene    psql              FAILS  (no DB socket in the container)
+        crm-hygiene    curl the bridge   FAILS  (--network=none)
+        email-analyst  gog OAuth tokens  FAILS  (host $HOME is not mounted)
+        email-analyst  gog binary        FAILS  (not in the image)
+
+      Global `enforce` would fail-close the CRM and email pipelines. And the way to
+      "fix" that — mount the DB socket, mount the OAuth tokens, open the network —
+      hands back most of what the sandbox took away, on the agents with the widest
+      blast radius. That is not containment, it is a container.
+
+      So containment is per-agent and deliberate, not a global default:
+
+        * repo-only work (auto-agent: run the test suite) -> `sandbox: docker`,
+          which now fails CLOSED on its own regardless of this flag (#207);
+        * host-resource work (main, crm-hygiene, conversation-inbox, email-analyst,
+          vision-monitor) -> stays on the host. Its blast radius is bounded by the
+          systemd confinement in #205 (no sudo, no root, read-only $HOME, workspace
+          the only writable tree), which is the honest control for these agents.
+
+      To contain those agents for real, give them tools instead of a shell — the
+      escape hatch is `python3 << EOF <arbitrary code>`, and no allowlist or
+      container placed around a general-purpose shell fixes that.
+
+      GOTCHA if you do flip it per-agent: ProtectHostname=yes in the engine unit
+      makes the UTS namespace immutable and every container dies at init with
+      "sethostname: operation not permitted". Set ProtectHostname=no.
 
       Note: an agent with an explicit manifest `sandbox: docker` now fails CLOSED
       on its own, regardless of this flag (#207) — the global mode is a default for

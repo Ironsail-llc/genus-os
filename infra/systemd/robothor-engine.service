@@ -66,7 +66,13 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
+# ProtectHostname makes the service's UTS namespace immutable, so a container
+# runtime cannot sethostname() and EVERY sandbox container dies at init with
+# "sethostname: operation not permitted: OCI permission denied". The hardening
+# blocks the sandbox it exists to enable. Set to `no` on any instance running the
+# sandbox — it costs nothing here, because CapabilityBoundingSet= is empty and
+# the service has no CAP_SYS_ADMIN to change the host's hostname with anyway.
+ProtectHostname=no
 RestrictRealtime=yes
 LockPersonality=yes
 # NOTE: do NOT add RestrictNamespaces without re-testing the sandbox — rootless

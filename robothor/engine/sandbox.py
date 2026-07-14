@@ -122,7 +122,12 @@ class Sandbox:
             argv += ["--userns=keep-id"]
         argv += ["--user", f"{os.getuid()}:{os.getgid()}"]
 
-        if cdp_port is not None:
+        # A port mapping is meaningless without a network, and passing both makes
+        # podman emit "Port mappings have been discarded as one of the Host,
+        # Container, Pod, and None network modes are in use" — which lands in the
+        # engine's error path and reads like the sandbox failed to start.
+        # Only the browser (CDP) needs the port, and it needs a network anyway.
+        if cdp_port is not None and sandbox_network() != "none":
             argv += ["-p", f"{cdp_port}:9222"]
 
         argv.append(SANDBOX_IMAGE)
