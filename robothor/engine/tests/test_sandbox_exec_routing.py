@@ -166,3 +166,20 @@ class TestRuntimeIsNotHardcoded:
         assert sandbox_binary() == "podman"
         cmd = Sandbox(mode=SandboxMode.DOCKER, run_id="r11")._run_argv(workspace="/w")
         assert cmd[0] == "podman", "the runtime is hardcoded to 'docker' in four places"
+
+
+class TestPortMappingMatchesTheNetwork:
+    """podman discards -p under --network=none and warns; the warning lands in the
+    engine's error path and reads exactly like a failed sandbox start."""
+
+    def test_no_port_mapping_when_the_network_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_NETWORK", "none")
+        cmd = Sandbox(mode=SandboxMode.DOCKER, run_id="r12")._run_argv("/w", cdp_port=19222)
+        assert "-p" not in cmd
+
+    def test_port_mapping_when_a_network_is_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_NETWORK", "bridge")
+        cmd = Sandbox(mode=SandboxMode.DOCKER, run_id="r13")._run_argv("/w", cdp_port=19222)
+        assert "-p" in cmd
