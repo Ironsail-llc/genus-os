@@ -83,7 +83,7 @@ class TestSandboxDocker:
         s = Sandbox(mode=SandboxMode.DOCKER, run_id="fail-run")
         with patch("robothor.engine.sandbox.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="no docker")
-            with pytest.raises(RuntimeError, match="Docker sandbox start failed"):
+            with pytest.raises(RuntimeError, match="Sandbox start failed"):
                 await s.start()
 
     @pytest.mark.asyncio

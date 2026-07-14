@@ -1,0 +1,14 @@
+# Triggered by robothor-restart.path. Runs as root (no User= line) — that is
+# deliberate: systemd exercises the privilege so the agent never has to.
+#
+# The target unit is HARDCODED. It is never read from the trigger file: that
+# file is agent-writable, and letting its contents name a unit would hand an
+# injected agent the ability to stop or restart anything on the machine.
+[Unit]
+Description=Robothor — restart the engine on agent request
+
+[Service]
+Type=oneshot
+# Consume the trigger first, so a failed restart cannot loop the path unit.
+ExecStartPre=/bin/rm -f /run/robothor/restart-request
+ExecStart=/bin/systemctl restart robothor-engine.service

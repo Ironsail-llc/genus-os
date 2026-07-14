@@ -23,5 +23,60 @@ TimeoutStopSec=15
 KillMode=control-group
 Environment=ROBOTHOR_ENGINE_PORT=18800
 
+# ── Containment ──────────────────────────────────────────────────────────────
+# Agents call `exec`, and `exec` runs on THIS host as THIS user — the "sandbox"
+# does not route exec (see the ROBOTHOR_SANDBOX_DEFAULT_MODE note in
+# infra/flags.yaml). So the service account is the blast radius of a prompt
+# injection.
+#
+# NoNewPrivileges is the one that matters. The engine user is typically a
+# desktop/admin account in the sudo group, often NOPASSWD. Without this, any
+# agent holding `exec` runs `sudo <anything>` and owns the machine. This blocks
+# every setuid path — sudo included — for the service and all its children,
+# whatever sudoers says.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Read-only filesystem except what the instance genuinely writes.
+ProtectSystem=strict
+ProtectHome=read-only
+# The workspace: repo, brain/ (agent memory + status files), logs, scratch.
+ReadWritePaths=%h/robothor
+# Instance state and refreshed OAuth tokens. gws/gog rewrite their token cache
+# on refresh, so these MUST stay writable or the email/calendar agents break.
+ReadWritePaths=%h/.config/robothor
+ReadWritePaths=%h/.config/gws
+ReadWritePaths=%h/.config/gog
+ReadWritePaths=%h/.config/gogcli
+# Decrypted secrets (ExecStartPre writes here) and the runtime dir.
+ReadWritePaths=/run/robothor
+# PostgreSQL's Unix socket — connect(2) needs write access to the socket file.
+ReadWritePaths=/var/run/postgresql
+
+# Private /tmp — but the desktop tools drive Xvfb over its X socket, which lives
+# in the shared /tmp/.X11-unix. Bind it back in or desktop_* silently stops
+# working.
+PrivateTmp=yes
+BindReadOnlyPaths=/tmp/.X11-unix
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+# ProtectHostname makes the service's UTS namespace immutable, so a container
+# runtime cannot sethostname() and EVERY sandbox container dies at init with
+# "sethostname: operation not permitted: OCI permission denied". The hardening
+# blocks the sandbox it exists to enable. Set to `no` on any instance running the
+# sandbox — it costs nothing here, because CapabilityBoundingSet= is empty and
+# the service has no CAP_SYS_ADMIN to change the host's hostname with anyway.
+ProtectHostname=no
+RestrictRealtime=yes
+LockPersonality=yes
+# NOTE: do NOT add RestrictNamespaces without re-testing the sandbox — rootless
+# podman (Phase 2) needs CLONE_NEWUSER/CLONE_NEWNS to start a container.
+
 [Install]
 WantedBy=multi-user.target

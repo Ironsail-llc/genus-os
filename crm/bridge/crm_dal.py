@@ -12,6 +12,7 @@ canonical DAL directly.
 
 import json
 import logging
+import os
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -129,8 +130,42 @@ def validate_person_input(
 
 
 def _conn():
-    """Get a database connection."""
-    return psycopg2.connect(config.PG_DSN)
+    """Get a database connection, bound to this instance's tenant.
+
+    This module is deprecated and the live bridge routers go through
+    ``robothor.crm.dal`` (which uses ``robothor.db.connection`` and scopes every
+    connection). But this function still hands out a raw, unscoped connection —
+    and nothing in *this* file has a single tenant predicate. Anyone who reuses
+    it gets an API that reads every tenant's rows, with RLS looking enabled.
+
+    So bind the tenant here too. Same contract as the engine: no-op unless
+    ROBOTHOR_RLS_ENABLED, tenant from ROBOTHOR_TENANT_ID then
+    ROBOTHOR_DEFAULT_TENANT, and a bind failure is logged loudly rather than
+    leaving a connection that silently forgot its scope.
+    """
+    conn = psycopg2.connect(config.PG_DSN)
+
+    if os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return conn
+
+    tenant = os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get(
+        "ROBOTHOR_DEFAULT_TENANT", ""
+    )
+    if not tenant:
+        return conn
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant,))
+    except Exception as exc:
+        logger.error("could not bind bridge connection to tenant %s for RLS: %s", tenant, exc)
+
+    return conn
 
 
 def _now():

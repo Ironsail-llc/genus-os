@@ -46,5 +46,29 @@ LimitNOFILE=65536
 TimeoutStartSec=30
 TimeoutStopSec=30
 
+# ── Containment ──────────────────────────────────────────────────────────────
+# The bridge is the HTTP API. It does not run agent `exec`, but it holds the
+# database credentials and serves every tenant's data, so the same escalation
+# logic applies: nothing it runs should ever be able to gain privileges.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/robothor
+ReadWritePaths=%h/.config/robothor
+ReadWritePaths=/run/robothor
+ReadWritePaths=/var/run/postgresql
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
 [Install]
 WantedBy=multi-user.target

@@ -38,6 +38,7 @@ import litellm
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
+from robothor.engine.model_breaker import get_model_breaker
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -574,8 +575,16 @@ class LLMClient:
             _sanitize(models),
             _sanitize(broken_models or set()),
         )
+        breaker = get_model_breaker()
         for model in models:
             if broken_models and model in broken_models:
+                continue
+            if breaker.is_open(model):
+                # This model has failed repeatedly and is in cooldown. Skipping
+                # it here is the point: otherwise a dead provider costs the full
+                # per-call timeout on every run, forever (codex/* did exactly
+                # that for a month).
+                logger.info("skipping %s — circuit breaker open", _sanitize(model))
                 continue
             # Per-call timeout (seconds) — wraps each provider call so the
             # runner cancels and falls through if the provider hangs. The
@@ -594,8 +603,10 @@ class LLMClient:
                         result = await codex_acompletion(**kwargs)
                     else:
                         result = await litellm.acompletion(**kwargs)
+                breaker.record_success(model)
                 return result
             except TimeoutError as e:
+                breaker.record_failure(model, reason=f"timeout after {per_call_timeout}s")
                 logger.warning(
                     "LLM call to %s exceeded %ds — cancelling and falling back",
                     _sanitize(model),
@@ -606,6 +617,7 @@ class LLMClient:
                 if self._active_watchdog:
                     self._active_watchdog.touch(f"model_fallback:{model}")
             except Exception as e:
+                breaker.record_failure(model, reason=str(e)[:120])
                 self._handle_model_error(e, model, broken_models)
                 last_error = e
                 if self._active_watchdog:

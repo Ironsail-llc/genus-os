@@ -72,6 +72,79 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
+def _rls_enabled() -> bool:
+    """Whether connections should scope themselves to a tenant via RLS.
+
+    Off by default: migration 081 leaves the policy permissive when
+    ``app.tenant_id`` is unset, so nothing changes until this is turned on.
+    """
+    return os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+# One-shot latch: warn once per process, not on every pooled connection.
+_warned_superuser = False
+
+
+def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
+    """Bind this connection to the instance's tenant for RLS.
+
+    Postgres then refuses to serve another tenant's rows *at the database*, so a
+    DAL that forgets its WHERE clause — the bridge's crm_dal.py has zero tenant
+    predicates — cannot leak across tenants.
+
+    Inert while the app connects as a SUPERUSER: superusers bypass RLS
+    unconditionally. Migration 082 creates the non-superuser ``robothor_app``
+    role the engine should connect as. See docs/runbooks/TENANT_RLS.md.
+    """
+    if not _rls_enabled():
+        return
+    tenant = os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get(
+        "ROBOTHOR_DEFAULT_TENANT", ""
+    )
+    if not tenant:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant,))
+
+            # RLS enabled + a SUPERUSER connection is not "RLS on". It is RLS OFF
+            # with a flag that says on — Postgres ignores the policy entirely for
+            # superusers — which is strictly worse than off, because the operator
+            # believes they have isolation.
+            #
+            # The default is the trap: config.py resolves the DB user from
+            # ROBOTHOR_DB_USER, falling back to $USER — whoever runs the process,
+            # which on a single-box instance is usually an admin. That is exactly
+            # how robothor-orchestrator and robothor-vision bypassed RLS for their
+            # entire existence while the instance reported it "enabled".
+            #
+            # Once per process, and never fatal: this must not be able to take the
+            # instance down, only to stop it lying about its isolation.
+            global _warned_superuser
+            if not _warned_superuser:
+                _warned_superuser = True
+                cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+                row = cur.fetchone()
+                if row and row[0]:
+                    logger.error(
+                        "RLS IS INERT: ROBOTHOR_RLS_ENABLED is set but this connection "
+                        "is a SUPERUSER, which bypasses row-level security "
+                        "unconditionally. There is NO tenant isolation on this "
+                        "connection. Set ROBOTHOR_DB_USER=robothor_app (migration 082) "
+                        "— see docs/runbooks/TENANT_RLS.md."
+                    )
+    except Exception as exc:
+        # Fail loudly: a connection that silently forgets its tenant scope has
+        # no isolation at all.
+        logger.error("could not bind connection to tenant %s for RLS: %s", tenant, exc)
+        raise
+
+
 @contextmanager
 def get_connection(
     autocommit: bool = False,
@@ -141,6 +214,7 @@ def get_connection(
     try:
         if autocommit:
             conn.autocommit = True
+        _apply_tenant_scope(conn)
         yield conn
         if not autocommit:
             conn.commit()

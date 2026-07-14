@@ -3,7 +3,10 @@
 # scripts/update-helm-values.sh on each release on main.
 
 global:
-  imageTag: "v1.15.4"
+  # Union: main ships the release tag; this branch ships the hardening flags.
+  # Dropping either side is a silent regression — the tag rolls production
+  # backwards, the flags disable auth. Keep both.
+  imageTag: "v1.21.0"
   environment: production
   authEnforce: true
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.

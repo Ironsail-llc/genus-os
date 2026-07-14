@@ -137,3 +137,45 @@ def test_missing_source_fails_loudly(tmp_path: Path):
     result = _run(tmp_path, tmp_path / "nonexistent", tmp_path / "remote")
     assert result.returncode != 0
     assert "source" in (result.stdout + result.stderr).lower()
+
+
+def test_uploads_only_the_generations_it_intends_to_keep(tmp_path: Path):
+    """Do not ship dumps that retention deletes minutes later.
+
+    Copying the whole source and pruning afterwards uploads (and pays for)
+    generations that are immediately discarded — at ~1.1 GB and ~4.5 MB/s per
+    dump that is roughly 45 wasted minutes a night on a 17-dump source.
+    """
+    src = _make_source(tmp_path, days=5)  # 5 dumps on disk
+    dest = tmp_path / "remote"
+
+    result = _run(tmp_path, src, dest)  # KEEP=2
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    uploaded = sorted(f.name for f in (dest / "db").glob("*.sql.gz"))
+    assert len(uploaded) == 2, f"uploaded {len(uploaded)} dumps but KEEP=2: {uploaded}"
+    # and they are the newest two, not an arbitrary pair
+    newest = sorted(f.name for f in src.glob("*.sql.gz"))[-2:]
+    assert uploaded == newest
+
+
+def test_verify_only_checks_only_the_retained_generations(tmp_path: Path):
+    """Verification must compare like with like.
+
+    Retention keeps N generations offsite while the local disk keeps many more.
+    A one-way check of the WHOLE source against the remote therefore reports
+    every un-replicated older dump as a "difference" and fails — every single
+    run. That is not a broken backup, it is a broken check, and it would page
+    the operator weekly until they learned to ignore it. Which is how a real
+    backup failure gets missed.
+    """
+    src = _make_source(tmp_path, days=5)  # 5 on disk
+    dest = tmp_path / "remote"
+
+    assert _run(tmp_path, src, dest).returncode == 0  # KEEP=2 -> 2 offsite
+
+    result = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+    assert result.returncode == 0, (
+        "verification failed against a healthy backup — it compared all 5 local "
+        f"dumps to the 2 retained offsite: {result.stdout + result.stderr}"
+    )

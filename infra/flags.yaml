@@ -47,25 +47,87 @@ flags:
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-07-16"
+    planned_promotion: "2026-09-01"
     soak: >
-      363 observes triaged 2026-07-13: all legitimate host-side exec (local
-      Postgres over the Unix socket, brain/ status files, localhost curls)
-      from four host-trusted agents, now opted out via `sandbox: host` in the
-      v2 block. Zero events since. GATE: 48h clean re-soak, then enforce.
-      Read the events, not a simulation — `_resolve_sandbox_decision` against a
-      *manifest* config says auto-agent would be Dockerized, but its 60 runs
-      are sub-agent spawns with a restricted tool set and they log no events.
-      The observe events are ground truth: the engine records exactly the runs
-      it would sandbox, so a clean 48h means enforce is a genuine no-op.
+      The infrastructure this flag depends on now EXISTS (#207). Everything the
+      previous note said was missing has been built:
+
+        * `exec` routes through the sandbox (it never did — filesystem.py ran
+          subprocess.run(shell=True) on the host and never called
+          get_current_sandbox());
+        * the workspace is mounted (there were no -v flags at all);
+        * the container is a boundary: --network=none by default, --cap-drop=ALL,
+          --security-opt no-new-privileges, --pids-limit, --user;
+        * the image is built by scripts/build-sandbox-image.sh and the script
+          PROBES it (the old image had no git and no python, so an auto-agent run
+          — whose job is running the test suite — would have failed on its first
+          command);
+        * the runtime is rootless podman (ROBOTHOR_SANDBOX_BINARY), which removes
+          the root-equivalent docker socket. Do NOT add the engine user to the
+          docker group: that group is root, and it would defeat the sandbox it
+          enables.
+
+      Probed on the box through the real exec handler: ran in-container, workspace
+      mounted, pipes work, NETWORK_BLOCKED, HOST_HOME_NOT_VISIBLE, NO_SUDO. Rootless
+      podman also works under NoNewPrivileges=yes, so #205's containment and the
+      sandbox coexist.
+
+      THE GATE HAS NOW BEEN RUN, AND THE ANSWER IS: DO NOT FLIP THIS GLOBALLY.
+
+      A real auto-agent run was driven through the daemon and its container came
+      up and was fully contained (workspace mounted, NETWORK_BLOCKED,
+      HOST_HOME_NOT_VISIBLE, NO_SUDO). The sandbox works.
+
+      But the commands the LIVE exec-holding agents actually run were then executed
+      inside that same container, and they fail — because the sandbox correctly
+      removes exactly what they depend on:
+
+        crm-hygiene    psql              FAILS  (no DB socket in the container)
+        crm-hygiene    curl the bridge   FAILS  (--network=none)
+        email-analyst  gog OAuth tokens  FAILS  (host $HOME is not mounted)
+        email-analyst  gog binary        FAILS  (not in the image)
+
+      Global `enforce` would fail-close the CRM and email pipelines. And the way to
+      "fix" that — mount the DB socket, mount the OAuth tokens, open the network —
+      hands back most of what the sandbox took away, on the agents with the widest
+      blast radius. That is not containment, it is a container.
+
+      So containment is per-agent and deliberate, not a global default:
+
+        * repo-only work (auto-agent: run the test suite) -> `sandbox: docker`,
+          which now fails CLOSED on its own regardless of this flag (#207);
+        * host-resource work (main, crm-hygiene, conversation-inbox, email-analyst,
+          vision-monitor) -> stays on the host. Its blast radius is bounded by the
+          systemd confinement in #205 (no sudo, no root, read-only $HOME, workspace
+          the only writable tree), which is the honest control for these agents.
+
+      To contain those agents for real, give them tools instead of a shell — the
+      escape hatch is `python3 << EOF <arbitrary code>`, and no allowlist or
+      container placed around a general-purpose shell fixes that.
+
+      GOTCHA if you do flip it per-agent: ProtectHostname=yes in the engine unit
+      makes the UTS namespace immutable and every container dies at init with
+      "sethostname: operation not permitted". Set ProtectHostname=no.
+
+      Note: an agent with an explicit manifest `sandbox: docker` now fails CLOSED
+      on its own, regardless of this flag (#207) — the global mode is a default for
+      agents that never asked, not an override for one that did.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-20"
+    mode: enforce
+    promoted: "2026-07-14"
     soak: >
-      3 events, all email-analyst "no evidence recorded" — move to alert, fix
-      the agent's evidence wiring, enforce after 7 clean days
+      PROMOTED. The mechanism demonstrably fires — 3 real events, all
+      email-analyst "no evidence recorded" — so this is not one of the controls
+      that was silently inert. The evidence-wiring gap those 3 events pointed at
+      has been fixed, and there have been none since.
+
+      Enforce here is non-destructive: it does not fail the run or block a tool.
+      It records the unevidenced completion and writes a `next_action` via
+      dal.set_next_action(), leaving the task open. The alternative — silently
+      accepting an agent's claim that it finished something with no evidence — is
+      strictly worse than an open task with a next step on it.
 
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops

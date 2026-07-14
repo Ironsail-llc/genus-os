@@ -1,0 +1,12 @@
+[Unit]
+Description=Robothor — nightly local backup (Postgres dumps)
+
+[Timer]
+# 04:30, before the 05:30 offsite replication that copies what this produces.
+OnCalendar=*-*-* 04:30:00
+# A missed run (box off/asleep) must still fire — otherwise a backup is skipped
+# and nothing says so.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

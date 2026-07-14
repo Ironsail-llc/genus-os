@@ -1,3 +1,109 @@
+## [1.21.0](https://github.com/Ironsail-llc/genus-os/compare/v1.20.5...v1.21.0) (2026-07-14)
+
+### Features
+
+* **dr:** archive WAL and take base backups — RPO 24h to ~15min, drilled ([#214](https://github.com/Ironsail-llc/genus-os/issues/214)) ([afc71b8](https://github.com/Ironsail-llc/genus-os/commit/afc71b88a44cc10d63bb8922343a37e98b4ac324))
+
+## [1.20.5](https://github.com/Ironsail-llc/genus-os/compare/v1.20.4...v1.20.5) (2026-07-14)
+
+### Bug Fixes
+
+* **app:** the test suite could not sanitize — jsdom, and a real XSS guard ([#213](https://github.com/Ironsail-llc/genus-os/issues/213)) ([18b48df](https://github.com/Ironsail-llc/genus-os/commit/18b48df500a2ab669b0cc44145b5aa64d1a1787f)), closes [#162](https://github.com/Ironsail-llc/genus-os/issues/162)
+
+## [1.20.4](https://github.com/Ironsail-llc/genus-os/compare/v1.20.3...v1.20.4) (2026-07-14)
+
+### Bug Fixes
+
+* **rls:** close the last superuser bypass, and make an inert RLS loud ([#212](https://github.com/Ironsail-llc/genus-os/issues/212)) ([755f79b](https://github.com/Ironsail-llc/genus-os/commit/755f79bf8e0cc87f599537e6b8727d611eed5dd0))
+
+## [1.20.3](https://github.com/Ironsail-llc/genus-os/compare/v1.20.2...v1.20.3) (2026-07-14)
+
+### Bug Fixes
+
+* **backup:** the primary backup must page when it fails ([#211](https://github.com/Ironsail-llc/genus-os/issues/211)) ([dcdafec](https://github.com/Ironsail-llc/genus-os/commit/dcdafec8c6f43719f95666d60d280701e06d3b53))
+
+## [1.20.2](https://github.com/Ironsail-llc/genus-os/compare/v1.20.1...v1.20.2) (2026-07-14)
+
+### Bug Fixes
+
+* **boot:** survive a cold boot, and let the pager page during one ([#210](https://github.com/Ironsail-llc/genus-os/issues/210)) ([9b80236](https://github.com/Ironsail-llc/genus-os/commit/9b8023670c809c28d1b954cda79a065c1e0986a4))
+
+## [1.20.1](https://github.com/Ironsail-llc/genus-os/compare/v1.20.0...v1.20.1) (2026-07-14)
+
+### Bug Fixes
+
+* **sandbox:** unblock containers, and record what the gate actually found ([#209](https://github.com/Ironsail-llc/genus-os/issues/209)) ([104f9d6](https://github.com/Ironsail-llc/genus-os/commit/104f9d68b447d3d3c50f763a93592de8d4637d08)), closes [#207](https://github.com/Ironsail-llc/genus-os/issues/207) [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+
+## [1.20.0](https://github.com/Ironsail-llc/genus-os/compare/v1.19.1...v1.20.0) (2026-07-14)
+
+### Features
+
+* **engine:** make the sandbox actually sandbox exec ([#207](https://github.com/Ironsail-llc/genus-os/issues/207)) ([2d7cd70](https://github.com/Ironsail-llc/genus-os/commit/2d7cd7086de0310aa17e03151cda3deb1da37287)), closes [#205](https://github.com/Ironsail-llc/genus-os/issues/205) [#201](https://github.com/Ironsail-llc/genus-os/issues/201) [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+
+## [1.19.1](https://github.com/Ironsail-llc/genus-os/compare/v1.19.0...v1.19.1) (2026-07-14)
+
+### Bug Fixes
+
+* **bridge:** bind the tenant on the bridge's raw connection ([#208](https://github.com/Ironsail-llc/genus-os/issues/208)) ([34e6e80](https://github.com/Ironsail-llc/genus-os/commit/34e6e80b1196d4c3ff10a01731423bbd83fd4c1f))
+
+## [1.19.0](https://github.com/Ironsail-llc/genus-os/compare/v1.18.1...v1.19.0) (2026-07-14)
+
+### Features
+
+* **engine:** fully-anchored exec allowlist patterns ([#206](https://github.com/Ironsail-llc/genus-os/issues/206)) ([17423b3](https://github.com/Ironsail-llc/genus-os/commit/17423b3052c9cc4818bb8e0eced76eb192ca4d08)), closes [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+
+## [1.18.1](https://github.com/Ironsail-llc/genus-os/compare/v1.18.0...v1.18.1) (2026-07-14)
+
+### Bug Fixes
+
+* **security:** block the sudo path to root, and correct the sandbox flag ([#205](https://github.com/Ironsail-llc/genus-os/issues/205)) ([501398f](https://github.com/Ironsail-llc/genus-os/commit/501398fb40126b00494a386102375f6cc3e6ed0f))
+
+## [1.18.0](https://github.com/Ironsail-llc/genus-os/compare/v1.17.0...v1.18.0) (2026-07-14)
+
+### Features
+
+* **security:** row-level security backstop for tenant isolation ([#203](https://github.com/Ironsail-llc/genus-os/issues/203)) ([f4afe09](https://github.com/Ironsail-llc/genus-os/commit/f4afe093a1715a604be6e3ad359ed4b5ef8bebad))
+
+### Bug Fixes
+
+* **ops:** verify only the generations we actually retain offsite ([#204](https://github.com/Ironsail-llc/genus-os/issues/204)) ([1211564](https://github.com/Ironsail-llc/genus-os/commit/1211564a3aac241bde4137a52fe092452ecddb7b))
+
+## [1.17.0](https://github.com/Ironsail-llc/genus-os/compare/v1.16.2...v1.17.0) (2026-07-14)
+
+### Features
+
+* **engine:** circuit breaker on the LLM fallback chain ([#202](https://github.com/Ironsail-llc/genus-os/issues/202)) ([18ab730](https://github.com/Ironsail-llc/genus-os/commit/18ab730c9fd5d74d1dde08b8e7610b0f0801a1ef))
+
+## [1.16.2](https://github.com/Ironsail-llc/genus-os/compare/v1.16.1...v1.16.2) (2026-07-14)
+
+### Bug Fixes
+
+* **security:** sandbox fails closed under enforce ([#201](https://github.com/Ironsail-llc/genus-os/issues/201)) ([803cd30](https://github.com/Ironsail-llc/genus-os/commit/803cd30c2578aa38105a171adf16a626856ffbfb))
+
+## [1.16.1](https://github.com/Ironsail-llc/genus-os/compare/v1.16.0...v1.16.1) (2026-07-14)
+
+### Bug Fixes
+
+* **engine:** never silently drop a guardrail audit write ([#200](https://github.com/Ironsail-llc/genus-os/issues/200)) ([ed34be1](https://github.com/Ironsail-llc/genus-os/commit/ed34be14180701a0a5cee4a98e415ed1cd6a3b23)), closes [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187)
+
+## [1.16.0](https://github.com/Ironsail-llc/genus-os/compare/v1.15.6...v1.16.0) (2026-07-14)
+
+### Features
+
+* **ops:** nag on session goals that have stopped moving ([#199](https://github.com/Ironsail-llc/genus-os/issues/199)) ([caaa735](https://github.com/Ironsail-llc/genus-os/commit/caaa7355ff06efd0d6b183f982dda548f67b0795))
+
+## [1.15.6](https://github.com/Ironsail-llc/genus-os/compare/v1.15.5...v1.15.6) (2026-07-14)
+
+### Bug Fixes
+
+* **ops:** upload only the retained backup generations ([#198](https://github.com/Ironsail-llc/genus-os/issues/198)) ([f81ce3a](https://github.com/Ironsail-llc/genus-os/commit/f81ce3a33f692bdaf11783a9a21bd3a47db71305)), closes [#192](https://github.com/Ironsail-llc/genus-os/issues/192)
+
+## [1.15.5](https://github.com/Ironsail-llc/genus-os/compare/v1.15.4...v1.15.5) (2026-07-13)
+
+### Bug Fixes
+
+* **security:** enforce the human-approval gate, now that it is real ([#197](https://github.com/Ironsail-llc/genus-os/issues/197)) ([16b84ab](https://github.com/Ironsail-llc/genus-os/commit/16b84ab5d9357bb570f9473cb30b2b7da4e81ea7)), closes [#186](https://github.com/Ironsail-llc/genus-os/issues/186)
+
 ## [1.15.4](https://github.com/Ironsail-llc/genus-os/compare/v1.15.3...v1.15.4) (2026-07-13)
 
 ### Bug Fixes

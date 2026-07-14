@@ -59,3 +59,33 @@ def clean_env(monkeypatch):
         "ROBOTHOR_DB_PASSWORD",
     ]:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env() -> object:
+    """Snapshot os.environ around every test, and restore it afterwards.
+
+    The suite must not depend on the machine it runs on, and one test must not be
+    able to reconfigure the next.
+
+    This is not hypothetical. ``robothor.cli.main()`` calls ``load_instance_env()``,
+    which adopts the instance's systemd drop-in environment — correct and
+    deliberate for a real CLI run (otherwise a shell reads every rollout-gated
+    guardrail back as off/observe while the daemon enforces it). But it mutates the
+    process-global ``os.environ``. So ``tests/test_setup.py::test_init_help``
+    imported this box's live ``ROBOTHOR_SANDBOX_BINARY=podman`` and left it there,
+    and ``test_sandbox.py::test_docker_exec`` — hundreds of tests later — asserted
+    ``'podman' == 'docker'`` and failed. Nothing about either test had changed. The
+    HOST had changed.
+
+    CI never caught it, because CI has no drop-in. A suite whose result depends on
+    the machine it runs on is not a suite; it is a coincidence.
+    """
+    import os
+
+    snapshot = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)
