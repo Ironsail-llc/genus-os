@@ -1,0 +1,35 @@
+# The nightly Postgres dumps — the PRIMARY backup.
+#
+# This ran from cron. The script is careful (it checks `mountpoint -q` and exits 1
+# if the backup volume is absent), but a cron job's exit 1 reaches nobody: cron
+# mails root, and nothing reads root's mail. Meanwhile the offsite-replication and
+# verify jobs — which merely copy and check what THIS produces — were systemd units
+# with OnFailure paging. The job that actually makes the backups was the one that
+# could fail in silence.
+#
+# On 2026-07-14 the encrypted USB volume physically dropped off the bus mid-write
+# and stayed unmounted. It happened at 10:25 — after that morning's run. Had it
+# dropped six hours earlier the backup would have failed, logged a line nobody
+# reads, and the operator would have gone on believing they had a backup.
+#
+# Paths use the generic /opt/robothor convention — adjust on install.
+[Unit]
+Description=Robothor — nightly local backup (Postgres dumps to the encrypted volume)
+After=postgresql.service
+Wants=postgresql.service
+# Do not even try if the backup volume is not mounted — and page when it is not.
+RequiresMountsFor=/mnt/robothor-backup
+OnFailure=robothor-alert@%n.service
+
+[Service]
+# oneshot: a non-zero exit IS a unit failure, which is what makes OnFailure fire.
+Type=oneshot
+User=robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/opt/robothor/scripts/backup-ssd.sh
+# The dumps are large; do not let a stalled USB link hang the job forever.
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target
