@@ -44,8 +44,23 @@ EnforcementMode = Literal["off", "observe", "alert", "enforce"]
 _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 
 
+def _resolve_raw(name: str, default: str = "") -> str:
+    """Governed flags resolve through the DB store first, then env.
+
+    Non-governed names (credentials, tuning) go straight to env — the store only
+    knows the 12 guardrail flags.
+    """
+    from robothor.flags.store import GOVERNED_FLAGS, resolve
+
+    if name in GOVERNED_FLAGS:
+        val = resolve(name)
+        if val is not None:
+            return val
+    return os.environ.get(name, default)
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name, "").strip().lower()
+    raw = _resolve_raw(name, "").strip().lower()
     if not raw:
         return default
     return raw in _TRUE_VALUES
@@ -98,7 +113,7 @@ def rip_7_enforcement_mode() -> Rip7Mode:
     """
     if _disabled_all() or not _env_bool("ROBOTHOR_RIP_7_ENABLED"):
         return "off"
-    raw = os.environ.get("ROBOTHOR_RIP_7_MODE", "observe").strip().lower()
+    raw = _resolve_raw("ROBOTHOR_RIP_7_MODE", "observe").strip().lower()
     if raw in _VALID_RIP_7_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
@@ -214,7 +229,7 @@ def symbolic_memory_mode() -> SymbolicMode:
     """
     if _disabled_all() or not _env_bool("ROBOTHOR_RIP_13_ENABLED"):
         return "off"
-    raw = os.environ.get("ROBOTHOR_RIP_13_MODE", "observe").strip().lower()
+    raw = _resolve_raw("ROBOTHOR_RIP_13_MODE", "observe").strip().lower()
     if raw in _VALID_SYMBOLIC_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
@@ -234,7 +249,7 @@ def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
     """
     if _disabled_all() or not _env_bool(enabled_var):
         return "off"
-    raw = os.environ.get(mode_var, "observe").strip().lower()
+    raw = _resolve_raw(mode_var, "observe").strip().lower()
     if raw in _VALID_ENFORCEMENT_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
