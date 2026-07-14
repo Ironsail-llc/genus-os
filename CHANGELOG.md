@@ -1,3 +1,9 @@
+## [1.22.0](https://github.com/Ironsail-llc/genus-os/compare/v1.21.0...v1.22.0) (2026-07-14)
+
+### Features
+
+* **platform:** harden Genus OS production foundation ([#176](https://github.com/Ironsail-llc/genus-os/issues/176)) ([47a9691](https://github.com/Ironsail-llc/genus-os/commit/47a9691c86ecaa92089f3371335a19521d7558c6))
+
 ## [1.21.0](https://github.com/Ironsail-llc/genus-os/compare/v1.20.5...v1.21.0) (2026-07-14)
 
 ### Features
