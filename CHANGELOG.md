@@ -1,3 +1,9 @@
+## [1.19.0](https://github.com/Ironsail-llc/genus-os/compare/v1.18.1...v1.19.0) (2026-07-14)
+
+### Features
+
+* **engine:** fully-anchored exec allowlist patterns ([#206](https://github.com/Ironsail-llc/genus-os/issues/206)) ([17423b3](https://github.com/Ironsail-llc/genus-os/commit/17423b3052c9cc4818bb8e0eced76eb192ca4d08)), closes [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+
 ## [1.18.1](https://github.com/Ironsail-llc/genus-os/compare/v1.18.0...v1.18.1) (2026-07-14)
 
 ### Bug Fixes
