@@ -1,3 +1,9 @@
+## [1.16.1](https://github.com/Ironsail-llc/genus-os/compare/v1.16.0...v1.16.1) (2026-07-14)
+
+### Bug Fixes
+
+* **engine:** never silently drop a guardrail audit write ([#200](https://github.com/Ironsail-llc/genus-os/issues/200)) ([ed34be1](https://github.com/Ironsail-llc/genus-os/commit/ed34be14180701a0a5cee4a98e415ed1cd6a3b23)), closes [#184](https://github.com/Ironsail-llc/genus-os/issues/184) [#187](https://github.com/Ironsail-llc/genus-os/issues/187)
+
 ## [1.16.0](https://github.com/Ironsail-llc/genus-os/compare/v1.15.6...v1.16.0) (2026-07-14)
 
 ### Features
