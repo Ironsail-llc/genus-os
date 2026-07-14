@@ -1076,6 +1076,40 @@ class AgentRunner:
                             "Sandbox start failed for %s: %s", _sanitize(agent_id), _sanitize(e)
                         )
                         sandbox = None
+                        # FAIL CLOSED. Under enforce the operator has been told
+                        # that exec-holding agents run contained; quietly falling
+                        # back to the host would give them containment they do
+                        # not have. (On this box the engine user is not in the
+                        # docker group, so start() cannot succeed at all — the
+                        # old behavior turned "enforce" into pure theater.)
+                        # Under observe, degrading to the host IS the contract.
+                        if sandbox_default_mode() == "enforce":
+                            _sb_reason = f"sandbox required but could not be started: {e}"
+                            try:
+                                from robothor.engine.tracking import log_guardrail_event
+
+                                log_guardrail_event(
+                                    run_id=session.run.id,
+                                    guardrail_name="sandbox_default",
+                                    action="blocked",
+                                    tool_name="exec",
+                                    reason=_sb_reason,
+                                    mode="enforce",
+                                    step_number=0,
+                                )
+                            except Exception as _audit_exc:  # noqa: BLE001
+                                logger.error(
+                                    "sandbox_default blocked a run but the guardrail "
+                                    "event could not be recorded: %s",
+                                    _sanitize(_audit_exc),
+                                )
+                            return self._finish_run(
+                                session.fail(f"Blocked by sandbox_default: {_sb_reason}"),
+                                trace=trace,
+                                agent_config=agent_config,
+                                session=session,
+                                spawn_context=spawn_context,
+                            )
 
                 # Watchdog already started before setup phase (see above).
 
