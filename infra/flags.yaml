@@ -49,39 +49,55 @@ flags:
     mode: observe
     planned_promotion: "2026-09-01"
     soak: >
-      DO NOT PROMOTE ON A CLEAN SOAK. The soak is structurally incapable of
-      telling us anything, and enforcing today would break the email pipeline
-      while containing nothing.
+      The infrastructure this flag depends on now EXISTS (#207). Everything the
+      previous note said was missing has been built:
 
-      The guardrail does not do what its name says. `exec` NEVER routes through
-      the sandbox: tools/handlers/filesystem.py runs subprocess.run(shell=True)
-      on the host and never consults get_current_sandbox(). Only browser.py and
-      desktop.py enter the container — and none of the three agents this flag
-      would sandbox (auto-agent, auto-researcher, email-analyst) use browser or
-      desktop tools at all. There are also no volume mounts in the docker run,
-      infra/sandbox/Dockerfile is never built or tagged, and the docker group
-      has no members, so Sandbox.start() cannot succeed on this box.
+        * `exec` routes through the sandbox (it never did — filesystem.py ran
+          subprocess.run(shell=True) on the host and never called
+          get_current_sandbox());
+        * the workspace is mounted (there were no -v flags at all);
+        * the container is a boundary: --network=none by default, --cap-drop=ALL,
+          --security-opt no-new-privileges, --pids-limit, --user;
+        * the image is built by scripts/build-sandbox-image.sh and the script
+          PROBES it (the old image had no git and no python, so an auto-agent run
+          — whose job is running the test suite — would have failed on its first
+          command);
+        * the runtime is rootless podman (ROBOTHOR_SANDBOX_BINARY), which removes
+          the root-equivalent docker socket. Do NOT add the engine user to the
+          docker group: that group is root, and it would defeat the sandbox it
+          enables.
 
-      "Zero events" is a FALSE NEGATIVE, not evidence of safety: the observe
-      event fires at step 0 of every run of an exec-holding agent, and
-      auto-agent and auto-researcher are `enabled: false` — they cannot emit a
-      soak event at all. email-analyst is live but rare. On the next complex
-      inbound email after a flip, sandbox start fails, the run fail-closes
-      (correctly, #201), and the email pipeline silently loses its analysis
-      stage — a missing-infrastructure failure wearing a guardrail's clothes.
+      Probed on the box through the real exec handler: ran in-container, workspace
+      mounted, pipes work, NETWORK_BLOCKED, HOST_HOME_NOT_VISIBLE, NO_SUDO. Rootless
+      podman also works under NoNewPrivileges=yes, so #205's containment and the
+      sandbox coexist.
 
-      GATE (not a date): route exec through the sandbox, build the image, mount
-      the workspace, move to rootless podman. Then probe one real auto-agent run
-      INSIDE the container and confirm it works — not merely that it does not
-      error. See the Phase 2 plan.
+      STILL A GATE, NOT A DATE. Before flipping, the engine unit needs podman's
+      state dirs writable (#205 set ProtectHome=read-only) and
+      ROBOTHOR_SANDBOX_BINARY=podman, then ONE REAL auto-agent run must complete
+      INSIDE the container — confirmed working, not merely not-erroring. "Zero
+      events" remains a false negative: the observe event fires at step 0 of every
+      exec-holding agent's run, and auto-agent/auto-researcher are disabled.
+
+      Note: an agent with an explicit manifest `sandbox: docker` now fails CLOSED
+      on its own, regardless of this flag (#207) — the global mode is a default for
+      agents that never asked, not an override for one that did.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops
-    mode: observe
-    planned_promotion: "2026-07-20"
+    mode: enforce
+    promoted: "2026-07-14"
     soak: >
-      3 events, all email-analyst "no evidence recorded" — move to alert, fix
-      the agent's evidence wiring, enforce after 7 clean days
+      PROMOTED. The mechanism demonstrably fires — 3 real events, all
+      email-analyst "no evidence recorded" — so this is not one of the controls
+      that was silently inert. The evidence-wiring gap those 3 events pointed at
+      has been fixed, and there have been none since.
+
+      Enforce here is non-destructive: it does not fail the run or block a tool.
+      It records the unevidenced completion and writes a `next_action` via
+      dal.set_next_action(), leaving the task open. The alternative — silently
+      accepting an agent's claim that it finished something with no evidence — is
+      strictly worse than an open task with a next step on it.
 
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops
