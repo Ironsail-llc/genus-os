@@ -157,3 +157,25 @@ def test_uploads_only_the_generations_it_intends_to_keep(tmp_path: Path):
     # and they are the newest two, not an arbitrary pair
     newest = sorted(f.name for f in src.glob("*.sql.gz"))[-2:]
     assert uploaded == newest
+
+
+def test_verify_only_checks_only_the_retained_generations(tmp_path: Path):
+    """Verification must compare like with like.
+
+    Retention keeps N generations offsite while the local disk keeps many more.
+    A one-way check of the WHOLE source against the remote therefore reports
+    every un-replicated older dump as a "difference" and fails — every single
+    run. That is not a broken backup, it is a broken check, and it would page
+    the operator weekly until they learned to ignore it. Which is how a real
+    backup failure gets missed.
+    """
+    src = _make_source(tmp_path, days=5)  # 5 on disk
+    dest = tmp_path / "remote"
+
+    assert _run(tmp_path, src, dest).returncode == 0  # KEEP=2 -> 2 offsite
+
+    result = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+    assert result.returncode == 0, (
+        "verification failed against a healthy backup — it compared all 5 local "
+        f"dumps to the 2 retained offsite: {result.stdout + result.stderr}"
+    )
