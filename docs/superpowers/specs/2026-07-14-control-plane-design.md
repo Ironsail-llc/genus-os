@@ -1,8 +1,12 @@
-# The Helm — Guardrail Control Plane (slice 1)
+# The Helm — Operator Control Center (full program)
 
 **Date:** 2026-07-14
-**Status:** approved
-**Slice:** 1 of 3 — control plane. Later: fleet/runs/workflows/health accounting; canvas bridge.
+**Status:** approved — build all three phases to completion
+**Build order is a dependency chain, not a choice:** the accounting tabs cannot
+read the control plane until its API exists; the canvas cannot bridge to data
+that has no endpoint. So: **Phase 1 control plane → Phase 2 accounting → Phase 3
+canvas**, each verified against the live system before the next begins. We do not
+stop and re-decide between phases; we carry through to the whole helm.
 
 ## Why
 
@@ -37,7 +41,7 @@ This builds the wheel.
 |---|---|---|
 | Control depth | **Full read + write** | An operator needs a helm, not a gauge. |
 | Write-path safety | **Agents structurally cannot reach it** | Not "blocked" — *absent*. See below. |
-| Slicing | **Control plane first** | It is the only surface with nothing today, and the only one where a design mistake costs security rather than convenience. |
+| Build order | **All 3 phases, dependency order** | Accounting needs the control API; canvas needs both. Order is forced, not chosen; we build through to the whole helm. |
 | Canvas power | **Read anything; act only via parent-chrome confirm** | The agent composes the instrument; the operator pulls the trigger. |
 | Inert detection | **Build it, loudly** | It would have caught 9 of today's 11 findings unaided. |
 
@@ -111,9 +115,9 @@ never renders "healthy". It renders:
 
 **Zero events is never green. It is a question.**
 
-## The canvas bridge (shape now, build in slice 3)
+## The canvas bridge (design here; Phase 1 shapes the API for it)
 
-The API must be shaped for this now or slice 3 reworks it.
+The Phase 1 API must be shaped for this now, or Phase 3 reworks it.
 
 **The iframe gets:** `srcdoc`, `sandbox="allow-scripts"` (**no**
 `allow-same-origin`), DOMPurify, `postMessage`.
@@ -189,8 +193,83 @@ Written against the failure modes this system has actually exhibited.
 
 > The thing that detects hollow controls must not itself be a hollow control.
 
-## Out of scope (later slices)
+---
 
-- Fleet / Runs / Workflows / Health tabs (slice 2)
-- Canvas bridge implementation (slice 3)
-- Tasks and Marketplace views — already exist, unchanged
+# Phase 2 — Accounting (the instruments)
+
+Once the control plane exposes its API, the read-only tabs render the whole
+system. Each tab has exactly one question it answers and one primary data source.
+
+| Tab | Answers | Backed by |
+|---|---|---|
+| **Controls** (Phase 1) | What's enforcing vs observing? What changed, and who? Which controls are inert? | `feature_flags`, `feature_flag_audit`, evidence detector |
+| **Fleet** | What are my 25 agents, what can each *do*, what's failing? | `docs/agents/*.yaml`, `agent_schedules`, `agent_runs`, per-agent guardrail events |
+| **Runs** | What happened in this run — every step, every block, every cost? | `agent_runs`, `agent_run_steps`, `agent_guardrail_events` |
+| **Workflows** | What multi-agent flows exist, what have they run? | `/api/workflows*` (built, barely used), `workflow_runs` |
+| **Health** | Is the box OK — backups, WAL, disks, failed units? | health API, `pg_stat_archiver`, systemd, backup timers |
+
+**Kept, unchanged:** Tasks, Marketplace.
+
+**New read API (bridge, operator-scoped, no writes):**
+`GET /api/fleet`, `GET /api/fleet/{agent}`, `GET /api/runs`,
+`GET /api/runs/{id}`, `GET /api/health/system`. Workflows reuse the engine's
+existing `/api/workflows*`.
+
+**The Fleet tab carries forward Phase 1's honesty rule.** For each agent it shows
+what it *can* do (`tools_allowed`, `exec_allowlist`, `sandbox`, delivery) beside
+what it *did* (last runs, failure rate, guardrail blocks). An agent holding
+`exec` with no allowlist is flagged the same way an inert control is — a
+capability without a constraint is a finding, not a fact.
+
+**No mutation in Phase 2.** The only write surface in the whole program is the
+Phase 1 control PATCH and the (confirmed) agent-trigger that already exists.
+
+---
+
+# Phase 3 — The canvas bridge (the brain's hands)
+
+The design is fixed in "The canvas bridge" section above. Phase 3 *implements* it:
+
+1. **`app/src/lib/canvas-bridge.ts`** — the parent-side mediator. Holds the
+   read-op whitelist, validates every `postMessage`, calls the operator-scoped
+   API, posts data back. Never forwards a token into the iframe.
+2. **Read-op whitelist** — a declared set (`get_agent`, `get_run`, `get_flags`,
+   `get_health`, …) mapping each op to one Phase-1/2 read endpoint. An op not on
+   the list is dropped, logged, and surfaced in parent chrome.
+3. **The propose→confirm channel** — a `{op:"propose"}` intent renders a button
+   in parent chrome; the confirm dialog is built from the *parent's* data, and
+   the only actions it will ever confirm are the same operator-only writes the
+   tabs use (flag PATCH, confirmed agent-trigger). The iframe can propose; it can
+   never widen the action set.
+4. **`srcdoc-renderer.tsx`** already sandboxes correctly (no `allow-same-origin`,
+   DOMPurify, the XSS canary from #213). Phase 3 adds the message channel to it,
+   not new sandbox surface.
+
+**The invariant Phase 3 must never break, pinned by a test:** the iframe has no
+`fetch`, no token, no same-origin. If a future change grants the canvas
+`allow-same-origin`, the test fails. This is the same discipline as Phase 1's
+"no control tool in schemas.py" — the boundary is enforced by CI, not by trust.
+
+---
+
+## Program-level testing
+
+Beyond each phase's own tests:
+
+- **Nothing regresses today's hardening.** The full Python + app + bridge + helm
+  suites pass; RLS still scopes to one tenant; `RLS IS INERT` stays silent; the
+  sandbox still fails closed.
+- **The one write path stays singular.** A program-level test asserts the only
+  mutation endpoints reachable are the operator-scoped control PATCH and the
+  confirmed agent-trigger — proven by enumerating the bridge's routes, not by
+  inspection.
+- **The canvas cannot escalate.** A test drives the bridge with a hostile
+  `propose` (`set_flag injection_scan=off` labelled "Refresh") and asserts the
+  confirm dialog renders the *real* action from parent data, not the label.
+
+## Out of scope (whole program)
+
+- Tasks and Marketplace views — already exist, unchanged.
+- Multi-operator RBAC beyond the single operator role #176 provides.
+- Editing agent manifests from the UI — Fleet shows config; manifests stay the
+  source of truth (CLAUDE.md rule 4). A later program can add guarded editing.
