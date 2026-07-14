@@ -1,0 +1,20 @@
+# Replicate the WAL archive offsite and keep it pruned. Deliberately NOT inside
+# Postgres's archive_command: a network problem must never be able to wedge the
+# database by making archive_command fail.
+[Unit]
+Description=Robothor — WAL archive offsite replication + prune
+After=network-online.target postgresql.service
+Wants=network-online.target
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=philip
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+Environment=ROBOTHOR_WAL_ARCHIVE_DIR=/var/lib/robothor/wal_archive
+ExecStart=/opt/robothor/scripts/wal-offsite.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
