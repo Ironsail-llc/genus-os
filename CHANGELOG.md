@@ -1,3 +1,9 @@
+## [1.18.1](https://github.com/Ironsail-llc/genus-os/compare/v1.18.0...v1.18.1) (2026-07-14)
+
+### Bug Fixes
+
+* **security:** block the sudo path to root, and correct the sandbox flag ([#205](https://github.com/Ironsail-llc/genus-os/issues/205)) ([501398f](https://github.com/Ironsail-llc/genus-os/commit/501398fb40126b00494a386102375f6cc3e6ed0f))
+
 ## [1.18.0](https://github.com/Ironsail-llc/genus-os/compare/v1.17.0...v1.18.0) (2026-07-14)
 
 ### Features
