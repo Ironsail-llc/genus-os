@@ -33,12 +33,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+import psycopg2
+
 from robothor.db.connection import get_connection
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-Status = Literal["ENFORCING", "INERT", "BLIND", "UNPROVEN"]
+Status = Literal["ENFORCING", "INERT", "BLIND", "UNPROVEN", "UNKNOWN"]
 
 
 @dataclass(frozen=True)
@@ -100,17 +102,47 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
 }
 
 
+def _unknown_verdict(name: str, mode: str, table: str) -> Verdict:
+    return Verdict(
+        name=name,
+        mode=mode,
+        status="UNKNOWN",
+        last_fired=None,
+        count_7d=0,
+        message=(
+            f"evidence table '{table}' is not present in this database — "
+            "this control cannot be assessed and is NOT confirmed working."
+        ),
+    )
+
+
 def verdict(name: str, mode: str) -> Verdict:
     """Classify a governed flag's real-world evidence, read straight from the
-    table its control actually writes (see ``EVIDENCE_SOURCES``)."""
+    table its control actually writes (see ``EVIDENCE_SOURCES``).
+
+    A missing evidence table (present in some deploys' migrations, absent in
+    others — e.g. ``agent_reviews`` from an external infra migration, or a
+    drifted local test DB missing ``memory_facts_audit``) must never crash
+    this function or produce a false green: it returns the distinct
+    ``UNKNOWN`` status instead, loud and never ENFORCING.
+    """
     src = EVIDENCE_SOURCES[name]
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"SELECT max({src.time_column}), "  # noqa: S608 -- table/where/time_column are code-declared constants above, never user input
-            f"count(*) FILTER (WHERE {src.time_column} > now() - interval '7 days') "
-            f"FROM {src.table} WHERE {src.where}"
-        )
-        last_fired, count_7d = cur.fetchone()
+        cur.execute("SELECT to_regclass(%s)", (f"public.{src.table}",))
+        (regclass,) = cur.fetchone()
+        if regclass is None:
+            return _unknown_verdict(name, mode, src.table)
+
+        try:
+            cur.execute(
+                f"SELECT max({src.time_column}), "  # noqa: S608 -- table/where/time_column are code-declared constants above, never user input
+                f"count(*) FILTER (WHERE {src.time_column} > now() - interval '7 days') "
+                f"FROM {src.table} WHERE {src.where}"
+            )
+            last_fired, count_7d = cur.fetchone()
+        except (psycopg2.errors.UndefinedTable, psycopg2.Error):
+            conn.rollback()
+            return _unknown_verdict(name, mode, src.table)
     count_7d = int(count_7d or 0)
 
     off = mode in ("off", "false", None)
