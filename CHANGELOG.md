@@ -1,3 +1,9 @@
+## [1.15.6](https://github.com/Ironsail-llc/genus-os/compare/v1.15.5...v1.15.6) (2026-07-14)
+
+### Bug Fixes
+
+* **ops:** upload only the retained backup generations ([#198](https://github.com/Ironsail-llc/genus-os/issues/198)) ([f81ce3a](https://github.com/Ironsail-llc/genus-os/commit/f81ce3a33f692bdaf11783a9a21bd3a47db71305)), closes [#192](https://github.com/Ironsail-llc/genus-os/issues/192)
+
 ## [1.15.5](https://github.com/Ironsail-llc/genus-os/compare/v1.15.4...v1.15.5) (2026-07-13)
 
 ### Bug Fixes
