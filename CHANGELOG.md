@@ -1,3 +1,9 @@
+## [1.16.0](https://github.com/Ironsail-llc/genus-os/compare/v1.15.6...v1.16.0) (2026-07-14)
+
+### Features
+
+* **ops:** nag on session goals that have stopped moving ([#199](https://github.com/Ironsail-llc/genus-os/issues/199)) ([caaa735](https://github.com/Ironsail-llc/genus-os/commit/caaa7355ff06efd0d6b183f982dda548f67b0795))
+
 ## [1.15.6](https://github.com/Ironsail-llc/genus-os/compare/v1.15.5...v1.15.6) (2026-07-14)
 
 ### Bug Fixes
