@@ -1,3 +1,9 @@
+## [1.21.0](https://github.com/Ironsail-llc/genus-os/compare/v1.20.5...v1.21.0) (2026-07-14)
+
+### Features
+
+* **dr:** archive WAL and take base backups — RPO 24h to ~15min, drilled ([#214](https://github.com/Ironsail-llc/genus-os/issues/214)) ([afc71b8](https://github.com/Ironsail-llc/genus-os/commit/afc71b88a44cc10d63bb8922343a37e98b4ac324))
+
 ## [1.20.5](https://github.com/Ironsail-llc/genus-os/compare/v1.20.4...v1.20.5) (2026-07-14)
 
 ### Bug Fixes
