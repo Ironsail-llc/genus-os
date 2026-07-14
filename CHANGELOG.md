@@ -1,3 +1,9 @@
+## [1.20.3](https://github.com/Ironsail-llc/genus-os/compare/v1.20.2...v1.20.3) (2026-07-14)
+
+### Bug Fixes
+
+* **backup:** the primary backup must page when it fails ([#211](https://github.com/Ironsail-llc/genus-os/issues/211)) ([dcdafec](https://github.com/Ironsail-llc/genus-os/commit/dcdafec8c6f43719f95666d60d280701e06d3b53))
+
 ## [1.20.2](https://github.com/Ironsail-llc/genus-os/compare/v1.20.1...v1.20.2) (2026-07-14)
 
 ### Bug Fixes
