@@ -1081,7 +1081,13 @@ class AgentRunner:
                 if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
 
-                    sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id=session.run.id)
+                    sandbox = Sandbox(
+                        mode=SandboxMode.DOCKER,
+                        run_id=session.run.id,
+                        # Without this the container mounts nothing and every
+                        # `exec` inside it lands in an empty filesystem.
+                        workspace=str(self.config.workspace),
+                    )
                     try:
                         await sandbox.start()
                         set_current_sandbox(sandbox)
