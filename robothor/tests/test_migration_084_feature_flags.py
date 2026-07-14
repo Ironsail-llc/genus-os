@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 MIGRATION = Path(__file__).resolve().parents[2] / "crm" / "migrations" / "084_feature_flags.sql"
 
 GOVERNED = {
@@ -31,29 +35,25 @@ def test_migration_file_exists():
     assert MIGRATION.exists(), "084_feature_flags.sql must exist"
 
 
-def test_migration_creates_both_tables_and_seeds_twelve(pg_scratch):
-    """pg_scratch: a fixture yielding a psycopg2 conn to an empty scratch DB.
-
-    No commit here: the fixture's isolation is the uncommitted transaction, and
-    statements within it see each other's writes without needing one. Committing
-    would leak these tables into the real database (see fixture docstring).
+def test_migration_creates_both_tables_and_seeds_twelve(db_cursor, db_conn):
+    """No commit here: db_conn's fixture teardown rolls back the transaction
+    (see tests/conftest_integration.py:db_conn), so the migration's DDL/DML
+    never touches the real database.
     """
-    with pg_scratch.cursor() as cur:
-        cur.execute(MIGRATION.read_text())
+    db_cursor.execute(MIGRATION.read_text())
 
-        cur.execute("SELECT to_regclass('public.feature_flags')")
-        assert cur.fetchone()[0] is not None
-        cur.execute("SELECT to_regclass('public.feature_flag_audit')")
-        assert cur.fetchone()[0] is not None
+    db_cursor.execute("SELECT to_regclass('public.feature_flags') AS reg")
+    assert db_cursor.fetchone()["reg"] is not None
+    db_cursor.execute("SELECT to_regclass('public.feature_flag_audit') AS reg")
+    assert db_cursor.fetchone()["reg"] is not None
 
-        cur.execute("SELECT name FROM feature_flags")
-        seeded = {r[0] for r in cur.fetchall()}
-        assert seeded == GOVERNED, f"seed drift: {seeded ^ GOVERNED}"
+    db_cursor.execute("SELECT name FROM feature_flags")
+    seeded = {r["name"] for r in db_cursor.fetchall()}
+    assert seeded == GOVERNED, f"seed drift: {seeded ^ GOVERNED}"
 
 
-def test_migration_is_idempotent(pg_scratch):
-    with pg_scratch.cursor() as cur:
-        cur.execute(MIGRATION.read_text())
-        cur.execute(MIGRATION.read_text())  # second apply must not raise
-        cur.execute("SELECT count(*) FROM feature_flags")
-        assert cur.fetchone()[0] == 12
+def test_migration_is_idempotent(db_cursor, db_conn):
+    db_cursor.execute(MIGRATION.read_text())
+    db_cursor.execute(MIGRATION.read_text())  # second apply must not raise
+    db_cursor.execute("SELECT count(*) AS n FROM feature_flags")
+    assert db_cursor.fetchone()["n"] == 12
