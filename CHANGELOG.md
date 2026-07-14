@@ -1,3 +1,9 @@
+## [1.20.2](https://github.com/Ironsail-llc/genus-os/compare/v1.20.1...v1.20.2) (2026-07-14)
+
+### Bug Fixes
+
+* **boot:** survive a cold boot, and let the pager page during one ([#210](https://github.com/Ironsail-llc/genus-os/issues/210)) ([9b80236](https://github.com/Ironsail-llc/genus-os/commit/9b8023670c809c28d1b954cda79a065c1e0986a4))
+
 ## [1.20.1](https://github.com/Ironsail-llc/genus-os/compare/v1.20.0...v1.20.1) (2026-07-14)
 
 ### Bug Fixes
