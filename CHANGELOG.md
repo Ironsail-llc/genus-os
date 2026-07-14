@@ -1,3 +1,9 @@
+## [1.19.1](https://github.com/Ironsail-llc/genus-os/compare/v1.19.0...v1.19.1) (2026-07-14)
+
+### Bug Fixes
+
+* **bridge:** bind the tenant on the bridge's raw connection ([#208](https://github.com/Ironsail-llc/genus-os/issues/208)) ([34e6e80](https://github.com/Ironsail-llc/genus-os/commit/34e6e80b1196d4c3ff10a01731423bbd83fd4c1f))
+
 ## [1.19.0](https://github.com/Ironsail-llc/genus-os/compare/v1.18.1...v1.19.0) (2026-07-14)
 
 ### Features
