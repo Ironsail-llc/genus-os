@@ -1,3 +1,9 @@
+## [1.20.5](https://github.com/Ironsail-llc/genus-os/compare/v1.20.4...v1.20.5) (2026-07-14)
+
+### Bug Fixes
+
+* **app:** the test suite could not sanitize — jsdom, and a real XSS guard ([#213](https://github.com/Ironsail-llc/genus-os/issues/213)) ([18b48df](https://github.com/Ironsail-llc/genus-os/commit/18b48df500a2ab669b0cc44145b5aa64d1a1787f)), closes [#162](https://github.com/Ironsail-llc/genus-os/issues/162)
+
 ## [1.20.4](https://github.com/Ironsail-llc/genus-os/compare/v1.20.3...v1.20.4) (2026-07-14)
 
 ### Bug Fixes
