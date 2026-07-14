@@ -1,0 +1,11 @@
+[Unit]
+Description=Robothor — WAL archive offsite replication (every 15 min = the RPO)
+
+[Timer]
+# This interval IS the recovery point objective. Every 15 minutes means losing at
+# most ~15 minutes of writes if the box is destroyed — vs 24 hours on the dump.
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+# The physical base backup that WAL replays ONTO. Without this the WAL archive
+# restores to nothing — you cannot PITR onto a pg_dump.
+[Unit]
+Description=Robothor — Postgres physical base backup (for PITR)
+After=postgresql.service
+Wants=postgresql.service
+RequiresMountsFor=/mnt/robothor-backup
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=postgres
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+Environment=ROBOTHOR_BACKUP_GROUP=%i
+ExecStart=/opt/robothor/scripts/pg-basebackup.sh
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target
