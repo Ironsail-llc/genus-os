@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from robothor import __version__
 from robothor.rag.pipeline import run_pipeline
 from robothor.rag.profiles import RAG_PROFILES
 
@@ -176,6 +177,49 @@ async def health() -> dict[str, Any]:
             "memory_db": {"available": True},
         },
     }
+
+
+@app.get("/live")
+@app.get("/liveness")
+async def liveness() -> dict[str, Any]:
+    """Process-only liveness; ``/liveness`` remains a compatibility alias."""
+    from robothor.health_contract import liveness_response
+
+    return liveness_response("orchestrator", __version__)
+
+
+@app.get("/ready")
+async def readiness() -> Any:
+    """Report whether the database and required generation model are usable."""
+    import asyncio
+
+    from fastapi.responses import JSONResponse
+
+    from robothor.health_contract import readiness_response
+
+    async def check_db() -> str:
+        from robothor.db.connection import get_connection
+
+        def _query() -> None:
+            with get_connection() as conn:
+                conn.cursor().execute("SELECT 1")
+
+        await asyncio.to_thread(_query)
+        return "ok"
+
+    async def check_generation_model() -> str:
+        from robothor.llm.ollama import check_model_available
+
+        if not await check_model_available():
+            raise RuntimeError("generation model unavailable")
+        return "ok"
+
+    checks = {
+        "database": check_db,
+        "generation_model": check_generation_model,
+    }
+    body, status = await readiness_response("orchestrator", __version__, checks)
+    return JSONResponse(body, status_code=status)
 
 
 @app.post("/query")

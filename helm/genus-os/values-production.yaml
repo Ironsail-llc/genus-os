@@ -4,21 +4,50 @@
 
 global:
   imageTag: "v1.15.4"
+  environment: production
+  authEnforce: true
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
 postgres:
   enabled: false
 redis:
   enabled: false
-# Vault Secrets Operator wiring — pointed at the populated `db` path.
-# Will be extended to a second VSS for `secrets` (ANTHROPIC_API_KEY, etc.)
-# once those values are populated in Vault.
+database:
+  sslMode: verify-full
+workspace:
+  allowEmptyFleet: false
+  minAgentCount: 1
+  requiredAgentIds: [main]
+  persistence:
+    enabled: true
+    size: 20Gi
+# Vault Secrets Operator wiring. Every secret class has its own path and is
+# projected only into its declared component. Layer 3 may change paths, but
+# must preserve the separation documented in the chart README.
 vault:
   enabled: true
   mount: cluster-is
   type: kv-v2
-  path: ironsail-production/genus-os/db
   refreshAfter: 1m
   authRef: vault-auth
+  secrets:
+    database:
+      path: ironsail-production/genus-os/database
+    cache:
+      path: ironsail-production/genus-os/cache
+    auth-signing:
+      path: ironsail-production/genus-os/auth-signing
+    bridge-sso:
+      path: ironsail-production/genus-os/bridge-sso
+    bridge-oidc:
+      path: ironsail-production/genus-os/bridge-oidc
+    dashboard-auth:
+      path: ironsail-production/genus-os/dashboard-auth
+    engine-providers:
+      path: ironsail-production/genus-os/engine-providers
+    bridge-integrations:
+      path: ironsail-production/genus-os/bridge-integrations
+    orchestrator-providers:
+      path: ironsail-production/genus-os/orchestrator-providers
 dashboard:
   enabled: true
   replicaCount: 2
@@ -41,3 +70,9 @@ bridge:
 orchestrator:
   enabled: true
   replicaCount: 3
+networkPolicy:
+  enabled: true
+  egress:
+    enabled: true
+    # Fail closed until the production Layer-3 values declare exact managed
+    # database/cache and approved API or egress-proxy CIDRs.

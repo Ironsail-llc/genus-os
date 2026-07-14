@@ -4,7 +4,7 @@
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
-const BASE_URL = "http://localhost:3004";
+const BASE_URL = "/";
 
 /** Mock SSE stream for /api/chat/send */
 function mockChatSSE(events: Array<{ event: string; data: unknown }>): string {

@@ -32,6 +32,8 @@ import pytest
 
 from robothor.constants import DEFAULT_TENANT
 
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("_clean_task_state")]
+
 
 @pytest.mark.integration
 class TestFullLifecycle:

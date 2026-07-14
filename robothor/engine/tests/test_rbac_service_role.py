@@ -44,6 +44,7 @@ def test_seed_includes_service_allow_all():
 
     src = inspect.getsource(perms.seed_default_permissions)
     assert '("service", "*", "allow")' in src
+    assert '("member", "*", "allow")' in src
 
 
 def test_service_role_allows_all_tools(monkeypatch):

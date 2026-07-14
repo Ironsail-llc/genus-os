@@ -1,40 +1,41 @@
-{{- if .Values.migrations.enabled -}}
-{{- $sa := include "genus-os.serviceAccountName" . -}}
-# Scoped RBAC for the migration-watcher initContainer pattern. Grants the
-# app's ServiceAccount read access to exactly:
-#   - the one migration Job for this release (by resourceName)
-#   - the one credentials Secret (by resourceName)
-# Pattern doc: aws-infrastucture/docs/helm-db-migrations.md
+{{- $root := . -}}
+{{- $watchers := list -}}
+{{- range $component := list "engine" "bridge" "orchestrator" -}}
+{{- if (index $root.Values $component).enabled -}}
+{{- $watchers = append $watchers $component -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.migrations.enabled $watchers -}}
+{{- $roleName := printf "%s-migration-watcher" (include "genus-os.fullname" .) -}}
+# Read-only, resource-name-scoped RBAC for the per-component migration watcher
+# init containers. The migration Job itself receives no API token or RBAC.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ $sa }}-migration-watcher
+  name: {{ $roleName }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch"]
-    resourceNames:
-      - {{ include "genus-os.migrationJobName" . }}
-  - apiGroups: [""]
-    resources: ["secrets"]
     verbs: ["get"]
     resourceNames:
-      - {{ include "genus-os.fullname" . }}-credentials
+      - {{ include "genus-os.migrationJobName" . }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ $sa }}-migration-watcher
+  name: {{ $roleName }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
 subjects:
+  {{- range $component := $watchers }}
   - kind: ServiceAccount
-    name: {{ $sa }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "genus-os.serviceAccountName" (dict "root" $root "component" $component) }}
+    namespace: {{ $root.Release.Namespace }}
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ $sa }}-migration-watcher
+  name: {{ $roleName }}
 {{- end }}

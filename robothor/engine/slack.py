@@ -184,7 +184,9 @@ class SlackBot:
                 message=text,
                 trigger_type=TriggerType.SLACK,
                 tenant_id=tenant_id,
-                session=session,
+                user_id=f"slack:{user_id}",
+                user_role="user",
+                conversation_history=list(session.history) if session.history else None,
             )
 
             if run.output_text:

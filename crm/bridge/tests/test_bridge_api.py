@@ -20,6 +20,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 @pytest.mark.asyncio
+async def test_live_does_not_check_dependencies(test_client, mock_http_client):
+    mock_http_client.get = AsyncMock(side_effect=AssertionError("dependency called"))
+
+    r = await test_client.get("/live")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ready_checks_crm_and_orchestrator(test_client, mock_http_client):
+    mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
+
+    with patch("robothor.crm.dal.check_health", return_value={"status": "ok"}):
+        r = await test_client.get("/ready")
+
+    assert r.status_code == 200
+    assert r.json()["checks"] == {"crm": "ok", "memory": "ok"}
+    mock_http_client.get.assert_awaited_once_with("http://localhost:9099/ready")
+
+
+@pytest.mark.asyncio
 async def test_health_all_services_ok(test_client, mock_http_client):
     """When CRM and memory are healthy, health reports status: ok."""
     mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
@@ -75,7 +97,7 @@ async def test_resolve_contact_missing_fields(test_client):
     r = await test_client.post("/resolve-contact", json={"channel": "email"})
     assert r.status_code == 422
 
-    r = await test_client.post("/resolve-contact", json={"identifier": "x@y.com"})
+    r = await test_client.post("/resolve-contact", json={"identifier": "person@example.com"})
     assert r.status_code == 422
 
 
@@ -85,7 +107,7 @@ async def test_resolve_contact_existing(test_client):
     resolved = {
         "person_id": "abc-123",
         "channel": "email",
-        "identifier": "test@test.com",
+        "identifier": "test@example.com",
         "display_name": "Test User",
     }
 
@@ -94,7 +116,7 @@ async def test_resolve_contact_existing(test_client):
             "/resolve-contact",
             json={
                 "channel": "email",
-                "identifier": "test@test.com",
+                "identifier": "test@example.com",
             },
         )
         assert r.status_code == 200

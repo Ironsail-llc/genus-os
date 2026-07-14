@@ -213,6 +213,7 @@ class TestExecuteToolUserId:
             agent_id="main",
             tenant_id="default",
             user_id="user-frank",
+            user_role="service",
         )
 
         mock_audit.assert_called_once()

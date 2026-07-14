@@ -1,6 +1,9 @@
 """Tests for instance configuration management."""
 
+import pytest
+
 from robothor.templates.instance import InstanceConfig
+from robothor.templates.safety import TemplateSecurityError
 
 
 class TestInstanceConfig:
@@ -79,6 +82,12 @@ class TestInstanceConfig:
         overrides = instance.get_agent_overrides("test-agent")
         assert overrides["model_primary"] == "custom-model"
 
+    @pytest.mark.parametrize("agent_id", ["../escape", "/absolute", "bad/id"])
+    def test_agent_overrides_reject_unsafe_id(self, tmp_instance_dir, agent_id):
+        instance = InstanceConfig.load(tmp_instance_dir)
+        with pytest.raises(TemplateSecurityError, match="agent ID"):
+            instance.save_agent_overrides(agent_id, {"model": "unsafe"})
+
     def test_archive_agent(self, tmp_instance_dir, tmp_path):
         instance = InstanceConfig.load(tmp_instance_dir)
 
@@ -89,6 +98,18 @@ class TestInstanceConfig:
         archive_path = instance.archive_agent("test-agent", {"manifest": manifest})
         assert archive_path.exists()
         assert (archive_path / "test.yaml").exists()
+
+    def test_archive_rejects_symlink_escape(self, tmp_instance_dir, tmp_path):
+        instance = InstanceConfig.load(tmp_instance_dir)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_instance_dir / "archive").symlink_to(outside, target_is_directory=True)
+        manifest = tmp_path / "test.yaml"
+        manifest.write_text("id: test-agent")
+
+        with pytest.raises(TemplateSecurityError, match="symlinks"):
+            instance.archive_agent("test-agent", {"manifest": manifest})
+        assert list(outside.iterdir()) == []
 
     def test_multiple_agents(self, tmp_instance_dir):
         instance = InstanceConfig.load(tmp_instance_dir)

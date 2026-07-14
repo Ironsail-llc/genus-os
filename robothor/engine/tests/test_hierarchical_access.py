@@ -164,6 +164,7 @@ class TestRegistryThreading:
                 agent_id="agent-1",
                 tenant_id="t1",
                 workspace="/tmp",
+                user_role="service",
                 accessible_tenant_ids=tenants,
             )
 
@@ -226,6 +227,7 @@ class TestDispatchThreading:
                 agent_id="agent-1",
                 tenant_id="t1",
                 workspace="/tmp",
+                user_role="service",
                 accessible_tenant_ids=tenants,
             )
 

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { env } from "next-runtime-env";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useRuntimeConfig } from "@/components/runtime-config";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -76,6 +76,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const { notifyConversationUpdate, setRender } = useVisualState();
+  const { aiName } = useRuntimeConfig();
 
   // Scroll to bottom on new messages (throttled during streaming)
   useEffect(() => {
@@ -833,8 +834,6 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     "Check the inbox",
     "What happened today?",
   ];
-
-  const aiName = env("NEXT_PUBLIC_AI_NAME") || "Robothor";
 
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">

@@ -14,6 +14,11 @@ global:
   # or by the staging-deploy workflow (per-PR builds).
   imageTag: "sha-replace-me"
 
+  # Runtime security posture. HTTP authentication is fail-closed by default;
+  # this explicit one-way flag documents and enforces the intended mode.
+  environment: development
+  authEnforce: true
+
   # Image registry. Single GHCR org, two image names beneath it.
   registry: ghcr.io/ironsail-llc/genus-os
   imagePullPolicy: IfNotPresent
@@ -44,9 +49,16 @@ global:
     runAsNonRoot: true
     runAsUser: 1000
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false  # robothor writes scratch + logs to disk
+    readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
+  initContainerResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
   podSecurityContext:
     fsGroup: 1000
     seccompProfile:
@@ -58,7 +70,7 @@ global:
 
 # ─── Database connection (used by every Python service) ─────────────────────
 # The Python services read host/port/name/user from here; password comes
-# from VSO-materialized `{fullname}-credentials` Secret as
+# from the VSO-materialized `{fullname}-database` Secret as
 # `ROBOTHOR_DB_PASSWORD`.
 #
 # When postgres.enabled (below) the chart deploys an in-cluster Postgres via
@@ -71,6 +83,30 @@ database:
   name: robothor_memory
   user: robothor
   sslMode: prefer
+
+# ─── Instance workspace ──────────────────────────────────────────────────────
+# The workspace contains the entity's manifests, instructions, memory, and
+# runtime state. The default emptyDir is for chart rendering/local evaluation
+# only. Production enables a PVC and refuses readiness until a valid fleet is
+# present. An operator may alternatively mount an immutable ConfigMap bundle.
+workspace:
+  mountPath: /workspace
+  readOnly: false
+  allowEmptyFleet: true
+  minAgentCount: 1
+  requiredAgentIds: []
+  persistence:
+    enabled: false
+    existingClaim: ""
+    storageClassName: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+    annotations: {}
+  configMap:
+    name: ""
+    # Optional key-to-path projection, e.g. {key: main.yaml,
+    # path: docs/agents/main.yaml}.
+    items: []
 
 # Same shape for Redis — `redis.enabled` flips both the subchart deployment
 # (via Chart.yaml dependencies.condition) and the python services' use of
@@ -94,6 +130,20 @@ redis:
   storage:
     requestedSize: 5Gi
     accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  initResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
   # Tag subchart pods with our part-of label so the NetworkPolicy's
   # default-deny + intra-chart allow cover them. podLabels lands on the
   # pod template (what NetworkPolicy.spec.podSelector matches);
@@ -104,16 +154,11 @@ redis:
     app.kubernetes.io/part-of: genus-os
 
 # ─── Vault Secrets Operator (HashiCorp VSO) ─────────────────────────────────
-# A VaultStaticSecret object pulls keys from the configured Vault path and
-# materializes a K8s Secret with the same name. VSO mirrors keys 1:1, so
-# **store keys in Vault using the exact env var names the containers expect**
-# (ROBOTHOR_DB_PASSWORD, ANTHROPIC_API_KEY, etc.). No per-key mapping in the
-# chart — change the keys in Vault if you need a different env var.
-#
-# The expected keys today (any subset works; missing ones become empty env):
-#   ROBOTHOR_DB_PASSWORD, ROBOTHOR_REDIS_PASSWORD, ANTHROPIC_API_KEY,
-#   OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY,
-#   ROBOTHOR_TELEGRAM_BOT_TOKEN, JIRA_TOKEN
+# Each entry below is a separate Vault path and Kubernetes Secret. Workloads
+# opt in with their `secretRefs` list; the chart never fans every secret out to
+# every pod. VSO mirrors keys 1:1, so every path must contain only the key class
+# documented in the chart README. In particular, never put provider, payment,
+# JWT-signing, or database material in a dashboard-readable path.
 #
 # Why VSO instead of ESO (external-secrets-operator):
 # the cluster runs `secrets.hashicorp.com/v1beta1` (VSO) — confirmed via
@@ -123,12 +168,30 @@ vault:
   type: kv-v2
   # Cluster's KV mount — same value the other ironsail apps use.
   mount: cluster-is
-  # Vault path under the mount. Override in layer 3 per env, e.g.
-  # `genus-os/production`.
-  path: genus-os/staging
   refreshAfter: 1m
   # VaultAuth reference. Defaults to the standard cluster auth.
   authRef: vault-auth
+  # Named, independently rotatable secret classes. Override every path in the
+  # environment layer. Secret names become `{fullname}-{name}`.
+  secrets:
+    database:
+      path: genus-os/development/database
+    cache:
+      path: genus-os/development/cache
+    auth-signing:
+      path: genus-os/development/auth-signing
+    bridge-sso:
+      path: genus-os/development/bridge-sso
+    bridge-oidc:
+      path: genus-os/development/bridge-oidc
+    dashboard-auth:
+      path: genus-os/development/dashboard-auth
+    engine-providers:
+      path: genus-os/development/engine-providers
+    bridge-integrations:
+      path: genus-os/development/bridge-integrations
+    orchestrator-providers:
+      path: genus-os/development/orchestrator-providers
 
 # ─── Engine (the agent runner) ───────────────────────────────────────────────
 engine:
@@ -145,6 +208,9 @@ engine:
     repository: python
     pullPolicy: ""
   command: ["python", "-m", "robothor.engine.daemon"]
+  # DB/cache, token verification, and engine-only provider credentials. Never
+  # add dashboard-auth here or reuse engine-providers from another component.
+  secretRefs: [database, cache, auth-signing, engine-providers]
   service:
     port: 18800
     annotations: {}
@@ -152,7 +218,7 @@ engine:
     enabled: false
     className: traefik-private
     host: ""
-    tls: {}
+    tls: []
     annotations: {}
   env: {}
   resources:
@@ -165,14 +231,14 @@ engine:
   probes:
     liveness:
       enabled: true
-      path: /health
+      path: /live
       initialDelaySeconds: 60
       periodSeconds: 30
       timeoutSeconds: 10
       failureThreshold: 5
     readiness:
       enabled: true
-      path: /health
+      path: /ready
       initialDelaySeconds: 15
       periodSeconds: 10
       timeoutSeconds: 5
@@ -194,6 +260,8 @@ bridge:
     repository: python
   command: ["python", "bridge_service.py"]
   workingDir: /app/crm/bridge
+  secretRefs:
+    [database, cache, auth-signing, bridge-sso, bridge-oidc, bridge-integrations]
   service:
     port: 9100
     annotations: {}
@@ -201,7 +269,7 @@ bridge:
     enabled: false
     className: traefik-private
     host: ""
-    tls: {}
+    tls: []
     annotations: {}
   env: {}
   resources:
@@ -214,14 +282,14 @@ bridge:
   probes:
     liveness:
       enabled: true
-      path: /health
+      path: /live
       initialDelaySeconds: 30
       periodSeconds: 30
       timeoutSeconds: 10
       failureThreshold: 5
     readiness:
       enabled: true
-      path: /health
+      path: /ready
       initialDelaySeconds: 10
       periodSeconds: 10
       timeoutSeconds: 5
@@ -237,6 +305,7 @@ orchestrator:
   image:
     repository: python
   command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
+  secretRefs: [database, cache, auth-signing, orchestrator-providers]
   service:
     port: 9099
     annotations: {}
@@ -244,7 +313,7 @@ orchestrator:
     enabled: false
     className: traefik-private
     host: ""
-    tls: {}
+    tls: []
     annotations: {}
   env: {}
   resources:
@@ -257,11 +326,11 @@ orchestrator:
   probes:
     liveness:
       enabled: true
-      path: /health
+      path: /live
       initialDelaySeconds: 30
     readiness:
       enabled: true
-      path: /health
+      path: /ready
       initialDelaySeconds: 10
   podDisruptionBudget:
     enabled: true
@@ -273,6 +342,9 @@ dashboard:
   replicaCount: 2
   image:
     repository: app
+  # The dashboard/BFF receives only Auth.js/OIDC and the Bridge exchange
+  # secret. Provider, payment, JWT-signing, DB, and cache paths are forbidden.
+  secretRefs: [dashboard-auth, bridge-sso]
   service:
     port: 3000
     annotations: {}
@@ -281,7 +353,7 @@ dashboard:
     enabled: false
     className: traefik-public
     host: ""
-    tls: {}
+    tls: []
     annotations: {}
   # Runtime config exposed to the dashboard. NEXT_PUBLIC_* values are served
   # to client components via next-runtime-env at request time, so per-env
@@ -299,11 +371,11 @@ dashboard:
   probes:
     liveness:
       enabled: true
-      path: /api/health
+      path: /api/live
       initialDelaySeconds: 20
     readiness:
       enabled: true
-      path: /api/health
+      path: /api/ready
       initialDelaySeconds: 5
   podDisruptionBudget:
     enabled: true
@@ -355,6 +427,20 @@ postgres:
   storage:
     requestedSize: 20Gi
     accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  initResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
   # Tag subchart pods with our part-of label so the NetworkPolicy's
   # default-deny + intra-chart allow cover them. podLabels lands on the
   # pod template (what NetworkPolicy.spec.podSelector matches);
@@ -369,7 +455,7 @@ postgres:
   # In production we never run this subchart (postgres.enabled=false in
   # values-production.yaml / values-staging.yaml); the fields below are for
   # local-dev. Supply a real password via the literal values shown or use
-  # `kubectl create secret generic <release>-genus-os-credentials ...`
+  # `kubectl create secret generic <release>-genus-os-database ...`
   # before installing in local-dev.
   userDatabase:
     name:
@@ -378,7 +464,7 @@ postgres:
       value: "robothor"
     password:
       # CHANGE-ME — overridden in layer 3 to:
-      #   existingSecret: "<release>-genus-os-credentials"
+      #   existingSecret: "<release>-genus-os-database"
       #   secretKey: ROBOTHOR_DB_PASSWORD
       value: "robothor"
   settings:
@@ -413,6 +499,8 @@ migrations:
   image:
     repository: python
   command: ["python", "-m", "robothor.cli", "migrate"]
+  # Migration execution is deliberately DB-only.
+  secretRefs: [database]
   backoffLimit: 3
   activeDeadlineSeconds: 600
   resources:
@@ -427,6 +515,9 @@ migrations:
 serviceAccount:
   create: true
   annotations: {}
+  # When create=false, optionally map each component to an existing account.
+  # Unspecified components use the Kubernetes `default` account.
+  names: {}
   # If you need IRSA for AWS resource access, set this in layer 3:
   # annotations:
   #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/genus-os-staging
@@ -439,3 +530,56 @@ networkPolicy:
   # kubernetes.io/metadata.name on the namespace). Override per env if
   # Traefik lives elsewhere.
   traefikNamespace: traefik
+  traefikPodSelector:
+    app.kubernetes.io/name: traefik
+  egress:
+    # When enabled, every Genus pod is default-deny. The chart permits only the
+    # declared service graph, DNS, in-chart Postgres/Redis, and destinations
+    # below. Empty CIDR lists intentionally fail closed in production/staging;
+    # Layer 3 must provide exact managed-service or egress-proxy ranges.
+    enabled: false
+    allowDNS: true
+    dnsNamespace: kube-system
+    dnsPodSelector:
+      k8s-app: kube-dns
+    destinations:
+      # Required only while wait-for-migrations uses a read-only Kubernetes
+      # Job lookup. Layer 3 supplies the kubernetes.default Service ClusterIP
+      # as an exact /32 (or /128); it is never folded into generic HTTPS.
+      kubernetes-api:
+        components: [engine, bridge, orchestrator]
+        cidrs: []
+        ports: [{protocol: TCP, port: 443}]
+      database:
+        components: [engine, bridge, orchestrator, migrations]
+        cidrs: []
+        ports: [{protocol: TCP, port: 5432}]
+      redis:
+        components: [engine, bridge, orchestrator]
+        cidrs: []
+        ports: [{protocol: TCP, port: 6379}]
+      ollama:
+        components: [engine, orchestrator]
+        cidrs: []
+        ports: [{protocol: TCP, port: 11434}]
+      # Hosted client-tokenization/provider APIs (Bridge) and organization
+      # virtual-card issuer APIs (Engine). Dashboard is never a consumer.
+      payments:
+        components: [engine, bridge]
+        cidrs: []
+        ports: [{protocol: TCP, port: 443}]
+      # Dashboard gets a separate identity-only destination. Helm rejects the
+      # dashboard in every other external destination class, preventing it
+      # from reaching public model/payment/provider egress.
+      identity:
+        components: [dashboard]
+        cidrs: []
+        ports: [{protocol: TCP, port: 443}]
+      # Prefer a controlled egress proxy: set its narrow CIDR(s)/port here and
+      # configure HTTP(S)_PROXY in only the backend component env blocks that
+      # need it. Direct API CIDRs may also be listed, but unrestricted ranges
+      # are rejected.
+      https:
+        components: [engine, bridge, orchestrator]
+        cidrs: []
+        ports: [{protocol: TCP, port: 443}]

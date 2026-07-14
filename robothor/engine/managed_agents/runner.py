@@ -46,6 +46,8 @@ async def run_on_managed_agents(
     outcome_rubric: str | None = None,
     outcome_max_iterations: int = 5,
     tenant_id: str = "",
+    user_id: str = "",
+    user_role: str = "",
     on_content: Callable[[str], Awaitable[None]] | None = None,
     on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     persist: bool = True,
@@ -93,6 +95,12 @@ async def run_on_managed_agents(
     tenant_id
         Robothor tenant ID — scopes custom tool execution and
         MA resource creation.
+    user_id
+        Verified caller or explicit workload identity propagated to local
+        custom-tool execution.
+    user_role
+        RBAC role for the verified caller/workload.  Missing identity fails
+        closed outside explicit loopback development mode.
     on_content
         Async callback invoked with text chunks as they stream.
     on_tool
@@ -105,6 +113,23 @@ async def run_on_managed_agents(
     MARunResult
         Session output, token counts, tool calls, outcome result.
     """
+    from robothor.auth.runtime import auth_required
+
+    bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+    requires_auth = auth_required(bind_host=bind_host)
+    if not user_id or not user_role or (requires_auth and not tenant_id):
+        if not requires_auth:
+            user_id = user_id or "loopback-development-operator"
+            user_role = user_role or "owner"
+        else:
+            logger.warning(
+                "Rejected Managed Agents run without verified identity/tenant: %s", agent_id
+            )
+            return MARunResult(
+                session_id="",
+                error="Authentication identity and tenant required for Managed Agents execution",
+            )
+
     client = get_ma_client()
 
     # ── 1. Build tool list ────────────────────────────────────────────
@@ -185,6 +210,8 @@ async def run_on_managed_agents(
                     agent_id=agent_id,
                     tenant_id=tenant_id,
                     workspace=workspace,
+                    user_id=user_id,
+                    user_role=user_role,
                     on_tool=on_tool,
                 )
 
@@ -261,6 +288,8 @@ async def _handle_custom_tool(
     agent_id: str,
     tenant_id: str,
     workspace: str,
+    user_id: str,
+    user_role: str,
     on_tool: Callable[[dict[str, Any]], Awaitable[None]] | None,
 ) -> None:
     """Execute a custom tool locally and send the result back to MA."""
@@ -280,8 +309,10 @@ async def _handle_custom_tool(
             agent_id=agent_id,
             tenant_id=tenant_id,
             workspace=workspace,
+            user_id=user_id,
+            user_role=user_role,
         )
-        is_error = False
+        is_error = bool(isinstance(tool_result, dict) and tool_result.get("error"))
     except Exception as exc:
         tool_result = {"error": str(exc)}
         is_error = True

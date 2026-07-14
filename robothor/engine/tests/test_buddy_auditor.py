@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from robothor.engine import buddy_auditor
 from robothor.engine.buddy_auditor import (
     HOLD_RATE_WINDOW_DAYS,
@@ -56,6 +58,18 @@ class TestComputeHoldRate:
 
 
 class TestRunAudit:
+    @pytest.fixture(autouse=True)
+    def isolate_secondary_audit_and_journal(self):
+        """Keep hold-rate unit tests independent of PostgreSQL and disk state."""
+        with (
+            patch(
+                "robothor.engine.buddy_auditor.run_sentinel_check",
+                return_value={"total_reviews": 0, "filler_rate": 0.0, "alerted": False},
+            ),
+            patch("robothor.engine.buddy_auditor._journal"),
+        ):
+            yield
+
     @patch("robothor.engine.buddy_auditor.emit_critical_notification")
     @patch("robothor.engine.buddy_auditor.pause_buddy_manifest", return_value=True)
     @patch("robothor.engine.buddy_auditor.compute_hold_rate")

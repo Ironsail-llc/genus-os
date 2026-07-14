@@ -285,6 +285,7 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
     # Single agent mode
     source = args.source
     source_path = Path(source)
+    hub_source: tuple[str, str] | None = None
 
     # If source is an agent ID (not a path), try to find its template
     if not source_path.is_dir():
@@ -294,15 +295,17 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
             source_path = template_path
         else:
             try:
-                from robothor.templates.hub_client import HubClient
+                from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
 
                 print(f"Template '{source}' not found locally. Searching hub...")
                 with HubClient() as hub:
                     bundle = hub.get_bundle(source)
                     if bundle:
                         print(f"Found on hub: {bundle.get('name', source)}")
-                        extracted = hub.download_bundle(source)
+                        expected_sha256 = trusted_bundle_sha256(bundle)
+                        extracted = hub.download_bundle(source, expected_sha256=expected_sha256)
                         source_path = extracted
+                        hub_source = (source, expected_sha256)
                     else:
                         print(f"Template not found: {source}")
                         return 1
@@ -311,7 +314,19 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
                 return 1
 
     try:
-        result = install(str(source_path), overrides=cli_overrides, auto_yes=auto_yes)
+        install_kwargs: dict[str, Any] = {}
+        if hub_source is not None:
+            install_kwargs = {
+                "source": "hub",
+                "source_ref": hub_source[0],
+                "source_sha256": hub_source[1],
+            }
+        result = install(
+            str(source_path),
+            overrides=cli_overrides,
+            auto_yes=auto_yes,
+            **install_kwargs,
+        )
     except Exception as e:
         print(f"Error: {e}")
         return 1

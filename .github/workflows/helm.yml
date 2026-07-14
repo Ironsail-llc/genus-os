@@ -20,22 +20,30 @@ jobs:
     name: Lint, unit-test, kubeconform, kube-linter
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
 
       - name: Install helm-unittest plugin
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
+        run: |
+          archive="$RUNNER_TEMP/helm-unittest.tgz"
+          curl --fail --show-error --location --output "$archive" \
+            https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $archive" \
+            | sha256sum --check --strict
+          plugin_dir="$(helm env HELM_PLUGINS)/helm-unittest"
+          mkdir -p "$plugin_dir"
+          tar --extract --gzip --file "$archive" --directory "$plugin_dir"
 
-      - name: helm dependency update
-        # Resolves groundhog2k/postgres + groundhog2k/redis subcharts. Required
-        # before `helm lint`/`template` will see the dependency Chart.yaml.
+      - name: helm dependency build
+        # Resolve the exact Chart.lock dependencies. `build` preserves the
+        # reviewed lock instead of re-resolving versions like `update`.
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
-          helm dependency update helm/genus-os
+          helm dependency build helm/genus-os
 
       - name: helm lint
         run: |
@@ -83,7 +91,7 @@ jobs:
             --namespace genus \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
-            --set dashboard.ingress.host=genus-os.ironsail.ai \
+            --set dashboard.ingress.host=genus-os.internal.ironsail.ai \
             > _rendered/production.yaml
           helm template gos helm/genus-os \
             --namespace genus \
@@ -93,9 +101,14 @@ jobs:
 
       - name: Install kubeconform
         run: |
-          curl -sSL -o /tmp/kc.tar.gz \
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --show-error --location --output "$RUNNER_TEMP/kubeconform.tar.gz" \
             https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
-          tar -xzf /tmp/kc.tar.gz -C /usr/local/bin kubeconform
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  $RUNNER_TEMP/kubeconform.tar.gz" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/kubeconform.tar.gz" \
+            --directory "$RUNNER_TEMP/bin" kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: kubeconform (k8s schema validation)
         run: |
@@ -109,28 +122,31 @@ jobs:
               -verbose \
               -kubernetes-version 1.31.0 \
               -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json' \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/34cef0fc2698bbb611f475515e555a2d7ca85b6c/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json' \
               "$f"
           done
 
       - name: Install kube-linter
         run: |
-          curl -sSL -o /tmp/kl.tar.gz \
-            https://github.com/stackrox/kube-linter/releases/download/v0.7.2/kube-linter-linux.tar.gz
-          tar -xzf /tmp/kl.tar.gz -C /usr/local/bin kube-linter
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --show-error --location --output "$RUNNER_TEMP/kube-linter.tar.gz" \
+            https://github.com/stackrox/kube-linter/releases/download/v0.7.4/kube-linter-linux.tar.gz
+          echo "1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671  $RUNNER_TEMP/kube-linter.tar.gz" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/kube-linter.tar.gz" \
+            --directory "$RUNNER_TEMP/bin" kube-linter
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: kube-linter (best practices)
         run: |
-          # Non-blocking initially — surfaces warnings but doesn't fail CI.
-          # Flip exit-code to 1 once the baseline is clean.
           for f in _rendered/*.yaml; do
             echo "→ $f"
-            kube-linter lint "$f" || true
+            kube-linter lint "$f"
           done
 
       - name: Upload rendered manifests
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rendered-manifests
           path: _rendered/

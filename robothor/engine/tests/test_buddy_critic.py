@@ -450,10 +450,26 @@ class TestReviewModelFromManifest:
     hardcoded constant. Root CLAUDE.md rule 6: manifests are source of
     truth for models. A broken manifest still falls back safely."""
 
-    def setup_method(self):
-        # Reset the module cache before each test so the mtime check refires.
+    @pytest.fixture(autouse=True)
+    def isolated_buddy_manifest(self, tmp_path, monkeypatch):
+        """Give every loader-path test a real, isolated manifest path.
+
+        ``_get_review_model`` intentionally stats the manifest before invoking
+        the config loader.  Supplying the file keeps these tests independent of
+        an operator's gitignored workspace and ensures the mocked loader path is
+        genuinely exercised.
+        """
         import robothor.engine.buddy_critic as bc
 
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "buddy.yaml").write_text(
+            "id: buddy\nname: Buddy\nmodel:\n  primary: test/model\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(bc, "AGENTS_DIR", agents_dir)
+        bc._review_model_cache = None
+        yield
         bc._review_model_cache = None
 
     def test_reads_model_primary_from_manifest(self):

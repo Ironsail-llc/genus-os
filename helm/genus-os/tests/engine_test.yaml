@@ -56,15 +56,15 @@ tests:
           value: 8Gi
         documentIndex: 0
 
-  - it: liveness + readiness probes point at /health
+  - it: liveness and readiness use separate contracts
     asserts:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.path
-          value: /health
+          value: /live
         documentIndex: 0
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
-          value: /health
+          value: /ready
         documentIndex: 0
 
   - it: service port matches container port
@@ -76,6 +76,47 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 18800
+        documentIndex: 0
+
+  - it: binds on the pod network and wires service DNS explicitly
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_HOST
+            value: 0.0.0.0
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRIDGE_URL
+            value: http://gos-genus-os-bridge:9100
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ORCHESTRATOR_URL
+            value: http://gos-genus-os-orchestrator:9099
+        documentIndex: 0
+
+  - it: mounts a workspace and exposes fleet readiness settings
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /workspace
+            readOnly: false
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ALLOW_EMPTY_FLEET
+            value: "true"
         documentIndex: 0
 
   - it: receives common DB env from values
@@ -107,7 +148,7 @@ tests:
 
   - it: omits explicit ROBOTHOR_DB_HOST env when postgres disabled
     # When external DB is used, the chart drops the explicit DB env block
-    # so the VSO-materialized credentials Secret (envFrom) supplies all
+    # so the VSO-materialized database Secret (envFrom) supplies all
     # ROBOTHOR_DB_* values without being shadowed. Explicit `env:` wins
     # over `envFrom:` in k8s — so emitting it here would mask the Vault
     # value silently.
@@ -121,14 +162,41 @@ tests:
           any: true
         documentIndex: 0
 
-  - it: envFrom references credentials secret
+  - it: envFrom references only Engine secret classes
     asserts:
       - contains:
           path: spec.template.spec.containers[0].envFrom
           content:
             secretRef:
-              name: gos-genus-os-credentials
+              name: gos-genus-os-database
         documentIndex: 0
+
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-engine-providers
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-dashboard-auth
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-bridge-integrations
+        documentIndex: 0
+
+  - it: Engine rejects unclassified Vault paths by default
+    set:
+      vault.secrets.unclassified.path: genus-os/test/unclassified
+      engine.secretRefs: [database, unclassified]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'engine.secretRefs forbids secret class "unclassified"'
 
   - it: tolerates the genus-os taint by default
     asserts:

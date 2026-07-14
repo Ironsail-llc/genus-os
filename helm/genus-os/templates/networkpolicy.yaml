@@ -1,5 +1,14 @@
+{{- $hardenedEnvironment := has .Values.global.environment (list "production" "prod" "staging") -}}
+{{- if and $hardenedEnvironment (not .Values.networkPolicy.enabled) -}}
+{{- fail "networkPolicy.enabled must be true in staging/production" -}}
+{{- end -}}
+{{- if and $hardenedEnvironment (not .Values.networkPolicy.egress.enabled) -}}
+{{- fail "networkPolicy.egress.enabled must be true in staging/production" -}}
+{{- end -}}
 {{- if .Values.networkPolicy.enabled -}}
-# Default deny + explicit allow rules. Cilium honors standard NetworkPolicy.
+{{- $root := . -}}
+# Default deny for every pod owned by this release, including enabled database
+# subcharts. Connectivity is rebuilt below from the actual component graph.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -11,76 +20,437 @@ spec:
     matchLabels:
       app.kubernetes.io/part-of: genus-os
       app.kubernetes.io/instance: {{ .Release.Name }}
-  policyTypes: [Ingress]
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
+{{- if and .Values.networkPolicy.egress.enabled .Values.networkPolicy.egress.allowDNS }}
 ---
-# Allow pod-to-pod traffic within the chart.
+# DNS is the only release-wide egress exception and is limited to the
+# configured DNS pods, not every pod in kube-system.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "genus-os.fullname" . }}-allow-intra-chart
+  name: {{ include "genus-os.fullname" . }}-allow-dns
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "shared") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/part-of: genus-os
+      app.kubernetes.io/name: {{ include "genus-os.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.dnsNamespace | default "kube-system" }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dnsPodSelector | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- end }}
+
+{{- /* Dashboard may call only its three internal backends. */}}
+{{- if and .Values.networkPolicy.egress.enabled .Values.dashboard.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-dashboard-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "dashboard") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- range $component := list "engine" "bridge" "orchestrator" }}
+    {{- $cv := index $root.Values $component }}
+    {{- if $cv.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ $cv.service.port }}}
+    {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- /* Engine calls Bridge, Orchestrator, in-chart data services, and NATS. */}}
+{{- if and .Values.networkPolicy.egress.enabled .Values.engine.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-engine-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "engine") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- range $component := list "bridge" "orchestrator" }}
+    {{- $cv := index $root.Values $component }}
+    {{- if $cv.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ $cv.service.port }}}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.database.port }}}]
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
+    {{- end }}
+    {{- if .Values.nats.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ .Values.nats.clientPort }}}]
+    {{- end }}
+{{- end }}
+
+{{- /* Bridge calls Orchestrator and the in-chart data services only. */}}
+{{- if and .Values.networkPolicy.egress.enabled .Values.bridge.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-bridge-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "bridge") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "bridge") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- if .Values.orchestrator.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" . "component" "orchestrator") | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ .Values.orchestrator.service.port }}}]
+    {{- end }}
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.database.port }}}]
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
+    {{- end }}
+{{- end }}
+
+{{- if and .Values.networkPolicy.egress.enabled .Values.orchestrator.enabled (or .Values.postgres.enabled .Values.redis.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-orchestrator-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "orchestrator") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "orchestrator") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.database.port }}}]
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
+    {{- end }}
+{{- end }}
+
+{{- if and .Values.networkPolicy.egress.enabled .Values.migrations.enabled .Values.postgres.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-migrations-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "migrations") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.database.port }}}]
+{{- end }}
+
+{{- /* Backend ingress mirrors the callers above and the Helm smoke pod. */}}
+{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+{{- $cv := index $root.Values $component }}
+{{- if $cv.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" $root }}-{{ $component }}-internal-ingress
+  labels:
+    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
   policyTypes: [Ingress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/part-of: genus-os
-              app.kubernetes.io/instance: {{ .Release.Name }}
-{{- if .Values.dashboard.enabled }}
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" "helm-test") | nindent 14 }}
+        {{- if eq $component "engine" }}
+        {{- if $root.Values.dashboard.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" "dashboard") | nindent 14 }}
+        {{- end }}
+        {{- else if eq $component "bridge" }}
+        {{- range $source := list "dashboard" "engine" }}
+        {{- if (index $root.Values $source).enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $source) | nindent 14 }}
+        {{- end }}
+        {{- end }}
+        {{- else if eq $component "orchestrator" }}
+        {{- range $source := list "dashboard" "engine" "bridge" }}
+        {{- if (index $root.Values $source).enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $source) | nindent 14 }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: {{ $cv.service.port }}}
+{{- end }}
+{{- end }}
+
+{{- if .Values.postgres.enabled }}
 ---
-# Allow Traefik to reach the dashboard on its service port only.
-# Scoped to the dashboard component (was previously to all chart pods)
-# and constrained to the dashboard's container port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "genus-os.fullname" . }}-allow-traefik-dashboard
+  name: {{ include "genus-os.fullname" . }}-postgres-ingress
   labels:
-    {{- include "genus-os.labels" (dict "root" . "component" "shared") | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" . "component" "database") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "genus-os.selectorLabels" (dict "root" . "component" "dashboard") | nindent 6 }}
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes: [Ingress]
   ingress:
     - from:
-        - namespaceSelector:
+        {{- range $component := list "engine" "bridge" "orchestrator" "migrations" }}
+        {{- if (index $root.Values $component).enabled }}
+        - podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.traefikNamespace | default "traefik" }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.dashboard.service.port }}
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
+        {{- end }}
+        {{- end }}
+      ports: [{protocol: TCP, port: {{ .Values.database.port }}}]
 {{- end }}
-{{- range $component := list "engine" "bridge" "orchestrator" }}
-{{- $cv := index $.Values $component }}
+
+{{- if .Values.redis.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-redis-ingress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "cache") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $component := list "engine" "bridge" "orchestrator" }}
+        {{- if (index $root.Values $component).enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
+        {{- end }}
+        {{- end }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
+{{- end }}
+
+{{- if and .Values.nats.enabled .Values.engine.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-nats-ingress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "nats") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "nats") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine") | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ .Values.nats.clientPort }}}]
+{{- end }}
+
+{{- /* The smoke-test pod can reach only service health ports. */}}
+{{- if .Values.networkPolicy.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-helm-test-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "helm-test") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "helm-test") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+    {{- $cv := index $root.Values $component }}
+    {{- if $cv.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ $cv.service.port }}}]
+    {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- /* External and managed destinations: one policy per destination class. */}}
+{{- if .Values.networkPolicy.egress.enabled }}
+{{- range $destinationName, $destination := .Values.networkPolicy.egress.destinations }}
+{{- if $destination.cidrs }}
+{{- if not $destination.components }}{{ fail (printf "networkPolicy.egress.destinations.%s.components is required" $destinationName) }}{{ end }}
+{{- if not $destination.ports }}{{ fail (printf "networkPolicy.egress.destinations.%s.ports is required" $destinationName) }}{{ end }}
+{{- range $component := $destination.components }}
+{{- if not (has $component (list "engine" "bridge" "orchestrator" "dashboard" "migrations" "helm-test")) }}{{ fail (printf "networkPolicy egress destination %s contains unknown component %s" $destinationName $component) }}{{ end }}
+{{- if and (eq $component "dashboard") (ne $destinationName "identity") }}{{ fail (printf "dashboard external egress is restricted to the identity destination; remove it from %s" $destinationName) }}{{ end }}
+{{- if and (eq $destinationName "identity") (ne $component "dashboard") }}{{ fail (printf "identity destination is dashboard-only; remove component %s" $component) }}{{ end }}
+{{- end }}
+{{- range $cidr := $destination.cidrs }}
+{{- if or (eq $cidr "0.0.0.0/0") (eq $cidr "::/0") }}{{ fail (printf "networkPolicy egress destination %s rejects unrestricted CIDR %s" $destinationName $cidr) }}{{ end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" $root }}-{{ $destinationName }}-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" $root "component" "shared") | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [{{ include "genus-os.name" $root }}]
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ $root.Release.Name }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range $component := $destination.components }}
+          - {{ $component }}
+          {{- end }}
+  policyTypes: [Egress]
+  egress:
+    {{- range $cidr := $destination.cidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr }}
+      ports:
+        {{- toYaml $destination.ports | nindent 8 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Traefik ingress is component and port scoped. */}}
+{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+{{- $cv := index $root.Values $component }}
 {{- if and $cv.enabled $cv.ingress.enabled }}
 ---
-# Allow Traefik to reach {{ $component }} on its service port (ingress enabled).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "genus-os.fullname" $ }}-allow-traefik-{{ $component }}
+  name: {{ include "genus-os.fullname" $root }}-allow-traefik-{{ $component }}
   labels:
-    {{- include "genus-os.labels" (dict "root" $ "component" "shared") | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "genus-os.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
   policyTypes: [Ingress]
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.traefikNamespace | default "traefik" }}
+              kubernetes.io/metadata.name: {{ $root.Values.networkPolicy.traefikNamespace | default "traefik" }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $root.Values.networkPolicy.traefikPodSelector | nindent 14 }}
       ports:
-        - protocol: TCP
-          port: {{ $cv.service.port }}
+        - {protocol: TCP, port: {{ $cv.service.port }}}
 {{- end }}
 {{- end }}
 {{- end }}

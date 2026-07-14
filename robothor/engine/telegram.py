@@ -1523,6 +1523,8 @@ class TelegramBot:
                     model_override=model,
                     conversation_history=history or None,
                     tenant_id=_tenant,
+                    user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
+                    user_role=str((_user or {}).get("role") or "user"),
                 )
 
                 async with _lock:
@@ -1756,6 +1758,8 @@ class TelegramBot:
         try:
             model = self._model_override.get(chat_id)
             history = list(session.history)
+            user = self._chat_user_info.get(chat_id) or {}
+            tenant_id = self._get_tenant_id(chat_id)
 
             run = await self.runner.execute(
                 agent_id=self.config.default_chat_agent,
@@ -1766,6 +1770,9 @@ class TelegramBot:
                 conversation_history=history or None,
                 readonly_mode=True,
                 deep_plan=deep_plan,
+                tenant_id=tenant_id,
+                user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
+                user_role=str(user.get("role") or "user"),
             )
 
             plan_text = _extract_plan_text(run.output_text or "")
@@ -1871,11 +1878,17 @@ class TelegramBot:
 
         try:
             history = list(session.history)
+            user = self._chat_user_info.get(chat_id) or {}
+            tenant_id = self._get_tenant_id(chat_id)
 
             run = await self.runner.execute_deep(
                 query=query,
                 on_progress=on_progress,
                 conversation_history=history or None,
+                trigger_type=TriggerType.TELEGRAM,
+                tenant_id=tenant_id,
+                user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
+                user_role=str(user.get("role") or "user"),
             )
 
             # Record in session history
@@ -1975,6 +1988,8 @@ class TelegramBot:
 
         try:
             model = self._model_override.get(chat_id)
+            user = self._chat_user_info.get(chat_id) or {}
+            tenant_id = self._get_tenant_id(chat_id)
 
             # Build agent config with continuous-mode overrides for background execution
             bg_config = self._build_background_config()
@@ -2000,6 +2015,9 @@ class TelegramBot:
                 model_override=model,
                 conversation_history=None,  # CLEAN CONTEXT
                 execution_mode=True,
+                tenant_id=tenant_id,
+                user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
+                user_role=str(user.get("role") or "user"),
             )
 
             # Track execution run ID on plan
@@ -2126,6 +2144,8 @@ class TelegramBot:
 
         try:
             # Build rich context from plan + exploration output
+            user = self._chat_user_info.get(chat_id) or {}
+            tenant_id = self._get_tenant_id(chat_id)
             exploration_output = ""
             for msg in reversed(session.history):
                 if msg.get("role") == "assistant" and msg.get("content"):
@@ -2142,6 +2162,10 @@ class TelegramBot:
                 query=plan.original_message,
                 on_progress=on_progress,
                 context_override=context,
+                trigger_type=TriggerType.TELEGRAM,
+                tenant_id=tenant_id,
+                user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
+                user_role=str(user.get("role") or "user"),
             )
 
             # Track execution run ID
@@ -2264,6 +2288,8 @@ class TelegramBot:
 
         try:
             model = self._model_override.get(chat_id)
+            user = self._chat_user_info.get(chat_id) or {}
+            tenant_id = self._get_tenant_id(chat_id)
 
             # Build iteration prompt with current plan + feedback
             iteration_message = (
@@ -2287,6 +2313,9 @@ class TelegramBot:
                 model_override=model,
                 conversation_history=history or None,
                 readonly_mode=True,
+                tenant_id=tenant_id,
+                user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
+                user_role=str(user.get("role") or "user"),
             )
 
             revised_plan_text = _extract_plan_text(run.output_text or "")

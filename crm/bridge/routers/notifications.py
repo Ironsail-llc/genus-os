@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 
 @router.post("/send")
-async def api_send_notification(
+def api_send_notification(
     body: SendNotificationRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -54,7 +54,7 @@ async def api_send_notification(
 
 
 @router.get("/inbox/{agent_id}")
-async def api_get_inbox(
+def api_get_inbox(
     agent_id: str,
     unreadOnly: bool = Query(True),
     typeFilter: str | None = Query(None),
@@ -73,7 +73,7 @@ async def api_get_inbox(
 
 
 @router.post("/{notification_id}/read")
-async def api_mark_read(
+def api_mark_read(
     notification_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -83,7 +83,7 @@ async def api_mark_read(
 
 
 @router.post("/{notification_id}/ack")
-async def api_acknowledge(
+def api_acknowledge(
     notification_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -93,7 +93,7 @@ async def api_acknowledge(
 
 
 @router.get("")
-async def api_list_notifications(
+def api_list_notifications(
     fromAgent: str | None = Query(None),
     toAgent: str | None = Query(None),
     taskId: str | None = Query(None),

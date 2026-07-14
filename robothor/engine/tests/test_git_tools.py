@@ -8,6 +8,22 @@ import pytest
 
 from robothor.engine.guardrails import GuardrailEngine
 
+
+@pytest.fixture(autouse=True)
+def explicit_sync_tool_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Supply the service identity expected by the legacy sync test shim."""
+
+    import robothor.engine.tools as tools
+
+    execute = tools._handle_sync_tool
+
+    def _execute_as_service(name, args, **kwargs):
+        kwargs.setdefault("user_role", "service")
+        return execute(name, args, **kwargs)
+
+    monkeypatch.setattr(tools, "_handle_sync_tool", _execute_as_service)
+
+
 # ─── Guardrail: no_main_branch_push ─────────────────────────────────
 
 

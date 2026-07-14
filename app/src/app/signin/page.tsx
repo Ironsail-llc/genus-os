@@ -2,7 +2,7 @@ import { signIn } from "@/lib/auth";
 
 /**
  * Sign-in page — single "Sign in with SSO" action that kicks off the OIDC flow.
- * On success Auth.js redirects back to ``callbackUrl`` (set by the middleware).
+ * On success Auth.js redirects back to ``callbackUrl`` (set by the request proxy).
  */
 export default async function SignInPage({
   searchParams,

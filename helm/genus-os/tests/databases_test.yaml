@@ -37,6 +37,12 @@ tests:
             name: ROBOTHOR_DB_HOST
           any: true
         documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_DB_SSLMODE
+            value: prefer
+        documentIndex: 0
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
@@ -75,9 +81,5 @@ tests:
       postgres.enabled: false
       database.host: rds.example.com
     asserts:
-      # wait-for-credentials still present; only wait-for-postgres should be gone.
-      - notContains:
+      - notExists:
           path: spec.template.spec.initContainers
-          content:
-            name: wait-for-postgres
-          any: true

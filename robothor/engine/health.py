@@ -7,11 +7,13 @@ and last run per agent.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from robothor import __version__
 from robothor.engine.models import TriggerType
 from robothor.engine.sanitize import sanitize_log
 
@@ -22,41 +24,55 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def validate_engine_auth_configuration() -> None:
+    """Fail closed unless the Engine's token-verification mode is safe."""
+    from robothor.auth.runtime import validate_auth_configuration
+
+    validate_auth_configuration(
+        bind_host=os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1"),
+        require_sso_configuration=False,
+    )
+
+
 def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
     """Create a lightweight FastAPI health app."""
-    import hmac
-
-    from fastapi import Depends, FastAPI, Header, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import JSONResponse
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
-    # ── Control-route auth ────────────────────────────────────────────────
-    # Routes that mutate a live run (steer/interrupt/resume) inject operator-
-    # trusted text into the agent, bypassing the injection scanner. Guard them
-    # with a shared secret so any process that can merely reach the engine port
-    # cannot drive another agent's run. Enforced when ROBOTHOR_ENGINE_CONTROL_TOKEN
-    # is set; if unset we allow (to avoid breaking a live instance mid-rollout)
-    # but warn once so the operator knows to configure it.
-    _control_token = os.environ.get("ROBOTHOR_ENGINE_CONTROL_TOKEN", "")
-    if not _control_token:
-        logger.warning(
-            "engine control routes (steer/interrupt/resume) are UNAUTHENTICATED; "
-            "set ROBOTHOR_ENGINE_CONTROL_TOKEN to require a shared secret"
-        )
+    # ── Engine-wide authentication boundary ──────────────────────────────
+    # NetworkPolicy/ClusterIP isolation remains defence in depth, but every
+    # non-probe HTTP request must also carry a signed, scoped Genus identity.
+    # Webhook POSTs are the sole exception here because the webhook handler
+    # authenticates the exact raw payload with its channel-specific HMAC.
+    @app.middleware("http")
+    async def _authenticate_engine_request(request: Request, call_next: Any) -> Any:
+        from robothor.engine.auth import authenticate_http_request
 
-    def _require_control_token(x_robothor_control_token: str = Header(default="")) -> None:
-        if not _control_token:
-            return  # unconfigured → allow (warned above)
-        if not hmac.compare_digest(x_robothor_control_token, _control_token):
-            raise HTTPException(status_code=401, detail="invalid control token")
+        try:
+            context = authenticate_http_request(request, tenant_id=config.tenant_id)
+        except HTTPException as error:
+            return JSONResponse(
+                {"error": str(error.detail)},
+                status_code=error.status_code,
+            )
+        if context is not None:
+            request.state.auth = context
+        return await call_next(request)
 
     # Mount dashboard endpoints (replaces brain/ Node.js servers)
-    from robothor.engine.dashboards import get_dashboard_router, get_public_router
+    from robothor.engine.dashboards import (
+        get_completion_router,
+        get_dashboard_router,
+        get_public_router,
+    )
 
     app.include_router(get_dashboard_router())
     app.include_router(get_public_router())
+    app.include_router(get_completion_router())
 
     # Mount chat endpoints when runner is available
     if runner is not None:
@@ -701,7 +717,7 @@ def create_health_app(
             return {
                 "status": "healthy",
                 "timestamp": datetime.now(UTC).isoformat(),
-                "engine_version": "0.1.0",
+                "engine_version": __version__,
                 "tenant_id": config.tenant_id,
                 "bot_configured": bool(config.bot_token),
                 "agents": agents,
@@ -725,13 +741,17 @@ def create_health_app(
             status_code=503,
         )
 
+    @app.get("/live")
     @app.get("/liveness")
     async def liveness() -> dict[str, Any]:
-        """Liveness probe — always 200 if process is running."""
+        """Liveness probe — always 200 if the process can serve requests.
+
+        ``/liveness`` remains as a compatibility alias for older operators.
+        """
         try:
             from robothor.health_contract import liveness_response
 
-            return liveness_response("engine", "0.1.0")
+            return liveness_response("engine", __version__)
         except Exception:
             logger.exception("Liveness check failed")
             return {"status": "error", "error": "Internal server error"}
@@ -744,24 +764,78 @@ def create_health_app(
         from robothor.health_contract import readiness_response
 
         async def check_db() -> str:
+            import asyncio
+
             from robothor.db.connection import get_connection
 
-            with get_connection() as conn:
-                conn.cursor().execute("SELECT 1")
+            def _query() -> None:
+                with get_connection() as conn:
+                    conn.cursor().execute("SELECT 1")
+
+            await asyncio.to_thread(_query)
             return "ok"
 
         async def check_schedules() -> str:
+            import asyncio
+
             from robothor.engine.tracking import list_schedules
 
-            list_schedules(tenant_id=config.tenant_id)
+            await asyncio.to_thread(list_schedules, tenant_id=config.tenant_id)
+            return "ok"
+
+        async def check_redis() -> str:
+            import redis.asyncio as aioredis
+
+            from robothor.config import get_config
+
+            redis_config = get_config().redis
+            client = aioredis.Redis(
+                host=redis_config.host,
+                port=redis_config.port,
+                db=redis_config.db,
+                password=redis_config.password or None,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            try:
+                # redis-py's async ping() is typed Awaitable[bool] | bool
+                # depending on the client flavour; normalise before awaiting.
+                result = client.ping()
+                if inspect.isawaitable(result):
+                    await result
+            finally:
+                await client.aclose()
+            return "ok"
+
+        async def check_fleet() -> str:
+            import asyncio
+
+            from robothor.engine.config import load_all_manifests
+
+            manifests = await asyncio.to_thread(load_all_manifests, config.manifest_dir)
+            if not manifests and config.allow_empty_fleet:
+                return "ok"
+
+            agent_ids = {str(manifest["id"]) for manifest in manifests}
+            if len(agent_ids) < config.min_agent_count:
+                raise RuntimeError(
+                    f"valid agent fleet has {len(agent_ids)} agents; "
+                    f"requires at least {config.min_agent_count}"
+                )
+
+            missing = set(config.required_agent_ids) - agent_ids
+            if missing:
+                raise RuntimeError(f"required agents missing: {', '.join(sorted(missing))}")
             return "ok"
 
         try:
             checks: dict[str, Any] = {
                 "database": check_db,
+                "redis": check_redis,
                 "schedules": check_schedules,
+                "fleet": check_fleet,
             }
-            body, status = await readiness_response("engine", "0.1.0", checks)
+            body, status = await readiness_response("engine", __version__, checks)
             return JSONResponse(body, status_code=status)
         except Exception:
             logger.exception("Readiness check failed")
@@ -1133,7 +1207,7 @@ def create_health_app(
     # ── v2 Enhancement endpoints ─────────────────────────────────────
 
     @app.post("/api/runs/{run_id}/resume")
-    async def resume_run(run_id: str, _: None = Depends(_require_control_token)) -> dict[str, Any]:
+    async def resume_run(run_id: str, request: Request) -> dict[str, Any]:
         """Resume a run from its latest checkpoint."""
         if not runner:
             return {"error": "Runner not available"}
@@ -1146,6 +1220,9 @@ def create_health_app(
 
             import asyncio
 
+            from robothor.engine.auth import request_context
+
+            auth = request_context(request)
             asyncio.create_task(
                 runner.execute(
                     agent_id=original["agent_id"],
@@ -1153,6 +1230,9 @@ def create_health_app(
                     trigger_type=TriggerType.MANUAL,
                     trigger_detail=f"resume:{run_id}",
                     resume_from_run_id=run_id,
+                    tenant_id=auth.tenant_id,
+                    user_id=auth.user_id,
+                    user_role=auth.role,
                 )
             )
             return {"status": "resuming", "original_run_id": run_id}
@@ -1161,7 +1241,7 @@ def create_health_app(
             return {"error": "Internal server error"}
 
     @app.get("/api/runs/active")
-    async def list_active_runs(_: None = Depends(_require_control_token)) -> dict[str, Any]:
+    async def list_active_runs() -> dict[str, Any]:
         """List currently-registered live sessions (this worker process only).
 
         Sourced from the in-process session_registry (Rip 9) — sessions
@@ -1193,7 +1273,8 @@ def create_health_app(
 
     @app.post("/api/runs/{run_id}/steer")
     async def steer_run(
-        run_id: str, body: dict[str, Any], _: None = Depends(_require_control_token)
+        run_id: str,
+        body: dict[str, Any],
     ) -> dict[str, Any]:
         """Inject a steering message into a live run (it continues, adjusted)."""
         from robothor.engine.interrupt_api import steer_session
@@ -1208,7 +1289,6 @@ def create_health_app(
     async def interrupt_run(
         run_id: str,
         body: dict[str, Any] | None = None,
-        _: None = Depends(_require_control_token),
     ) -> dict[str, Any]:
         """Halt a live run at the next iteration boundary (optional note)."""
         from robothor.engine.interrupt_api import interrupt_session
@@ -1268,7 +1348,7 @@ def create_health_app(
             return {"error": "Internal server error"}
 
     @app.post("/api/agents/{agent_id}/trigger")
-    async def trigger_agent(agent_id: str) -> dict[str, Any]:
+    async def trigger_agent(agent_id: str, request: Request) -> dict[str, Any]:
         """Manually trigger an agent run with TriggerType.MANUAL.
 
         Added 2026-05-06 for the benchmark-runner verification flow — there
@@ -1286,6 +1366,10 @@ def create_health_app(
 
         import asyncio
 
+        from robothor.engine.auth import request_context
+
+        auth = request_context(request)
+
         async def _go() -> None:
             try:
                 await runner.execute(
@@ -1294,6 +1378,9 @@ def create_health_app(
                     trigger_type=TriggerType.MANUAL,
                     trigger_detail="api-manual-trigger",
                     agent_config=agent_config,
+                    tenant_id=auth.tenant_id,
+                    user_id=auth.user_id,
+                    user_role=auth.role,
                 )
             except Exception:
                 logger.exception("Manual trigger of %s failed", sanitize_log(agent_id))
@@ -1302,7 +1389,7 @@ def create_health_app(
         return {"status": "started", "agent_id": agent_id}
 
     @app.post("/api/workflows/{workflow_id}/execute")
-    async def execute_workflow(workflow_id: str) -> dict[str, Any]:
+    async def execute_workflow(workflow_id: str, request: Request) -> dict[str, Any]:
         """Manually trigger a workflow execution."""
         if not workflow_engine:
             return {"error": "Workflow engine not available"}
@@ -1314,11 +1401,17 @@ def create_health_app(
         # Execute in background
         import asyncio
 
+        from robothor.engine.auth import request_context
+
+        auth = request_context(request)
+
         asyncio.create_task(
             workflow_engine.execute(
                 workflow_id=workflow_id,
                 trigger_type="manual",
                 trigger_detail="api",
+                user_id=auth.user_id,
+                user_role=auth.role,
             )
         )
         return {"status": "started", "workflow_id": workflow_id}
@@ -1370,6 +1463,8 @@ async def serve_health(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> None:
     """Start the health endpoint server."""
+    validate_engine_auth_configuration()
+
     import uvicorn
 
     app = create_health_app(config, runner=runner, workflow_engine=workflow_engine)

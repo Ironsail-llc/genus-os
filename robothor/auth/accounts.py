@@ -19,6 +19,23 @@ from robothor.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROLE = "member"
+JIT_PROVISIONABLE_ROLES = frozenset({"member", "viewer"})
+
+
+class AccountProvisioningError(RuntimeError):
+    """Base class for fail-closed SSO account resolution failures."""
+
+
+class AccountInactiveError(AccountProvisioningError):
+    """The IdP identity is bound to an account that is not active."""
+
+
+class AccountBindingRequiredError(AccountProvisioningError):
+    """An existing email identity needs an explicit administrator binding."""
+
+
+class UnsafeProvisioningRoleError(AccountProvisioningError):
+    """JIT provisioning attempted to create a privileged account."""
 
 
 def get_account_by_id(user_id: str) -> dict[str, Any] | None:
@@ -62,43 +79,48 @@ def jit_provision(
 ) -> dict[str, Any]:
     """Resolve (or create) the account for a verified SSO identity, just-in-time.
 
-    Resolution order: (1) existing (issuer, subject); (2) existing (tenant, email)
-    with the IdP identity linked onto it; (3) create a new account at
-    ``default_role``. Stamps ``last_login_at``. The IdP did the authentication;
-    this only maps the verified identity to a local account + role.
+    Resolution order: (1) an active account already bound to ``(issuer,
+    subject)``; (2) a new, non-privileged account when the email is unused.
+
+    Email equality is deliberately *not* an identity-binding mechanism.  An
+    existing account (including the owner bootstrap account and invitations)
+    must be explicitly bound to the IdP subject by an administrator before it
+    can sign in.  This prevents a verified email claim from silently taking
+    over a pre-existing or privileged local account.
     """
+    if default_role not in JIT_PROVISIONABLE_ROLES:
+        raise UnsafeProvisioningRoleError("privileged roles cannot be JIT provisioned")
+
+    email = email.strip().casefold()
     existing = get_account_by_idp(issuer, subject)
     if existing:
+        if existing.get("status") != "active":
+            raise AccountInactiveError("SSO account is not active")
         return _touch_login(existing["id"])
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # Link IdP identity onto a pre-existing email account (e.g. break-glass
-        # admin, or an invited user) if present.
+        # Never turn a matching email claim into an identity binding.  The
+        # explicit safe binding is a pre-populated (idp_issuer, idp_subject)
+        # pair, resolved by the branch above.
         cur.execute(
             "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
             (tenant_id, email),
         )
         row = cur.fetchone()
         if row:
-            cur.execute(
-                """UPDATE user_accounts
-                   SET idp_issuer = %s, idp_subject = %s,
-                       display_name = COALESCE(NULLIF(%s, ''), display_name),
-                       last_login_at = NOW(), updated_at = NOW()
-                   WHERE id = %s
-                   RETURNING *""",
-                (issuer, subject, display_name, row["id"]),
+            raise AccountBindingRequiredError(
+                "existing account must be explicitly bound to the SSO identity"
             )
-        else:
-            cur.execute(
-                """INSERT INTO user_accounts
-                       (tenant_id, email, idp_issuer, idp_subject, display_name,
-                        role, status, last_login_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'active', NOW())
-                   RETURNING *""",
-                (tenant_id, email, issuer, subject, display_name or email, default_role),
-            )
+
+        cur.execute(
+            """INSERT INTO user_accounts
+                   (tenant_id, email, idp_issuer, idp_subject, display_name,
+                    role, status, last_login_at)
+               VALUES (%s, %s, %s, %s, %s, %s, 'active', NOW())
+               RETURNING *""",
+            (tenant_id, email, issuer, subject, display_name or email, default_role),
+        )
         out = cur.fetchone()
         conn.commit()
         return dict(out)
@@ -109,10 +131,12 @@ def _touch_login(user_id: str) -> dict[str, Any]:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "UPDATE user_accounts SET last_login_at = NOW(), updated_at = NOW() "
-            "WHERE id = %s RETURNING *",
+            "WHERE id = %s AND status = 'active' RETURNING *",
             (user_id,),
         )
         row = cur.fetchone()
+        if not row:
+            raise AccountInactiveError("SSO account is not active")
         conn.commit()
         return dict(row)
 
@@ -156,6 +180,27 @@ def get_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
+    """Atomically revoke and return one valid refresh session.
+
+    Rotation must be a single database operation: a separate read followed by
+    a revoke allows two concurrent requests to reuse the same refresh token.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """UPDATE user_sessions
+               SET revoked_at = NOW()
+               WHERE refresh_token_hash = %s
+                 AND revoked_at IS NULL AND expires_at > NOW()
+               RETURNING *""",
+            (refresh_token_hash,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+
+
 def revoke_session(refresh_token_hash: str) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
@@ -176,9 +221,9 @@ def bootstrap_owner_account() -> dict[str, Any] | None:
     """Seed the ``owner.yaml`` operator as the tenant's ``owner`` user account.
 
     Idempotent. Returns the account, or None if no operator is configured. The
-    account has no credentials yet (SSO links on first login; break-glass
-    password set out-of-band) — it just establishes the owner identity + role so
-    enforcement never locks the operator out.
+    account has no credentials yet. Its exact trusted OIDC issuer + subject
+    must be bound out-of-band before SSO; a verified email never auto-links a
+    privileged account. Break-glass access is also provisioned out-of-band.
     """
     from robothor.owner_config import load_owner_config
 

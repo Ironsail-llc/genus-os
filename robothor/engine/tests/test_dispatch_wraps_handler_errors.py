@@ -37,7 +37,7 @@ async def _ok_handler(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_handler_exception_becomes_tool_crashed() -> None:
     with patch.object(dispatch, "_get_handlers", return_value={"boom": _boom_handler}):
-        result = await dispatch._execute_tool("boom", {})
+        result = await dispatch._execute_tool("boom", {}, user_role="service")
     assert result.get("tool_crashed") is True
     assert "RuntimeError" in result.get("error", "")
     assert "orchestrator down" in result.get("error", "")
@@ -49,7 +49,7 @@ async def test_httpstatus_error_does_not_propagate() -> None:
         dispatch, "_get_handlers", return_value={"log_interaction": _http_boom_handler}
     ):
         # Must not raise — the whole point of the guard
-        result = await dispatch._execute_tool("log_interaction", {})
+        result = await dispatch._execute_tool("log_interaction", {}, user_role="service")
     assert result.get("tool_crashed") is True
     assert "HTTPStatusError" in result.get("error", "")
 
@@ -57,7 +57,7 @@ async def test_httpstatus_error_does_not_propagate() -> None:
 @pytest.mark.asyncio
 async def test_success_path_unaffected() -> None:
     with patch.object(dispatch, "_get_handlers", return_value={"ok": _ok_handler}):
-        result = await dispatch._execute_tool("ok", {})
+        result = await dispatch._execute_tool("ok", {}, user_role="service")
     assert result == {"ok": True}
     assert "tool_crashed" not in result
 
@@ -70,6 +70,6 @@ async def test_handler_returning_error_dict_not_tagged_as_crash() -> None:
         return {"error": "bad args"}
 
     with patch.object(dispatch, "_get_handlers", return_value={"controlled": _controlled}):
-        result = await dispatch._execute_tool("controlled", {})
+        result = await dispatch._execute_tool("controlled", {}, user_role="service")
     assert result.get("error") == "bad args"
     assert "tool_crashed" not in result

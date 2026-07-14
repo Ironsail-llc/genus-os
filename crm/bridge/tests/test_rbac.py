@@ -3,16 +3,8 @@
 Phase 3: Validates agent capability enforcement at the Bridge API layer.
 """
 
-import os
 import sys
 from pathlib import Path
-
-# Set capabilities manifest path BEFORE importing bridge_service (middleware loads at import time)
-os.environ.setdefault(
-    "ROBOTHOR_CAPABILITIES_MANIFEST",
-    str(Path.home() / "robothor" / "brain" / "agent_capabilities.json"),
-)
-
 from unittest.mock import patch
 
 import pytest
@@ -22,14 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "brain" / "memory_system"))
 
 from bridge_service import app
-
-from robothor.events.capabilities import load_capabilities
-
-
-@pytest.fixture(autouse=True)
-def ensure_capabilities_loaded():
-    """Ensure capabilities manifest is loaded before each test."""
-    load_capabilities()
 
 
 @pytest.fixture

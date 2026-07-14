@@ -93,7 +93,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
       } else {
         // Fallback for standalone usage: route through the same
         // /api/actions/execute allowlist as every other task mutation (so the
-        // bridge gets X-Agent-Id + rate limiting). Check res.ok and throw so a
+        // bridge gets verified auth + rate limiting). Check res.ok and throw so a
         // failed POST isn't silently swallowed (the throw skips the clear
         // below, so the operator keeps their text to retry).
         const res = await fetch("/api/actions/execute", {

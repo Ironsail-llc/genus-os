@@ -52,12 +52,18 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
-{{/* ServiceAccount name. */}}
+{{/* Per-component ServiceAccount name. Pass .root + .component. */}}
 {{- define "genus-os.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{- include "genus-os.fullname" . -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- if $root.Values.serviceAccount.create -}}
+{{- printf "%s-%s" (include "genus-os.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
+{{- $configuredName := index ($root.Values.serviceAccount.names | default dict) $component -}}
+{{- if and (has $root.Values.global.environment (list "production" "prod" "staging")) (not $configuredName) -}}
+{{- fail (printf "serviceAccount.names.%s is required when chart-managed accounts are disabled in staging/production" $component) -}}
+{{- end -}}
+{{- default "default" $configuredName -}}
 {{- end -}}
 {{- end -}}
 
@@ -88,6 +94,11 @@ the same name. See aws-infrastucture/docs/helm-db-migrations.md.
 */}}
 {{- define "genus-os.migrationJobName" -}}
 {{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (.Values.global.imageTag | sha256sum | trunc 8) -}}
+{{- end -}}
+
+{{/* Workspace PVC name (created by this chart or supplied by the operator). */}}
+{{- define "genus-os.workspaceClaimName" -}}
+{{- default (printf "%s-workspace" (include "genus-os.fullname" .)) .Values.workspace.persistence.existingClaim -}}
 {{- end -}}
 
 {{/*
@@ -128,9 +139,9 @@ postgres subchart is enabled. In that mode the chart can compute the
 service name and `database.*` values are authoritative.
 
 When postgres.enabled is false (staging / production with external RDS),
-all `ROBOTHOR_DB_*` env vars come from the VSO-materialized credentials
-Secret via envFrom — including HOST, PORT, NAME, USER, PASSWORD. The
-Vault path under `ironsail-<env>/genus-os/db` is the source of truth.
+all `ROBOTHOR_DB_*` connection variables come from the component-scoped
+`database` Secret via envFrom — including HOST, PORT, NAME, USER, PASSWORD.
+The environment-specific `vault.secrets.database.path` is authoritative.
 
 Explicit `env:` entries WIN over `envFrom:` in k8s, so rendering them
 here when the values are wrong would mask the Vault values silently.
@@ -147,12 +158,20 @@ here when the values are wrong would mask the Vault values silently.
 - name: ROBOTHOR_DB_SSLMODE
   value: {{ .Values.database.sslMode | quote }}
 {{- end }}
+{{- if not .Values.postgres.enabled }}
+- name: ROBOTHOR_DB_SSLMODE
+  value: {{ .Values.database.sslMode | quote }}
+{{- end }}
 {{- if .Values.redis.enabled }}
 - name: ROBOTHOR_REDIS_HOST
   value: {{ include "genus-os.redisHost" . | quote }}
 - name: ROBOTHOR_REDIS_PORT
   value: {{ .Values.redis.port | quote }}
 {{- end }}
+- name: GENUS_ENVIRONMENT
+  value: {{ .Values.global.environment | quote }}
+- name: GENUS_AUTH_ENFORCE
+  value: {{ .Values.global.authEnforce | quote }}
 - name: GENUS_OS_DEPLOYED_FROM_PR
   value: {{ .Values.global.deployedFromPR | quote }}
 - name: GENUS_OS_DEPLOYED_AT
@@ -162,24 +181,38 @@ here when the values are wrong would mask the Vault values silently.
 {{- end -}}
 
 {{/*
-envFrom referencing the credentials Secret (`{fullname}-credentials`).
-
-The Secret is sourced one of two ways:
-  - vault.enabled: true  → materialized by VSO from Vault
-                            (VaultStaticSecret, see vaultstaticsecret.yaml)
-  - vault.enabled: false → user-provided out-of-band
-                            (e.g. local-dev `kubectl create secret`)
-
-Either way the referenced Secret name is the same. There is no soft
-fallback if the Secret is missing — pods will CreateContainerConfigError
-until it exists. For app pods this is implicitly guarded by the
-wait-for-migrations initContainer (the migration Job's
-wait-for-credentials init container blocks until the Secret is present,
-and app pods only proceed once migrations complete).
+Render only the named Secret classes declared by one component's secretRefs.
+Pass .root + .component. Unknown references are a hard template error. The
+Secret may be materialized by VSO or supplied out-of-band when Vault is off;
+missing Secrets fail closed with CreateContainerConfigError.
 */}}
 {{- define "genus-os.envFromSecret" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- $cv := index $root.Values $component -}}
+{{- $allowedByComponent := dict
+      "engine" (list "database" "cache" "auth-signing" "engine-providers")
+      "bridge" (list "database" "cache" "auth-signing" "bridge-sso" "bridge-oidc" "bridge-integrations")
+      "orchestrator" (list "database" "cache" "auth-signing" "orchestrator-providers")
+      "dashboard" (list "dashboard-auth" "bridge-sso")
+      "migrations" (list "database") -}}
+{{- $allowedRefs := index $allowedByComponent $component -}}
+{{- range $secretName := ($cv.secretRefs | default list) -}}
+{{- if not (hasKey $root.Values.vault.secrets $secretName) -}}
+{{- fail (printf "%s.secretRefs contains unknown vault.secrets entry %q" $component $secretName) -}}
+{{- end }}
+{{- if and (eq $component "dashboard") (not (has $secretName (list "dashboard-auth" "bridge-sso"))) -}}
+{{- fail (printf "dashboard.secretRefs forbids privileged secret class %q; only dashboard-auth and bridge-sso are allowed" $secretName) -}}
+{{- end }}
+{{- if and (eq $component "migrations") (ne $secretName "database") -}}
+{{- fail (printf "migrations.secretRefs is DB-only and forbids secret class %q" $secretName) -}}
+{{- end }}
+{{- if not (has $secretName $allowedRefs) -}}
+{{- fail (printf "%s.secretRefs forbids secret class %q" $component $secretName) -}}
+{{- end }}
 - secretRef:
-    name: {{ include "genus-os.fullname" . }}-credentials
+    name: {{ include "genus-os.fullname" $root }}-{{ $secretName }}
+{{- end }}
 {{- end -}}
 
 {{/* Merge globals + per-component nodeSelector. */}}
@@ -206,7 +239,20 @@ and app pods only proceed once migrations complete).
 {{- $cv := index .root.Values $component -}}
 {{- $aff := $cv.affinity | default dict -}}
 {{- if not $aff -}}{{- $aff = .root.Values.global.affinity | default dict -}}{{- end -}}
+{{- if $aff -}}
 {{- toYaml $aff -}}
+{{- else if gt (int ($cv.replicaCount | default 1)) 1 -}}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            {{- include "genus-os.selectorLabels" (dict "root" .root "component" $component) | nindent 12 }}
+{{- else -}}
+{}
+{{- end -}}
 {{- end -}}
 
 {{/* Probe rendering. Pass .root + .component + .probe (string: liveness|readiness) + .port. */}}

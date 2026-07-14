@@ -8,6 +8,9 @@ vi.stubGlobal("fetch", mockFetch);
 describe("GET /api/health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.BRIDGE_URL = "http://localhost:9100";
+    process.env.ORCHESTRATOR_URL = "http://localhost:9099";
+    process.env.VISION_URL = "http://localhost:8600";
   });
 
   it("returns ok when all services healthy", async () => {
@@ -52,7 +55,7 @@ describe("GET /api/health", () => {
 
     await GET();
 
-    const urls = mockFetch.mock.calls.map((c: unknown[]) => c[0]);
+    const urls = mockFetch.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(urls).toContain("http://localhost:9100/health");
     expect(urls).toContain("http://localhost:9099/health");
     expect(urls).toContain("http://localhost:8600/health");
@@ -68,5 +71,28 @@ describe("GET /api/health", () => {
       expect(typeof s.responseTime).toBe("number");
       expect(s.responseTime).toBeGreaterThanOrEqual(0);
     });
+  });
+
+  it("rejects non-HTTP service targets without making a request", async () => {
+    process.env.BRIDGE_URL = "file:///etc/passwd";
+    process.env.ORCHESTRATOR_URL = "file:///etc/passwd";
+    process.env.VISION_URL = "file:///etc/passwd";
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(body.status).toBe("degraded");
+    expect(body.services.every((s: { status: string }) => s.status === "unhealthy")).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not follow backend redirects during a health probe", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 302 });
+
+    await GET();
+
+    for (const [, options] of mockFetch.mock.calls) {
+      expect(options).toMatchObject({ redirect: "manual" });
+    }
   });
 });

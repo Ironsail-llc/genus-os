@@ -25,8 +25,142 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Production release gate
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request'
+        && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: robothor
+          POSTGRES_PASSWORD: robothor
+          POSTGRES_DB: robothor_release_gate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify workflow actions are immutably pinned
+        run: python3 scripts/check_workflow_action_pins.py
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      - run: pip install -r crm/bridge/requirements.txt
+      - name: Verify Python source and complete unit suite
+        run: |
+          ruff check robothor/ crm/bridge/
+          ruff format --check robothor/ crm/bridge/
+          mypy robothor/ --ignore-missing-imports
+          pytest tests/ robothor/ -m "not integration and not llm and not slow and not e2e" --cov=robothor --cov-fail-under=60
+          pytest crm/bridge/tests/ -m "not integration and not slow and not e2e"
+          python scripts/validate_agents.py --ci
+
+      - name: Verify canonical migrations against PostgreSQL
+        env:
+          PGPASSWORD: robothor
+          ROBOTHOR_TEST_DB_DSN: "dbname=robothor_release_gate user=robothor password=robothor host=localhost port=5432"
+          ROBOTHOR_DB_HOST: 127.0.0.1
+          ROBOTHOR_DB_PORT: "5432"
+          ROBOTHOR_DB_NAME: robothor_release_gate
+          ROBOTHOR_DB_USER: robothor
+          ROBOTHOR_DB_PASSWORD: robothor
+        run: |
+          python -m robothor.cli migrate
+          python -m robothor.cli migrate --check
+          pytest tests/integration/ -m integration
+
+      - name: Audit Python dependencies
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit
+
+      - name: Scan repository history for secrets
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --show-error --location --output "$archive" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  $archive" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" \
+            --directory "$RUNNER_TEMP/bin" gitleaks
+          "$RUNNER_TEMP/bin/gitleaks" detect --source . --verbose
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Verify product version metadata
+        run: node scripts/check-version-consistency.js
+      - name: Audit release-tooling lock
+        run: npm audit --package-lock-only --audit-level=high
+      - name: Verify dashboard and browser flows
+        working-directory: app
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
+          pnpm lint
+          pnpm exec tsc --noEmit
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.16.3
+      - name: Verify production Kubernetes manifests
+        run: |
+          archive="$RUNNER_TEMP/helm-unittest.tgz"
+          curl --fail --show-error --location --output "$archive" \
+            https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $archive" \
+            | sha256sum --check --strict
+          plugin_dir="$(helm env HELM_PLUGINS)/helm-unittest"
+          mkdir -p "$plugin_dir"
+          tar --extract --gzip --file "$archive" --directory "$plugin_dir"
+          helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          helm dependency build helm/genus-os
+          helm lint helm/genus-os --strict \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml
+          helm unittest helm/genus-os --strict
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            > /tmp/genus-production.yaml
+          curl --fail --show-error --location \
+            --output "$RUNNER_TEMP/kube-linter.tar.gz" \
+            https://github.com/stackrox/kube-linter/releases/download/v0.7.4/kube-linter-linux.tar.gz
+          echo "1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671  $RUNNER_TEMP/kube-linter.tar.gz" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/kube-linter.tar.gz" \
+            --directory "$RUNNER_TEMP" kube-linter
+          "$RUNNER_TEMP/kube-linter" lint /tmp/genus-production.yaml
+
   release:
     name: Semantic Release
+    needs: [verify]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -37,12 +171,12 @@ jobs:
       new_release_published: ${{ steps.semantic.outputs.new_release_published }}
       new_release_version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
           fetch-depth: 0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: npm
@@ -80,9 +214,9 @@ jobs:
 
   build:
     name: Build & Push (${{ matrix.image.name }})
-    needs: [release]
+    needs: [verify, release]
     if: |
-      always() && (
+      always() && needs.verify.result == 'success' && (
         github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'push' && needs.release.outputs.new_release_published == 'true') ||
         (github.event_name == 'pull_request'
@@ -101,16 +235,18 @@ jobs:
           - { name: python, dockerfile: Dockerfile.python }
           - { name: app,    dockerfile: Dockerfile.app    }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # For labeled PRs, check out the PR HEAD (not the merge commit) so
-          # the SHA we tag matches what the contributor pushed.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # the SHA we tag matches what the contributor pushed. A production
+          # release must build the semantic-release tag because that commit
+          # contains the newly synchronized runtime version metadata.
+          ref: ${{ github.event_name == 'push' && needs.release.outputs.new_release_published == 'true' && format('v{0}', needs.release.outputs.new_release_version) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
           fetch-depth: 0
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -130,7 +266,7 @@ jobs:
 
       - name: docker meta
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}
           flavor: |
@@ -144,7 +280,7 @@ jobs:
 
       - name: Build & push
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./${{ matrix.image.dockerfile }}
@@ -173,8 +309,7 @@ jobs:
       # Trivy does double duty: CVE scan + SPDX SBOM generation. Avoids a
       # second action (was anchore/sbom-action) that only ships floating v0
       # tags. Third-party action SHA-pinned + tag-commented.
-      - name: Trivy — block on CRITICAL (non-blocking initially)
-        continue-on-error: true
+      - name: Trivy — block on CRITICAL
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.primary.outputs.ref }}
@@ -203,7 +338,7 @@ jobs:
 
       - name: Upload Trivy SARIF
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
           path: trivy-${{ matrix.image.name }}.sarif
@@ -211,11 +346,71 @@ jobs:
 
       - name: Upload SBOM
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-${{ matrix.image.name }}-${{ steps.primary.outputs.tag }}
           path: sbom-${{ matrix.image.name }}.spdx.json
           retention-days: 90
+
+  # Production values remain on the previous known-good image while release
+  # metadata is committed, images are built, and both blocking scans run.
+  # Only this job makes the new release deployable.
+  promote-production:
+    name: Promote scanned production images
+    needs: [release, build]
+    if: |
+      always()
+      && needs.build.result == 'success'
+      && needs.release.outputs.new_release_published == 'true'
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    outputs:
+      promotion_commit: ${{ steps.promote.outputs.promotion_commit }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
+          ref: main
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify both release images exist
+        env:
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          docker buildx imagetools inspect "ghcr.io/ironsail-llc/genus-os/python:v${VERSION}" >/dev/null
+          docker buildx imagetools inspect "ghcr.io/ironsail-llc/genus-os/app:v${VERSION}" >/dev/null
+
+      - name: Promote release in GitOps values
+        id: promote
+        env:
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          node scripts/promote-release-values.js "$VERSION"
+          node scripts/check-version-consistency.js
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/genus-os/values-production.yaml helm/genus-os/values-staging.yaml
+          if git diff --staged --quiet; then
+            echo "Release v${VERSION} is already promoted; refusing an ambiguous no-op."
+            exit 1
+          fi
+          git commit -m "chore(deploy): promote v${VERSION} [skip ci]"
+          git push origin HEAD:main
+          echo "promotion_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   comment-pr:
     name: Sticky PR comment
@@ -249,24 +444,31 @@ jobs:
             For now the images are available in GHCR and tagged for this PR's HEAD.
 
   # ───────────────────────────────────────────────────────────────────────
-  # Production: semantic-release bumped values-production.yaml on this
-  # push; tail with an argocd sync.
+  # Production: deploy only the GitOps promotion commit created after both
+  # release images passed their blocking scans.
   # ───────────────────────────────────────────────────────────────────────
   deploy-production:
     name: Deploy to production
-    needs: [release, build]
+    needs: [release, build, promote-production]
     if: |
       always()
       && needs.build.result == 'success'
+      && needs.promote-production.result == 'success'
       && needs.release.outputs.new_release_published == 'true'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
+          ref: main
+          fetch-depth: 0
+
       - name: Tailscale up (needed for private ArgoCD)
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -274,9 +476,8 @@ jobs:
 
       - name: Install ArgoCD CLI
         run: |
-          curl -sSL -o /usr/local/bin/argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
+          scripts/install-argocd-cli.sh "$RUNNER_TEMP/argocd"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Sync + wait for health
         env:
@@ -287,6 +488,47 @@ jobs:
           argocd app terminate-op ironsail-production-genus-os --grpc-web || true
           argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
           argocd app wait ironsail-production-genus-os --grpc-web --health --timeout 900
+
+      - name: Smoke-test live and ready endpoints
+        id: smoke
+        continue-on-error: true
+        env:
+          GENUS_URL: ${{ vars.GENUS_PRODUCTION_URL || 'https://genus-os.internal.ironsail.ai' }}
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 "$GENUS_URL/api/live"
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 "$GENUS_URL/api/ready"
+
+      - name: Roll back a failed production smoke test
+        if: steps.smoke.outcome == 'failure'
+        env:
+          ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+          PROMOTION_COMMIT: ${{ needs.promote-production.outputs.promotion_commit }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --ff-only origin main
+
+          git_rollback=false
+          if git revert --no-commit "$PROMOTION_COMMIT"; then
+            git commit -m "revert(deploy): roll back v${VERSION} [skip ci]"
+            if git push origin HEAD:main; then
+              git_rollback=true
+            fi
+          else
+            git revert --abort || true
+          fi
+
+          if [ "$git_rollback" = "true" ]; then
+            argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+          else
+            echo "GitOps rollback failed; applying an emergency ArgoCD rollback." >&2
+            argocd app rollback ironsail-production-genus-os --grpc-web
+          fi
+          argocd app wait ironsail-production-genus-os --grpc-web --health --timeout 900
+          exit 1
 
   # ───────────────────────────────────────────────────────────────────────
   # Staging: label-driven. The deploy-staging label on a PR triggers an
@@ -319,7 +561,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
           ref: main
@@ -385,7 +627,7 @@ jobs:
           git push origin main
 
       - name: Tailscale up
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -393,9 +635,8 @@ jobs:
 
       - name: Install ArgoCD CLI
         run: |
-          curl -sSL -o /usr/local/bin/argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
+          scripts/install-argocd-cli.sh "$RUNNER_TEMP/argocd"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Sync + wait for health
         env:
@@ -438,7 +679,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ssh-key: ${{ secrets.CI_USER_PRIVATE_KEY }}
           ref: main
@@ -483,7 +724,7 @@ jobs:
       # Tailscale, no argocd, no sticky comment noise.
       - name: Tailscale up
         if: steps.bump.outputs.synced == 'true'
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -492,9 +733,8 @@ jobs:
       - name: Install ArgoCD CLI
         if: steps.bump.outputs.synced == 'true'
         run: |
-          curl -sSL -o /usr/local/bin/argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
+          scripts/install-argocd-cli.sh "$RUNNER_TEMP/argocd"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Sync staging
         if: steps.bump.outputs.synced == 'true'

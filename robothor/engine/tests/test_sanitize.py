@@ -16,6 +16,12 @@ class TestSanitizeLog:
     def test_crlf_escaped(self):
         assert sanitize_log("line1\r\nline2") == "line1\\r\\nline2"
 
+    def test_all_c0_and_c1_controls_escaped(self):
+        result = sanitize_log("value\x00\t\x7f\x85")
+        assert result == "value\\x00\\x09\\x7f\\x85"
+        assert all(ord(character) >= 0x20 for character in result)
+        assert all(not 0x7F <= ord(character) < 0xA0 for character in result)
+
     def test_non_string_converted(self):
         assert sanitize_log(42) == "42"
         assert sanitize_log(None) == "None"

@@ -35,40 +35,64 @@ async def memory_search(body: MemorySearchRequest, tenant_id: str = Depends(get_
 
 
 @router.post("/store")
-async def memory_store(body: MemoryStoreRequest):
+async def memory_store(
+    body: MemoryStoreRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
     """Store content and extract facts."""
+    from robothor.constants import DEFAULT_TENANT
+
+    # ``ingest_content`` is not tenant-aware yet.  Do not silently route a
+    # secondary tenant's content into the primary tenant while that boundary
+    # remains unresolved.
+    if tenant_id != DEFAULT_TENANT:
+        return JSONResponse(
+            {"error": "memory ingestion is not available for this tenant"},
+            status_code=403,
+        )
     try:
         from robothor.memory.ingestion import ingest_content
 
-        result = await ingest_content(body.content, source_channel=body.content_type)
+        result = await ingest_content(
+            body.content,
+            source_channel="api",
+            content_type=body.content_type,
+            metadata={"tenant_id": tenant_id},
+        )
         return {"status": "ok", "facts_extracted": result}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/entity/{name}")
-async def memory_entity(name: str):
+async def memory_entity(name: str, tenant_id: str = Depends(get_tenant_id)):
     """Get entity with relationships from the knowledge graph."""
     try:
         from robothor.memory.entities import get_all_about
 
-        result = await get_all_about(name)
+        result = await get_all_about(name, tenant_id=tenant_id)
         return result or {"entity": name, "relations": []}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/stats")
-async def memory_stats():
+def memory_stats(tenant_id: str = Depends(get_tenant_id)):
     """Get memory system statistics."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             stats = {}
             for table in ("memory_facts", "memory_entities", "memory_relations"):
-                cur.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+                cur.execute(  # noqa: S608 -- table is selected from a constant allowlist
+                    f"SELECT COUNT(*) FROM {table} WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
                 stats[table] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM memory_facts WHERE is_active = true")
+            cur.execute(
+                "SELECT COUNT(*) FROM memory_facts WHERE is_active = true AND tenant_id = %s",
+                (tenant_id,),
+            )
             stats["active_facts"] = cur.fetchone()[0]
             return stats
     except Exception as e:
@@ -79,23 +103,26 @@ async def memory_stats():
 
 
 @router.get("/blocks")
-async def list_memory_blocks():
+def list_memory_blocks(tenant_id: str = Depends(get_tenant_id)):
     """List all memory blocks."""
     try:
         from robothor.memory.blocks import list_blocks
 
-        return list_blocks()
+        return list_blocks(tenant_id=tenant_id)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/blocks/{block_name}")
-async def get_memory_block(block_name: str):
+def get_memory_block(
+    block_name: str,
+    tenant_id: str = Depends(get_tenant_id),
+):
     """Read a named memory block."""
     try:
         from robothor.memory.blocks import read_block
 
-        result = read_block(block_name)
+        result = read_block(block_name, tenant_id=tenant_id)
         if "error" in result:
             return JSONResponse({"error": result["error"]}, status_code=404)
         return result
@@ -105,12 +132,16 @@ async def get_memory_block(block_name: str):
 
 
 @router.put("/blocks/{block_name}")
-async def put_memory_block(block_name: str, body: MemoryBlockWriteRequest):
+def put_memory_block(
+    block_name: str,
+    body: MemoryBlockWriteRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
     """Write/update a named memory block."""
     try:
         from robothor.memory.blocks import write_block
 
-        result = write_block(block_name, body.content)
+        result = write_block(block_name, body.content, tenant_id=tenant_id)
         if result.get("success"):
             log_event(
                 "crm.update",
@@ -124,7 +155,7 @@ async def put_memory_block(block_name: str, body: MemoryBlockWriteRequest):
 
 
 @router.post("/blocks/{block_name}/append")
-async def append_memory_block(
+def append_memory_block(
     block_name: str, body: MemoryBlockAppendRequest, tenant_id: str = Depends(get_tenant_id)
 ):
     """Append a timestamped entry to a memory block, trimming oldest."""
@@ -146,7 +177,7 @@ async def append_memory_block(
 
 
 @router.get("/pipeline/status")
-async def pipeline_status():
+def pipeline_status(tenant_id: str = Depends(get_tenant_id)):
     """Get intelligence pipeline status — watermarks and last run times."""
     try:
         with get_connection() as conn:
@@ -155,7 +186,8 @@ async def pipeline_status():
             cur.execute(
                 "SELECT source_name, last_ingested_at, items_ingested, "
                 "last_error, error_count, updated_at "
-                "FROM ingestion_watermarks ORDER BY source_name",
+                "FROM ingestion_watermarks WHERE tenant_id = %s ORDER BY source_name",
+                (tenant_id,),
             )
             watermarks = [
                 {
@@ -172,7 +204,9 @@ async def pipeline_status():
             cur.execute(
                 "SELECT event_type, action, timestamp, status, details "
                 "FROM audit_log WHERE event_type LIKE 'pipeline.%%' "
+                "AND details->>'tenant_id' = %s "
                 "ORDER BY timestamp DESC LIMIT 10",
+                (tenant_id,),
             )
             runs = [
                 {
@@ -191,11 +225,21 @@ async def pipeline_status():
 
 
 @router.post("/pipeline/trigger/{tier}")
-async def pipeline_trigger(tier: int):
+def pipeline_trigger(
+    tier: int,
+    tenant_id: str = Depends(get_tenant_id),
+):
     """Trigger a pipeline tier on demand (1=ingest, 2=analysis, 3=deep)."""
     import subprocess
 
     from robothor.config import get_config
+    from robothor.constants import DEFAULT_TENANT
+
+    if tenant_id != DEFAULT_TENANT:
+        return JSONResponse(
+            {"error": "pipeline trigger is not available for this tenant"},
+            status_code=403,
+        )
 
     cfg = get_config()
     scripts = {
@@ -219,7 +263,12 @@ async def pipeline_trigger(tier: int):
         log_event(
             "pipeline.trigger",
             f"Tier {tier} pipeline triggered",
-            details={"tier": tier, "script": str(script), "pid": proc.pid},
+            details={
+                "tier": tier,
+                "script": str(script),
+                "pid": proc.pid,
+                "tenant_id": tenant_id,
+            },
         )
         return {"status": "triggered", "tier": tier, "pid": proc.pid}
     except Exception as e:

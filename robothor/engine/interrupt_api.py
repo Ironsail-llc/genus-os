@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from robothor.engine import session_registry
+from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def interrupt_session(run_id: str, message: str | None = None) -> bool:
     """
     session = session_registry.lookup(run_id)
     if session is None:
-        logger.debug("interrupt_session: no active session for run_id=%s", run_id)
+        logger.debug("interrupt_session: no active session for run_id=%s", sanitize_log(run_id))
         return False
     session.interrupt(message)
     _record_intervention(session, "interrupt", message)
@@ -35,7 +36,7 @@ def steer_session(run_id: str, text: str) -> bool:
     """Inject ``text`` as a steer for the live session with ``run_id``."""
     session = session_registry.lookup(run_id)
     if session is None:
-        logger.debug("steer_session: no active session for run_id=%s", run_id)
+        logger.debug("steer_session: no active session for run_id=%s", sanitize_log(run_id))
         return False
     session.steer(text)
     _record_intervention(session, "steer", text)
@@ -56,5 +57,7 @@ def _record_intervention(session: Any, kind: str, detail: str | None) -> None:
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug(
-            "intervention record failed for run_id=%s: %s", getattr(session, "run", None), exc
+            "intervention record failed for run_id=%s: %s",
+            sanitize_log(getattr(session, "run", None)),
+            sanitize_log(exc),
         )

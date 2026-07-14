@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from robothor.auth import deps, tokens
-from robothor.auth.deps import AuthContext
 from robothor.auth.tokens import TokenError
 
 
@@ -20,13 +19,25 @@ def _signing_key(monkeypatch):
 def test_verify_token_builds_context():
     t = tokens.issue_access_token("u1", "tenant-x", "admin")
     ctx = deps.verify_token(t)
-    assert ctx == AuthContext(user_id="u1", tenant_id="tenant-x", role="admin", typ="user")
+    assert ctx.user_id == "u1"
+    assert ctx.tenant_id == "tenant-x"
+    assert ctx.role == "admin"
+    assert ctx.typ == "user"
+    assert ctx.audience == "genus-bridge"
+    assert ctx.scopes == frozenset({"audit:read", "bridge:*", "engine:*", "tenant:admin"})
+    assert ctx.agent_id is None
+    assert ctx.token_id
     assert ctx.is_service is False
+    assert ctx.actor_id == "u1"
+    assert ctx.has_scope("bridge:write") is True
 
 
 def test_service_context():
     t = tokens.issue_access_token("svc", "t", "", typ="service")
-    assert deps.verify_token(t).is_service is True
+    ctx = deps.verify_token(t)
+    assert ctx.is_service is True
+    assert ctx.agent_id == "svc"
+    assert ctx.actor_id == "svc"
 
 
 def test_missing_sub_or_tid_raises():

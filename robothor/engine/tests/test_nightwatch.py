@@ -235,7 +235,7 @@ class TestInvokeClaudeCode:
             prompt="Fix the bug",
             system_prompt="You are a fixer",
             allowed_tools="Read,Edit",
-            budget=0.5,
+            fallback_model=None,
         )
         assert result.get("result") == "Done"
         assert "error" not in result
@@ -254,7 +254,7 @@ class TestInvokeClaudeCode:
             prompt="Fix",
             system_prompt="System",
             allowed_tools="Read",
-            budget=0.5,
+            fallback_model=None,
         )
         assert "error" in result
 
@@ -268,7 +268,7 @@ class TestInvokeClaudeCode:
             prompt="Fix",
             system_prompt="System",
             allowed_tools="Read",
-            budget=0.5,
+            fallback_model=None,
         )
         assert "timed out" in result["error"]
 
@@ -283,7 +283,7 @@ class TestInvokeClaudeCode:
                 prompt="Fix",
                 system_prompt="System",
                 allowed_tools="Read",
-                budget=0.5,
+                fallback_model=None,
             )
         # Check env passed to subprocess
         call_kwargs = mock_run.call_args[1]

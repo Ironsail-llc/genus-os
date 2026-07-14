@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from robothor import __version__
 from robothor.tui.client import EngineClient
 
 
@@ -18,7 +19,7 @@ def mock_client():
     client.check_health = AsyncMock(
         return_value={
             "status": "healthy",
-            "engine_version": "0.1.0",
+            "engine_version": __version__,
             "tenant_id": "test-tenant",
             "bot_configured": False,
             "agents": {

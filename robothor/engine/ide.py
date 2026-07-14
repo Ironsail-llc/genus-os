@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
@@ -43,9 +44,10 @@ def init_ide(runner: AgentRunner, config: EngineConfig) -> None:
 class IdeSession:
     """State for a single IDE WebSocket connection."""
 
-    def __init__(self, ws: WebSocket, session_id: str) -> None:
+    def __init__(self, ws: WebSocket, session_id: str, auth: AuthContext) -> None:
         self.ws = ws
         self.session_id = session_id
+        self.auth = auth
         self.history: list[dict[str, Any]] = []
         self.active_task: asyncio.Task[Any] | None = None
 
@@ -83,8 +85,24 @@ class IdeSession:
 @router.websocket("/ide/ws")
 async def ide_websocket(ws: WebSocket) -> None:
     """WebSocket endpoint for IDE extensions."""
+    if _config is None:
+        await ws.close(code=1013, reason="Engine not initialized")
+        return
+
+    from robothor.auth.tokens import TokenError
+    from robothor.engine.auth import authenticate_websocket
+
+    try:
+        auth = authenticate_websocket(ws, tenant_id=_config.tenant_id)
+    except TokenError:
+        # Authenticate before accepting so an unauthenticated peer never gets a
+        # live JSON-RPC channel.  Keep the close reason generic to avoid making
+        # token-validation details observable.
+        await ws.close(code=4401, reason="authentication required")
+        return
+
     await ws.accept()
-    session = IdeSession(ws, str(uuid.uuid4()))
+    session = IdeSession(ws, str(uuid.uuid4()), auth)
     logger.info("IDE session connected: %s", session.session_id)
 
     try:
@@ -168,6 +186,9 @@ async def _handle_chat_send(
                 on_tool=on_tool,
                 conversation_history=list(session.history) if session.history else None,
                 model_override=params.get("model"),
+                tenant_id=session.auth.tenant_id,
+                user_id=session.auth.user_id,
+                user_role=session.auth.role,
             )
 
             # Update history

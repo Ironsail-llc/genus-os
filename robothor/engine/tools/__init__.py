@@ -92,8 +92,10 @@ def _handle_sync_tool(
     agent_id: str = "",
     tenant_id: str = "",
     workspace: str = "",
+    user_id: str = "",
+    user_role: str = "",
 ) -> dict[str, Any]:
-    """Backward-compatible sync wrapper. Used by tests that call tool handlers directly."""
+    """Backward-compatible sync wrapper requiring normal dispatch identity."""
     import asyncio
 
     coro = _execute_tool(
@@ -102,6 +104,8 @@ def _handle_sync_tool(
         agent_id=agent_id,
         tenant_id=tenant_id,
         workspace=workspace,
+        user_id=user_id,
+        user_role=user_role,
     )
     # If we're already in an async context, use a new event loop in a thread
     try:

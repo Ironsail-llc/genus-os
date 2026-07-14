@@ -23,13 +23,10 @@ export function LiveCanvas() {
     setDashboardCode,
     clearDashboard,
     isUpdating,
-    submitAction,
-    resolveAction,
   } = useVisualState();
 
   const [error, setError] = useState<string | null>(null);
   const welcomeLoadedRef = useRef(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Background dashboard agent — handles conversation-driven updates
   useDashboardAgent();
@@ -113,38 +110,6 @@ export function LiveCanvas() {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [dashboardCode]);
 
-  // Handle actions from dashboard iframes
-  const handleAction = useCallback(
-    async (action: { tool: string; params: Record<string, unknown>; id: string }) => {
-      submitAction({ ...action });
-      try {
-        const res = await fetch("/api/actions/execute", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tool: action.tool, params: action.params }),
-        });
-        const data = await res.json();
-        const result = {
-          id: action.id,
-          success: res.ok && data.success,
-          data: data.data,
-          error: data.error,
-        };
-        resolveAction(result);
-        // Send result back to iframe
-        iframeRef.current?.querySelector("iframe")?.contentWindow?.postMessage(
-          { type: "robothor:action-result", ...result },
-          "*"
-        );
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Action failed";
-        const result = { id: action.id, success: false, error: errorMsg };
-        resolveAction(result);
-      }
-    },
-    [submitAction, resolveAction]
-  );
-
   const handleRetry = useCallback(() => {
     setError(null);
     clearDashboard();
@@ -213,8 +178,8 @@ export function LiveCanvas() {
 
         {/* Dashboard code rendered — always use srcdoc (HTML-first) */}
         {canvasMode === "dashboard" && dashboardCode && (
-          <div className="h-full" ref={iframeRef}>
-            <SrcdocRenderer html={dashboardCode} preSanitized onAction={handleAction} />
+          <div className="h-full">
+            <SrcdocRenderer html={dashboardCode} />
           </div>
         )}
 

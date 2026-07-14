@@ -6,14 +6,13 @@ import {
 } from "@/lib/dashboard/code-validator";
 
 describe("validateDashboardCode", () => {
-  it("accepts valid TSX with default export", () => {
+  it("rejects executable TSX with default export", () => {
     const code = `
 export default function Dashboard() {
   return <div>Hello</div>;
 }`;
     const result = validateDashboardCode(code);
-    expect(result.valid).toBe(true);
-    expect(result.errors).toHaveLength(0);
+    expect(result.valid).toBe(false);
   });
 
   it("accepts valid HTML", () => {
@@ -65,10 +64,10 @@ export default function Dashboard() {
     expect(result.valid).toBe(false);
   });
 
-  it("allows local fetch", () => {
+  it("blocks local fetch", () => {
     const code = `export default function Dashboard() { fetch("/api/health"); return <div />; }`;
     const result = validateDashboardCode(code);
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
   });
 
   it("strips markdown fences", () => {
@@ -78,10 +77,10 @@ export default function Dashboard() {
     expect(result.code).toContain("export default");
   });
 
-  it("accepts TSX without default export (HTML-first, no TSX requirement)", () => {
+  it("rejects non-HTML executable source", () => {
     const code = `function Dashboard() { return <div />; }`;
     const result = validateDashboardCode(code);
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
   });
 
   it("blocks case-insensitive eval variants", () => {
@@ -119,14 +118,14 @@ export default function Dashboard() {
     expect(validateDashboardCode(code).valid).toBe(false);
   });
 
-  it("allows setTimeout with function argument", () => {
+  it("blocks setTimeout with function argument", () => {
     const code = "setTimeout(function() { reportHeight(); }, 500)";
-    expect(validateDashboardCode(code).valid).toBe(true);
+    expect(validateDashboardCode(code).valid).toBe(false);
   });
 
-  it("validates valid data-chart specs", () => {
+  it("rejects data-chart capabilities without an executable chart runtime", () => {
     const code = `<div data-chart='{"type":"bar","labels":["A"],"datasets":[{"data":[1]}]}'></div>`;
-    expect(validateDashboardCode(code).valid).toBe(true);
+    expect(validateDashboardCode(code).valid).toBe(false);
   });
 
   it("rejects invalid JSON in data-chart", () => {

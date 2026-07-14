@@ -4,9 +4,9 @@
 # Usage:
 #   docker compose -f infra/docker-compose.yml -f infra/docker-compose.apps.yml up -d --build
 #
-# All cross-service URLs and credentials live in infra/.env. Each service
-# loads it via `env_file:`. The `environment:` block here only carries
-# Telegram gating since that uses compose substitution syntax.
+# Secrets and instance-specific settings live in infra/.env. Container DNS,
+# bind addresses, and workspace paths are explicit here so a host-oriented
+# .env cannot silently point a container back at itself.
 
 services:
   engine:
@@ -25,7 +25,21 @@ services:
       ollama:
         condition: service_started
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      ROBOTHOR_ENGINE_HOST: 0.0.0.0
+      ROBOTHOR_WORKSPACE: /workspace
+      ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
+      ROBOTHOR_ALLOW_EMPTY_FLEET: "false"
+      ROBOTHOR_MIN_AGENT_COUNT: "1"
+      ROBOTHOR_REQUIRED_AGENT_IDS: main
+      ROBOTHOR_DB_HOST: postgres
+      ROBOTHOR_DB_SSLMODE: prefer
+      ROBOTHOR_REDIS_HOST: redis
+      ROBOTHOR_OLLAMA_HOST: ollama
+      BRIDGE_URL: http://bridge:9100
+      ORCHESTRATOR_URL: http://orchestrator:9099
     # NOTE: HEAD's robothor.engine.daemon instantiates TelegramBot
     # unconditionally (aiogram crashes on empty token). To run without
     # Telegram, comment out ROBOTHOR_TELEGRAM_BOT_TOKEN in infra/.env or
@@ -35,13 +49,14 @@ services:
     volumes:
       - ../robothor:/app/robothor
       - ../crm:/app/crm
-      - ../brain:/app/brain:ro
-      - ../docs:/app/docs:ro
-      - robothor_workspace:/var/lib/robothor
+      - robothor_workspace:/workspace
+      - ../brain:/workspace/brain
+      - ../docs:/workspace/docs
+      - ../agents:/workspace/agents:ro
       - robothor_logs:/var/log/robothor
       - ${USERPROFILE:-${HOME}}/.robothor:/root/.robothor:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:18800/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:18800/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -54,18 +69,32 @@ services:
     depends_on:
       engine:
         condition: service_started
+      orchestrator:
+        condition: service_healthy
     working_dir: /app/crm/bridge
     command: ["python", "bridge_service.py"]
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      ROBOTHOR_BRIDGE_HOST: 0.0.0.0
+      ROBOTHOR_WORKSPACE: /workspace
+      ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
+      ROBOTHOR_DB_HOST: postgres
+      ROBOTHOR_DB_SSLMODE: prefer
+      ROBOTHOR_REDIS_HOST: redis
+      MEMORY_URL: http://orchestrator:9099
     ports:
       - "127.0.0.1:9100:9100"
     volumes:
       - ../robothor:/app/robothor
       - ../crm:/app/crm
-      - ../brain:/app/brain:ro
+      - robothor_workspace:/workspace
+      - ../brain:/workspace/brain
+      - ../docs:/workspace/docs
+      - ../agents:/workspace/agents:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9100/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9100/ready"]
       interval: 60s
       timeout: 30s
       retries: 5
@@ -82,14 +111,19 @@ services:
         condition: service_started
     command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      ROBOTHOR_DB_HOST: postgres
+      ROBOTHOR_DB_SSLMODE: prefer
+      ROBOTHOR_OLLAMA_HOST: ollama
     ports:
       - "127.0.0.1:9099:9099"
     volumes:
       - ../robothor:/app/robothor
       - ../crm:/app/crm
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9099/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9099/ready"]
       interval: 60s
       timeout: 30s
       retries: 5
@@ -105,15 +139,20 @@ services:
     restart: always
     depends_on:
       bridge:
-        condition: service_started
+        condition: service_healthy
       orchestrator:
-        condition: service_started
+        condition: service_healthy
+      engine:
+        condition: service_healthy
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      # Browser-visible URL (the marketplace component proxies through Next's
-      # own /api). Must reach the dashboard's published origin from a browser.
-      NEXT_PUBLIC_BRIDGE_URL: http://localhost:3000
+      BRIDGE_URL: http://bridge:9100
+      ORCHESTRATOR_URL: http://orchestrator:9099
+      ROBOTHOR_ENGINE_URL: http://engine:18800
+      # Browser traffic stays same-origin and is forwarded by the dashboard.
+      NEXT_PUBLIC_BRIDGE_URL: /api/bridge
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
@@ -128,7 +167,7 @@ services:
       - /app/node_modules
       - /app/.next
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/ready >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

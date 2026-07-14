@@ -15,3 +15,10 @@ def get_public_router() -> Any:
     from robothor.engine.dashboards.router import public_router
 
     return public_router
+
+
+def get_completion_router() -> Any:
+    """Authenticated model-completion boundary for the Next.js dashboard."""
+    from robothor.engine.dashboards.completions import router
+
+    return router

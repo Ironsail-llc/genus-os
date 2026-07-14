@@ -13,6 +13,9 @@ vi.mock("@/lib/config", () => ({
   AI_NAME: "Robothor",
   SESSION_KEY: "agent:main:webchat-user",
 }));
+vi.mock("@/lib/bridge-auth", () => ({
+  bridgeAuthHeaders: async () => ({ Authorization: "Bearer test-bridge-token" }),
+}));
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -100,8 +103,8 @@ describe("GET /api/session", () => {
     const res = await GET();
     const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body.error).toContain("Failed to read session");
+    expect(res.status).toBe(502);
+    expect(body.error).toBe("Session backend unavailable");
   });
 
   it("handles fetch exceptions", async () => {
@@ -110,8 +113,9 @@ describe("GET /api/session", () => {
     const res = await GET();
     const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body.error).toContain("Connection refused");
+    expect(res.status).toBe(502);
+    expect(body.error).toBe("Session backend unavailable");
+    expect(body.error).not.toContain("Connection refused");
   });
 });
 
@@ -138,7 +142,7 @@ describe("POST /api/session", () => {
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/memory-blocks/helm_state");
     expect(opts.method).toBe("PUT");
-    expect(opts.headers["X-Agent-Id"]).toBe("helm-user");
+    expect(opts.headers.Authorization).toBe("Bearer test-bridge-token");
 
     const sentBody = JSON.parse(opts.body);
     const state = JSON.parse(sentBody.content);
@@ -171,7 +175,7 @@ describe("POST /api/session", () => {
     expect(body.error).toContain("too large");
   });
 
-  it("forwards bridge errors", async () => {
+  it("does not forward bridge error details", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -181,7 +185,8 @@ describe("POST /api/session", () => {
     const res = await POST(makeRequest({ html: "<div>Test</div>" }));
     const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body.error).toContain("Bridge returned 500");
+    expect(res.status).toBe(502);
+    expect(body.error).toBe("Session backend unavailable");
+    expect(body.error).not.toContain("Internal Server Error");
   });
 });

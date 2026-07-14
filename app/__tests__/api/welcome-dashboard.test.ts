@@ -8,8 +8,13 @@ vi.mock("@/lib/config", () => ({
   SESSION_KEY: "agent:main:webchat-user",
 }));
 
-const mockFetch = vi.fn();
-vi.stubGlobal("fetch", mockFetch);
+const { mockDashboardCompletion } = vi.hoisted(() => ({
+  mockDashboardCompletion: vi.fn(),
+}));
+
+vi.mock("@/lib/engine/server-client", () => ({
+  getEngineClient: () => ({ dashboardCompletion: mockDashboardCompletion }),
+}));
 
 vi.mock("@/lib/dashboard/welcome-context", () => ({
   fetchWelcomeContext: vi.fn().mockResolvedValue({
@@ -27,20 +32,9 @@ describe("POST /api/dashboard/welcome", () => {
   });
 
   it("returns JSON with html and type on success", async () => {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"<div class=\\"glass\\">Welcome</div>"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    mockFetch.mockResolvedValue({ ok: true, body: stream });
+    mockDashboardCompletion.mockResolvedValue(
+      '<div class="glass">Welcome</div>',
+    );
 
     const res = await POST();
     expect(res.status).toBe(200);
@@ -49,14 +43,17 @@ describe("POST /api/dashboard/welcome", () => {
     const body = JSON.parse(text.trim());
     expect(body.html).toContain("Welcome");
     expect(body.type).toBeTruthy();
+    expect(mockDashboardCompletion).toHaveBeenCalledWith(
+      "render",
+      expect.stringContaining("read-only Genus OS dashboard"),
+      expect.stringContaining("Real Data"),
+    );
   });
 
-  it("returns error JSON on OpenRouter failure", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: () => Promise.resolve("Server error"),
-    });
+  it("returns generic error JSON on Engine completion failure", async () => {
+    mockDashboardCompletion.mockRejectedValue(
+      new Error("provider response contained sk-sensitive-value"),
+    );
 
     const res = await POST();
     expect(res.status).toBe(200);
@@ -64,24 +61,11 @@ describe("POST /api/dashboard/welcome", () => {
     const text = await res.text();
     const body = JSON.parse(text.trim());
     expect(body.error).toBe("Dashboard service temporarily unavailable");
-    expect(body.error).not.toContain("OpenRouter");
+    expect(body.error).not.toContain("sk-sensitive-value");
   });
 
   it("returns error JSON if generated code fails validation", async () => {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"eval(\\"alert(1)\\")"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    mockFetch.mockResolvedValue({ ok: true, body: stream });
+    mockDashboardCompletion.mockResolvedValue('eval("alert(1)")');
 
     const res = await POST();
     expect(res.status).toBe(200);
@@ -92,14 +76,14 @@ describe("POST /api/dashboard/welcome", () => {
   });
 
   it("returns error JSON on unexpected error with sanitized message", async () => {
-    mockFetch.mockRejectedValue(new Error("Network timeout"));
+    mockDashboardCompletion.mockRejectedValue(new Error("Network timeout"));
 
     const res = await POST();
     expect(res.status).toBe(200);
 
     const text = await res.text();
     const body = JSON.parse(text.trim());
-    expect(body.error).toBe("Dashboard generation failed");
+    expect(body.error).toBe("Dashboard service temporarily unavailable");
     expect(body.error).not.toContain("Network timeout");
   });
 });

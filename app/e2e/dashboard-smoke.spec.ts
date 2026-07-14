@@ -4,7 +4,7 @@
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
-const BASE_URL = "http://localhost:3004";
+const BASE_URL = "/";
 
 /** Set up standard mocks so tests are deterministic (no real engine calls). */
 async function setupMocks(page: Page) {

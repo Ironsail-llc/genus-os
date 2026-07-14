@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+
+# FastAPI resolves request-body models at route registration time. Keeping
+# these imports behind TYPE_CHECKING makes the body look like an unresolved
+# string annotation and FastAPI incorrectly treats it as a required query
+# parameter.
+from models import (  # noqa: TC002
+    CreatePersonRequest,
+    MergeRequest,
+    UpdateCompanyRequest,
+    UpdatePersonRequest,
+)
 
 from robothor.crm.dal import (
     create_person,
@@ -32,14 +41,6 @@ from robothor.crm.dal import (
     update_person,
 )
 
-if TYPE_CHECKING:
-    from models import (
-        CreatePersonRequest,
-        MergeRequest,
-        UpdateCompanyRequest,
-        UpdatePersonRequest,
-    )
-
 router = APIRouter(prefix="/api", tags=["people", "companies"])
 
 
@@ -47,7 +48,7 @@ router = APIRouter(prefix="/api", tags=["people", "companies"])
 
 
 @router.get("/people")
-async def api_list_people(
+def api_list_people(
     search: str | None = Query(None),
     limit: int = Query(20),
     tenant_id: str = Depends(get_tenant_id),
@@ -57,7 +58,7 @@ async def api_list_people(
 
 
 @router.post("/people")
-async def api_create_person(
+def api_create_person(
     body: CreatePersonRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -73,7 +74,7 @@ async def api_create_person(
 
 
 @router.get("/people/{person_id}")
-async def api_get_person(
+def api_get_person(
     person_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -84,7 +85,7 @@ async def api_get_person(
 
 
 @router.patch("/people/{person_id}")
-async def api_update_person(
+def api_update_person(
     person_id: str,
     body: UpdatePersonRequest,
     tenant_id: str = Depends(get_tenant_id),
@@ -121,7 +122,7 @@ async def api_update_person(
 
 
 @router.get("/people/{person_id}/timeline")
-async def api_person_timeline(
+def api_person_timeline(
     person_id: str,
     limit: int = Query(50, ge=1, le=500),
     channels: list[str] | None = Query(None),
@@ -132,7 +133,7 @@ async def api_person_timeline(
 
 
 @router.get("/people/{person_id}/summary")
-async def api_person_summary(
+def api_person_summary(
     person_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -140,7 +141,7 @@ async def api_person_summary(
 
 
 @router.get("/people/{person_id}/messages")
-async def api_person_messages(
+def api_person_messages(
     person_id: str,
     channel: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
@@ -151,7 +152,7 @@ async def api_person_messages(
 
 
 @router.get("/people/{person_id}/calls")
-async def api_person_calls(
+def api_person_calls(
     person_id: str,
     limit: int = Query(100, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -160,7 +161,7 @@ async def api_person_calls(
 
 
 @router.get("/people/{person_id}/events")
-async def api_person_events(
+def api_person_events(
     person_id: str,
     limit: int = Query(100, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -169,7 +170,7 @@ async def api_person_events(
 
 
 @router.get("/people/{person_id}/tasks")
-async def api_person_tasks(
+def api_person_tasks(
     person_id: str,
     limit: int = Query(100, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -178,7 +179,7 @@ async def api_person_tasks(
 
 
 @router.get("/people/{person_id}/notes")
-async def api_person_notes(
+def api_person_notes(
     person_id: str,
     limit: int = Query(100, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -187,7 +188,7 @@ async def api_person_notes(
 
 
 @router.get("/people/{person_id}/runs")
-async def api_person_runs(
+def api_person_runs(
     person_id: str,
     limit: int = Query(100, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -196,7 +197,7 @@ async def api_person_runs(
 
 
 @router.get("/people/{person_id}/memory")
-async def api_person_memory(
+def api_person_memory(
     person_id: str,
     limit: int = Query(50, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -205,7 +206,7 @@ async def api_person_memory(
 
 
 @router.get("/people/{person_id}/contact-360")
-async def api_person_contact_360(
+def api_person_contact_360(
     person_id: str,
     timeline_limit: int = Query(50, ge=1, le=500),
     tenant_id: str = Depends(get_tenant_id),
@@ -217,7 +218,7 @@ async def api_person_contact_360(
 
 
 @router.delete("/people/{person_id}")
-async def api_delete_person(
+def api_delete_person(
     person_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -227,7 +228,7 @@ async def api_delete_person(
 
 
 @router.post("/people/merge")
-async def api_merge_people(
+def api_merge_people(
     body: MergeRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -244,7 +245,7 @@ async def api_merge_people(
 
 
 @router.get("/companies")
-async def api_list_companies(
+def api_list_companies(
     search: str | None = Query(None),
     limit: int = Query(50),
     tenant_id: str = Depends(get_tenant_id),
@@ -254,7 +255,7 @@ async def api_list_companies(
 
 
 @router.get("/companies/{company_id}")
-async def api_get_company(
+def api_get_company(
     company_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -265,7 +266,7 @@ async def api_get_company(
 
 
 @router.patch("/companies/{company_id}")
-async def api_update_company(
+def api_update_company(
     company_id: str,
     body: UpdateCompanyRequest,
     tenant_id: str = Depends(get_tenant_id),
@@ -291,7 +292,7 @@ async def api_update_company(
 
 
 @router.delete("/companies/{company_id}")
-async def api_delete_company(
+def api_delete_company(
     company_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -301,7 +302,7 @@ async def api_delete_company(
 
 
 @router.post("/companies/merge")
-async def api_merge_companies(
+def api_merge_companies(
     body: MergeRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):

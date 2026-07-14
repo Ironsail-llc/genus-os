@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from deps import get_tenant_id
-from fastapi import APIRouter, Depends, Header, Query
+from deps import get_actor_id, get_tenant_id
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from models import CreateRoutineRequest, UpdateRoutineRequest
+from models import CreateRoutineRequest, UpdateRoutineRequest  # noqa: TC002
 
 from robothor.crm.dal import (
     advance_routine,
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api", tags=["routines"])
 
 
 @router.get("/routines")
-async def api_list_routines(
+def api_list_routines(
     activeOnly: bool = Query(True),
     limit: int = Query(50),
     tenant_id: str = Depends(get_tenant_id),
@@ -31,9 +31,9 @@ async def api_list_routines(
 
 
 @router.post("/routines")
-async def api_create_routine(
+def api_create_routine(
     body: CreateRoutineRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
     if not body.title:
@@ -60,7 +60,7 @@ async def api_create_routine(
         tags=body.tags,
         person_id=body.personId,
         company_id=body.companyId,
-        created_by=x_agent_id or "helm-user",
+        created_by=actor_id or "helm-user",
         tenant_id=tenant_id,
     )
     if routine_id:
@@ -80,7 +80,7 @@ async def api_create_routine(
 
 
 @router.patch("/routines/{routine_id}")
-async def api_update_routine(
+def api_update_routine(
     routine_id: str,
     body: UpdateRoutineRequest,
     tenant_id: str = Depends(get_tenant_id),
@@ -122,7 +122,7 @@ async def api_update_routine(
 
 
 @router.delete("/routines/{routine_id}")
-async def api_delete_routine(
+def api_delete_routine(
     routine_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -132,7 +132,7 @@ async def api_delete_routine(
 
 
 @router.post("/routines/trigger")
-async def api_manual_trigger(
+def api_manual_trigger(
     tenant_id: str = Depends(get_tenant_id),
 ):
     """Manually trigger due routines (for testing)."""

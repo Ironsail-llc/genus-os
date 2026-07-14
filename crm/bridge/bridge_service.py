@@ -2,8 +2,8 @@
 Genus OS Bridge Service — Connects agents, CRM, and Memory System.
 
 FastAPI app on port 9100. All CRM operations go through robothor.crm.dal.
-Agent RBAC enforced via X-Agent-Id header middleware.
-Tenant isolation via X-Tenant-Id header middleware.
+Agent RBAC and tenant isolation are derived from verified token claims.
+Legacy identity headers require explicit loopback-only insecure development mode.
 
 OpenAPI docs: http://localhost:9100/docs
 """
@@ -102,6 +102,9 @@ async def _routine_trigger_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
+    from robothor.auth.runtime import validate_auth_configuration
+
+    validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
     http_client = httpx.AsyncClient(timeout=30.0)
     trigger_task = asyncio.create_task(_routine_trigger_loop())
     yield
@@ -124,7 +127,8 @@ app = FastAPI(
 
 # Middleware (applied in reverse order — correlation runs first, then auth,
 # then tenant, then RBAC). AuthMiddleware verifies a bridge-issued token and
-# sets request.state.auth; it ships in shadow mode (GENUS_AUTH_ENFORCE off).
+# sets request.state.auth. Authentication is fail-closed unless the bridge is
+# explicitly placed in loopback-only insecure development mode.
 app.add_middleware(RBACMiddleware)
 app.add_middleware(TenantMiddleware)
 app.add_middleware(AuthMiddleware)

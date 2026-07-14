@@ -17,7 +17,8 @@ spec:
       labels:
         {{- include "genus-os.labels" (dict "root" . "component" "nats") | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "genus-os.serviceAccountName" . }}
+      serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" . "component" "nats") }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
       {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "nats") }}

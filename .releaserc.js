@@ -36,9 +36,8 @@ if (branch === 'main') {
 }
 
 plugins.push(
-  // Bump helm/genus-os/values-production.yaml's global.imageTag to the
-  // new vX.Y.Z on release. scripts/update-helm-values.sh handles the
-  // branch → file mapping (main → values-production.yaml).
+  // Synchronize release metadata. Deployment image tags are promoted by the
+  // workflow only after both release images have passed their blocking scan.
   ['@semantic-release/exec', {
     prepareCmd: 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name}',
   }],
@@ -48,7 +47,11 @@ plugins.push(
       ...(branch === 'main' ? ['CHANGELOG.md'] : []),
       'package.json',
       'package-lock.json',
-      'helm/genus-os/values-production.yaml',
+      'pyproject.toml',
+      'uv.lock',
+      'robothor/__init__.py',
+      'app/package.json',
+      'helm/genus-os/Chart.yaml',
     ],
     message: 'chore(release): ${nextRelease.version} [skip ci]',
   }],

@@ -162,7 +162,11 @@ class TestRecallNodeHandler:
 
         with patch.dict(os.environ, {"ROBOTHOR_RIP_13_ENABLED": "1"}, clear=True):
             out = await _execute_tool(
-                "recall_node", {"node_id": "n1"}, run_id="run-disp", tenant_id="t1"
+                "recall_node",
+                {"node_id": "n1"},
+                run_id="run-disp",
+                tenant_id="t1",
+                user_role="service",
             )
         assert out["content"] == "DISPATCHED FULL OUTPUT"
         sm.clear_graph("run-disp")

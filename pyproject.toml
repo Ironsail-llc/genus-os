@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "0.1.0"
+version = "1.10.0"
 description = "Genus OS — An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
 readme = "README.md"
 license = "MIT"
@@ -29,17 +29,22 @@ dependencies = [
     "redis~=5.0",
     "httpx~=0.27",
     "pydantic~=2.0",
-    "numpy~=1.26",
+    # ONNX 1.22+ requires ml-dtypes, whose Python 3.13+ wheels require NumPy
+    # 2.x. Keep the stable 1.26 ABI on 3.11/3.12 while allowing the supported
+    # NumPy 2 line on 3.13+.
+    "numpy>=1.26,<2; python_version < '3.13'",
+    "numpy>=2.1,<3; python_version >= '3.13'",
     "requests~=2.31",
     "pyyaml~=6.0",
     # Floor pins past the LiteLLM SQL-injection advisory (GHSA-vh4m-vp44-3rgq,
     # fixed in 1.61.17). No upper cap below 2.0: litellm 1.84+ relaxed its
     # transitive aiohttp pin again, so the latest 1.x (1.87.0) resolves cleanly
-    # with aiohttp>=3.13.4.
+    # with aiohttp>=3.13.4. The 1.84 floor also clears later 2026 advisories.
     "litellm>=1.84.0,<2.0",
     "aiohttp>=3.14.1",
     "aiogram~=3.10",
     "apscheduler~=3.10",
+    "croniter~=6.0",
     "html2text~=2024.2",
     "cryptography>=48.0.1",
     "structlog~=24.0",
@@ -48,10 +53,9 @@ dependencies = [
 
 [project.optional-dependencies]
 api = [
-    # fastapi 0.136.3 was a supply-chain attack (OSV MAL-2026-4750, malicious
-    # code uploaded to PyPI 2026-05-26). Exclude that exact version; safe
-    # before and after. Remove the exclusion when PyPI yanks it.
-    "fastapi>=0.115,!=0.136.3",
+    # This floor also excludes the malicious FastAPI 0.136.3 release and pulls
+    # the patched Starlette 1.3 line.
+    "fastapi>=0.139",
     "uvicorn[standard]>=0.32",
     # Auth: bridge-issued JWT sessions + password hashing (break-glass admin).
     # pyjwt/bcrypt already resolve transitively; declare them as first-class.
@@ -61,6 +65,9 @@ api = [
 vision = [
     "ultralytics>=8.0",
     "insightface>=0.7",
+    # InsightFace leaves ONNX unconstrained; require the first release that
+    # clears the 2026 parser and validation advisories.
+    "onnx>=1.22.0",
     "onnxruntime>=1.17",
     "opencv-python>=4.8",
 ]
@@ -102,14 +109,93 @@ robothor = "robothor.cli:main"
 
 [project.urls]
 Homepage = "https://genusos.dev"
-Repository = "https://github.com/genusos/genusos"
-Issues = "https://github.com/genusos/genusos/issues"
+Repository = "https://github.com/Ironsail-llc/genus-os"
+Issues = "https://github.com/Ironsail-llc/genus-os/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["robothor"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"infra/migrations" = "robothor/migrations"
+"infra/migrations" = "robothor/migrations/infra"
+"crm/migrations/001_crm_tables.sql" = "robothor/migrations/crm/001_crm_tables.sql"
+"crm/migrations/004_telemetry_table.sql" = "robothor/migrations/crm/004_telemetry_table.sql"
+"crm/migrations/005_task_coordination.sql" = "robothor/migrations/crm/005_task_coordination.sql"
+"crm/migrations/006_task_state_machine.sql" = "robothor/migrations/crm/006_task_state_machine.sql"
+"crm/migrations/007_routines.sql" = "robothor/migrations/crm/007_routines.sql"
+"crm/migrations/008_multi_tenancy.sql" = "robothor/migrations/crm/008_multi_tenancy.sql"
+"crm/migrations/009_agent_notifications.sql" = "robothor/migrations/crm/009_agent_notifications.sql"
+"crm/migrations/010_health_tables.sql" = "robothor/migrations/crm/010_health_tables.sql"
+"crm/migrations/011_agent_engine.sql" = "robothor/migrations/crm/011_agent_engine.sql"
+"crm/migrations/012_webchat_trigger_type.sql" = "robothor/migrations/crm/012_webchat_trigger_type.sql"
+"crm/migrations/013_workflow_engine.sql" = "robothor/migrations/crm/013_workflow_engine.sql"
+"crm/migrations/014_engine_enhancements.sql" = "robothor/migrations/crm/014_engine_enhancements.sql"
+"crm/migrations/015_chat_history.sql" = "robothor/migrations/crm/015_chat_history.sql"
+"crm/migrations/015b_supervisor_to_main.sql" = "robothor/migrations/crm/015b_supervisor_to_main.sql"
+"crm/migrations/016_sub_agents.sql" = "robothor/migrations/crm/016_sub_agents.sql"
+"crm/migrations/017_timezone_new_york.sql" = "robothor/migrations/crm/017_timezone_new_york.sql"
+"crm/migrations/018_migration_tracking.sql" = "robothor/migrations/crm/018_migration_tracking.sql"
+"crm/migrations/019_unified_session.sql" = "robothor/migrations/crm/019_unified_session.sql"
+"crm/migrations/020_plan_mode.sql" = "robothor/migrations/crm/020_plan_mode.sql"
+"crm/migrations/021_deep_reason.sql" = "robothor/migrations/crm/021_deep_reason.sql"
+"crm/migrations/022_tool_events.sql" = "robothor/migrations/crm/022_tool_events.sql"
+"crm/migrations/023_memory_v4_schema.sql" = "robothor/migrations/crm/023_memory_v4_schema.sql"
+"crm/migrations/024_requires_human.sql" = "robothor/migrations/crm/024_requires_human.sql"
+"crm/migrations/025_federation.sql" = "robothor/migrations/crm/025_federation.sql"
+"crm/migrations/026_consolidation_tracking.sql" = "robothor/migrations/crm/026_consolidation_tracking.sql"
+"crm/migrations/027_auto_task.sql" = "robothor/migrations/crm/027_auto_task.sql"
+"crm/migrations/028_agent_teams.sql" = "robothor/migrations/crm/028_agent_teams.sql"
+"crm/migrations/029_cache_token_tracking.sql" = "robothor/migrations/crm/029_cache_token_tracking.sql"
+"crm/migrations/030_checkpoint_schema_version.sql" = "robothor/migrations/crm/030_checkpoint_schema_version.sql"
+"crm/migrations/031_add_escalation_type.sql" = "robothor/migrations/crm/031_add_escalation_type.sql"
+"crm/migrations/032_run_status_skipped.sql" = "robothor/migrations/crm/032_run_status_skipped.sql"
+"crm/migrations/032a_seed_legacy_primary_tenant.sql" = "robothor/migrations/crm/032a_seed_legacy_primary_tenant.sql"
+"crm/migrations/033_memory_multi_tenancy.sql" = "robothor/migrations/crm/033_memory_multi_tenancy.sql"
+"crm/migrations/034_outcome_assessment.sql" = "robothor/migrations/crm/034_outcome_assessment.sql"
+"crm/migrations/035_retention_indexes.sql" = "robothor/migrations/crm/035_retention_indexes.sql"
+"crm/migrations/036_devops_metrics.sql" = "robothor/migrations/crm/036_devops_metrics.sql"
+"crm/migrations/037_access_control.sql" = "robothor/migrations/crm/037_access_control.sql"
+"crm/migrations/038_audit_user_id.sql" = "robothor/migrations/crm/038_audit_user_id.sql"
+"crm/migrations/039_operator_identity.sql" = "robothor/migrations/crm/039_operator_identity.sql"
+"crm/migrations/040_memory_episodes.sql" = "robothor/migrations/crm/040_memory_episodes.sql"
+"crm/migrations/041_memory_procedures.sql" = "robothor/migrations/crm/041_memory_procedures.sql"
+"crm/migrations/042_chat_embeddings.sql" = "robothor/migrations/crm/042_chat_embeddings.sql"
+"crm/migrations/043_fact_outcomes.sql" = "robothor/migrations/crm/043_fact_outcomes.sql"
+"crm/migrations/044_agent_breadcrumbs.sql" = "robothor/migrations/crm/044_agent_breadcrumbs.sql"
+"crm/migrations/045_channel_bus.sql" = "robothor/migrations/crm/045_channel_bus.sql"
+"crm/migrations/046_person_linkage.sql" = "robothor/migrations/crm/046_person_linkage.sql"
+"crm/migrations/046b_orphan_cleanup.sql" = "robothor/migrations/crm/046b_orphan_cleanup.sql"
+"crm/migrations/047_messaging_kernel.sql" = "robothor/migrations/crm/047_messaging_kernel.sql"
+"crm/migrations/048_voice_calendar.sql" = "robothor/migrations/crm/048_voice_calendar.sql"
+"crm/migrations/049_timeline_activity.sql" = "robothor/migrations/crm/049_timeline_activity.sql"
+"crm/migrations/050_task_planner_fields.sql" = "robothor/migrations/crm/050_task_planner_fields.sql"
+"crm/migrations/051_task_followup.sql" = "robothor/migrations/crm/051_task_followup.sql"
+"crm/migrations/052_multi_tenant_telegram_users.sql" = "robothor/migrations/crm/052_multi_tenant_telegram_users.sql"
+"crm/migrations/062_step_type_warmup_phase.sql" = "robothor/migrations/crm/062_step_type_warmup_phase.sql"
+"crm/migrations/063_benchmark_results.sql" = "robothor/migrations/crm/063_benchmark_results.sql"
+"crm/migrations/065_session_goal_meta.sql" = "robothor/migrations/crm/065_session_goal_meta.sql"
+"crm/migrations/066_session_goal_meta_v2.sql" = "robothor/migrations/crm/066_session_goal_meta_v2.sql"
+"crm/migrations/067_task_history_kind_schema.sql" = "robothor/migrations/crm/067_task_history_kind_schema.sql"
+"crm/migrations/068_curator_state.sql" = "robothor/migrations/crm/068_curator_state.sql"
+"crm/migrations/069_memory_facts_drift.sql" = "robothor/migrations/crm/069_memory_facts_drift.sql"
+"crm/migrations/070_user_cronjobs.sql" = "robothor/migrations/crm/070_user_cronjobs.sql"
+"crm/migrations/071_memory_vault.sql" = "robothor/migrations/crm/071_memory_vault.sql"
+"crm/migrations/071_user_accounts.sql" = "robothor/migrations/crm/071_user_accounts.sql"
+"crm/migrations/072_memory_intents.sql" = "robothor/migrations/crm/072_memory_intents.sql"
+"crm/migrations/073_memory_facts_active_hnsw.sql" = "robothor/migrations/crm/073_memory_facts_active_hnsw.sql"
+"crm/migrations/074_memory_active_hnsw_partials.sql" = "robothor/migrations/crm/074_memory_active_hnsw_partials.sql"
+"crm/migrations/075_operator_signals.sql" = "robothor/migrations/crm/075_operator_signals.sql"
+"crm/migrations/076_judge_reviewer_type.sql" = "robothor/migrations/crm/076_judge_reviewer_type.sql"
+"crm/migrations/077_message_reactions_unique.sql" = "robothor/migrations/crm/077_message_reactions_unique.sql"
+"crm/migrations/078_memory_facts_content_hash_unique.sql" = "robothor/migrations/crm/078_memory_facts_content_hash_unique.sql"
+"crm/migrations/079_guardrail_event_modes.sql" = "robothor/migrations/crm/079_guardrail_event_modes.sql"
+"crm/migrations/080_judge_reviewer_type.sql" = "robothor/migrations/crm/080_judge_reviewer_type.sql"
+
+[tool.coverage.run]
+source = ["robothor"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+skip_empty = true
 
 [tool.ruff]
 target-version = "py311"
@@ -125,8 +211,8 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 "conftest.py" = ["SIM105"]
 "crm/bridge/*.py" = ["E402", "N815", "SIM105"]
 "crm/bridge/models.py" = ["N815"]
-"crm/bridge/routers/*.py" = ["N803", "B008"]  # B008: FastAPI Query/Depends defaults are idiomatic
-"crm/bridge/tests/*.py" = ["E402"]
+"crm/bridge/routers/*.py" = ["N803", "B008", "TC002"]  # FastAPI resolves request models at runtime
+"crm/bridge/tests/*.py" = ["E402", "DTZ001"]
 "crm/tests/*.py" = ["E402"]
 # Engine modules with legitimate append-in-loop patterns (conditional builds,
 # structured record construction) — PERF401 style suggestion not worth the rewrite

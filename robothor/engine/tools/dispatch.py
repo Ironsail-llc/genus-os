@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -269,15 +270,15 @@ async def _execute_tool(
     servers), then falls through to hardcoded engine handlers.
     """
     # ── Permission check (single enforcement gate) ──
-    if user_role:
-        from robothor.engine.permissions import check_tool_permission
+    from robothor.engine.permissions import check_tool_permission
 
-        denied = check_tool_permission(user_role, tenant_id, name)
-        if denied:
-            _audit_tool_call(
-                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
-            )
-            return {"error": denied}
+    # Permission lookup is database-backed and synchronous.  Keep it off the
+    # Engine event loop so one slow RBAC query cannot stall unrelated chat,
+    # health, or agent sessions.
+    denied = await asyncio.to_thread(check_tool_permission, user_role, tenant_id, name)
+    if denied:
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
+        return {"error": denied}
 
     # ── Per-task tool whitelist (Rip 1) ──
     # If a parent forked us with a restricted toolset (e.g. the

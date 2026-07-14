@@ -42,6 +42,7 @@ def test_system_trigger_allowlist_membership():
         TriggerType.WORKFLOW,
         TriggerType.SUB_AGENT,
         TriggerType.FEDERATION,
+        TriggerType.CHANNEL_EVENT,
     ):
         assert t in _SYSTEM_TRIGGER_TYPES
     # Interactive surfaces must NOT fall through to the permissive service_role.
@@ -52,9 +53,26 @@ def test_system_trigger_allowlist_membership():
         TriggerType.IDE,
         TriggerType.MANUAL,
         TriggerType.WEBHOOK,
-        TriggerType.CHANNEL_EVENT,
     ):
         assert t not in _SYSTEM_TRIGGER_TYPES
+
+
+@pytest.mark.asyncio
+async def test_interactive_run_without_identity_fails_closed(
+    runner, sample_agent_config, monkeypatch
+):
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
+
+    run = await runner.execute(
+        "test-agent",
+        "go",
+        trigger_type=TriggerType.WEBCHAT,
+        agent_config=sample_agent_config,
+    )
+
+    assert run.status == RunStatus.FAILED
+    assert "Authentication identity required" in run.error_message
 
 
 @pytest.mark.asyncio
@@ -117,6 +135,10 @@ async def test_rbac_gate_runs_only_for_system_triggers(
     assert run.status == RunStatus.COMPLETED
     # The service_role gate should be consulted only for system triggers.
     assert (calls["n"] > 0) is expect_gated
+    if expect_gated:
+        dispatch_kwargs = runner.registry.execute.await_args.kwargs
+        assert dispatch_kwargs["user_id"] == "service:test-agent"
+        assert dispatch_kwargs["user_role"] == sample_agent_config.service_role
 
 
 @pytest.mark.asyncio
