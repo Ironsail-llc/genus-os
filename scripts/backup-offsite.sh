@@ -43,21 +43,12 @@ command -v rclone >/dev/null 2>&1 || fail "rclone is not installed"
 [[ -n "$REMOTE" ]] || fail "ROBOTHOR_OFFSITE_REMOTE is not set — no offsite destination configured"
 [[ -d "$SOURCE" ]] || fail "backup source directory not found: $SOURCE"
 
-# ── Verify-only: confirm what is already offsite is intact ──────────────────
-if [[ "$VERIFY_ONLY" == "1" ]]; then
-    log "verifying offsite copy at $REMOTE"
-    if rclone check "$SOURCE" "$REMOTE/db" --one-way --checkers 4 >>"$LOG" 2>&1; then
-        log "verification OK — offsite copy matches source"
-        exit 0
-    fi
-    fail "verification MISMATCH — the offsite copy does not match the source"
-fi
-
-# ── Replicate the database dumps ────────────────────────────────────────────
-# Upload ONLY the generations we intend to retain. Copying the whole directory
-# and pruning afterwards means shipping (and paying for) dumps that are deleted
-# minutes later — at ~1.1 GB and ~4.5 MB/s per dump that is roughly 45 wasted
-# minutes a night on a 17-dump source.
+# ── Which generations we intend to retain ───────────────────────────────────
+# Both the upload and the verification must operate on the same set. Verifying
+# the WHOLE source against a remote that only holds KEEP generations reports
+# every older local dump as a "difference" and fails on a perfectly healthy
+# backup — a weekly false alarm the operator would learn to ignore, which is
+# how a real backup failure gets missed.
 mapfile -t keep_files < <(
     find "$SOURCE" -maxdepth 1 -name "*.sql.gz" -printf "%f\n" 2>/dev/null | sort | tail -n "$KEEP"
 )
@@ -70,6 +61,21 @@ for f in "${keep_files[@]}"; do
     include_args+=(--include "$f")
 done
 
+# ── Verify-only: confirm what is already offsite is intact ──────────────────
+if [[ "$VERIFY_ONLY" == "1" ]]; then
+    log "verifying ${#keep_files[@]} retained generations offsite at $REMOTE"
+    if rclone check "$SOURCE" "$REMOTE/db" "${include_args[@]}" --one-way --checkers 4 >>"$LOG" 2>&1; then
+        log "verification OK — offsite copy matches source"
+        exit 0
+    fi
+    fail "verification MISMATCH — the offsite copy does not match the source"
+fi
+
+# ── Replicate the database dumps ────────────────────────────────────────────
+# Upload ONLY the generations we intend to retain. Copying the whole directory
+# and pruning afterwards means shipping (and paying for) dumps that are deleted
+# minutes later — at ~1.1 GB and ~4.5 MB/s per dump that is roughly 45 wasted
+# minutes a night on a 17-dump source.
 log "replicating ${#keep_files[@]} newest dumps (of $(find "$SOURCE" -maxdepth 1 -name '*.sql.gz' | wc -l)): $SOURCE -> $REMOTE/db"
 rclone copy "$SOURCE" "$REMOTE/db" "${include_args[@]}" --transfers 2 --checkers 4 >>"$LOG" 2>&1 \
     || fail "rclone copy of database dumps failed"
