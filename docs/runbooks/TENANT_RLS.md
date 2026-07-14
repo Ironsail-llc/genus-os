@@ -56,9 +56,40 @@ psql -U robothor_app -d robothor_memory -c \
 Rollback: unset `ROBOTHOR_RLS_ENABLED` (policy goes permissive again) and/or point
 `ROBOTHOR_DB_USER` back. The policy itself is safe to leave in place.
 
-## Why it isn't enabled yet
+## No new secret is needed
 
-Switching the engine's database user on a live single-box instance is the kind of
-change that takes production down if a grant is missing. The migrations, the
-connection support, and the proof are all in place; flipping it deserves a
-maintenance window and the verification query above — not a drive-by.
+The services connect over the **Unix socket with peer auth** (`ROBOTHOR_DB_HOST=/var/run/postgresql`),
+so `robothor_app` needs no password — map the OS user to the role instead:
+
+```
+# pg_ident.conf
+robothor_map    <os-user>       robothor_app
+
+# pg_hba.conf — MUST come before the generic `local all all peer` line
+local   all   robothor_app   peer map=robothor_map
+```
+
+`systemctl reload postgresql`, then `psql -U robothor_app -d robothor_memory` should
+connect with no prompt. This avoids provisioning a DB password through SOPS.
+
+## Status: enabled 2026-07-14
+
+Rehearsed first on a scratch database restored from the nightly dump — never on
+production. As `robothor_app`, scoped to `robothor-primary`: reads returned exactly
+one tenant, writes to the *own* tenant succeeded, and a write to another tenant was
+refused (`new row violates row-level security policy`). Every table was readable and
+every sequence usable, so migration 082's grants are sufficient. The app uses no
+`TRUNCATE` and no runtime DDL, which 082 does **not** grant.
+
+Live on: **engine, bridge, delphi-engine** (`ROBOTHOR_DB_USER=robothor_app`).
+
+## What is NOT yet isolated
+
+`robothor-app` (dashboard), `robothor-orchestrator` and `robothor-vision` use a
+different variable set — `PG_USER=philip` over TCP — so they still connect as a
+**superuser and bypass RLS**. They are read-mostly, but until they are switched the
+isolation is real for the agent-execution path and *not* for the dashboard. Moving
+them needs either a `robothor_app` password (they connect to `127.0.0.1`, not the
+socket) or a switch to the socket + peer map above.
+
+Do not describe this instance as tenant-isolated end-to-end until that is done.
