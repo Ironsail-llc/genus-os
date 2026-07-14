@@ -266,48 +266,71 @@ def test_set_flag_writes_audit_and_notifies(pg_scratch_store):
     assert rows[-1]["actor"] == "operator:philip"
 ```
 
-Add a `pg_scratch_store` fixture (a thin wrapper the tests use to seed/read the scratch DB) to `robothor/tests/conftest.py`:
+**Test-fixture convention (LEARNED IN TASK 1 — follow it exactly):** DB tests
+must be marked `pytestmark = pytest.mark.integration` and use the repo's existing
+`db_conn` / `db_cursor` fixtures (re-exported repo-wide from
+`tests/conftest_integration.py` via the root `conftest.py`, backed by the
+disposable `robothor_test` DB, rollback-on-teardown). Do NOT hand-roll a fixture
+that connects to `robothor_memory`, and NEVER call `.commit()` against it — that
+writes to the production database and CI's unit lane (no Postgres) would break on
+an unmarked test. See `tests/test_migration_079.py`.
+
+Add `pytestmark = pytest.mark.integration` at the top of `test_flag_store.py`, and
+a `flag_store_db` fixture built on `db_conn`/`db_cursor` (in the same test file, or
+`robothor/tests/conftest.py`). The two tests that don't touch the DB
+(`test_only_governed_flags_are_writable`, `test_db_unreachable_falls_through_to_env`)
+still run under the integration marker — that is fine.
 
 ```python
-# robothor/tests/conftest.py  (append)
+# in robothor/tests/test_flag_store.py — replace the pg_scratch_store fixture usage
+import pytest
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture
-def pg_scratch_store(pg_scratch, monkeypatch):
-    """Point the store at the scratch connection and expose seed/audit helpers."""
+def flag_store_db(db_conn, monkeypatch):
+    """Apply 084 to the disposable test DB, point store.get_connection at it, and
+    expose seed/audit helpers. Relies on db_conn's rollback-on-teardown — no
+    .commit(), no production writes."""
+    from pathlib import Path
+    from contextlib import contextmanager
     from robothor.flags import store as _store
 
+    with db_conn.cursor() as cur:
+        cur.execute(
+            (Path(__file__).resolve().parents[2] / "crm/migrations/084_feature_flags.sql").read_text()
+        )
+    # NB: no db_conn.commit() — the integration fixture rolls back on teardown.
+
+    @contextmanager
+    def _conn():
+        yield db_conn
+    monkeypatch.setattr(_store, "get_connection", _conn)
+
     class _Harness:
-        def __init__(self, conn):
-            self.conn = conn
-            with conn.cursor() as cur:
-                cur.execute(
-                    (Path(__file__).resolve().parents[2]
-                     / "crm/migrations/084_feature_flags.sql").read_text()
-                )
-            conn.commit()
         def seed(self, name, value, by):
-            with self.conn.cursor() as cur:
+            with db_conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO feature_flags (name,value,updated_by) VALUES (%s,%s,%s) "
                     "ON CONFLICT (name) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by",
                     (name, value, by),
                 )
-            self.conn.commit()
         def audit(self, name):
-            with self.conn.cursor() as cur:
+            with db_conn.cursor() as cur:
                 cur.execute(
                     "SELECT to_value, actor FROM feature_flag_audit WHERE name=%s ORDER BY at",
                     (name,),
                 )
                 return [{"to_value": r[0], "actor": r[1]} for r in cur.fetchall()]
 
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _conn():
-        yield pg_scratch
-    monkeypatch.setattr(_store, "get_connection", _conn)
-    return _Harness(pg_scratch)
+    return _Harness()
 ```
+
+Then rename the `pg_scratch_store` parameter to `flag_store_db` in the four tests
+that use it (`test_env_wins_when_only_a_seed_row_exists`,
+`test_operator_row_wins_over_env`, `test_set_flag_writes_audit_and_notifies` — the
+`set_flag` test must NOT commit either, so drop `NOTIFY` verification here and
+assert only the audit row; the pg_notify path is proven end-to-end in Task 7).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -454,8 +477,12 @@ from __future__ import annotations
 
 import pytest
 
+import pytest
+
 from robothor.flags import evidence
 from robothor.flags.store import GOVERNED_FLAGS
+
+pytestmark = pytest.mark.integration  # uses db_cursor (robothor_test), like Task 1
 
 
 def test_every_governed_flag_has_an_evidence_source():
