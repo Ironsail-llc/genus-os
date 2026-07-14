@@ -35,11 +35,15 @@ class RobothorNativeAdapter(FormatAdapter):
 
         manifest_template = bundle_path / "manifest.template.yaml"
         if manifest_template.exists():
-            result["manifest.yaml"] = resolver.resolve_file(manifest_template, variables)
+            result["manifest.yaml"] = resolver.resolve_file(
+                manifest_template, variables, trusted_root=bundle_path
+            )
 
         instructions_template = bundle_path / "instructions.template.md"
         if instructions_template.exists():
-            result["instructions.md"] = resolver.resolve_file(instructions_template, variables)
+            result["instructions.md"] = resolver.resolve_file(
+                instructions_template, variables, trusted_root=bundle_path
+            )
 
         return result
 

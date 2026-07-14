@@ -6,13 +6,16 @@ through the registry, and the new structured-evidence contract.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from robothor.engine.tools.dispatch import _execute_tool
+from robothor.engine.tools.dispatch import _execute_tool as _execute_tool_impl
 from robothor.engine.tools.registry import ToolRegistry
+
+_execute_tool = partial(_execute_tool_impl, user_role="service")
 
 
 def _row(

@@ -8,6 +8,14 @@ vi.mock("@/lib/config", () => ({
   SESSION_KEY: "agent:main:webchat-user",
 }));
 
+const { mockDashboardCompletion } = vi.hoisted(() => ({
+  mockDashboardCompletion: vi.fn(),
+}));
+
+vi.mock("@/lib/engine/server-client", () => ({
+  getEngineClient: () => ({ dashboardCompletion: mockDashboardCompletion }),
+}));
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -32,23 +40,9 @@ describe("POST /api/dashboard/generate", () => {
   });
 
   it("returns chunked JSON on successful legacy generation", async () => {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"<div class=\\"glass\\">Test Dashboard</div>"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: stream,
-    });
+    mockDashboardCompletion.mockResolvedValue(
+      '<div class="glass">Test Dashboard</div>',
+    );
 
     const req = new Request("http://localhost:3004/api/dashboard/generate", {
       method: "POST",
@@ -64,32 +58,15 @@ describe("POST /api/dashboard/generate", () => {
     const body = JSON.parse(text.trim());
     expect(body.html).toContain("Test Dashboard");
     expect(body.type).toBeTruthy();
+    expect(mockDashboardCompletion).toHaveBeenCalledWith(
+      "render",
+      expect.stringContaining("read-only Genus OS dashboard"),
+      expect.stringContaining("health"),
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns 204 for trivial conversation messages", async () => {
-    // Mock triage to return shouldUpdate: false
-    mockFetch.mockImplementation((url: string) => {
-      if (typeof url === "string" && url.includes("openrouter.ai")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              choices: [
-                {
-                  message: {
-                    content: '{"shouldUpdate": false, "dataNeeds": [], "summary": ""}',
-                  },
-                },
-              ],
-            }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({}),
-      });
-    });
-
     const req = new Request("http://localhost:3004/api/dashboard/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -103,47 +80,16 @@ describe("POST /api/dashboard/generate", () => {
 
     const res = await POST(req);
     expect(res.status).toBe(204);
+    expect(mockDashboardCompletion).not.toHaveBeenCalled();
   });
 
   it("triages then generates for substantive conversation", async () => {
-    const encoder = new TextEncoder();
-    const openRouterStream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"<div>Health Dashboard</div>"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    let callCount = 0;
-    mockFetch.mockImplementation((url: string) => {
-      callCount++;
-      if (typeof url === "string" && url.includes("openrouter.ai")) {
-        if (callCount === 1) {
-          // Triage call
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                choices: [
-                  {
-                    message: {
-                      content:
-                        '{"shouldUpdate": true, "dataNeeds": ["health"], "summary": "Service health dashboard"}',
-                    },
-                  },
-                ],
-              }),
-          });
-        }
-        // Generate call
-        return Promise.resolve({ ok: true, body: openRouterStream });
-      }
-      // Data fetch (health checks)
+    mockDashboardCompletion
+      .mockResolvedValueOnce(
+        '{"shouldUpdate": true, "dataNeeds": ["health"], "summary": "Service health dashboard"}',
+      )
+      .mockResolvedValueOnce("<div>Health Dashboard</div>");
+    mockFetch.mockImplementation(() => {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ status: "ok" }),
@@ -168,49 +114,29 @@ describe("POST /api/dashboard/generate", () => {
     const text = await res.text();
     const body = JSON.parse(text.trim());
     expect(body.html).toContain("Health Dashboard");
+    expect(mockDashboardCompletion).toHaveBeenNthCalledWith(
+      1,
+      "triage",
+      expect.any(String),
+      expect.stringContaining("How are the services running?"),
+    );
+    expect(mockDashboardCompletion).toHaveBeenNthCalledWith(
+      2,
+      "render",
+      expect.any(String),
+      expect.any(String),
+    );
   });
 
   it("uses agentData and skips satisfied data needs", async () => {
-    const encoder = new TextEncoder();
-    const openRouterStream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"<div>Weather Dashboard</div>"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
+    mockDashboardCompletion
+      .mockResolvedValueOnce(
+        '{"shouldUpdate": true, "dataNeeds": ["web:weather NYC"], "summary": "Weather dashboard"}',
+      )
+      .mockResolvedValueOnce("<div>Weather Dashboard</div>");
     const fetchCalls: string[] = [];
-    let callCount = 0;
     mockFetch.mockImplementation((url: string) => {
       fetchCalls.push(url);
-      callCount++;
-      if (typeof url === "string" && url.includes("openrouter.ai")) {
-        if (callCount === 1) {
-          // Triage call — requests web search
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                choices: [
-                  {
-                    message: {
-                      content:
-                        '{"shouldUpdate": true, "dataNeeds": ["web:weather NYC"], "summary": "Weather dashboard"}',
-                    },
-                  },
-                ],
-              }),
-          });
-        }
-        // Generate call
-        return Promise.resolve({ ok: true, body: openRouterStream });
-      }
-      // Should NOT be called for web search since agentData satisfies it
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({}),
@@ -238,51 +164,18 @@ describe("POST /api/dashboard/generate", () => {
     const body = JSON.parse(text.trim());
     expect(body.html).toContain("Weather Dashboard");
 
-    // Verify no SearXNG call was made (only OpenRouter calls)
-    const nonOpenRouterCalls = fetchCalls.filter(
-      (url) => !url.includes("openrouter.ai")
+    expect(fetchCalls).not.toContainEqual(
+      expect.stringMatching(/openrouter|anthropic|openai\.com/i),
     );
-    expect(nonOpenRouterCalls).toHaveLength(0);
   });
 
   it("fetches unsatisfied needs when agentData is partial", async () => {
-    const encoder = new TextEncoder();
-    const openRouterStream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            'data: {"choices":[{"delta":{"content":"<div>Combined Dashboard</div>"}}]}\n\n'
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    let callCount = 0;
-    mockFetch.mockImplementation((url: string) => {
-      callCount++;
-      if (typeof url === "string" && url.includes("openrouter.ai")) {
-        if (callCount === 1) {
-          // Triage requests web + health
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                choices: [
-                  {
-                    message: {
-                      content:
-                        '{"shouldUpdate": true, "dataNeeds": ["web:weather", "health"], "summary": "Overview"}',
-                    },
-                  },
-                ],
-              }),
-          });
-        }
-        return Promise.resolve({ ok: true, body: openRouterStream });
-      }
-      // Health endpoint calls (web is satisfied by agentData)
+    mockDashboardCompletion
+      .mockResolvedValueOnce(
+        '{"shouldUpdate": true, "dataNeeds": ["web:weather", "health"], "summary": "Overview"}',
+      )
+      .mockResolvedValueOnce("<div>Combined Dashboard</div>");
+    mockFetch.mockImplementation(() => {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ status: "ok" }),
@@ -307,12 +200,10 @@ describe("POST /api/dashboard/generate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("returns error JSON when OpenRouter fails", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: () => Promise.resolve("Server error"),
-    });
+  it("returns generic error JSON when Engine completion fails", async () => {
+    mockDashboardCompletion.mockRejectedValue(
+      new Error("provider leaked sk-sensitive-value"),
+    );
 
     const req = new Request("http://localhost:3004/api/dashboard/generate", {
       method: "POST",
@@ -326,5 +217,6 @@ describe("POST /api/dashboard/generate", () => {
     const text = await res.text();
     const body = JSON.parse(text.trim());
     expect(body.error).toBe("Dashboard service temporarily unavailable");
+    expect(text).not.toContain("sk-sensitive-value");
   });
 });

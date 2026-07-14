@@ -10,10 +10,11 @@ from robothor.engine.permissions import check_tool_permission, resolve_accessibl
 class TestCheckToolPermission:
     """Tests for check_tool_permission()."""
 
-    def test_empty_role_always_allowed(self):
-        """System/automated calls (empty role) skip permission checks."""
+    def test_empty_role_fails_closed(self):
+        """Every execution path must provide a concrete human/service role."""
         result = check_tool_permission("", "test-tenant", "create_person")
-        assert result is None
+        assert result is not None
+        assert "denied" in result
 
     def test_no_rules_fails_closed(self):
         """No rules configured means fail-closed (denied)."""
@@ -52,7 +53,7 @@ class TestCheckToolPermission:
         """Tenant-specific deny wins over __default__ allow."""
         with patch("robothor.db.connection.get_connection") as mock_conn:
             mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
-            # Tenant-specific deny first (ORDER BY tenant_id = test-tenant first)
+            # Tenant-specific policy takes precedence over platform defaults.
             mock_cursor.fetchall.return_value = [
                 ("create_*", "deny", "test-tenant"),
                 ("*", "allow", "__default__"),
@@ -81,12 +82,22 @@ class TestCheckToolPermission:
             result = check_tool_permission("viewer", "t", "create_person")
             assert result is not None
 
+    def test_specific_allow_beats_catchall_deny_regardless_of_row_order(self):
+        """Database row order cannot turn a viewer allowlist into deny-all."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = [
+                ("*", "deny", "__default__"),
+                ("search_*", "allow", "__default__"),
+            ]
+
+            assert check_tool_permission("viewer", "t", "search_memory") is None
+
     def test_deny_shadows_allow_same_tenant(self):
         """A deny rule at the same tenant level shadows a broader allow rule."""
         with patch("robothor.db.connection.get_connection") as mock_conn:
             mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
-            # Same tenant, deny on specific tool sorts before allow on wildcard
-            # (ORDER BY access DESC: 'deny' > 'allow')
+            # Same tenant: an exact deny is more specific than a wildcard allow.
             mock_cursor.fetchall.return_value = [
                 ("create_person", "deny", "test-tenant"),
                 ("*", "allow", "test-tenant"),

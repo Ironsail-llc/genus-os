@@ -1,7 +1,7 @@
 -- 007_routines.sql
 -- Recurring task templates with cron scheduling.
 
-CREATE TABLE crm_routines (
+CREATE TABLE IF NOT EXISTS crm_routines (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
     body TEXT,
@@ -20,5 +20,5 @@ CREATE TABLE crm_routines (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
-CREATE INDEX idx_routines_due ON crm_routines (next_run_at)
+CREATE INDEX IF NOT EXISTS idx_routines_due ON crm_routines (next_run_at)
     WHERE active = TRUE AND deleted_at IS NULL;

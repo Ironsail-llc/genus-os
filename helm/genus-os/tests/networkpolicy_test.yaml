@@ -5,83 +5,245 @@ release:
 templates:
   - networkpolicy.yaml
 tests:
-  - it: opt-in — renders nothing when networkPolicy.enabled=false
+  - it: opt-in renders nothing when networkPolicy is disabled
     asserts:
       - hasDocuments:
           count: 0
 
-  - it: default-deny + intra-chart render when enabled (no ingress)
+  - it: default deny covers ingress and egress for every release pod
     set:
       networkPolicy.enabled: true
-      dashboard.enabled: false
-      engine.ingress.enabled: false
-      bridge.ingress.enabled: false
-      orchestrator.ingress.enabled: false
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-default-deny
     asserts:
-      - hasDocuments:
-          count: 2
-      - equal:
-          path: metadata.name
-          value: gos-genus-os-default-deny
-        documentIndex: 0
-      - equal:
-          path: metadata.name
-          value: gos-genus-os-allow-intra-chart
-        documentIndex: 1
-
-  - it: allow-traefik-dashboard is scoped to dashboard pods + port 3000
-    set:
-      networkPolicy.enabled: true
-    asserts:
-      - equal:
-          path: metadata.name
-          value: gos-genus-os-allow-traefik-dashboard
-        documentIndex: 2
-      - equal:
-          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
-          value: dashboard
-        documentIndex: 2
-      - equal:
-          path: spec.ingress[0].ports[0].port
-          value: 3000
-        documentIndex: 2
-
-  - it: traefikNamespace is configurable
-    set:
-      networkPolicy.enabled: true
-      networkPolicy.traefikNamespace: ingress-system
-    asserts:
-      - equal:
-          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
-          value: ingress-system
-        documentIndex: 2
-
-  - it: per-component traefik allow only renders when service ingress enabled
-    set:
-      networkPolicy.enabled: true
-      engine.ingress.enabled: true
-      engine.ingress.host: engine.example.com
-    asserts:
-      - equal:
-          path: metadata.name
-          value: gos-genus-os-allow-traefik-engine
-        documentIndex: 3
-      - equal:
-          path: spec.ingress[0].ports[0].port
-          value: 18800
-        documentIndex: 3
-      - equal:
-          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
-          value: engine
-        documentIndex: 3
-
-  - it: default-deny covers subchart pods via part-of label
-    set:
-      networkPolicy.enabled: true
-    asserts:
+      - contains:
+          path: spec.policyTypes
+          content: Ingress
+      - contains:
+          path: spec.policyTypes
+          content: Egress
       - equal:
           path: spec.podSelector.matchLabels["app.kubernetes.io/part-of"]
           value: genus-os
-        documentIndex: 0
-      # Subchart pods carry app.kubernetes.io/part-of=genus-os via podLabels
-      # in values.yaml; the assertion above is what makes them covered.
+
+  - it: DNS egress is restricted to configured DNS pods and port 53
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.dnsNamespace: dns-system
+      networkPolicy.egress.dnsPodSelector.k8s-app: coredns
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-allow-dns
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: dns-system
+      - equal:
+          path: spec.egress[0].to[0].podSelector.matchLabels["k8s-app"]
+          value: coredns
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 53
+      - equal:
+          path: spec.egress[0].ports[1].port
+          value: 53
+
+  - it: dashboard internal egress is limited to backend component ports
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      postgres.enabled: false
+      redis.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-dashboard-internal-egress
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: dashboard
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: bridge
+            ports:
+              - protocol: TCP
+                port: 9100
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: postgres
+                    app.kubernetes.io/instance: gos
+          any: true
+
+  - it: in-chart Postgres ingress excludes the dashboard
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      postgres.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-postgres-ingress
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 5432
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: migrations
+      - notContains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: dashboard
+
+  - it: external database policy selects only declared components and CIDR
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.database.cidrs: [10.42.16.0/28]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-database-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].ipBlock.cidr
+          value: 10.42.16.0/28
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 5432
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: migrations
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
+  - it: dashboard external egress is limited to the identity destination
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.identity.cidrs: [10.42.48.12/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-identity-egress
+    asserts:
+      - equal:
+          path: spec.podSelector.matchExpressions[2].values
+          value: [dashboard]
+      - equal:
+          path: spec.egress[0].to[0].ipBlock.cidr
+          value: 10.42.48.12/32
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 443
+
+  - it: Kubernetes API egress is exact and watcher-component scoped
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.kubernetes-api.cidrs: [10.43.0.1/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-kubernetes-api-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].ipBlock.cidr
+          value: 10.43.0.1/32
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: engine
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
+  - it: payment egress is backend-only and exact-CIDR scoped
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.payments.cidrs: [10.42.26.20/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-payments-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].ipBlock.cidr
+          value: 10.42.26.20/32
+      - equal:
+          path: spec.podSelector.matchExpressions[2].values
+          value: [engine, bridge]
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
+  - it: dashboard cannot be added to provider HTTPS egress
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.https.components:
+        [engine, bridge, orchestrator, dashboard]
+      networkPolicy.egress.destinations.https.cidrs: [10.42.64.0/28]
+    asserts:
+      - failedTemplate:
+          errorMessage: dashboard external egress is restricted to the identity destination; remove it from https
+
+  - it: unrestricted IPv4 egress CIDR is rejected
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.https.cidrs: [0.0.0.0/0]
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy egress destination https rejects unrestricted CIDR 0.0.0.0/0
+
+  - it: unrestricted IPv6 egress CIDR is rejected
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.https.cidrs: ["::/0"]
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy egress destination https rejects unrestricted CIDR ::/0
+
+  - it: Traefik ingress is restricted by namespace pod selector and port
+    set:
+      networkPolicy.enabled: true
+      dashboard.ingress.enabled: true
+      dashboard.ingress.host: genus.example.test
+      networkPolicy.traefikNamespace: ingress-system
+      networkPolicy.traefikPodSelector:
+        app.kubernetes.io/name: edge-traefik
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-allow-traefik-dashboard
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: dashboard
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: ingress-system
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: edge-traefik
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 3000

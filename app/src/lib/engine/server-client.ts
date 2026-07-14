@@ -3,10 +3,62 @@
  * Server-side only — used by Next.js API routes.
  */
 import type { ChatMessage } from "./types";
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 
 const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
 
+async function engineHeaders(json = false): Promise<Record<string, string>> {
+  return {
+    ...(await bridgeAuthHeaders()),
+    ...(json ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
+async function verifiedDashboardHeaders(): Promise<Record<string, string>> {
+  const headers = await engineHeaders(true);
+  if (!headers.Authorization?.startsWith("Bearer ")) {
+    throw new Error("Dashboard authentication required");
+  }
+  return headers;
+}
+
 class EngineClient {
+  /**
+   * Run a provider-neutral dashboard completion inside the authenticated
+   * Engine. Model routing and provider credentials never enter Next.js.
+   */
+  async dashboardCompletion(
+    purpose: "triage" | "render",
+    systemPrompt: string,
+    userPrompt: string,
+  ): Promise<string> {
+    const res = await fetch(`${ENGINE_URL}/api/dashboard/completions`, {
+      method: "POST",
+      headers: await verifiedDashboardHeaders(),
+      body: JSON.stringify({
+        purpose,
+        system_prompt: systemPrompt,
+        user_prompt: userPrompt,
+      }),
+      signal: AbortSignal.timeout(purpose === "triage" ? 20_000 : 130_000),
+    });
+    if (!res.ok) {
+      // Never copy provider/Engine response text into a dashboard exception.
+      throw new Error("Dashboard completion unavailable");
+    }
+    const payload: unknown = await res.json();
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !("content" in payload) ||
+      typeof payload.content !== "string" ||
+      payload.content.length === 0
+    ) {
+      throw new Error("Dashboard completion unavailable");
+    }
+    return payload.content;
+  }
+
   /**
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
@@ -14,7 +66,7 @@ class EngineClient {
   async chatSend(sessionKey: string, message: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/send`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, message }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -31,7 +83,7 @@ class EngineClient {
   ): Promise<{ sessionKey: string; messages: ChatMessage[] }> {
     const res = await fetch(
       `${ENGINE_URL}/chat/history?session_key=${encodeURIComponent(sessionKey)}&limit=${limit}`,
-      { signal: AbortSignal.timeout(30_000) },
+      { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -47,7 +99,7 @@ class EngineClient {
   ): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/inject`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, message, label }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -61,7 +113,7 @@ class EngineClient {
   async chatAbort(sessionKey: string): Promise<{ ok: boolean; aborted: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/abort`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -75,7 +127,7 @@ class EngineClient {
   async chatClear(sessionKey: string): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/clear`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -91,7 +143,7 @@ class EngineClient {
   async planStart(sessionKey: string, message: string, deepPlan = false): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, message, deep_plan: deepPlan }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -105,7 +157,7 @@ class EngineClient {
   async planApprove(sessionKey: string, planId: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, plan_id: planId }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -123,7 +175,7 @@ class EngineClient {
   ): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/reject`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, plan_id: planId, feedback }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -139,7 +191,7 @@ class EngineClient {
   ): Promise<{ active: boolean; plan?: PlanState }> {
     const res = await fetch(
       `${ENGINE_URL}/chat/plan/status?session_key=${encodeURIComponent(sessionKey)}`,
-      { signal: AbortSignal.timeout(30_000) },
+      { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -153,7 +205,7 @@ class EngineClient {
   async deepStart(sessionKey: string, query: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await engineHeaders(true),
       body: JSON.stringify({ session_key: sessionKey, query }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -169,7 +221,7 @@ class EngineClient {
   ): Promise<{ active: boolean; deep?: DeepState }> {
     const res = await fetch(
       `${ENGINE_URL}/chat/deep/status?session_key=${encodeURIComponent(sessionKey)}`,
-      { signal: AbortSignal.timeout(30_000) },
+      { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);

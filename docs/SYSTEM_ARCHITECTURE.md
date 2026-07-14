@@ -1,7 +1,13 @@
 # Genus OS — System Architecture
 
 > Technical reference for the Genus OS platform.
-> Last updated: 2026-04-19
+> Last updated: 2026-07-13
+>
+> Most service names, hardware details, schedules, and Cloudflare routes below
+> describe one systemd appliance deployment. They are an operational snapshot,
+> not defaults, availability measurements, or inherited security controls for
+> every Genus OS installation. The Kubernetes release-candidate boundary is
+> called out separately below.
 
 ---
 
@@ -15,37 +21,80 @@
 6. [Data Layer](#data-layer)
 7. [Intelligence Pipeline](#intelligence-pipeline)
 8. [Triage & Heartbeat Pipeline](#triage--heartbeat-pipeline)
-9. [Self-Improvement Loop (Buddy)](#self-improvement-loop-buddy)
-10. [Vision System](#vision-system)
-11. [CRM Stack](#crm-stack)
-12. [Memory System](#memory-system)
-13. [Communications Layer](#communications-layer)
-14. [Tool Access Topology](#tool-access-topology)
-15. [Cron Schedule](#cron-schedule)
-16. [Backup & Recovery](#backup--recovery)
-17. [Folder Structure](#folder-structure)
+9. [Task Lifecycle](#task-lifecycle--short-list--thread-pool)
+10. [Self-Improvement Loop (Buddy)](#self-improvement-loop-buddy)
+11. [Vision System](#vision-system)
+12. [CRM Stack](#crm-stack)
+13. [Memory System](#memory-system)
+14. [Communications Layer](#communications-layer)
+15. [Tool Access Topology](#tool-access-topology)
+16. [Cron Schedule](#cron-schedule)
+17. [Backup & Recovery](#backup--recovery)
+18. [Folder Structure](#folder-structure)
 
 ---
 
 ## Executive Summary
 
-Genus OS hosts an autonomous AI entity running 24/7 on dedicated hardware. It manages the owner's communications, calendar, contacts, security monitoring, and knowledge base — acting as a partner rather than an assistant.
+The reference appliance is designed to operate an autonomous AI entity
+continuously on dedicated hardware. It manages configured communications,
+calendar, contacts, security monitoring, and knowledge workflows. Continuous
+operation is an operating objective, not an availability claim.
 
 **Core capabilities:**
 
-- Always-on vision surveillance with face recognition and instant Telegram alerts
+- Continuously operated vision monitoring with face recognition and configured alerts
 - Three-tier intelligence pipeline: ingest (10 min) → analysis (4x/day) → deep synthesis (daily)
 - Unified CRM across email, Telegram, Google Chat, SMS, voice, and video meetings
 - RAG-powered memory with structured facts, entity graph, and working memory blocks
 - Autonomous triage: categorizes, handles routine items, escalates complex ones
 - Voice calling and SMS via Twilio, Telegram delivery via Python Agent Engine
 
-**Key constraints:**
+**Reference-appliance constraints:**
 
 - Single-machine deployment (no cloud compute)
 - All services managed by systemd (system-level, `Restart=always`)
 - All external access via Cloudflare Tunnel (no open ports)
 - LLM inference is local (Ollama) for embeddings/reranking/vision; remote (OpenRouter) for agent work
+
+### Production release-candidate security boundary
+
+The Helm deployment has a different boundary from the systemd appliance:
+
+- The dashboard requires an Auth.js OIDC session and a successful Bridge token
+  exchange. Existing accounts require an explicit issuer/subject binding;
+  verified email alone does not auto-link or grant a privileged role.
+- Bridge private routes verify signed issuer/audience/expiry/tenant/role/scope
+  claims and apply route-specific scope and tenant checks.
+- Engine non-probe HTTP routes and the IDE WebSocket independently verify
+  signed, tenant-bound Engine scopes. Channel webhooks use their own
+  route-specific HMAC. Empty roles do not imply privileged execution.
+- Model-generated dashboards are sanitized, sandboxed, static HTML. Links,
+  forms, controls, scripts, network calls, and mutation channels are rejected.
+  The dashboard forwards verified identity to the Engine; only the Engine
+  selects the model and holds provider credentials.
+- Orchestrator and vision do not yet independently enforce the signed identity
+  contract. They must remain private/NetworkPolicy-restricted services; neither
+  is approved for direct public exposure. Vision is outside the current chart.
+- Production/staging chart values split secret classes per workload and require
+  default-deny NetworkPolicy with exact operator-supplied DB, cache, IdP,
+  provider/payment, Kubernetes API, or controlled-proxy CIDRs. Broad internet
+  CIDRs fail rendering.
+- The canonical PostgreSQL chain contains 83 ordered, checksum-verified
+  migrations. Legacy-memory tables are archived, and the legacy score-column
+  cutover enforces a 30-day data gate plus full-row archive before dropping
+  columns. Managed databases must provide `vector`, `uuid-ossp`, `citext`, and
+  `pgcrypto`.
+- Customer payment handling accepts provider tokens; Entity spend accepts
+  provider-issued virtual-card references. Neither boundary accepts raw
+  PAN/CVC/CVV, and neither is a PCI certification or a live payment adapter.
+- Engine remains one replica because it owns scheduling and consumer state.
+  Other replicas, PDBs, and readiness checks do not make the Engine highly
+  available. The 99.9% availability, 15-minute RPO, and 60-minute RTO values are
+  targets until failover and restore drills measure them.
+
+Changes to this boundary are proposed and tested through a draft PR. Merge and
+deployment are separate human-approved operations.
 
 ---
 
@@ -172,31 +221,38 @@ All services are **system-level systemd units** (`/etc/systemd/system/`), manage
 
 ## Network Edge — Cloudflare Tunnel
 
-All external access routes through a single Cloudflare Tunnel. No ports are exposed directly to the internet.
+In the reference systemd appliance, externally routed traffic uses a single
+Cloudflare Tunnel and host ports are not directly exposed. This is not the Helm
+chart's ingress model and should not be copied as proof of application-layer
+authorization.
 
-### Public Routes (no authentication)
+### Externally reachable routes
 
-| Subdomain | Port | Service |
-|-----------|------|---------|
-| ${INSTANCE_DOMAIN} | 3000 | Status homepage |
-| status.${INSTANCE_DOMAIN} | 3001 | Status dashboard |
-| dashboard.${INSTANCE_DOMAIN} | 3001 | Status dashboard (alias) |
-| privacy.${INSTANCE_DOMAIN} | 3002 | Privacy policy |
-| voice.${INSTANCE_DOMAIN} | 8765 | Twilio voice webhooks |
-| sms.${INSTANCE_DOMAIN} | 8766 | Twilio SMS webhooks |
+| Subdomain | Port | Service | Required boundary |
+|-----------|------|---------|-------------------|
+| ${INSTANCE_DOMAIN} | 3000 | Status homepage | Deliberately public content only |
+| status.${INSTANCE_DOMAIN} | 3001 | Status dashboard | Deliberately public, non-sensitive status only |
+| dashboard.${INSTANCE_DOMAIN} | 3001 | Status dashboard (alias) | Same as status route |
+| privacy.${INSTANCE_DOMAIN} | 3002 | Privacy policy | Deliberately public content only |
+| voice.${INSTANCE_DOMAIN} | 8765 | Twilio voice webhooks | Provider-signature validation at service/edge |
+| sms.${INSTANCE_DOMAIN} | 8766 | Twilio SMS webhooks | Provider-signature validation at service/edge |
 
-### Protected Routes (Cloudflare Access — email OTP)
+Webhook reachability is not anonymous authorization. A deployment that cannot
+verify the provider signature must not enable the route.
 
-Authorized emails: configured in Cloudflare Access (owner + Robothor service account)
+### Private operator/service routes
 
-| Subdomain | Port | Service |
-|-----------|------|---------|
-| cam.${INSTANCE_DOMAIN} | 8890 | Live webcam HLS stream |
-| ops.${INSTANCE_DOMAIN} | 3003 | Ops dashboard |
-| bridge.${INSTANCE_DOMAIN} | 9100 | Bridge API |
-| engine.${INSTANCE_DOMAIN} | 18800 | Agent Engine API |
-| orchestrator.${INSTANCE_DOMAIN} | 9099 | RAG orchestrator API |
-| vision.${INSTANCE_DOMAIN} | 8600 | Vision API |
+The reference appliance also uses Cloudflare Access. Application and network
+requirements still apply:
+
+| Subdomain | Port | Service | Application requirement |
+|-----------|------|---------|-------------------------|
+| cam.${INSTANCE_DOMAIN} | 8890 | Live webcam HLS stream | Private edge policy; biometric/privacy controls |
+| ops.${INSTANCE_DOMAIN} | 3003 | Legacy ops dashboard | Private edge policy; do not expose sensitive views anonymously |
+| bridge.${INSTANCE_DOMAIN} | 9100 | Bridge API | Signed scoped Bridge token in addition to the edge |
+| engine.${INSTANCE_DOMAIN} | 18800 | Agent Engine API | Signed scoped Engine authority in addition to the edge |
+| orchestrator.${INSTANCE_DOMAIN} | 9099 | RAG orchestrator API | No independent signed-auth boundary yet; keep private |
+| vision.${INSTANCE_DOMAIN} | 8600 | Vision API | No independent signed-auth boundary yet; keep private |
 
 ### Network Topology
 
@@ -207,7 +263,10 @@ Internet → Cloudflare Edge → Tunnel (cloudflared) → localhost:<port>
                                               to 127.0.0.1 only
 ```
 
-Docker containers reach host services via `172.17.0.1` (Docker bridge). PostgreSQL listens on Docker bridge in addition to localhost. Redis runs with `protected-mode off` for Docker access.
+Docker containers in this legacy appliance reach host services via
+`172.17.0.1`. Its PostgreSQL/Redis bridge exposure, including Redis
+`protected-mode off`, is instance-specific risk that requires host firewall and
+trusted-container isolation; it is not a production chart recommendation.
 
 ---
 
@@ -239,6 +298,21 @@ Two databases on the same instance:
 | `crm_conversations` | CRM conversations |
 | `crm_messages` | CRM messages |
 
+### Canonical schema lifecycle
+
+`robothor/migrations/manifest.txt` is the sole packaged migration order. The
+runner takes an advisory lock, applies each file transactionally, records the
+full migration ID and SHA-256 checksum, and refuses unknown history or drift.
+The current chain has 83 entries. Migration 023 preserves legacy short/long
+memory tables under explicit archive names. Migration 035 requires at least 30
+days of replacement achievement data on populated upgrades and archives the
+complete legacy rows before dropping superseded columns.
+
+The chain is forward-only. Before an upgrade, pre-provision the required
+PostgreSQL extensions (`vector`, `uuid-ossp`, `citext`, `pgcrypto`), take a
+verified snapshot, run the full chain against a production clone, compare
+material row counts, and rehearse restore.
+
 ### Redis
 
 Port 6379, 2 GB max. Shared by:
@@ -264,7 +338,7 @@ Three-tier architecture converts raw API data into structured knowledge:
 
 `continuous_ingest.py` reads JSON logs incrementally, deduplicates via content hashes, and ingests into pgvector.
 
-- ~10 minute freshness from API event to searchable fact
+- The 10-minute schedule is a freshness target; provider delay, backlog, and failures can increase it
 - Sources: email, calendar, Jira, Meet transcripts, CRM conversations, CRM updates
 - Dedup: `ingested_items` table (content\_hash) + `ingestion_watermarks` (per-source cursor)
 
@@ -497,7 +571,9 @@ The `buddy` agent (`docs/agents/buddy.yaml`, cron `0 6-22 * * *`) runs two passe
 - **Hourly review pass** — for each agent with goals, sample up to 2 recent top-level runs biased toward failures / error steps / long durations and not already reviewed. Build a structured `Evidence` dict from `agent_runs` + `agent_run_steps`. Sonnet 4.6 phrases a rating (1-5) + dimension + `specific_issue` (≤ 80 chars referencing concrete evidence) + `suggested_action` (≤ 120 chars). Persist to `agent_reviews` with `reviewer_type='buddy'`.
 - **6-hourly aggregation pass** — run `detect_goal_breach` per agent. For breaches with `priority_score ≥ 3.0` *and* a non-null current metric value, build a `Finding`: 3 representative reviews, corrective-action template from `docs/agents/corrective-actions.yaml`, live baseline metric. Create one `crm_tasks` row per finding tagged `nightwatch+self-improve+<agent>+<metric>` assigned to `auto-agent`. Dedups against open tasks for the same (agent, metric). The task body embeds a machine-readable `<!-- buddy-baseline: {...} -->` marker the grader parses later.
 
-The LLM cannot invent findings — it only phrases pre-computed evidence. This closes the hallucination surface that produced filler in the previous design.
+The LLM receives pre-computed evidence and is used only to phrase the finding,
+which reduces but does not eliminate hallucination risk. Persisted evidence and
+post-change metrics remain the authority.
 
 ### Verify — `robothor/engine/buddy_grader.py`
 
@@ -532,7 +608,7 @@ Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/
 
 ## Vision System
 
-Always-on computer vision with three operational modes:
+When operated continuously, the computer-vision service supports three modes:
 
 | Mode | Behavior |
 |------|----------|
@@ -785,6 +861,18 @@ Two runtime environments access the same underlying DAL:
 
 ## Backup & Recovery
 
+The supported, portable recovery contract is `robothor snapshot`; see
+`docs/runbooks/SNAPSHOT_RESTORE.md`. It provides versioned manifests,
+PostgreSQL custom dumps, workspace-state checksums, encrypted atomic output,
+verification, retention, and guarded restore. The SSD procedure below is a
+legacy instance-specific secondary copy and does not replace snapshot
+verification or restore rehearsal.
+
+The 15-minute RPO and 60-minute RTO are targets, not properties of the snapshot
+format. The daily SSD schedule below cannot by itself demonstrate either target;
+only scheduled off-site recovery points, age monitoring, and a timed restore
+drill can do so.
+
 LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 
 | Field | Value |
@@ -983,4 +1071,4 @@ robothor/                                 Project root (git repo)
 
 ---
 
-*Updated 2026-03-01.*
+*Updated 2026-07-13.*

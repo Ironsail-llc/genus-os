@@ -21,6 +21,24 @@ sys.path.insert(0, str(BRIDGE_DIR))
 import bridge_service  # noqa: E402
 from bridge_service import app  # noqa: E402
 
+from robothor.events.capabilities import load_capabilities, reset  # noqa: E402
+
+CAPABILITIES_MANIFEST = BRIDGE_DIR.parents[1] / "brain" / "agent_capabilities.json"
+
+
+@pytest.fixture(autouse=True)
+def insecure_loopback_dev_mode(monkeypatch):
+    """Legacy bridge tests opt into the only supported trusted-header mode."""
+    monkeypatch.setenv("GENUS_INSECURE_DEV_MODE", "true")
+    monkeypatch.setenv("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOTHOR_CAPABILITIES_MANIFEST", str(CAPABILITIES_MANIFEST))
+    monkeypatch.delenv("GENUS_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ROBOTHOR_ENVIRONMENT", raising=False)
+    reset()
+    load_capabilities()
+    yield
+    reset()
+
 
 @pytest.fixture
 def test_prefix():

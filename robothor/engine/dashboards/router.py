@@ -276,13 +276,23 @@ async def homepage(request: Request) -> HTMLResponse:
             {"name": "Bridge", "url": "http://127.0.0.1:9100/health"},
             {"name": "Helm", "url": "http://127.0.0.1:3004/"},
         ]
+    # The homepage itself is behind Engine authentication.  Forward that
+    # verified credential only to the same Engine origin for authenticated
+    # self-inspection; never leak it to the other service health endpoints.
+    engine_headers: dict[str, str] = {}
+    authorization = request.headers.get("authorization")
+    if authorization:
+        engine_headers["authorization"] = authorization
     service_results = []
     for svc in service_defs:
         try:
             import httpx
 
             async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(svc["url"])
+                resp = await client.get(
+                    svc["url"],
+                    headers=engine_headers if svc["name"] == "Engine" else None,
+                )
                 service_results.append(
                     {**svc, "status": "up" if resp.status_code < 500 else "degraded"}
                 )
@@ -309,7 +319,7 @@ async def homepage(request: Request) -> HTMLResponse:
         import httpx
 
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(_engine_health_url)
+            resp = await client.get(_engine_health_url, headers=engine_headers)
             if resp.status_code == 200:
                 engine_data = resp.json()
                 agents = engine_data.get("agents", {})

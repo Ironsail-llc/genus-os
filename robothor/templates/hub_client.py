@@ -8,18 +8,27 @@ agent template bundles.
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import os
-import re
+import shutil
 import tarfile
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
 
 from robothor.engine.sanitize import sanitize_log
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    safe_relative_path,
+    trusted_directory,
+    validate_identifier,
+    validate_sha256,
+)
 
 logger = logging.getLogger("robothor.hub")
 
@@ -27,6 +36,9 @@ HUB_BASE_URL = os.getenv("PROGRAMMATIC_RESOURCES_URL", "https://programmaticreso
 DEFAULT_TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 1.0  # seconds
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 512
+MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 
 
 def _is_retryable(status_code: int) -> bool:
@@ -40,6 +52,51 @@ class HubError(Exception):
 
 class HubAuthError(HubError):
     """Raised when authentication fails."""
+
+
+def trusted_bundle_sha256(metadata: object) -> str:
+    """Extract the mandatory digest from trusted registry metadata."""
+
+    if not isinstance(metadata, dict):
+        raise HubError("Hub bundle metadata is missing a valid SHA-256 digest")
+    try:
+        return validate_sha256(metadata.get("sha256"), label="hub bundle SHA-256")
+    except TemplateSecurityError as error:
+        raise HubError("Hub bundle metadata is missing a valid SHA-256 digest") from error
+
+
+def _safe_slug(value: object) -> str:
+    try:
+        return validate_identifier(value, label="hub bundle slug")
+    except TemplateSecurityError as error:
+        raise HubError(str(error)) from error
+
+
+def _prepare_destination_root(value: str | Path) -> Path:
+    """Create/validate an explicit download root without traversing symlinks."""
+
+    requested = Path(value).expanduser().absolute()
+    existing = requested
+    while not existing.exists():
+        parent = existing.parent
+        if parent == existing:
+            raise HubError("Bundle destination has no trusted existing parent")
+        existing = parent
+
+    try:
+        trusted_ancestor = trusted_directory(existing, label="bundle destination ancestor")
+        if requested == existing:
+            return trusted_ancestor
+        relative = requested.relative_to(existing).as_posix()
+        destination = contained_path(
+            trusted_ancestor,
+            relative,
+            label="bundle destination path",
+        )
+        destination.mkdir(parents=True, mode=0o700)
+        return trusted_directory(destination, label="bundle destination")
+    except (TemplateSecurityError, ValueError) as error:
+        raise HubError("Bundle destination must be a trusted directory") from error
 
 
 class HubClient:
@@ -189,7 +246,11 @@ class HubClient:
             if not isinstance(b, dict):
                 logger.warning("Skipping malformed bundle entry: %s", type(b).__name__)
                 continue
-            slug = b.get("slug")
+            try:
+                slug = _safe_slug(b.get("slug"))
+            except HubError:
+                logger.warning("Skipping bundle with invalid slug")
+                continue
             name = b.get("name")
             if not slug or not name:
                 logger.warning("Skipping bundle missing slug/name: %s", b)
@@ -215,25 +276,37 @@ class HubClient:
 
     def get_bundle(self, slug: str) -> dict[str, Any] | None:
         """Get a single bundle by slug."""
+        slug = _safe_slug(slug)
         resp = self._request_with_retry("GET", f"/api/bundles/{slug}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
-        bundle: dict[str, Any] = resp.json()
+        raw_bundle = resp.json()
+        if not isinstance(raw_bundle, dict):
+            raise HubError("Hub returned malformed bundle metadata")
+        returned_slug = _safe_slug(raw_bundle.get("slug"))
+        if returned_slug != slug:
+            raise HubError("Hub bundle metadata slug does not match the requested bundle")
+        bundle: dict[str, Any] = raw_bundle
         return bundle
 
     def download_bundle(
-        self, slug: str, dest_dir: str | None = None, expected_sha256: str | None = None
+        self,
+        slug: str,
+        *,
+        expected_sha256: str | None = None,
+        dest_dir: str | Path | None = None,
     ) -> Path:
-        """Download a bundle tarball and extract it.
+        """Download and safely extract an integrity-pinned bundle tarball.
 
         Returns path to the extracted bundle directory.
         """
-        # Validate the bundle slug at the source: it flows into both the request
-        # URL and the on-disk filename, so constrain it to a safe charset (no
-        # path separators / traversal) before any use (path-injection guard).
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", slug or ""):
-            raise HubError(f"invalid bundle slug: {slug!r}")
+        slug = _safe_slug(slug)
+        try:
+            expected_sha256 = validate_sha256(expected_sha256, label="expected hub bundle SHA-256")
+        except TemplateSecurityError as error:
+            raise HubError("A valid trusted SHA-256 is required before download") from error
+
         resp = self._request_with_retry(
             "GET",
             f"/api/bundles/{slug}/download",
@@ -253,32 +326,98 @@ class HubClient:
             )
         resp.raise_for_status()
 
-        # Write to temp file and extract
-        dest = Path(dest_dir) if dest_dir else Path(tempfile.mkdtemp(prefix="pr-"))
-        tarball_path = self._safe_path(dest, f"{slug}.tar.gz")
-        tarball_path.write_bytes(resp.content)
-
-        # Verify checksum if provided (hash the bytes we already have in memory)
-        if expected_sha256 and not self._verify_checksum(resp.content, expected_sha256):
-            tarball_path.unlink()
+        content = resp.content
+        if len(content) > MAX_DOWNLOAD_BYTES:
+            raise HubError(f"Bundle '{slug}' exceeds the maximum download size")
+        if not self._verify_checksum(content, expected_sha256):
             raise HubError(f"Checksum verification failed for bundle '{slug}'")
 
-        if tarfile.is_tarfile(tarball_path):
-            with tarfile.open(tarball_path, "r:gz") as tf:
-                tf.extractall(dest, filter="data")
-            tarball_path.unlink()
+        # The slug is registry input and must never influence a filesystem
+        # path.  tempfile supplies an unpredictable leaf beneath an explicit
+        # caller-owned root (or the platform temporary root).
+        destination: Path
+        if dest_dir is None:
+            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-"))
+        else:
+            parent = _prepare_destination_root(dest_dir)
+            destination = Path(tempfile.mkdtemp(prefix=".robothor-hub-", dir=parent))
 
-        # Find the extracted directory (GitHub tarballs have a top-level dir)
-        subdirs = [d for d in dest.iterdir() if d.is_dir()]
+        try:
+            self._extract_archive(content, destination)
+            root_setup = contained_path(destination, "setup.yaml", label="bundle setup path")
+            if root_setup.is_file():
+                return destination
 
-        # Validate extracted bundle
-        bundle_dir = subdirs[0] if len(subdirs) == 1 else dest
-        if not (bundle_dir / "setup.yaml").exists():
-            logger.warning("Downloaded bundle '%s' missing setup.yaml", sanitize_log(slug))
+            candidates = []
+            for child in destination.iterdir():
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                setup = contained_path(child, "setup.yaml", label="bundle setup path")
+                if setup.is_file():
+                    candidates.append(child)
+            if len(candidates) != 1:
+                raise HubError("Downloaded bundle must contain exactly one setup.yaml root")
+            return candidates[0]
+        except Exception:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
 
-        if len(subdirs) == 1:
-            return subdirs[0]
-        return dest
+    @staticmethod
+    def _extract_archive(content: bytes, destination: Path) -> None:
+        """Extract only bounded regular files/directories under *destination*."""
+
+        try:
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+                members = archive.getmembers()
+                if not members or len(members) > MAX_ARCHIVE_MEMBERS:
+                    raise HubError("Bundle archive has an invalid number of members")
+
+                seen: set[str] = set()
+                total_size = 0
+                checked: list[tuple[tarfile.TarInfo, Path]] = []
+                for member in members:
+                    try:
+                        relative = safe_relative_path(member.name, label="archive member path")
+                    except TemplateSecurityError as error:
+                        raise HubError(f"Unsafe bundle archive member: {member.name!r}") from error
+                    normalized = PurePosixPath(*relative.parts).as_posix()
+                    if normalized in seen:
+                        raise HubError(f"Duplicate bundle archive member: {normalized}")
+                    seen.add(normalized)
+
+                    if not (member.isdir() or member.isfile()):
+                        raise HubError(f"Unsupported bundle archive member: {normalized}")
+                    if member.size < 0:
+                        raise HubError(f"Invalid bundle archive member size: {normalized}")
+                    if member.isfile():
+                        total_size += member.size
+                        if total_size > MAX_EXTRACTED_BYTES:
+                            raise HubError("Bundle archive exceeds the maximum extracted size")
+
+                    target = contained_path(
+                        destination, normalized, label="archive extraction path"
+                    )
+                    checked.append((member, target))
+
+                for member, target in checked:
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        target.chmod(0o700)
+                        continue
+
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    source = archive.extractfile(member)
+                    if source is None:
+                        raise HubError(f"Could not read archive member: {member.name}")
+                    with source, target.open("xb") as output:
+                        shutil.copyfileobj(source, output)
+                    if target.stat().st_size != member.size:
+                        raise HubError(
+                            f"Archive member size changed during extraction: {member.name}"
+                        )
+                    target.chmod(0o600)
+        except (tarfile.TarError, OSError) as error:
+            raise HubError(f"Invalid bundle archive: {error}") from error
 
     def submit(self, repo_url: str) -> dict[str, Any]:
         """Submit a GitHub repo to the hub catalog.

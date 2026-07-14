@@ -9,9 +9,15 @@ and the engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 from robothor.auth.tokens import TokenError, decode_token
+
+_HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
 
 
 @dataclass(frozen=True)
@@ -22,25 +28,102 @@ class AuthContext:
     tenant_id: str
     role: str
     typ: str  # "user" (human session) | "service" (engine/agent → bridge)
+    audience: str = ""
+    scopes: frozenset[str] = field(default_factory=frozenset)
+    agent_id: str | None = None
+    token_id: str = ""
 
     @property
     def is_service(self) -> bool:
         return self.typ == "service"
 
+    @property
+    def actor_id(self) -> str:
+        """Stable audit actor: service agent when present, otherwise the user."""
+        return self.agent_id or self.user_id
 
-def verify_token(token: str) -> AuthContext:
+    def has_scope(self, required: str) -> bool:
+        """Return whether a concrete scope is granted, including namespace wildcards."""
+        if "*" in self.scopes or required in self.scopes:
+            return True
+        namespace, separator, _ = required.partition(":")
+        return bool(separator and f"{namespace}:*" in self.scopes)
+
+
+def verify_token(token: str, *, expected_audience: str = "genus-bridge") -> AuthContext:
     """Decode + verify a token into an ``AuthContext``. Raises ``TokenError``."""
-    claims = decode_token(token)
+    claims = decode_token(token, expected_audience=expected_audience)
     sub = claims.get("sub")
     tid = claims.get("tid")
-    if not sub or not tid:
+    tenant = claims.get("tenant")
+    typ = claims.get("typ")
+    type_alias = claims.get("type")
+    role = claims.get("role")
+    audience = claims.get("aud")
+    token_id = claims.get("jti")
+    if not sub or not tid or not role or not audience or not token_id:
         raise TokenError("token missing sub/tid")
+    if tenant is not None and str(tenant) != str(tid):
+        raise TokenError("conflicting tenant claims")
+    if typ not in ("user", "service"):
+        raise TokenError("unsupported token type")
+    if type_alias is not None and type_alias != typ:
+        raise TokenError("conflicting token type claims")
+
+    scopes = _parse_scopes(claims.get("scope"))
+    if not scopes:
+        raise TokenError("token missing scopes")
+
+    agent_id = claims.get("agent_id")
+    if typ == "service" and not agent_id:
+        raise TokenError("service token missing agent_id")
+    if typ == "service" and role != "service":
+        raise TokenError("service token has invalid role")
+    if typ == "user" and agent_id is not None:
+        raise TokenError("user token cannot carry agent_id")
+    if typ == "user" and role not in _HUMAN_ROLES:
+        raise TokenError("user token has invalid role")
+    if not isinstance(audience, str):
+        raise TokenError("token audience must be a string")
+
     return AuthContext(
         user_id=str(sub),
         tenant_id=str(tid),
-        role=str(claims.get("role") or ""),
-        typ=str(claims.get("typ") or "user"),
+        role=str(role),
+        typ=str(typ),
+        audience=str(audience),
+        scopes=scopes,
+        agent_id=str(agent_id) if agent_id is not None else None,
+        token_id=str(token_id),
     )
+
+
+def _parse_scopes(raw: object) -> frozenset[str]:
+    if isinstance(raw, str):
+        return frozenset(part for part in raw.split() if part)
+    if isinstance(raw, (list, tuple)) and all(isinstance(item, str) for item in raw):
+        return frozenset(item.strip() for item in raw if item.strip())
+    raise TokenError("invalid token scopes")
+
+
+def require_access(
+    *, scopes: Iterable[str] = (), roles: Iterable[str] = ()
+) -> Callable[[object], AuthContext]:
+    """Build a FastAPI dependency enforcing verified scopes and/or user roles."""
+    required_scopes = tuple(scopes)
+    permitted_roles = frozenset(roles)
+
+    def dependency(request: object) -> AuthContext:
+        from fastapi import HTTPException
+
+        ctx = get_current_user(request)
+        if required_scopes and not all(ctx.has_scope(scope) for scope in required_scopes):
+            raise HTTPException(status_code=403, detail="insufficient scope")
+        if permitted_roles and (ctx.is_service or ctx.role not in permitted_roles):
+            raise HTTPException(status_code=403, detail="role not authorized")
+        return ctx
+
+    return dependency
 
 
 def bearer_from_header(authorization: str | None) -> str | None:

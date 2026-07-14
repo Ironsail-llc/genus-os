@@ -42,10 +42,12 @@ async def _renew_loop(agent_id: str, token: str) -> None:
         try:
             ok = await asyncio.to_thread(redis_lease.renew, _dedup_key(agent_id), token, _HA_TTL_MS)
             if not ok:
-                logger.warning("HA dedup: lost lease for %s during renew", agent_id)
+                logger.warning("HA dedup: lost lease for %s during renew", sanitize_log(agent_id))
                 return
         except Exception as e:
-            logger.warning("HA dedup renew failed for %s: %s", agent_id, e)
+            logger.warning(
+                "HA dedup renew failed for %s: %s", sanitize_log(agent_id), sanitize_log(e)
+            )
 
 
 def _stop_renew(agent_id: str) -> None:
@@ -75,7 +77,9 @@ async def try_acquire(agent_id: str) -> bool:
 
             token = await asyncio.to_thread(redis_lease.acquire, _dedup_key(agent_id), _HA_TTL_MS)
             if token is None:
-                logger.debug("Dedup(HA): %s already running on another node", agent_id)
+                logger.debug(
+                    "Dedup(HA): %s already running on another node", sanitize_log(agent_id)
+                )
                 return False
             _owners[agent_id] = token
             # Keep the lease alive for runs longer than the TTL.
@@ -84,7 +88,9 @@ async def try_acquire(agent_id: str) -> bool:
                 _running.add(agent_id)
             return True
         except Exception as e:
-            logger.warning("HA dedup acquire failed; falling back to in-process: %s", e)
+            logger.warning(
+                "HA dedup acquire failed; falling back to in-process: %s", sanitize_log(e)
+            )
 
     async with _lock:
         if agent_id in _running:
@@ -108,7 +114,11 @@ async def release(agent_id: str) -> None:
             await asyncio.to_thread(redis_lease.release, _dedup_key(agent_id), token)
             _owners.pop(agent_id, None)  # only forget the lease once released
         except Exception as e:
-            logger.warning("HA dedup release failed for %s; lease will TTL out: %s", agent_id, e)
+            logger.warning(
+                "HA dedup release failed for %s; lease will TTL out: %s",
+                sanitize_log(agent_id),
+                sanitize_log(e),
+            )
     async with _lock:
         _running.discard(agent_id)
 
@@ -125,7 +135,9 @@ def release_sync(agent_id: str) -> None:
             _owners.pop(agent_id, None)
         except Exception as e:
             logger.warning(
-                "HA dedup release_sync failed for %s; lease will TTL out: %s", agent_id, e
+                "HA dedup release_sync failed for %s; lease will TTL out: %s",
+                sanitize_log(agent_id),
+                sanitize_log(e),
             )
     _running.discard(agent_id)
 

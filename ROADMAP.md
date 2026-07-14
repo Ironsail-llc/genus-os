@@ -1,137 +1,107 @@
-# Roadmap
+# Genus OS roadmap
 
-Genus OS's path from AI brain to AI operating system.
+Genus OS 1.10 is an agent operating platform moving toward an
+organization-owned, policy-bound software entity. “Self-functioning” means it
+can observe, remember, plan, act, recover, and improve inside delegated limits.
+It does not mean unlimited authority, hidden financial activity, autonomous
+production deployment, or permission to rewrite its own governing policy.
 
-## v0.1 -- Memory & RAG (current)
+The delivery checklist and go-live blockers live in
+[`docs/PRODUCTION_HARDENING_TODO.md`](docs/PRODUCTION_HARDENING_TODO.md).
 
-The foundation. Three-tier memory with lifecycle management, fact extraction, conflict resolution, knowledge graph, semantic search, and RAG pipeline.
+## 1.10 production foundation — current
 
-- [x] Config system with env-based validation
-- [x] Database connection factory with pooling
-- [x] Fact store with LLM extraction, confidence scoring, and categories
-- [x] Conflict resolution (duplicate, update, contradiction detection)
-- [x] Memory lifecycle (decay, importance scoring, consolidation)
-- [x] Three-tier memory (working/short-term/long-term) with auto-archival
-- [x] Knowledge graph (entities + relations, auto-extracted)
-- [x] Ingestion pipeline with dedup (content hashing + watermarks)
-- [x] Contact matching (fuzzy names, nickname canonicalization)
-- [x] RAG pipeline (embed, search, rerank, generate)
-- [x] LLM client (Ollama: chat, embeddings, model management)
-- [x] CLI (`robothor migrate`, `robothor status`, `robothor serve`)
+Implemented in the current hardening work:
 
-## v0.2 -- CRM & Vision
+- canonical checksum-verified PostgreSQL migrations with drift detection and a
+  packaged migration manifest;
+- dependency-aware readiness, persistent fleet workspace, hardened containers,
+  and production NetworkPolicies;
+- fail-closed dashboard/Bridge SSO and JWT authorization with verified tenant,
+  role, scope, audience, and agent identity;
+- release-blocking Python, integration, frontend/browser, Helm, vulnerability,
+  and post-deploy smoke gates with rollback;
+- encrypted/checksummed snapshot and restore tooling with safe dry-run defaults;
+- a first Entity Kernel treasury boundary with token/reference-only payment
+  models, deny-default spend policy, idempotency, authority tiers, and redacted
+  tamper-evident events;
+- runtime/database reliability repairs and removal of stale test quarantine.
 
-Built-in contact management and always-on camera monitoring.
+This is a release-candidate foundation, not a certification or an availability
+claim. A real deployment still requires the operator controls and measured
+recovery evidence in the production TODO.
 
-- [x] CRM module (people, companies, notes, tasks, validation, blocklists)
-- [x] Cross-channel identity resolution (contact_identifiers table)
-- [x] Merge operations (people, companies -- fills gaps, re-links records)
-- [x] Vision module (YOLO detection, InsightFace recognition, pluggable alerts)
-- [x] Vision service loop with mode switching (disarmed/basic/armed)
-- [ ] Migration runner (`robothor migrate` executes SQL files)
-- [ ] CRM import/export (CSV, vCard)
+## Phase 1 — measured reliability and zero-trust service identity
 
-## v0.3 -- Events & Infrastructure
+- add leader election or active/passive failover for the single-writer engine;
+- require independently verified workload identity and service-specific
+  audiences on engine, orchestrator, vision, webhook, and websocket surfaces;
+- add PostgreSQL point-in-time recovery and automated isolated restore drills;
+- publish SLI dashboards and alerts for availability, latency, errors,
+  saturation, queue depth, auth failures, migration state, and snapshot age;
+- run failure-injection tests for database, Redis, model, node, secret rotation,
+  and partial deployment failures;
+- ratchet risk-weighted coverage to 70%, then 80%;
+- sign images, publish build provenance, and enforce admission verification;
+- export audit events to immutable storage with explicit retention and coverage
+  tests.
 
-Event-driven architecture and self-describing infrastructure.
+Exit criterion: the operated deployment demonstrates at least 99.9%
+availability, a maximum 15-minute recovery point, and a maximum 60-minute
+recovery time over an agreed measurement window. Repository features alone do
+not satisfy that criterion.
 
-- [x] Event bus (7 Redis Streams, standard envelopes, consumer groups)
-- [x] Agent RBAC (capability manifests, tool/stream/endpoint access control)
-- [x] Event consumers (email, calendar, health, vision) with graceful shutdown
-- [x] Service registry (topology sort, health checks, env overrides)
-- [x] Audit logging with typed events and telemetry table
-- [x] API layer (FastAPI orchestrator, MCP server with 44 tools)
-- [x] Infrastructure templates (Docker Compose, systemd, env config)
-- [ ] Documentation site (MkDocs or similar)
-- [ ] PyPI release
+## Phase 2 — durable Entity Kernel treasury
 
-## v0.4 -- Process Model
+- implement transactional, tenant-scoped decision, reservation, idempotency,
+  and append-only ledger storage;
+- integrate a reviewed provider through two separate adapters: hosted/tokenized
+  customer payments and Genus-owned virtual-card references;
+- verify signed webhooks, prevent replay, reconcile authorizations/settlements,
+  and model refunds, disputes, failures, card freeze, and rotation;
+- enforce vendor/category/currency allowlists, velocity limits, daily/monthly
+  budgets, approval thresholds, and separation of duties;
+- build operator-visible statements, exception queues, and incident controls;
+- complete the actual PCI scope assessment and provider/vendor review.
 
-Agent lifecycle management. Agents become first-class citizens with defined states.
+Raw PAN, full track data, PIN data, and CVC/CVV remain outside Genus OS for both
+customer and organization-owned cards. Card ownership is not an exemption from
+PCI or sound credential handling.
 
-- [ ] Agent registry (declare, discover, inspect agents)
-- [ ] Lifecycle states: `idle` -> `starting` -> `running` -> `stopping` -> `stopped`
-- [ ] Supervised execution (restart policies, failure budgets)
-- [ ] Agent health reporting (heartbeat protocol)
-- [ ] Process isolation (each agent gets its own working memory scope)
+## Phase 3 — governed self-functioning entity
 
-## v0.5 -- Capabilities
+- maintain a signed organization charter, objectives, delegated authorities,
+  risk appetite, and explicit non-delegable actions;
+- continuously build a self-model from health, outcomes, costs, obligations,
+  and operator feedback;
+- let reversible, low-risk learning and operational tuning execute
+  automatically with bounded rollback;
+- stage code changes on branches, run benchmarks/security checks, and open
+  reviewable draft PRs; never deploy code or expand permissions without human
+  approval;
+- require plans and approval for production mutation, external publication,
+  high-impact communication, regulated-data expansion, and controlled spend;
+- expose every material decision, reason, evidence, policy version, approval,
+  and outcome to the operator;
+- detect goal conflict, policy ambiguity, degraded confidence, and anomalous
+  behavior and fail closed or escalate.
 
-Fine-grained, runtime-enforced permissions.
+Exit criterion: Genus can sustain routine operations and recovery inside a
+formally delegated envelope while an operator can inspect, interrupt, revoke,
+and reconstruct every material action.
 
-- [ ] Per-agent rate limiting (tool calls/minute, tokens/hour)
-- [ ] Data scoping (agent X can only see its own facts, not all facts)
-- [ ] Resource quotas (memory blocks, stream throughput)
-- [ ] Capability negotiation (agent requests capabilities, system grants/denies)
-- [ ] Audit trail for all capability checks (who asked for what, when)
+## Phase 4 — enterprise and regulated-operation evidence
 
-## v0.6 -- Scheduler
+- formalize data classification, retention/deletion, consent, legal hold,
+  incident response, access review, vendor risk, and privacy workflows;
+- add tenant defense in depth such as PostgreSQL row-level security;
+- produce environment-specific control evidence packages rather than generic
+  compliance claims;
+- validate accessibility, localization, administrative delegation, audit
+  export, and multi-region/federated recovery;
+- pursue independent assessments only after the deployed technical and
+  organizational controls are operating and evidenced.
 
-Unified scheduling -- cron and event-driven in one system.
-
-- [ ] Declarative job definitions (replace crontab entries with config)
-- [ ] Event triggers (run job when stream event matches pattern)
-- [ ] Time triggers (cron expressions, intervals, one-shot)
-- [ ] Job dependencies (job B runs after job A completes)
-- [ ] Backpressure (skip if previous run still active)
-- [ ] Job history and failure tracking
-
-## v0.7 -- Channel Drivers
-
-Messaging abstraction layer.
-
-- [ ] Channel driver interface (send, receive, status, capabilities)
-- [ ] Built-in drivers: email (IMAP/SMTP), Telegram, webhook
-- [ ] Channel routing (rules for which agent handles which channel)
-- [ ] Message normalization (all channels produce the same event format)
-
-## v0.8 -- Device Abstraction
-
-Hardware as first-class resources.
-
-- [ ] Device registry (cameras, microphones, sensors, GPIO)
-- [ ] Device capabilities and status
-- [ ] Hot-plug support (detect new devices, auto-configure)
-- [ ] Device sharing (multiple agents can share a camera with priority)
-- [ ] Remote device access (devices on other machines via network)
-
-## v0.9 -- The Helm as Shell
-
-The dashboard becomes the operating system's shell.
-
-- [ ] Process manager panel (start, stop, inspect agents)
-- [ ] File system browser (memory facts, entities, blocks)
-- [ ] Log viewer (real-time streaming from all agents)
-- [ ] Resource monitor (memory usage, token consumption, stream throughput)
-- [ ] Agent console (interactive chat with any running agent)
-- [ ] Plugin system for custom panels
-
-## v0.10 -- Federation
-
-Peer-to-peer instance networking. Independent instances connect with scoped permissions.
-
-- [x] Instance identity (Ed25519 keypair generation, signed invite tokens)
-- [x] Connection state machine (pending → active → limited/suspended)
-- [x] Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks
-- [x] NATS JetStream transport (hub server + leaf node topology)
-- [x] Federation agent tools (query, trigger, sync_status)
-- [x] CLI commands (init, invite, connect, status, list, export, suspend, remove)
-- [x] Daemon integration (auto-start NATS on active connections)
-- [ ] Local integration test (two daemons on localhost)
-- [ ] Sensor tables + tools (Phase 5 — PF project)
-- [ ] Signal K MCP integration
-
-## v1.0 -- Unified Syscall Interface
-
-The complete operating system. Every capability accessible through one interface.
-
-- [ ] Syscall-style API (process, memory, device, channel, schedule, capability)
-- [ ] Agent app store (install, update, remove agent packages)
-- [x] Multi-node support (federation — distribute agents across machines)
-- [ ] Snapshot and restore (full system state backup)
-- [ ] SDK for building agent apps against the Genus OS API
-- [ ] Comprehensive documentation and tutorials
-
----
-
-**Current status:** v0.1-0.3 + v0.10 implemented (2,000+ tests passing). The intelligence layer, agent orchestration, control plane, and federation are production-validated. Next: formalizing the process model.
+HIPAA, PCI DSS, SOC 2, or other mappings in this repository are planning aids.
+They are not legal advice, attestations, certifications, or proof that a
+particular deployment is compliant.

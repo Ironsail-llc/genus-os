@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from datetime import UTC
 
-from deps import get_tenant_id
-from fastapi import APIRouter, Depends, Header, Query
+from deps import get_actor_id, get_tenant_id
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 # Keep these at runtime, NOT under TYPE_CHECKING — FastAPI must see the
@@ -50,7 +50,7 @@ router = APIRouter(prefix="/api", tags=["notes", "tasks"])
 
 
 @router.get("/notes")
-async def api_list_notes(
+def api_list_notes(
     personId: str | None = Query(None),
     companyId: str | None = Query(None),
     limit: int = Query(50),
@@ -60,7 +60,7 @@ async def api_list_notes(
 
 
 @router.post("/notes")
-async def api_create_note(
+def api_create_note(
     body: CreateNoteRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -73,7 +73,7 @@ async def api_create_note(
 
 
 @router.get("/notes/{note_id}")
-async def api_get_note(
+def api_get_note(
     note_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -84,7 +84,7 @@ async def api_get_note(
 
 
 @router.delete("/notes/{note_id}")
-async def api_delete_note(
+def api_delete_note(
     note_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -97,7 +97,7 @@ async def api_delete_note(
 
 
 @router.get("/tasks")
-async def api_list_tasks(
+def api_list_tasks(
     status: str | None = Query(None),
     personId: str | None = Query(None),
     assignedToAgent: str | None = Query(None),
@@ -125,9 +125,9 @@ async def api_list_tasks(
 
 
 @router.post("/tasks")
-async def api_create_task(
+def api_create_task(
     body: CreateTaskRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
     if not body.title:
@@ -141,8 +141,8 @@ async def api_create_task(
             )
             if existing:
                 return {"id": existing["id"], "title": existing["title"], "deduplicated": True}
-    # Auto-populate created_by_agent from X-Agent-Id header
-    agent_id = x_agent_id
+    # Auto-populate authorship from the verified service/user identity.
+    agent_id = actor_id
     task_id = create_task(
         title=body.title,
         body=body.body,
@@ -201,7 +201,7 @@ async def api_create_task(
 
 
 @router.get("/tasks/agent/{agent_id}")
-async def api_list_agent_tasks(
+def api_list_agent_tasks(
     agent_id: str,
     status: str | None = Query(None),
     includeUnassigned: bool = Query(False),
@@ -222,7 +222,7 @@ async def api_list_agent_tasks(
 
 
 @router.get("/tasks/{task_id}")
-async def api_get_task(
+def api_get_task(
     task_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):
@@ -233,10 +233,10 @@ async def api_get_task(
 
 
 @router.patch("/tasks/{task_id}")
-async def api_update_task(
+def api_update_task(
     task_id: str,
     body: UpdateTaskRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
     kwargs = {}
@@ -268,7 +268,7 @@ async def api_update_task(
         from datetime import datetime
 
         kwargs["resolved_at"] = datetime.now(UTC).isoformat()
-    result = update_task(task_id, changed_by=x_agent_id, tenant_id=tenant_id, **kwargs)
+    result = update_task(task_id, changed_by=actor_id, tenant_id=tenant_id, **kwargs)
     # Handle transition validation errors
     if isinstance(result, dict) and "error" in result:
         return JSONResponse(result, status_code=422)
@@ -282,15 +282,15 @@ async def api_update_task(
             {
                 "task_id": task_id,
                 "fields": list(kwargs.keys()),
-                "agent_id": x_agent_id,
+                "agent_id": actor_id,
                 "tenant_id": tenant_id,
             },
             source="bridge",
         )
         # Auto-send review_requested notification when moving to REVIEW
-        if body.status and body.status.upper() == "REVIEW" and x_agent_id:
+        if body.status and body.status.upper() == "REVIEW" and actor_id:
             send_notification(
-                from_agent=x_agent_id,
+                from_agent=actor_id,
                 to_agent="main",
                 notification_type="review_requested",
                 subject=f"Review requested: {task_id}",
@@ -302,16 +302,16 @@ async def api_update_task(
 
 
 @router.post("/tasks/{task_id}/resolve")
-async def api_resolve_task(
+def api_resolve_task(
     task_id: str,
     body: dict,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
     resolution = body.get("resolution", "")
     if not resolution:
         return JSONResponse({"error": "resolution required"}, status_code=400)
-    ok = resolve_task(task_id, resolution, agent_id=x_agent_id, tenant_id=tenant_id)
+    ok = resolve_task(task_id, resolution, agent_id=actor_id, tenant_id=tenant_id)
     if ok:
         publish(
             "agent",
@@ -319,7 +319,7 @@ async def api_resolve_task(
             {
                 "task_id": task_id,
                 "resolution": resolution,
-                "agent_id": x_agent_id,
+                "agent_id": actor_id,
                 "tenant_id": tenant_id,
             },
             source="bridge",
@@ -329,13 +329,13 @@ async def api_resolve_task(
 
 
 @router.post("/tasks/{task_id}/approve")
-async def api_approve_task(
+def api_approve_task(
     task_id: str,
     body: ApproveTaskRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
-    reviewer = x_agent_id or "helm-user"
+    reviewer = actor_id or "helm-user"
     result = approve_task(task_id, body.resolution, reviewer, tenant_id=tenant_id)
     if isinstance(result, dict) and "error" in result:
         return JSONResponse(result, status_code=422)
@@ -355,13 +355,13 @@ async def api_approve_task(
 
 
 @router.post("/tasks/{task_id}/reject")
-async def api_reject_task(
+def api_reject_task(
     task_id: str,
     body: RejectTaskRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
-    reviewer = x_agent_id or "helm-user"
+    reviewer = actor_id or "helm-user"
     result = reject_task(
         task_id,
         body.reason,
@@ -387,10 +387,10 @@ async def api_reject_task(
 
 
 @router.post("/tasks/{task_id}/answer")
-async def api_answer_task_question(
+def api_answer_task_question(
     task_id: str,
     body: AnswerQuestionRequest,
-    x_agent_id: str | None = Header(None, alias="X-Agent-Id"),
+    actor_id: str | None = Depends(get_actor_id),
     tenant_id: str = Depends(get_tenant_id),
 ):
     """Operator answer to a planner-set question. Phase 4.
@@ -399,7 +399,7 @@ async def api_answer_task_question(
     `requires_human`, resets `escalation_count`, optionally advances status,
     records a `kind=answer` history row, and notifies the assigned agent.
     """
-    by = x_agent_id or "helm-user"
+    by = actor_id or "helm-user"
     if not body.answer.strip():
         return JSONResponse({"error": "answer is required"}, status_code=422)
     result = answer_question(
@@ -436,7 +436,7 @@ async def api_answer_task_question(
 
 
 @router.get("/tasks/{task_id}/history")
-async def api_get_task_history(
+def api_get_task_history(
     task_id: str,
     limit: int = Query(50),
     tenant_id: str = Depends(get_tenant_id),
@@ -446,7 +446,7 @@ async def api_get_task_history(
 
 
 @router.delete("/tasks/{task_id}")
-async def api_delete_task(
+def api_delete_task(
     task_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ):

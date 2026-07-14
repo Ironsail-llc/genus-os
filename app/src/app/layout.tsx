@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { PublicEnvScript } from "next-runtime-env";
+import { RuntimeConfigProvider } from "@/components/runtime-config";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -33,15 +33,19 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Indirect lookup keeps this operator-owned value request-time configurable
+  // in the standalone image instead of baking it into the browser bundle.
+  const runtimeValue = (name: string) => process.env[name];
+  const aiName = runtimeValue("NEXT_PUBLIC_AI_NAME") || "Robothor";
+
   return (
     <html lang="en" className="dark">
-      <head>
-        <PublicEnvScript />
-      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <TooltipProvider>{children}</TooltipProvider>
+        <RuntimeConfigProvider aiName={aiName}>
+          <TooltipProvider>{children}</TooltipProvider>
+        </RuntimeConfigProvider>
       </body>
     </html>
   );

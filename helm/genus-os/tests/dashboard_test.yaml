@@ -12,14 +12,29 @@ tests:
           path: spec.replicas
           value: 2
 
-  - it: dashboard wires bridge URL and runtime identity env
+  - it: dashboard wires internal backends and same-origin browser proxy
     template: dashboard/deployment.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: NEXT_PUBLIC_BRIDGE_URL
+            value: /api/bridge
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRIDGE_URL
             value: http://gos-genus-os-bridge:9100
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ORCHESTRATOR_URL
+            value: http://gos-genus-os-orchestrator:9099
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_URL
+            value: http://gos-genus-os-engine:18800
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -30,6 +45,59 @@ tests:
           content:
             name: NEXT_PUBLIC_AI_NAME
             value: "Robothor"
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-dashboard-auth
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-bridge-sso
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-database
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-auth-signing
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-engine-providers
+
+  - it: dashboard fails rendering if a privileged secret is requested
+    template: dashboard/deployment.yaml
+    set:
+      dashboard.secretRefs: [dashboard-auth, bridge-sso, engine-providers]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'dashboard.secretRefs forbids privileged secret class "engine-providers"; only dashboard-auth and bridge-sso are allowed'
+
+  - it: dashboard never mounts a Kubernetes API token
+    template: dashboard/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: gos-genus-os-dashboard
+
+  - it: dashboard probes separate liveness and readiness
+    template: dashboard/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /api/live
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /api/ready
 
   - it: HPA renders when autoscaling enabled
     template: dashboard/hpa.yaml

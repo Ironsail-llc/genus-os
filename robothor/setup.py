@@ -567,28 +567,24 @@ def _find_template_dir() -> Path | None:
 
 
 def run_migration(db_config: DatabaseConfig) -> int:
-    """Run database migration. Returns table count on success, -1 on failure."""
-    from robothor.cli import _find_migration_sql
-
-    sql = _find_migration_sql()
-    if sql is None:
-        return -1
-
+    """Run the canonical migration chain. Return table count or ``-1``."""
     try:
         import psycopg2
 
+        from robothor.db.migrate import apply
+
         conn = psycopg2.connect(**db_config.dict, connect_timeout=5)
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            # Count tables
-            cur.execute(
-                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-            )
-            row = cur.fetchone()
-            count: int = row[0] if row else 0
-        conn.close()
-        return count
+        try:
+            apply(connection=conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+                )
+                row = cur.fetchone()
+                count: int = row[0] if row else 0
+            return count
+        finally:
+            conn.close()
     except Exception:
         return -1
 

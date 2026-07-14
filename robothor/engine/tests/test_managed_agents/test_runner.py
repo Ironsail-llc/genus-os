@@ -385,3 +385,20 @@ class TestRunOnManagedAgents:
             )
 
         assert result.output_text == "Partial"
+
+    @pytest.mark.asyncio
+    async def test_missing_identity_fails_closed_before_external_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+        monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
+
+        with patch("robothor.engine.managed_agents.runner.get_ma_client") as get_client:
+            result = await run_on_managed_agents(
+                "main", "test", tools=[], system_prompt="test", persist=False
+            )
+
+        assert result.error == (
+            "Authentication identity and tenant required for Managed Agents execution"
+        )
+        get_client.assert_not_called()

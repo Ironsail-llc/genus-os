@@ -1,0 +1,23 @@
+suite: independent connectivity smoke test
+release:
+  name: gos
+  namespace: genus
+templates:
+  - test-connection.yaml
+tests:
+  - it: checks live and ready over every enabled ClusterIP service
+    asserts:
+      - isKind:
+          of: Pod
+      - matchRegex:
+          path: spec.containers[0].command[2]
+          pattern: gos-genus-os-engine:18800/live
+      - matchRegex:
+          path: spec.containers[0].command[2]
+          pattern: gos-genus-os-engine:18800/ready
+      - matchRegex:
+          path: spec.containers[0].command[2]
+          pattern: gos-genus-os-bridge:9100/ready
+      - matchRegex:
+          path: spec.containers[0].command[2]
+          pattern: gos-genus-os-dashboard:3000/api/ready

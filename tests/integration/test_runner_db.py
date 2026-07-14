@@ -12,6 +12,10 @@ import pytest
 
 from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
+_RUN_ONE = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1"
+_RUN_TWO = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2"
+_CORRELATION_ONE = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeff"
+
 
 @pytest.mark.integration
 class TestRunnerDB:
@@ -20,21 +24,21 @@ class TestRunnerDB:
         from robothor.engine.tracking import create_run, get_run
 
         run = AgentRun(
-            id="test-run-001",
-            tenant_id="test-tenant",
+            id=_RUN_ONE,
+            tenant_id="default",
             agent_id="test-agent",
             trigger_type=TriggerType.CRON,
             trigger_detail="manual test",
-            correlation_id="corr-001",
+            correlation_id=_CORRELATION_ONE,
             status=RunStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
 
         run_id = create_run(run)
-        assert run_id == "test-run-001"
+        assert run_id == _RUN_ONE
 
         # Verify it was persisted
-        row = get_run("test-run-001")
+        row = get_run(_RUN_ONE)
         assert row is not None
         assert row["agent_id"] == "test-agent"
         assert row["status"] == "running"
@@ -44,8 +48,8 @@ class TestRunnerDB:
         from robothor.engine.tracking import create_run, get_run, update_run
 
         run = AgentRun(
-            id="test-run-002",
-            tenant_id="test-tenant",
+            id=_RUN_TWO,
+            tenant_id="default",
             agent_id="test-agent",
             trigger_type=TriggerType.CRON,
             status=RunStatus.RUNNING,
@@ -54,7 +58,7 @@ class TestRunnerDB:
         create_run(run)
 
         update_run(
-            "test-run-002",
+            _RUN_TWO,
             status="completed",
             completed_at=datetime.now(UTC),
             duration_ms=5000,
@@ -64,7 +68,7 @@ class TestRunnerDB:
             total_cost_usd=0.01,
         )
 
-        row = get_run("test-run-002")
+        row = get_run(_RUN_TWO)
         assert row is not None
         assert row["status"] == "completed"
         assert row["duration_ms"] == 5000

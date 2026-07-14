@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import subprocess
+from functools import partial
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from robothor.engine.models import AgentConfig
-from robothor.engine.tools import ToolRegistry, _execute_tool, get_registry
+from robothor.engine.tools import ToolRegistry, get_registry
+from robothor.engine.tools import _execute_tool as _execute_tool_impl
+
+_execute_tool = partial(_execute_tool_impl, user_role="service")
 
 
 class TestToolRegistry:
@@ -112,7 +116,11 @@ class TestToolRegistry:
 
         config = AgentConfig(id="test", name="test", tools_allowed=["list_tasks"])
         names = registry.get_tool_names(config)
-        assert names == ["list_tasks"]
+        assert "list_tasks" in names
+        # Session-goal lifecycle tools are deliberately available to every
+        # agent, even when its business-tool allowlist is narrow.
+        assert "create_goal" in names
+        assert "update_goal" in names
 
     def test_schema_format(self):
         """Tool schemas are in OpenAI function-calling format."""
@@ -128,8 +136,7 @@ class TestToolRegistry:
 
         config = AgentConfig(id="test", name="test", tools_allowed=["list_tasks"])
         schemas = registry.build_for_agent(config)
-        assert len(schemas) == 1
-        schema = schemas[0]
+        schema = next(s for s in schemas if s["function"]["name"] == "list_tasks")
         assert schema["type"] == "function"
         assert schema["function"]["name"] == "list_tasks"
         assert schema["function"]["description"] == "List tasks"
@@ -569,7 +576,8 @@ class TestMergeAndAliasTools:
         names = [t["function"]["name"] for t in tools]
         assert "list_my_tasks" in names
         assert "exec" in names
-        assert len(names) == 2
+        assert "create_goal" in names
+        assert "update_goal" in names
 
     def test_merge_contacts_in_agent_allowlist(self):
         """Agent with merge_contacts in tools_allowed gets the schema."""

@@ -19,6 +19,6 @@ Modules:
 
 from __future__ import annotations
 
-from robothor.auth.deps import AuthContext
+from robothor.auth.deps import AuthContext, require_access
 
-__all__ = ["AuthContext"]
+__all__ = ["AuthContext", "require_access"]

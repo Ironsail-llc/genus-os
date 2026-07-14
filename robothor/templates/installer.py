@@ -17,6 +17,15 @@ import yaml
 
 from robothor.templates.instance import InstanceConfig
 from robothor.templates.resolver import TemplateResolver, deep_merge
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    safe_relative_path,
+    trusted_directory,
+    validate_identifier,
+    validate_sha256,
+    workspace_path,
+)
 
 
 def _find_repo_root() -> Path:
@@ -35,12 +44,74 @@ def _find_defaults_path(repo_root: Path) -> Path | None:
     return None
 
 
+def _bundle_file(bundle: Path, name: str, *, required: bool = False) -> Path | None:
+    """Return a regular, non-symlink bundle control file."""
+
+    path = contained_path(bundle, name, label=f"bundle {name} path")
+    if not path.exists():
+        if required:
+            raise FileNotFoundError(f"{name} not found in {bundle}")
+        return None
+    if not path.is_file():
+        raise TemplateSecurityError(f"Bundle {name} must be a regular file")
+    return path
+
+
+def _manifest_path(repo_root: Path, agent_id: str) -> Path:
+    return workspace_path(
+        repo_root,
+        f"docs/agents/{agent_id}.yaml",
+        allowed_prefix="docs/agents",
+        label="agent manifest destination",
+    )
+
+
+def _instruction_path(repo_root: Path, value: object) -> Path:
+    return workspace_path(
+        repo_root,
+        value,
+        allowed_prefix="brain",
+        label="agent instruction destination",
+    )
+
+
+def _load_mapping(path: Path, *, label: str) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise TemplateSecurityError(f"Invalid {label}: expected a YAML mapping")
+    return data
+
+
+def _owned_agent_files(repo_root: Path, agent_id: str) -> dict[str, Path]:
+    """Derive removable files from the canonical manifest, never installed.yaml paths."""
+
+    manifest_path = _manifest_path(repo_root, agent_id)
+    files = {"manifest": manifest_path}
+    if not manifest_path.exists():
+        return files
+
+    manifest = _load_mapping(manifest_path, label="installed agent manifest")
+    manifest_id = validate_identifier(manifest.get("id"), label="manifest agent ID")
+    if manifest_id != agent_id:
+        raise TemplateSecurityError(
+            f"Installed manifest ID {manifest_id!r} does not match requested agent {agent_id!r}"
+        )
+    instruction = manifest.get("instruction_file")
+    if instruction:
+        files["instruction"] = _instruction_path(repo_root, instruction)
+    return files
+
+
 def install(
     template_path: str | Path,
     overrides: dict[str, Any] | None = None,
     auto_yes: bool = False,
     instance_dir: Path | None = None,
     repo_root: Path | None = None,
+    *,
+    source: str = "local",
+    source_ref: str | None = None,
+    source_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Install an agent from a template bundle.
 
@@ -56,22 +127,33 @@ def install(
     """
     if repo_root is None:
         repo_root = _find_repo_root()
+    repo_root = repo_root.resolve(strict=True)
 
-    bundle = Path(template_path)
-    if not bundle.is_dir():
-        raise FileNotFoundError(f"Template bundle not found: {bundle}")
+    if source not in {"local", "hub"}:
+        raise TemplateSecurityError(f"Unsupported agent install source: {source}")
+    if source == "hub":
+        source_ref = validate_identifier(source_ref, label="hub bundle slug")
+        source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
+
+    try:
+        bundle = trusted_directory(template_path, label="template bundle")
+    except TemplateSecurityError as error:
+        raise FileNotFoundError(f"Template bundle not found or unsafe: {template_path}") from error
 
     # Load setup.yaml
-    setup_path = bundle / "setup.yaml"
-    if not setup_path.exists():
-        raise FileNotFoundError(f"setup.yaml not found in {bundle}")
-    setup = yaml.safe_load(setup_path.read_text()) or {}
+    setup_path = _bundle_file(bundle, "setup.yaml", required=True)
+    assert setup_path is not None
+    setup = _load_mapping(setup_path, label="bundle setup.yaml")
 
-    agent_id = setup.get("agent_id", bundle.name)
+    agent_id = validate_identifier(setup.get("agent_id", bundle.name), label="agent ID")
+    if source == "hub" and agent_id != source_ref:
+        raise TemplateSecurityError(
+            "Downloaded bundle agent ID does not match its trusted registry slug"
+        )
     version = setup.get("version", "0.0.0")
 
     # Check for existing agent (duplicate detection)
-    manifest_dest = repo_root / "docs" / "agents" / f"{agent_id}.yaml"
+    manifest_dest = _manifest_path(repo_root, agent_id)
     if manifest_dest.exists() and not auto_yes:
         overwrite = (
             input(f"  Agent '{agent_id}' already installed. Overwrite? [y/N]: ").strip().lower()
@@ -117,25 +199,49 @@ def install(
                     context[var_name] = var_def["default"]
 
     # Resolve template files
-    output_files = {}
+    output_files: dict[str, tuple[Path, str]] = {}
+    manifest_data: dict[str, Any] = {}
 
-    manifest_template = bundle / "manifest.template.yaml"
-    if manifest_template.exists():
-        manifest_content = resolver.resolve_file(manifest_template, context)
-        manifest_data = yaml.safe_load(manifest_content) or {}
-        manifest_id = manifest_data.get("id", agent_id)
-        manifest_dest = repo_root / "docs" / "agents" / f"{manifest_id}.yaml"
+    manifest_template = _bundle_file(bundle, "manifest.template.yaml", required=True)
+    if manifest_template is not None:
+        manifest_content = resolver.resolve_file(manifest_template, context, trusted_root=bundle)
+        loaded_manifest = yaml.safe_load(manifest_content) or {}
+        if not isinstance(loaded_manifest, dict):
+            raise TemplateSecurityError("Invalid resolved manifest: expected a YAML mapping")
+        manifest_data = loaded_manifest
+        manifest_id = validate_identifier(manifest_data.get("id"), label="manifest agent ID")
+        if manifest_id != agent_id:
+            raise TemplateSecurityError(
+                f"Manifest ID {manifest_id!r} does not match setup agent ID {agent_id!r}"
+            )
+        manifest_dest = _manifest_path(repo_root, manifest_id)
         output_files["manifest"] = (manifest_dest, manifest_content)
 
-    instructions_template = bundle / "instructions.template.md"
-    if instructions_template.exists():
-        instructions_content = resolver.resolve_file(instructions_template, context)
+    setup_instruction = setup.get("instruction_file_path")
+    manifest_instruction = manifest_data.get("instruction_file")
+    if setup_instruction:
+        _instruction_path(repo_root, setup_instruction)
+    if manifest_instruction:
+        _instruction_path(repo_root, manifest_instruction)
+    if (
+        setup_instruction
+        and manifest_instruction
+        and safe_relative_path(setup_instruction, label="setup instruction path")
+        != safe_relative_path(manifest_instruction, label="manifest instruction path")
+    ):
+        raise TemplateSecurityError(
+            "setup.yaml and the resolved manifest declare different instruction paths"
+        )
+
+    instructions_template = _bundle_file(bundle, "instructions.template.md")
+    if instructions_template is not None:
+        instructions_content = resolver.resolve_file(
+            instructions_template, context, trusted_root=bundle
+        )
         # Determine instruction file destination from resolved manifest
-        instr_path = setup.get("instruction_file_path")
-        if not instr_path and manifest_data:
-            instr_path = manifest_data.get("instruction_file", "")
+        instr_path = setup_instruction or manifest_instruction
         if instr_path:
-            instr_dest = repo_root / instr_path
+            instr_dest = _instruction_path(repo_root, instr_path)
             output_files["instruction"] = (instr_dest, instructions_content)
 
     # Write files atomically — temp files first, then validate, then move
@@ -181,14 +287,23 @@ def install(
         raise
 
     # Record installation
+    recorded_source = str(bundle)
+    if source == "hub":
+        assert source_ref is not None  # validated before any bundle files were read
+        recorded_source = source_ref
     instance.record_install(
         agent_id=agent_id,
-        source="local",
-        source_path=str(bundle),
+        source=source,
+        source_path=recorded_source,
         version=version,
         variables=context,
-        manifest_path=str(output_files.get("manifest", ("",))[0]),
-        instruction_path=str(output_files.get("instruction", ("",))[0]),
+        manifest_path=output_files["manifest"][0].relative_to(repo_root).as_posix(),
+        instruction_path=(
+            output_files["instruction"][0].relative_to(repo_root).as_posix()
+            if "instruction" in output_files
+            else ""
+        ),
+        source_sha256=source_sha256,
     )
 
     return {
@@ -198,6 +313,7 @@ def install(
         "validation": validation_messages,
         "chain_validation": chain_validation_messages,
         "context": context,
+        "source": source,
     }
 
 
@@ -217,6 +333,8 @@ def remove(
     """
     if repo_root is None:
         repo_root = _find_repo_root()
+    repo_root = repo_root.resolve(strict=True)
+    agent_id = validate_identifier(agent_id, label="agent ID")
 
     instance = InstanceConfig.load(instance_dir)
     agents = instance.installed_agents
@@ -224,23 +342,18 @@ def remove(
     if agent_id not in agents:
         return False
 
-    record = agents[agent_id]
-    files = record.get("files", {})
-
-    file_paths = {}
-    for file_type, path_str in files.items():
-        if path_str:
-            p = Path(path_str)
-            if not p.is_absolute():
-                p = repo_root / p
-            file_paths[file_type] = p
+    # installed.yaml is mutable state, not an authorization source for deletion.
+    # Derive the only removable paths from the strict ID and canonical manifest.
+    file_paths = _owned_agent_files(repo_root, agent_id)
 
     # Archive or delete
     if archive:
         instance.archive_agent(agent_id, file_paths)
 
     for path in file_paths.values():
-        if path.exists():
+        if path.is_symlink():
+            raise TemplateSecurityError(f"Refusing to remove symlink: {path}")
+        if path.is_file():
             path.unlink()
 
     instance.record_remove(agent_id)
@@ -254,11 +367,15 @@ def update(
     auto_yes: bool = False,
     instance_dir: Path | None = None,
     repo_root: Path | None = None,
+    *,
+    source: str = "local",
+    source_ref: str | None = None,
+    source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Update an installed agent with a new or same template.
 
     1. Read current install record from .robothor/installed.yaml
-    2. Load new template (from path or same source)
+    2. Load an explicit template or a same-ID bundle from the local catalog
     3. Re-resolve with existing variables + any new defaults
     4. Diff against current manifest -> show changes
     5. Write updated files
@@ -268,6 +385,8 @@ def update(
     """
     if repo_root is None:
         repo_root = _find_repo_root()
+    repo_root = repo_root.resolve(strict=True)
+    agent_id = validate_identifier(agent_id, label="agent ID")
 
     instance = InstanceConfig.load(instance_dir)
     agents = instance.installed_agents
@@ -277,10 +396,29 @@ def update(
 
     record = agents[agent_id]
 
-    # Determine template path
-    template_path = new_template_path or record.get("source_path")
-    if not template_path:
-        return None
+    # Never execute a source path recovered from mutable installed.yaml state.
+    # Without an explicit source, only a deterministic in-workspace catalog
+    # bundle with the same strict ID is eligible for a local update.
+    template_path = new_template_path
+    if template_path is None:
+        catalog_root = workspace_path(
+            repo_root,
+            "templates/agents",
+            allowed_prefix="templates/agents",
+            label="local template catalog",
+        )
+        if catalog_root.is_dir():
+            for department in catalog_root.iterdir():
+                if not department.is_dir() or department.is_symlink():
+                    continue
+                candidate = department / agent_id
+                if candidate.is_dir() and not candidate.is_symlink():
+                    template_path = candidate
+                    break
+        if template_path is None:
+            raise TemplateSecurityError(
+                "No trusted local template found; provide an explicit update template"
+            )
 
     # Merge existing variables with new overrides
     existing_vars = record.get("variables", {})
@@ -288,13 +426,9 @@ def update(
 
     # Read current files for diff
     current_files = {}
-    for file_type, path_str in record.get("files", {}).items():
-        if path_str:
-            p = Path(path_str)
-            if not p.is_absolute():
-                p = repo_root / p
-            if p.exists():
-                current_files[file_type] = p.read_text()
+    for file_type, path in _owned_agent_files(repo_root, agent_id).items():
+        if path.is_file():
+            current_files[file_type] = path.read_text()
 
     # Install with merged overrides
     result = install(
@@ -303,6 +437,9 @@ def update(
         auto_yes=auto_yes,
         instance_dir=instance_dir,
         repo_root=repo_root,
+        source=source,
+        source_ref=source_ref,
+        source_sha256=source_sha256,
     )
 
     # Generate diffs for user review
@@ -347,13 +484,23 @@ def import_agent(
     """
     if repo_root is None:
         repo_root = _find_repo_root()
+    repo_root = repo_root.resolve(strict=True)
+    agent_id = validate_identifier(agent_id, label="agent ID")
 
     # Load manifest
-    manifest_path = repo_root / "docs" / "agents" / f"{agent_id}.yaml"
+    manifest_path = _manifest_path(repo_root, agent_id)
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-    manifest = yaml.safe_load(manifest_path.read_text()) or {}
+    manifest = _load_mapping(manifest_path, label="agent manifest")
+    manifest_id = validate_identifier(manifest.get("id"), label="manifest agent ID")
+    if manifest_id != agent_id:
+        raise TemplateSecurityError(
+            f"Manifest ID {manifest_id!r} does not match requested agent {agent_id!r}"
+        )
+    declared_instruction = manifest.get("instruction_file")
+    if declared_instruction:
+        _instruction_path(repo_root, declared_instruction)
 
     # Load defaults for comparison
     defaults: dict[str, Any] = {}
@@ -365,13 +512,21 @@ def import_agent(
             defaults = yaml.safe_load(dp.read_text()) or {}
 
     # Determine output directory
-    department = manifest.get("department", "custom")
+    department = validate_identifier(manifest.get("department", "custom"), label="department")
     out_path: Path
     if output_dir is None:
-        out_path = repo_root / "templates" / "agents" / department / agent_id
+        out_path = workspace_path(
+            repo_root,
+            f"templates/agents/{department}/{agent_id}",
+            allowed_prefix="templates/agents",
+            label="template output directory",
+        )
     else:
-        out_path = Path(output_dir)
+        out_path = Path(output_dir).expanduser().resolve(strict=False)
     out_path.mkdir(parents=True, exist_ok=True)
+
+    def output_file(name: str) -> Path:
+        return contained_path(out_path, name, label="generated template path")
 
     # Identify instance-specific variables (deviations from defaults)
     variables = {}
@@ -465,14 +620,14 @@ def import_agent(
             template_content = template_content.replace(old, new, 1)  # Only first occurrence
 
     # Write manifest.template.yaml
-    (out_path / "manifest.template.yaml").write_text(template_content)
+    output_file("manifest.template.yaml").write_text(template_content)
 
     # Copy instruction file as template
     instr_file = manifest.get("instruction_file")
     if instr_file:
-        instr_path = repo_root / instr_file
+        instr_path = _instruction_path(repo_root, instr_file)
         if instr_path.exists():
-            (out_path / "instructions.template.md").write_text(instr_path.read_text())
+            output_file("instructions.template.md").write_text(instr_path.read_text())
 
     # Generate setup.yaml
     setup = {
@@ -481,14 +636,14 @@ def import_agent(
         "instruction_file_path": instr_file or "",
         "variables": variables,
     }
-    (out_path / "setup.yaml").write_text(
+    output_file("setup.yaml").write_text(
         yaml.dump(setup, default_flow_style=False, sort_keys=False)
     )
 
     # Generate SKILL.md using description optimizer
     instr_content = ""
     if instr_file:
-        instr_path = repo_root / instr_file
+        instr_path = _instruction_path(repo_root, instr_file)
         if instr_path.exists():
             instr_content = instr_path.read_text()
 
@@ -511,7 +666,7 @@ department: {department}
 {manifest.get("description", "")}
 """
 
-    (out_path / "SKILL.md").write_text(skill_content)
+    output_file("SKILL.md").write_text(skill_content)
 
     # Generate programmatic.json
     import json
@@ -525,7 +680,7 @@ department: {department}
         "description": manifest.get("description", ""),
         "tags": manifest.get("tags_produced", []),
     }
-    (out_path / "programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
+    output_file("programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
 
     # Register in installed.yaml
     instance = InstanceConfig.load()
@@ -537,8 +692,8 @@ department: {department}
         variables={
             k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
         },
-        manifest_path=str(manifest_path),
-        instruction_path=str(repo_root / instr_file) if instr_file else "",
+        manifest_path=manifest_path.relative_to(repo_root).as_posix(),
+        instruction_path=safe_relative_path(instr_file).as_posix() if instr_file else "",
     )
 
     # Score hub readiness

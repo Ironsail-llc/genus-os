@@ -417,6 +417,7 @@ class TestScenario5HappyPathNoRecovery:
 class TestScenario6ReplanLoopPrevention:
     """Replan should be capped at MAX_REPLANS (2)."""
 
+    @pytest.mark.usefixtures("_mock_run_persistence")
     @pytest.mark.asyncio
     async def test_max_replans_enforced(self, runner, spawn_agent_config):
         spawn_agent_config.max_iterations = 15
@@ -465,15 +466,12 @@ class TestScenario6ReplanLoopPrevention:
 
         runner.registry.execute = AsyncMock(side_effect=mock_execute)
 
-        with patch("robothor.engine.runner.create_run"):
-            with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", side_effect=mock_completion):
-                        run = await runner.execute(
-                            "test-agent",
-                            "Complex task",
-                            agent_config=spawn_agent_config,
-                        )
+        with patch("litellm.acompletion", side_effect=mock_completion):
+            run = await runner.execute(
+                "test-agent",
+                "Complex task",
+                agent_config=spawn_agent_config,
+            )
 
         # Run should complete (not infinite loop)
         assert run.status in (RunStatus.COMPLETED, RunStatus.FAILED)

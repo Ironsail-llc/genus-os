@@ -13,7 +13,7 @@ interface ServiceDef {
   port: number;
   host: string;
   health: string | null;
-  protocol?: string;
+  protocol?: "http" | "https";
   systemd_unit?: string | null;
   tunnel_route?: string | null;
   dependencies: string[];
@@ -27,6 +27,7 @@ interface Manifest {
 
 /** Environment variable overrides per service */
 const ENV_OVERRIDES: Record<string, string> = {
+  engine: "ROBOTHOR_ENGINE_URL",
   bridge: "BRIDGE_URL",
   orchestrator: "ORCHESTRATOR_URL",
   vision: "VISION_URL",
@@ -36,19 +37,85 @@ const ENV_OVERRIDES: Record<string, string> = {
   helm: "HELM_URL",
 };
 
-const MANIFEST_PATHS = [
-  path.resolve(__dirname, "../../../../robothor-services.json"),
-  path.join(process.env.ROBOTHOR_WORKSPACE || path.join(process.env.HOME || "", "robothor"), "robothor-services.json"),
-];
+function validatedServiceUrl(baseValue: string, urlPath = ""): string | null {
+  if (baseValue.length > 2_048) return null;
+
+  try {
+    const base = new URL(baseValue);
+    if (
+      !["http:", "https:"].includes(base.protocol) ||
+      !base.hostname ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    ) {
+      return null;
+    }
+
+    if (!urlPath) return base.toString().replace(/\/$/, "");
+    if (!urlPath.startsWith("/") || urlPath.startsWith("//")) return null;
+
+    const target = new URL(
+      urlPath.replace(/^\/+/, ""),
+      `${base.origin}${base.pathname.replace(/\/?$/, "/")}`,
+    );
+    return target.origin === base.origin ? target.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve only explicit, bounded manifest locations.
+ *
+ * The previous `__dirname/../../..` and `$HOME/robothor` search caused Next's
+ * output tracer to conservatively copy the whole application tree into the
+ * production standalone image. Operators can provide either the exact file or
+ * the workspace root; the container deployment normally uses service URL
+ * environment overrides and does not need a filesystem manifest.
+ */
+function manifestPaths(): string[] {
+  const paths = [
+    path.join(
+      /* turbopackIgnore: true */ process.cwd(),
+      "robothor-services.json"
+    ),
+  ];
+  const explicitManifest = process.env.ROBOTHOR_SERVICES_MANIFEST;
+  const workspace = process.env.ROBOTHOR_WORKSPACE;
+
+  if (explicitManifest) {
+    paths.unshift(path.resolve(/* turbopackIgnore: true */ explicitManifest));
+  }
+  if (workspace) {
+    paths.push(
+      path.join(/* turbopackIgnore: true */ workspace, "robothor-services.json")
+    );
+  }
+  if (process.env.NODE_ENV !== "production") {
+    // Local development and tests run from app/ while the repository manifest
+    // lives one directory above it. This branch is removed from production
+    // builds, keeping the standalone output trace bounded to app/.
+    paths.push(
+      path.resolve(
+        /* turbopackIgnore: true */ process.cwd(),
+        "..",
+        "robothor-services.json"
+      )
+    );
+  }
+  return paths;
+}
 
 let _manifest: Manifest | null = null;
 
 function loadManifest(): Manifest {
   if (_manifest) return _manifest;
 
-  for (const p of MANIFEST_PATHS) {
+  for (const p of manifestPaths()) {
     try {
-      const content = fs.readFileSync(p, "utf-8");
+      const content = fs.readFileSync(/* turbopackIgnore: true */ p, "utf-8");
       _manifest = JSON.parse(content) as Manifest;
       return _manifest;
     } catch {
@@ -71,8 +138,11 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   if (envKey) {
     const envVal = process.env[envKey];
     if (envVal) {
-      const base = envVal.replace(/\/$/, "");
-      return urlPath ? `${base}${urlPath}` : base;
+      const validated = validatedServiceUrl(envVal, urlPath);
+      if (!validated) {
+        throw new Error(`Invalid ${envKey} service URL configuration`);
+      }
+      return validated;
     }
   }
 
@@ -80,9 +150,18 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   const svc = manifest.services[name];
   if (!svc) return null;
 
-  const protocol = svc.protocol === "ws" ? "ws" : "http";
+  const protocol = svc.protocol ?? "http";
+  if (protocol !== "http" && protocol !== "https") return null;
   const base = `${protocol}://${svc.host}:${svc.port}`;
-  return urlPath ? `${base}${urlPath}` : base;
+  return validatedServiceUrl(base, urlPath);
+}
+
+/** Resolve a health/readiness target from operator runtime configuration only. */
+export function getConfiguredServiceUrl(name: string, urlPath = ""): string | null {
+  const envKey = ENV_OVERRIDES[name];
+  if (!envKey) return null;
+  const value = process.env[envKey];
+  return value ? validatedServiceUrl(value, urlPath) : null;
 }
 
 /**

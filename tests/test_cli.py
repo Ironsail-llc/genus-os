@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from robothor import __version__
 from robothor.cli import REQUIRED_TABLES, _find_migration_sql, main
 
 
@@ -11,7 +12,7 @@ class TestCli:
         assert rc == 0
         out = capsys.readouterr().out
         assert "robothor" in out
-        assert "0.1.0" in out
+        assert __version__ in out
 
     def test_version_flag(self, capsys):
         rc = main(["--version"])
@@ -97,7 +98,11 @@ class TestMigrate:
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("psycopg2.connect", return_value=mock_conn):
+        current = [{"migration_id": "001_init", "status": "applied"}]
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.status", return_value=current),
+        ):
             rc = main(["migrate", "--check"])
 
         assert rc == 0
@@ -112,7 +117,11 @@ class TestMigrate:
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("psycopg2.connect", return_value=mock_conn):
+        current = [{"migration_id": "001_init", "status": "applied"}]
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.status", return_value=current),
+        ):
             rc = main(["migrate", "--check"])
 
         assert rc == 1

@@ -366,7 +366,7 @@ class TestAdapterDispatch:
             patch("robothor.engine.tools.registry._registry", registry),
             patch("robothor.engine.mcp_client.get_mcp_client_pool", return_value=mock_pool),
         ):
-            result = await _execute_tool("search_patients", {"query": "Smith"})
+            result = await _execute_tool("search_patients", {"query": "Smith"}, user_role="service")
 
         assert result == {"data": "result"}
         mock_session.call_tool.assert_called_once_with("search_patients", {"query": "Smith"})
@@ -380,7 +380,7 @@ class TestAdapterDispatch:
 
         with patch("robothor.engine.tools.registry.get_registry", return_value=mock_registry):
             # Should fall through to hardcoded handlers — "fake_tool" won't exist
-            result = await _execute_tool("fake_tool", {})
+            result = await _execute_tool("fake_tool", {}, user_role="service")
 
         assert "error" in result
         assert "Unknown tool" in result["error"]

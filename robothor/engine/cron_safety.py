@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 import re
 
+from robothor.engine.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,7 +82,12 @@ def screen_cron_prompt(text: str, *, context: str = "cron") -> str | None:
     finding = scan_assembled_cron_prompt(text)
     if finding is None:
         return None
-    logger.warning("Injection signal in %s prompt (mode=%s): %s", context, mode, finding)
+    logger.warning(
+        "Injection signal in %s prompt (mode=%s): %s",
+        sanitize_log(context),
+        sanitize_log(mode),
+        sanitize_log(finding),
+    )
     if mode == "enforce":
         raise CronPromptInjectionBlockedError(finding)
     return finding

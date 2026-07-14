@@ -1,72 +1,28 @@
-/**
- * Tests for code-validator Phase 4 changes.
- * onclick and onsubmit are now allowed for robothor.action() calls.
- * Other inline event handlers remain blocked.
- */
+import { describe, expect, it } from "vitest";
 
-import { describe, it, expect } from "vitest";
 import { validateDashboardCode } from "@/lib/dashboard/code-validator";
 
-describe("validateDashboardCode — interactive handler rules", () => {
-  it("allows onclick for robothor.action()", () => {
-    const code = `<button onclick="robothor.action('crm_health', {})">Health Check</button>`;
+describe("validateDashboardCode executable-capability denial", () => {
+  it.each([
+    `<button onclick="robothor.action('crm_health', {})">Run</button>`,
+    `<form onsubmit="postMessage({type:'robothor:action'}, '*')"></form>`,
+    `<script>fetch('/api/actions/execute')</script>`,
+    `<a href="javascript:alert(1)">bad</a>`,
+    `<link rel="stylesheet" href="https://evil.test/x.css">`,
+    `<style>@import 'https://evil.test/x.css';</style>`,
+    `<style>.x{background:url(https://evil.test/x)}</style>`,
+    `<a href="/internal/read">static link</a>`,
+    `<form><input value="x"></form>`,
+    `<button type="button">static button</button>`,
+    `<select><option>one</option></select>`,
+    `<textarea>notes</textarea>`,
+    `<fieldset><p>controls</p></fieldset>`,
+  ])("rejects executable or network-bearing markup", (code) => {
+    expect(validateDashboardCode(code).valid).toBe(false);
+  });
+
+  it("accepts static semantic HTML and local CSS", () => {
+    const code = `<section class="genus-dashboard"><style>.metric{color:#fff}</style><article><h2>Health</h2><p>3 healthy</p></article></section>`;
     expect(validateDashboardCode(code).valid).toBe(true);
-  });
-
-  it("allows onsubmit for robothor.submit()", () => {
-    const code = `<form onsubmit="event.preventDefault(); robothor.submit('create_note', '#note-form')">
-      <input name="title"><button type="submit">Save</button>
-    </form>`;
-    expect(validateDashboardCode(code).valid).toBe(true);
-  });
-
-  it("allows onclick with double quotes", () => {
-    const code = `<button onclick="robothor.action('list_people', {limit: 5})">List</button>`;
-    expect(validateDashboardCode(code).valid).toBe(true);
-  });
-
-  it("allows onclick with single quotes", () => {
-    const code = `<button onclick='robothor.action("crm_health", {})'>Check</button>`;
-    expect(validateDashboardCode(code).valid).toBe(true);
-  });
-
-  it("still blocks onerror", () => {
-    const code = `<img onerror="alert(1)" src="x">`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onload", () => {
-    const code = `<body onload="steal()">test</body>`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onmouseover", () => {
-    const code = `<div onmouseover="alert(document.cookie)">hover</div>`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onfocus", () => {
-    const code = `<input onfocus="alert(1)">`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onblur", () => {
-    const code = `<input onblur="alert(1)">`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onchange", () => {
-    const code = `<select onchange="evil()"><option>A</option></select>`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks onkeyup", () => {
-    const code = `<input onkeyup="steal(this.value)">`;
-    expect(validateDashboardCode(code).valid).toBe(false);
-  });
-
-  it("still blocks ondrag", () => {
-    const code = `<div ondrag="evil()">drag me</div>`;
-    expect(validateDashboardCode(code).valid).toBe(false);
   });
 });

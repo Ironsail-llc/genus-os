@@ -35,11 +35,11 @@ REQUIRED_TABLES = [
 
 
 def _find_migration_sql() -> str | None:
-    """Find the migration SQL file bundled with the package."""
+    """Find the legacy baseline SQL (backward-compatible helper)."""
     from pathlib import Path
 
     # Bundled in wheel via force-include
-    bundled = Path(__file__).parent.parent / "migrations" / "001_init.sql"
+    bundled = Path(__file__).parent.parent / "migrations" / "infra" / "001_init.sql"
     if bundled.exists():
         return bundled.read_text(encoding="utf-8")
 
@@ -59,40 +59,35 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    sql = _find_migration_sql()
-    if sql is None:
-        print("Error: Migration SQL not found.")
-        print("Expected at: robothor/migrations/001_init.sql")
-        return 1
-
-    if args.check:
-        return cmd_migrate_check()
-
-    if args.dry_run:
-        print("-- Dry run: the following SQL would be executed --")
-        print(sql)
-        return 0
-
-    # Execute migration
     try:
         import psycopg2
 
         from robothor.config import get_config
+        from robothor.db.migrate import MigrationError, apply
+
+        if args.dry_run:
+            print("-- Dry run: canonical migration chain (no database connection) --")
+            apply(dry_run=True)
+            return 0
 
         cfg = get_config().db
         print(f"Connecting to {cfg.host}:{cfg.port}/{cfg.name}...")
         conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.close()
-        print("Migration completed successfully.")
+        try:
+            if args.check:
+                return cmd_migrate_check(connection=conn)
 
-        # Verify
-        return cmd_migrate_check()
+            applied = apply(connection=conn)
+            print(f"Migration completed successfully ({len(applied)} applied).")
+            return cmd_migrate_check(connection=conn)
+        finally:
+            conn.close()
 
     except ImportError:
         print("Error: psycopg2 is required. Install with: pip install robothor")
+        return 1
+    except MigrationError as e:
+        print(f"Error: Migration safety check failed: {e}")
         return 1
     except Exception as e:
         print(f"Error: Migration failed: {e}")
@@ -100,21 +95,34 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_migrate_check() -> int:
-    """Check if required tables exist in the database."""
+def cmd_migrate_check(*, connection: Any | None = None) -> int:
+    """Check canonical migration state and required runtime tables."""
+
+    conn = connection
+    owns_connection = connection is None
     try:
         import psycopg2
 
         from robothor.config import get_config
+        from robothor.db.migrate import status
 
-        cfg = get_config().db
-        conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
+        if conn is None:
+            cfg = get_config().db
+            conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
+
+        migration_rows = status(connection=conn)
+        incomplete = [row for row in migration_rows if row["status"] != "applied"]
+        if incomplete:
+            print(f"Schema is not current ({len(incomplete)} migration issue(s)):")
+            for row in incomplete:
+                print(f"  - {row['migration_id']}: {row['status']}")
+            return 1
+
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
             )
             existing = {row[0] for row in cur.fetchall()}
-        conn.close()
 
         missing = [t for t in REQUIRED_TABLES if t not in existing]
         if missing:
@@ -124,11 +132,15 @@ def cmd_migrate_check() -> int:
             print("\nRun 'robothor migrate' to create them.")
             return 1
         print(f"All {len(REQUIRED_TABLES)} required tables present.")
+        print(f"All {len(migration_rows)} canonical migrations applied without drift.")
         return 0
 
     except Exception as e:
         print(f"Error: Cannot check tables: {e}")
         return 1
+    finally:
+        if owns_connection and conn is not None:
+            conn.close()
 
 
 def cmd_serve(args: argparse.Namespace) -> int:

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from robothor import __version__
 from robothor.tui.commands import COMMANDS, handle_command
 
 
@@ -71,7 +72,7 @@ class TestStatusCommand:
         assert output is not None
         assert "healthy" in output
         assert output is not None
-        assert "0.1.0" in output
+        assert __version__ in output
 
     @pytest.mark.asyncio
     async def test_status_disconnected(self, mock_app):

@@ -28,7 +28,7 @@ async def test_tool_timeout_returns_error():
         return {"ok": True}
 
     with patch("robothor.engine.tools.registry._execute_tool", side_effect=_hang):
-        result = await registry.execute("fake_tool", {}, timeout=1)
+        result = await registry.execute("fake_tool", {}, timeout=1, user_role="service")
 
     assert "error" in result
     assert "timed out" in result["error"]
@@ -46,7 +46,7 @@ async def test_tool_no_timeout_when_zero():
         return {"ok": True}
 
     with patch("robothor.engine.tools.registry._execute_tool", side_effect=_fast):
-        result = await registry.execute("fake_tool", {}, timeout=0)
+        result = await registry.execute("fake_tool", {}, timeout=0, user_role="service")
 
     assert result == {"ok": True}
 
@@ -62,7 +62,7 @@ async def test_tool_completes_within_timeout():
         return {"data": "hello"}
 
     with patch("robothor.engine.tools.registry._execute_tool", side_effect=_fast):
-        result = await registry.execute("fake_tool", {}, timeout=120)
+        result = await registry.execute("fake_tool", {}, timeout=120, user_role="service")
 
     assert result == {"data": "hello"}
 
@@ -78,7 +78,7 @@ async def test_tool_exception_still_caught():
         raise ValueError("boom")
 
     with patch("robothor.engine.tools.registry._execute_tool", side_effect=_explode):
-        result = await registry.execute("fake_tool", {}, timeout=120)
+        result = await registry.execute("fake_tool", {}, timeout=120, user_role="service")
 
     assert "error" in result
     assert "boom" in result["error"]

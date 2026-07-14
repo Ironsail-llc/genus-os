@@ -27,6 +27,9 @@ class DatabaseConfig:
     name: str = "robothor_memory"
     user: str = "robothor"
     password: str = ""
+    # Empty preserves libpq's platform default. Deployments should set this
+    # explicitly; the production chart uses ``verify-full``.
+    ssl_mode: str = ""
 
     @property
     def dsn(self) -> str:
@@ -39,6 +42,8 @@ class DatabaseConfig:
             parts.append(f"user={self.user}")
         if self.password:
             parts.append(f"password={self.password}")
+        if self.ssl_mode:
+            parts.append(f"sslmode={self.ssl_mode}")
         return " ".join(parts)
 
     @property
@@ -54,6 +59,8 @@ class DatabaseConfig:
             d["user"] = self.user
         if self.password:
             d["password"] = self.password
+        if self.ssl_mode:
+            d["sslmode"] = self.ssl_mode
         return d
 
     @property
@@ -82,7 +89,8 @@ class DatabaseConfig:
                 if self.password:
                     userinfo = f"{userinfo}:{quote(self.password, safe='')}"
                 userinfo = f"{userinfo}@"
-            return f"postgresql://{userinfo}{self.host}:{self.port}/{self.name}"
+            ssl_qs = f"?sslmode={quote(self.ssl_mode, safe='-')}" if self.ssl_mode else ""
+            return f"postgresql://{userinfo}{self.host}:{self.port}/{self.name}{ssl_qs}"
 
         # Unix socket: put user, password, and socket dir (if set) in query.
         params: list[str] = []
@@ -92,6 +100,8 @@ class DatabaseConfig:
             params.append(f"password={quote(self.password, safe='')}")
         if self.host:
             params.append(f"host={quote(self.host, safe='/')}")
+        if self.ssl_mode:
+            params.append(f"sslmode={quote(self.ssl_mode, safe='-')}")
         qs = f"?{'&'.join(params)}" if params else ""
         return f"postgresql:///{self.name}{qs}"
 
@@ -232,6 +242,7 @@ def _load_from_env() -> Config:
         name=os.environ.get("ROBOTHOR_DB_NAME", "robothor_memory"),
         user=os.environ.get("ROBOTHOR_DB_USER", os.environ.get("USER", "robothor")),
         password=os.environ.get("ROBOTHOR_DB_PASSWORD", ""),
+        ssl_mode=os.environ.get("ROBOTHOR_DB_SSLMODE", ""),
     )
     # Export DATABASE_URL for subprocess tooling (e.g. experiment_measure
     # metric commands that shell out to psql). Respect an explicit override

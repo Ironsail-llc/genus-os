@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
+from robothor import __version__
 from robothor.audit.logger import query_log, query_telemetry, stats
 from robothor.crm.dal import check_health
 
@@ -19,7 +22,7 @@ async def health():
     services = {}
 
     try:
-        h = check_health()
+        h = await asyncio.to_thread(check_health)
         services["crm"] = "ok" if h["status"] == "ok" else f"error:{h.get('error', 'unknown')}"
     except Exception as e:
         services["crm"] = f"error:{e}"
@@ -36,12 +39,13 @@ async def health():
     return JSONResponse({"status": status, "services": services}, status_code=status_code)
 
 
+@router.get("/live")
 @router.get("/liveness")
-async def liveness():
-    """Liveness probe — always 200 if process is running."""
+def liveness():
+    """Liveness probe; ``/liveness`` is retained as a compatibility alias."""
     from robothor.health_contract import liveness_response
 
-    return liveness_response("bridge", "0.1.0")
+    return liveness_response("bridge", __version__)
 
 
 @router.get("/ready")
@@ -54,17 +58,19 @@ async def readiness():
     async def check_crm():
         from robothor.crm.dal import check_health
 
-        h = check_health()
+        h = await asyncio.to_thread(check_health)
         return "ok" if h["status"] == "ok" else f"error:{h.get('error', 'unknown')}"
 
     async def check_memory():
         from bridge_service import _bridge_config, http_client
 
-        r = await http_client.get(f"{_bridge_config['memory_url']}/health")
+        if http_client is None:
+            return "error:http-client-not-started"
+        r = await http_client.get(f"{_bridge_config['memory_url']}/ready")
         return "ok" if r.status_code == 200 else f"error:{r.status_code}"
 
     checks = {"crm": check_crm, "memory": check_memory}
-    body, status = await readiness_response("bridge", "0.1.0", checks)
+    body, status = await readiness_response("bridge", __version__, checks)
     return JSONResponse(body, status_code=status)
 
 
@@ -72,7 +78,7 @@ async def readiness():
 
 
 @router.get("/api/audit")
-async def api_query_audit(
+def api_query_audit(
     event_type: str | None = Query(None),
     category: str | None = Query(None),
     actor: str | None = Query(None),
@@ -94,12 +100,12 @@ async def api_query_audit(
 
 
 @router.get("/api/audit/stats")
-async def api_audit_stats():
+def api_audit_stats():
     return stats()
 
 
 @router.get("/api/telemetry")
-async def api_query_telemetry(
+def api_query_telemetry(
     service: str | None = Query(None),
     metric: str | None = Query(None),
     since: str | None = Query(None),

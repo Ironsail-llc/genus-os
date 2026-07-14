@@ -127,7 +127,7 @@ logger = logging.getLogger(__name__)
 # Trigger types that run with no interactive human and are therefore governed by
 # the agent's service_role under the RBAC ladder (see the system-run gate in
 # _run_loop). This is an ALLOWLIST on purpose: interactive surfaces (telegram,
-# webchat, slack, ide, manual, webhook, channel_event) are gated by the dispatch
+# webchat, slack, ide, manual, webhook) are gated by the dispatch
 # user_role check instead, and any future trigger type defaults to that
 # restrictive path rather than silently inheriting allow-all service_role.
 _SYSTEM_TRIGGER_TYPES = frozenset(
@@ -138,6 +138,7 @@ _SYSTEM_TRIGGER_TYPES = frozenset(
         TriggerType.WORKFLOW,
         TriggerType.SUB_AGENT,
         TriggerType.FEDERATION,
+        TriggerType.CHANNEL_EVENT,
     }
 )
 
@@ -475,6 +476,37 @@ class AgentRunner:
             session.start("", message, [])
             return session.fail(f"Agent config not found: {agent_id}")
 
+        # Resolve a concrete execution identity before creating the run.  An
+        # empty role used to mean "system" and silently bypass every per-user
+        # permission check.  System triggers now receive the manifest's explicit
+        # service role; interactive triggers must carry a verified caller (with
+        # the sole exception of explicit loopback insecure-development mode).
+        effective_user_id = user_id
+        effective_user_role = user_role
+        if spawn_context and not effective_user_id and spawn_context.user_id:
+            effective_user_id = spawn_context.user_id
+            effective_user_role = spawn_context.user_role
+
+        if trigger_type in _SYSTEM_TRIGGER_TYPES:
+            effective_user_id = effective_user_id or f"service:{agent_id}"
+            effective_user_role = effective_user_role or agent_config.service_role or "service"
+        elif not effective_user_id or not effective_user_role:
+            from robothor.auth.runtime import auth_required
+
+            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+            if not auth_required(bind_host=bind_host):
+                effective_user_id = effective_user_id or "loopback-development-operator"
+                effective_user_role = effective_user_role or "owner"
+            else:
+                logger.warning(
+                    "Rejected interactive run without verified identity: agent=%s trigger=%s",
+                    _sanitize(agent_id),
+                    trigger_type.value,
+                )
+                session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
+                session.start("", message, [])
+                return session.fail("Authentication identity required for interactive run")
+
         # Per-run reasoning effort → extended-thinking budget (task-local).
         from robothor.engine.model_registry import set_reasoning_effort
 
@@ -491,8 +523,8 @@ class AgentRunner:
         )
 
         # User identity threading
-        session.run.user_id = user_id
-        session.run.user_role = user_role
+        session.run.user_id = effective_user_id
+        session.run.user_role = effective_user_role
 
         # Benchmark sandbox marker — when the parent (typically benchmark-runner
         # via _benchmark_run) stamps the child_config with is_benchmark=True,
@@ -505,7 +537,7 @@ class AgentRunner:
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id
             session.run.nesting_depth = spawn_context.nesting_depth + 1
-            if not user_id and spawn_context.user_id:
+            if not session.run.user_id and spawn_context.user_id:
                 session.run.user_id = spawn_context.user_id
                 session.run.user_role = spawn_context.user_role
             # Contact 360 linkage — inherit parent's person.
@@ -527,7 +559,9 @@ class AgentRunner:
                     tenant_id=resolved_tenant,
                 )
             except Exception as e:  # noqa: BLE001
-                logger.debug("person_id resolution failed for %s: %s", agent_id, e)
+                logger.debug(
+                    "person_id resolution failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+                )
 
         # Resolve hierarchical tenant access.
         # owner/admin roles see child tenants; others see only their own.
@@ -1319,6 +1353,10 @@ class AgentRunner:
         on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_override: str | None = None,
+        trigger_type: TriggerType = TriggerType.MANUAL,
+        tenant_id: str | None = None,
+        user_id: str = "",
+        user_role: str = "",
     ) -> AgentRun:
         """Execute a deep reasoning session via the RLM, bypassing the LLM loop.
 
@@ -1340,12 +1378,32 @@ class AgentRunner:
         from robothor.engine.session import AgentSession
 
         agent_id = "main"
+        resolved_tenant = tenant_id or self.config.tenant_id
+        if not user_id or not user_role:
+            from robothor.auth.runtime import auth_required
+
+            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+            if not auth_required(bind_host=bind_host):
+                user_id = user_id or "loopback-development-operator"
+                user_role = user_role or "owner"
+            else:
+                session = AgentSession(
+                    agent_id=agent_id,
+                    trigger_type=trigger_type,
+                    trigger_detail="deep_reason",
+                    tenant_id=resolved_tenant,
+                )
+                session.start("", query, ["deep_reason"])
+                return session.fail("Authentication identity required for interactive run")
+
         session = AgentSession(
             agent_id=agent_id,
-            trigger_type=TriggerType.MANUAL,
+            trigger_type=trigger_type,
             trigger_detail="deep_reason",
-            tenant_id=self.config.tenant_id,
+            tenant_id=resolved_tenant,
         )
+        session.run.user_id = user_id
+        session.run.user_role = user_role
         session.start(
             system_prompt="",
             user_message=query,
@@ -3358,11 +3416,11 @@ class AgentRunner:
                     session.todo_list = restored
                     logger.info(
                         "checkpoint.resume.todo run_id=%s items=%d",
-                        run_id,
+                        _sanitize(run_id),
                         len(restored.items),
                         extra={
                             "event": "checkpoint.resume.todo",
-                            "run_id": run_id,
+                            "run_id": _sanitize(run_id),
                             "items_count": len(restored.items),
                         },
                     )

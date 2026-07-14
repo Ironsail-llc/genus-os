@@ -52,6 +52,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             trigger_type=TriggerType.MANUAL,
             agent_config=agent_config,
             model_override=args.model,
+            tenant_id=config.tenant_id,
+            user_id="cli-operator",
+            user_role="owner",
         )
 
     run = asyncio.run(_run())
@@ -223,6 +226,9 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
             message=message,
             trigger_type=trigger,
             agent_config=agent_config,
+            tenant_id=config.tenant_id,
+            user_id="cli-operator" if trigger == TriggerType.MANUAL else f"service:{agent_id}",
+            user_role="owner" if trigger == TriggerType.MANUAL else agent_config.service_role,
         )
 
     run = asyncio.run(_run())
@@ -272,6 +278,9 @@ def _cmd_engine_run_deep(args: argparse.Namespace, config: Any) -> int:
         return await runner.execute_deep(
             query=message,
             on_progress=on_progress,
+            tenant_id=config.tenant_id,
+            user_id="cli-operator",
+            user_role="owner",
         )
 
     run = asyncio.run(_run())

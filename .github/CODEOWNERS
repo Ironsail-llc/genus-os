@@ -1,6 +1,7 @@
-# Default: maintainers team reviews everything
-* @genusos/maintainers
+# Default: an independent repository maintainer reviews everything.
+# The former @genusos/maintainers owner does not exist in this organization.
+* @danylo-ironsail
 
 # CRM subsystem
-/crm/ @genusos/maintainers
-/robothor/crm/ @genusos/maintainers
+/crm/ @danylo-ironsail
+/robothor/crm/ @danylo-ironsail

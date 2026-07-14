@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
@@ -53,14 +53,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat")
-
 MAX_HISTORY = 40  # 20 turns (user + assistant)
 SSE_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 
 # Module-level references injected by init_chat()
 _runner: AgentRunner | None = None
 _config: EngineConfig | None = None
+
+
+def _require_chat_auth(request: Request) -> None:
+    """Route-level auth so the router is safe even when mounted standalone."""
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.auth import authenticate_http_request
+
+    if isinstance(getattr(request.state, "auth", None), AuthContext):
+        return
+    if _config is None:
+        raise HTTPException(status_code=503, detail="Chat not initialized")
+    context = authenticate_http_request(request, tenant_id=_config.tenant_id)
+    if context is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    request.state.auth = context
+
+
+def _auth_context(request: Request) -> Any:
+    from robothor.engine.auth import request_context
+
+    return request_context(request)
+
+
+router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
 
 
 @dataclass
@@ -155,6 +178,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     """Accept a message and return an SSE stream of deltas."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+    auth = _auth_context(request)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -201,6 +225,9 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 on_status=on_status,
                 model_override=session.model_override,
                 conversation_history=list(session.history),
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                user_role=auth.role,
             )
 
             # Always record user message in session history
@@ -229,7 +256,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         run.output_text,
                         channel="webchat",
                         model_override=session.model_override,
-                        tenant_id=_config.tenant_id,
+                        tenant_id=auth.tenant_id,
                     )
                 )
 
@@ -247,7 +274,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         agent_id=agent_id,
                         trigger_type="webchat",
                         run_id=run.id,
-                        tenant_id=_config.tenant_id,
+                        tenant_id=auth.tenant_id,
                     ),
                     name=f"conv-ingest:{session_key}",
                 )
@@ -321,7 +348,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
 
 @router.get("/history")
-async def chat_history(session_key: str = "", limit: int = 50) -> JSONResponse:
+async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
     """Return conversation history for a session."""
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
@@ -335,6 +362,7 @@ async def chat_history(session_key: str = "", limit: int = 50) -> JSONResponse:
 @router.post("/inject")
 async def chat_inject(request: Request) -> JSONResponse:
     """Add a system message to the session history."""
+    auth = _auth_context(request)
     body = await request.json()
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
@@ -354,7 +382,7 @@ async def chat_inject(request: Request) -> JSONResponse:
                 "system",
                 message,
                 channel="webchat",
-                tenant_id=_config.tenant_id,
+                tenant_id=auth.tenant_id,
             )
         )
 
@@ -388,6 +416,7 @@ async def chat_abort(request: Request) -> JSONResponse:
 @router.post("/clear")
 async def chat_clear(request: Request) -> JSONResponse:
     """Reset session history."""
+    auth = _auth_context(request)
     body = await request.json()
     session_key: str = body.get("session_key", "")
 
@@ -412,7 +441,7 @@ async def chat_clear(request: Request) -> JSONResponse:
         asyncio.create_task(
             clear_session_async(
                 session_key,
-                tenant_id=_config.tenant_id,
+                tenant_id=auth.tenant_id,
             )
         )
 
@@ -498,6 +527,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start plan mode: run agent with read-only tools, return plan via SSE."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+    auth = _auth_context(request)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -558,6 +588,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 conversation_history=list(session.history[-4:]) if session.history else None,
                 readonly_mode=True,
                 deep_plan=deep_plan,
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                user_role=auth.role,
             )
 
             # Extract plan from output
@@ -577,7 +610,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                         run.output_text,
                         channel="webchat",
                         model_override=session.model_override,
-                        tenant_id=_config.tenant_id,
+                        tenant_id=auth.tenant_id,
                     )
                 )
 
@@ -602,7 +635,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                         await save_plan_state_async(
                             session_key,
                             _plan_to_dict(plan),
-                            tenant_id=_config.tenant_id,
+                            tenant_id=auth.tenant_id,
                         )
                     except Exception as e:
                         logger.warning("Failed to persist plan state: %s", e)
@@ -674,6 +707,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     """Approve a pending plan: execute original message with full tools."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+    auth = _auth_context(request)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -739,6 +773,10 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     query=plan.original_message,
                     on_progress=on_deep_progress,
                     context_override=context,
+                    trigger_type=TriggerType.WEBCHAT,
+                    tenant_id=auth.tenant_id,
+                    user_id=auth.user_id,
+                    user_role=auth.role,
                 )
 
                 # Track execution run ID
@@ -769,7 +807,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                             run.output_text,
                             channel="webchat",
                             model_override=session.model_override,
-                            tenant_id=_config.tenant_id,
+                            tenant_id=auth.tenant_id,
                         )
                     )
 
@@ -777,7 +815,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_plan = None
                 if _config:
                     asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
                     )
 
                 # Emit deep result + done
@@ -857,6 +895,9 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     model_override=session.model_override,
                     conversation_history=None,  # CLEAN CONTEXT
                     execution_mode=True,
+                    tenant_id=auth.tenant_id,
+                    user_id=auth.user_id,
+                    user_role=auth.role,
                 )
 
                 # Track execution run ID
@@ -884,7 +925,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                             run.output_text,
                             channel="webchat",
                             model_override=session.model_override,
-                            tenant_id=_config.tenant_id,
+                            tenant_id=auth.tenant_id,
                         )
                     )
 
@@ -892,7 +933,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_plan = None
                 if _config:
                     asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=_config.tenant_id)
+                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
                     )
 
                 await queue.put(
@@ -950,6 +991,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
 @router.post("/plan/reject")
 async def plan_reject(request: Request) -> JSONResponse:
     """Reject a pending plan, optionally with feedback."""
+    auth = _auth_context(request)
     body = await request.json()
     session_key: str = body.get("session_key", "")
     plan_id: str = body.get("plan_id", "")
@@ -979,7 +1021,7 @@ async def plan_reject(request: Request) -> JSONResponse:
 
     # Persist cleared state
     if _config:
-        asyncio.create_task(clear_plan_state_async(session_key, tenant_id=_config.tenant_id))
+        asyncio.create_task(clear_plan_state_async(session_key, tenant_id=auth.tenant_id))
 
     return JSONResponse({"ok": True})
 
@@ -989,6 +1031,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     """Iterate on a pending plan with feedback — revise without restarting."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+    auth = _auth_context(request)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1069,6 +1112,9 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 model_override=session.model_override,
                 conversation_history=list(session.history),
                 readonly_mode=True,
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                user_role=auth.role,
             )
 
             revised_plan_text = _extract_plan_text(run.output_text or "")
@@ -1088,7 +1134,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                     save_plan_state_async(
                         session_key,
                         _plan_to_dict(plan),
-                        tenant_id=_config.tenant_id,
+                        tenant_id=auth.tenant_id,
                     )
                 )
 
@@ -1154,7 +1200,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
 
 
 @router.get("/plan/status")
-async def plan_status(session_key: str = "") -> JSONResponse:
+async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
     """Check plan state for a session."""
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
@@ -1201,6 +1247,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start deep reasoning: call RLM directly, return SSE stream with progress."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+    auth = _auth_context(request)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1235,6 +1282,10 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 query=query,
                 on_progress=on_progress,
                 conversation_history=list(session.history),
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                user_role=auth.role,
             )
 
             deep.completed_at = datetime.now(UTC).isoformat()
@@ -1282,7 +1333,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                         run.output_text,
                         channel="webchat",
                         model_override=session.model_override,
-                        tenant_id=_config.tenant_id,
+                        tenant_id=auth.tenant_id,
                     )
                 )
 
@@ -1345,7 +1396,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
 
 
 @router.get("/deep/status")
-async def deep_status(session_key: str = "") -> JSONResponse:
+async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
     """Check deep reasoning state for a session."""
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)

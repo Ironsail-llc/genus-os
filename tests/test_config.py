@@ -190,7 +190,9 @@ class TestGetConfig:
         cfg = get_config()
         assert str(cfg.workspace) == "/opt/robothor"
 
-    def test_identity_defaults(self):
+    def test_identity_defaults(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_OWNER_NAME", raising=False)
+        monkeypatch.delenv("ROBOTHOR_AI_NAME", raising=False)
         cfg = get_config()
         assert cfg.owner_name == "there"
         assert cfg.ai_name == "Robothor"

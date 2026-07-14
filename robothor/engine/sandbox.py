@@ -189,14 +189,8 @@ class Sandbox:
         cmd = self._run_argv(workspace=self.workspace, cdp_port=cdp_port)
 
         try:
-            proc = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                ),
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=30
             )
             if proc.returncode != 0:
                 logger.error("Failed to start sandbox: %s", proc.stderr)
@@ -223,15 +217,13 @@ class Sandbox:
             env = os.environ.copy()
             env["DISPLAY"] = self.display
             try:
-                proc = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout,
-                        env=env,
-                    ),
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
                 )
                 if proc.returncode != 0:
                     return {"error": proc.stderr.strip(), "exit_code": proc.returncode}
@@ -244,14 +236,8 @@ class Sandbox:
 
         docker_cmd = [sandbox_binary(), "exec", str(self.container_id)] + cmd
         try:
-            proc = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    docker_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                ),
+            proc = await asyncio.to_thread(
+                subprocess.run, docker_cmd, capture_output=True, text=True, timeout=timeout
             )
             if proc.returncode != 0:
                 return {"error": proc.stderr.strip(), "exit_code": proc.returncode}
@@ -268,9 +254,8 @@ class Sandbox:
 
         cmd = [sandbox_binary(), "cp", f"{self.container_id}:{container_path}", local_path]
         try:
-            proc = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=10),
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=10
             )
             return proc.returncode == 0
         except Exception as e:
@@ -289,13 +274,11 @@ class Sandbox:
             return
 
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    [sandbox_binary(), "rm", "-f", str(self.container_id)],
-                    capture_output=True,
-                    timeout=15,
-                ),
+            await asyncio.to_thread(
+                subprocess.run,
+                [sandbox_binary(), "rm", "-f", str(self.container_id)],
+                capture_output=True,
+                timeout=15,
             )
             logger.info("Sandbox stopped: %s", self.container_id[:12])
         except Exception as e:

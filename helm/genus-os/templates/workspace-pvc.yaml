@@ -1,0 +1,21 @@
+{{- if and .Values.engine.enabled .Values.workspace.persistence.enabled (not .Values.workspace.persistence.existingClaim) (not .Values.workspace.configMap.name) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "genus-os.workspaceClaimName" . }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "workspace") | nindent 4 }}
+  {{- with .Values.workspace.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.workspace.persistence.accessModes | nindent 4 }}
+  {{- with .Values.workspace.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.workspace.persistence.size }}
+{{- end }}

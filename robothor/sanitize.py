@@ -12,13 +12,20 @@ Usage::
 
 from __future__ import annotations
 
-_LOG_SANITIZE_TABLE = str.maketrans({"\n": "\\n", "\r": "\\r"})
+_LOG_SANITIZE_TABLE = str.maketrans(
+    {
+        chr(codepoint): (
+            "\\n" if codepoint == 0x0A else "\\r" if codepoint == 0x0D else f"\\x{codepoint:02x}"
+        )
+        for codepoint in (*range(0x20), *range(0x7F, 0xA0))
+    }
+)
 
 
 def sanitize_log(val: object) -> str:
     """Sanitize a value for safe inclusion in log messages.
 
-    Escapes newlines and carriage returns to prevent log injection attacks
-    where user-controlled data could split log entries.
+    Escapes record separators and every C0/C1 control character so
+    user-controlled data cannot split or visually manipulate log entries.
     """
     return str(val).translate(_LOG_SANITIZE_TABLE)

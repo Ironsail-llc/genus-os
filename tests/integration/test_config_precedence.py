@@ -5,10 +5,13 @@ Tests the full chain: fleet defaults → agent manifest → env overrides.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.integration
@@ -31,9 +34,10 @@ class TestConfigPrecedence:
         defaults_path.write_text(yaml.dump(defaults))
         manifest_path.write_text(yaml.dump(manifest))
 
-        from robothor.engine.config import manifest_to_agent_config
+        from robothor.engine.config import load_agent_config
 
-        config = manifest_to_agent_config(manifest_path, defaults_dir=tmp_path)
+        config = load_agent_config("test-agent", tmp_path)
+        assert config is not None
         assert config.error_feedback is True
         assert config.checkpoint_enabled is True
 
@@ -55,9 +59,10 @@ class TestConfigPrecedence:
         defaults_path.write_text(yaml.dump(defaults))
         manifest_path.write_text(yaml.dump(manifest))
 
-        from robothor.engine.config import manifest_to_agent_config
+        from robothor.engine.config import load_agent_config
 
-        config = manifest_to_agent_config(manifest_path, defaults_dir=tmp_path)
+        config = load_agent_config("test-agent", tmp_path)
+        assert config is not None
         assert config.max_iterations == 5
 
     def test_env_override(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,8 +82,8 @@ class TestConfigPrecedence:
 
         monkeypatch.setenv("ROBOTHOR_OVERRIDE_SCHEDULE__MAX_ITERATIONS", "3")
 
-        from robothor.engine.config import manifest_to_agent_config
+        from robothor.engine.config import load_agent_config
 
-        config = manifest_to_agent_config(manifest_path, defaults_dir=tmp_path)
-        # Env override should cap iterations
-        assert config.max_iterations <= 10
+        config = load_agent_config("test-agent", tmp_path)
+        assert config is not None
+        assert config.max_iterations == 3

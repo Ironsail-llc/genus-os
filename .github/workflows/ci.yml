@@ -15,45 +15,44 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
+      - name: Verify immutable workflow action pins
+        run: python3 scripts/check_workflow_action_pins.py
       - name: Install gitleaks
         run: |
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz
+          curl --fail --show-error --location --output gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  gitleaks.tar.gz" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file gitleaks.tar.gz gitleaks
           sudo mv gitleaks /usr/local/bin/
       - name: Run gitleaks
         run: gitleaks detect --source . --verbose
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Audit release-tooling lock
+        run: npm audit --package-lock-only --audit-level=high
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: "pip"
       - run: pip install --upgrade pip
-      - run: pip install pip-audit
+      - run: pip install pip-audit==2.10.1
       - run: pip install -e ".[api]"
-      # CVE-2026-3219 is a pip self-CVE with no fix released; ignore until
-      # upstream ships a patched version. CVE-2026-6357 is resolved by the
-      # pip upgrade above.
-      # PYSEC-2025-183 (CVE-2025-45768): disputed-by-maintainer, CVSS 3.1
-      # pyjwt advisory about caller-chosen key length — no library fix exists
-      # (affects all versions incl. latest 2.12.1). pyjwt is transitive via
-      # litellm + redis; we never call it directly (no `import jwt`). Tracked
-      # as Not Affected in SECURITY.md. Revisit if we add direct pyjwt usage.
-      # CVE-2026-34993 / CVE-2026-47265: aiohttp advisories (CookieJar.load
-      # deserialization; per-request `cookies=` leak across cross-origin
-      # redirects), both fixed in aiohttp 3.14.0. We cannot upgrade — aiogram
-      # hard-caps aiohttp <3.14 in every release (incl. latest 3.28.2). We are
-      # Not Affected: no `CookieJar.load()` anywhere, and our sole direct
-      # aiohttp call posts JSON to an operator-configured URL with no `cookies=`
-      # param. Tracked as Not Affected in SECURITY.md. Revisit when aiogram
-      # lifts its aiohttp <3.14 cap.
-      - run: pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln PYSEC-2025-183 --ignore-vuln CVE-2026-34993 --ignore-vuln CVE-2026-47265
+      # No standing advisory exceptions: a newly reported dependency issue
+      # must fail the gate and receive an explicit, reviewed remediation.
+      - run: pip-audit
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install ruff
@@ -63,8 +62,8 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -74,8 +73,8 @@ jobs:
   validate-agents:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install pyyaml
@@ -88,41 +87,36 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,api,vision]" opencv-python-headless
-      - run: pytest tests/ robothor/engine/tests/ robothor/crm/tests/ robothor/memory/tests/ robothor/auth/tests/ robothor/cli/tests/test_auth_cli.py -m "not integration and not llm and not slow and not e2e" -v
+      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      - name: Run the complete Python unit suite
+        run: >-
+          pytest tests/ robothor/
+          -m "not integration and not llm and not slow and not e2e"
+          --cov=robothor
+          --cov-report=term-missing:skip-covered
+          --cov-fail-under=60
+          -v
 
   test-bridge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: "pip"
       - run: pip install -e ".[dev,api]"
       - run: pip install -r crm/bridge/requirements.txt
-      - run: >-
-          pytest
-          crm/bridge/tests/test_task_coordination.py
-          crm/bridge/tests/test_multi_tenancy.py
-          crm/bridge/tests/test_agent_status.py
-          crm/bridge/tests/test_answer_endpoint.py
-          crm/bridge/tests/test_auth_endpoint.py
-          -v
+      - run: pytest crm/bridge/tests/ -m "not integration and not slow and not e2e" -v
 
   test-integration:
-    # Real-PostgreSQL task-lifecycle suite (tests/integration/test_task_lifecycle.py).
-    # Kept out of the default `test` job (which runs `-m "not integration"`); this
-    # lane stops broken task-system integration tests from shipping silently.
-    # NOTE: scoped to the task-lifecycle file for now. Other tests/integration/
-    # files (test_config_precedence.py, test_runner_db.py) are pre-existing and
-    # currently red (stale manifest API / agent_runs schema drift); widening this
-    # lane to the full `-m integration` set is a tracked follow-up.
+    # Real-PostgreSQL integration lane. Kept out of the default unit matrix,
+    # but every integration contract is release-blocking here.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -145,31 +139,30 @@ jobs:
     env:
       PGPASSWORD: robothor
       ROBOTHOR_TEST_DB_DSN: "dbname=robothor_test user=robothor password=robothor host=localhost port=5432"
+      ROBOTHOR_DB_HOST: 127.0.0.1
+      ROBOTHOR_DB_PORT: "5432"
+      ROBOTHOR_DB_NAME: robothor_test
+      ROBOTHOR_DB_USER: robothor
+      ROBOTHOR_DB_PASSWORD: robothor
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: "pip"
       - run: pip install -e ".[dev,api]"
       - name: Apply schema to the test database
-        # Apply every migration sorted by basename (matching the runner's
-        # `sorted(files, key=p.name)`). psql continues past errors by default;
-        # some pre-consolidation crm/ migrations harmlessly conflict with the
-        # newer infra/001_init.sql base. The verify step below is the real gate.
+        run: python -m robothor.cli migrate
+      - name: Verify canonical migration ledger and required schema
         run: |
-          for f in $(ls infra/migrations/*.sql crm/migrations/*.sql | sort -t/ -k3); do
-            psql "$ROBOTHOR_TEST_DB_DSN" -q -f "$f" > /dev/null 2>&1 || true
-          done
-      - name: Verify required schema is present
-        run: |
+          python -m robothor.cli migrate --check
           psql "$ROBOTHOR_TEST_DB_DSN" -tAc \
             "SELECT 1 FROM information_schema.columns WHERE table_name='crm_tasks' AND column_name='question_resolved_at'" \
             | grep -q 1
           psql "$ROBOTHOR_TEST_DB_DSN" -tAc \
             "SELECT 1 FROM information_schema.tables WHERE table_name IN ('crm_task_history','crm_agent_notifications') HAVING count(*)=2" \
             | grep -q 1
-      - run: pytest tests/integration/test_task_lifecycle.py -m integration -v
+      - run: pytest tests/integration/ -m integration -v
 
   frontend:
     runs-on: ubuntu-latest
@@ -177,17 +170,21 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # Third-party action SHA-pinned + tag-commented.
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
         with:
-          version: 10
-      - uses: actions/setup-node@v6
+          version: 10.34.5
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: "pnpm"
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
       - run: pnpm lint
-      - run: npx tsc --noEmit
+      - run: pnpm exec tsc --noEmit
       - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright test

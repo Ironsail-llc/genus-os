@@ -22,7 +22,7 @@ from datetime import UTC
 from typing import Any
 
 from robothor.engine.config import EngineConfig
-from robothor.engine.health import serve_health
+from robothor.engine.health import serve_health, validate_engine_auth_configuration
 from robothor.engine.hooks import EventHooks
 from robothor.engine.runner import AgentRunner
 from robothor.engine.scheduler import CronScheduler
@@ -257,6 +257,12 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
 
 async def main() -> None:
     """Start all engine subsystems."""
+    # Reject unsafe production authentication before touching the database,
+    # loading agents, or starting any background subsystem. The Engine verifies
+    # Bridge-issued tokens but is not an SSO exchange authority, so it must not
+    # require the Bridge's IdP credentials.
+    validate_engine_auth_configuration()
+
     # Configure structured logging via structlog
     # Wraps stdlib logging so existing logging.getLogger() calls get structured output
     import structlog

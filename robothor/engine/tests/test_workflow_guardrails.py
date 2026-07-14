@@ -65,8 +65,16 @@ async def test_push_to_main_blocked():
 @pytest.mark.asyncio
 async def test_benign_tool_runs():
     engine, registry = _engine_with_spy_registry()
-    run = WorkflowRun(workflow_id="wf1")
+    run = WorkflowRun(
+        workflow_id="wf1",
+        tenant_id="tenant-1",
+        user_id="human-1",
+        user_role="member",
+    )
     result = _result()
     await engine._run_tool_step(_step("search_memory", query="x"), run, result)
     assert result.status == WorkflowStepStatus.COMPLETED
     registry.execute.assert_awaited_once()
+    assert registry.execute.await_args.kwargs["tenant_id"] == "tenant-1"
+    assert registry.execute.await_args.kwargs["user_id"] == "human-1"
+    assert registry.execute.await_args.kwargs["user_role"] == "member"

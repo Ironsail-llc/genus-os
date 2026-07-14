@@ -1029,6 +1029,7 @@ class TestPlanModeResearchNudge:
 class TestPlanModeIterationCap:
     """Verify plan mode caps max_iterations at 10."""
 
+    @pytest.mark.usefixtures("_mock_run_persistence")
     @pytest.mark.asyncio
     async def test_plan_mode_caps_at_10(self, runner, sample_agent_config, mock_litellm_response):
         """readonly_mode=True caps iterations at 10 regardless of agent config."""
@@ -1058,17 +1059,14 @@ class TestPlanModeIterationCap:
         runner.registry.get_readonly_tool_names.return_value = ["list_tasks"]
 
         # Disable routing so it doesn't interfere with the iteration cap
-        with patch("robothor.engine.runner.create_run"):
-            with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
-                    with patch("litellm.acompletion", side_effect=mock_completion):
-                        with patch.object(runner, "_apply_routing", return_value=None):
-                            await runner.execute(
-                                "test-agent",
-                                "check tasks",
-                                agent_config=sample_agent_config,
-                                readonly_mode=True,
-                            )
+        with patch("litellm.acompletion", side_effect=mock_completion):
+            with patch.object(runner, "_apply_routing", return_value=None):
+                await runner.execute(
+                    "test-agent",
+                    "check tasks",
+                    agent_config=sample_agent_config,
+                    readonly_mode=True,
+                )
 
         # Should be capped at 10 iterations, not 20.
         # max_iterations is a check-in interval, so LLM call_count may exceed

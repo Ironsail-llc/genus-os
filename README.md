@@ -16,6 +16,7 @@ Your infrastructure. Your data. Your rules.
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
+  <a href="https://github.com/Ironsail-llc/genus-os/actions/workflows/ci.yml"><img src="https://github.com/Ironsail-llc/genus-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/tests-11%2C000%2B%20passing-brightgreen.svg" alt="Tests">
 </p>
 
@@ -23,34 +24,54 @@ Your infrastructure. Your data. Your rules.
 
 ## Why Genus OS
 
-Most AI platforms force a choice: cloud-hosted convenience or self-hosted complexity. Genus OS eliminates that trade-off. Deploy on your infrastructure — on-prem, private cloud, or air-gapped — and get an enterprise-grade AI operating system with the security, governance, and scalability your organization demands.
+Genus OS is a self-hosted agent operating platform for organizations that need
+to own their runtime, data flows, policies, and deployment lifecycle. It can run
+on-premises, in a private cloud, or in a deliberately configured air gap.
 
 | Enterprise Need | How Genus OS Delivers |
 |---|---|
-| **Data sovereignty** | Everything runs on your infrastructure. No data leaves your network. No third-party API required (local LLMs via Ollama). |
-| **Security** | SOPS + age encrypted secrets, per-agent tool allow/deny lists, 7 guardrail policies, secret scanning pre-commit hooks, RBAC on event streams, Ed25519 cryptographic identity for federation. |
-| **Governance** | Full audit trails on every agent run, tool call, and decision. Task state machines with SLA tracking. Review workflows with human-in-the-loop approval. OTel-compatible distributed tracing. |
-| **Scalability** | Federate across sites, teams, and subsidiaries. Each instance is autonomous; federation adds scoped connectivity without single points of failure. |
-| **Multi-tenancy** | Every CRM table scoped by `tenant_id`. Bridge middleware enforces tenant isolation. Separate agent fleets per business unit. |
-| **Compliance** | Air-gap compatible. No internet dependency for core operations. Secrets never touch disk unencrypted. Systemd services with watchdog health checks. |
+| **Data sovereignty** | Core services run on your infrastructure. Local models can keep model traffic inside the deployment; configured cloud models, web search, messaging, and other connectors send data to their named providers. |
+| **Security** | Vault/SOPS deployment options, signed dashboard sessions and scoped Bridge/Engine tokens, per-agent tool allow/deny lists, runtime guardrails, secret scanning, and cryptographic federation identity. |
+| **Governance** | Structured agent-run, tool, policy, and task evidence; review workflows; approval boundaries; and OTel-compatible trace context. Audit coverage must be validated for each material workflow. |
+| **Scalability** | Federate across sites, teams, and subsidiaries. Federation adds scoped connectivity between autonomous instances; it does not remove the single-writer Engine or other per-instance availability dependencies. |
+| **Multi-tenancy** | Bridge identity, route authorization, and CRM access are tenant-scoped. Appliance-global and legacy memory paths have additional restrictions; add database-level isolation before hostile multi-tenant use. |
+| **Compliance** | Capability mappings and deployer controls for regulated environments. These are not certifications; actual scope, configuration, operating evidence, contracts, and organizational controls determine compliance. |
 
 ## Highlights
 
-**Governed Agent Platform** — Declarative YAML agent manifests with a template catalog of 24+ blueprints and full audit trails. A workflow engine with conditional branching. 110+ registered tools with per-agent allow/deny lists — agents see only what they're authorized to use. 7 guardrail policies enforce security at runtime: destructive write prevention, external HTTP blocking, branch protection, rate limiting, secret scanning, exec allowlists, and write path restrictions. OTel-compatible tracing captures every decision for compliance review.
+**Governed Agent Platform** — Declarative YAML agent manifests, conditional
+workflows, and a large registered tool catalog with per-agent allow/deny lists.
+Twelve implemented guardrail policies cover destructive writes, external HTTP,
+branch protection, rate limits, sensitive output, command/path restrictions,
+desktop safety, approvals, and selected domain rules; three baseline policies
+apply by default and higher-risk policies must be assigned deliberately.
 
 **Enterprise Federation** — Connect Genus OS instances across sites, subsidiaries, and partners into a peer-to-peer mesh. Ed25519 signed invite tokens establish cryptographic trust. Each connection has scoped exports/imports — no implicit access, no transitive trust. Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering across distributed instances. NATS JetStream transport with leaf-node topology handles unreliable networks gracefully. Every instance runs autonomously; federation adds connectivity, not dependency.
 
-**The Helm (Control Plane)** — Not a dashboard — an enterprise control plane. Next.js 16 + Dockview with 48 lazy-loaded components. Chat with agents, manage tasks on a Kanban board, watch event streams in real time, monitor fleet health across federated instances. Fully extensible component registry for custom operational views.
+**The Helm (Control Plane)** — A Next.js 16 + Dockview control plane with 48
+lazy-loaded components. Chat with agents, manage tasks, watch event streams, and
+monitor fleet health. Human sessions use OIDC plus Bridge-issued identity, and
+the Engine independently enforces signed, tenant-bound scopes. Model-generated
+views are sanitized, isolated, and read-only; provider calls and credentials
+remain in the Engine.
 
-**Intelligence Layer** — Two-tier memory: working context and long-term facts with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal Rank Fusion). Knowledge graph that grows autonomously. Fully local RAG stack — embeddings, reranking, and generation never leave your network. Facts carry confidence scores, categories, and lifecycle states with quality gates that prevent knowledge degradation.
+**Intelligence Layer** — Two-tier memory: working context and long-term facts
+with hybrid search (HNSW vectors + BM25 keyword matching, fused by Reciprocal
+Rank Fusion). Embedding, reranking, and generation can be fully local when the
+deployment selects only local providers. Facts carry confidence, category, and
+lifecycle metadata with quality gates.
 
-**Physical Security** — YOLOv8 nano + InsightFace ArcFace for real-time object detection and face recognition. Three runtime modes: disarmed, basic (motion-triggered smart detection), armed (per-frame tracking). Any RTSP camera. Sub-2-second unknown person alerts. Scene analysis via vision LLM. All processing local — no cloud, no external API calls, no video data leaving your premises.
+**Physical Security** — YOLOv8 nano + InsightFace ArcFace for object detection
+and face recognition, with disarmed/basic/armed runtime modes and RTSP camera
+support. Vision stays local only when its configured analysis and alert
+providers are local; operators are responsible for biometric/privacy policy,
+consent, retention, and jurisdictional requirements.
 
 **Desktop & Browser Automation** — Full computer-use capability with 13 desktop tools (screenshot, click, type, drag, scroll, window management, app launch) via Xvfb virtual display and VNC. Browser automation for web interactions. Agents can operate GUI applications autonomously — no human screen required.
 
-**Inter-Agent Communication** — Agents coordinate via typed messages, team scratchpads, and shared working state. Teams form dynamically for multi-agent collaboration. RPG-style scoring tracks per-agent performance with XP, levels, and stats (debugging, patience, reliability, wisdom).
+**Inter-Agent Communication** — Agents coordinate via typed messages, team scratchpads, and shared working state. Teams form dynamically for multi-agent collaboration. Goal evidence and achievement metrics support review and improvement workflows.
 
-**Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 44 tools over stdio; agents can also call external MCP servers as clients. Encrypted secrets (SOPS + age), systemd services, Cloudflare tunnel.
+**Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 44 tools over stdio; agents can also call external MCP servers as clients. The repository includes SOPS/age, systemd, and Cloudflare Tunnel patterns whose controls depend on deployment configuration.
 
 ## Getting Started
 
@@ -101,6 +122,40 @@ robothor engine status   # Engine health, scheduler, bot status
 robothor engine run <id> # Run any agent manually
 robothor tui             # Terminal dashboard for monitoring
 ```
+
+## Production status
+
+The version 1.10 release-candidate change set contains a hardening foundation:
+an ordered manifest of 83 checksum-verified migrations with upgrade archives,
+separate liveness/readiness, persistent production workspaces, fail-closed
+dashboard/Bridge/Engine authentication, constrained Kubernetes workloads,
+release gates, encrypted snapshot/restore, and the first policy-bound Entity
+Kernel treasury contracts.
+
+That does not make an unconfigured checkout production-ready. Before go-live,
+operators must provision Vault and OIDC, seed the agent workspace, validate
+database TLS, configure monitoring and private ingress, schedule off-site
+snapshots, complete a measured restore drill, and close or explicitly accept
+every P0 item in the [production hardening TODO](docs/PRODUCTION_HARDENING_TODO.md).
+The current single-writer engine also requires leader election or tested
+active/passive failover before a 99.9% service commitment can be substantiated.
+The 15-minute RPO and 60-minute RTO are likewise targets until a deployed
+backup schedule and restore drill measure them.
+
+This change set must be reviewed in a draft PR. Merge and deployment are
+separate human-approved actions; opening the PR does not deploy it.
+
+Useful operating references:
+
+- [Snapshot and restore runbook](docs/runbooks/SNAPSHOT_RESTORE.md)
+- [Entity Kernel treasury boundary](docs/ENTITY_KERNEL_TREASURY.md)
+- [Payment-data boundary](docs/compliance/PAYMENT_DATA.md)
+- [Security controls inventory](docs/compliance/SECURITY_CONTROLS.md)
+
+Genus OS does not store raw PAN or CVC/CVV for either customers or the
+organization's own cards. Customer flows use payment-provider tokens; Entity
+spend uses provider-issued virtual-card references. Ownership does not remove
+PCI scope, and this boundary is not a PCI certification or live payment adapter.
 
 ## Build Your Agents
 
@@ -197,7 +252,7 @@ Required manifest fields: `id` (kebab-case), `name`, `description`, `version` (Y
 | `messaging` | Enable inter-agent messaging and team scratchpads. |
 | `lifecycle_hooks` | Event-driven hooks (on_start, on_complete, on_failure) with handler types: command, http, agent, python. |
 
-Full schema: [schema.yaml](docs/agents/schema.yaml) | Reference: [Agent Playbook](docs/agents/PLAYBOOK.md)
+Full schema: [schema.yaml](docs/agents/schema.yaml) | Reference: [Agent Builder](docs/AGENT_BUILDER.md)
 
 ### Agent Lifecycle
 
@@ -216,7 +271,7 @@ The engine's execution loop includes a full suite of runtime enhancements, all o
 
 - **Planning phase** — Generates an execution plan before acting, with dynamic replanning on new information
 - **Working memory scratchpad** — Persistent scratch space across iterations for intermediate reasoning
-- **Token and cost budgets** — Hard enforcement with graceful shutdown when limits are reached
+- **Token and cost budgets** — Engine-side limits bound configured runs; keep provider-side caps and billing alerts because not every external charge is under the runner's control
 - **Graduated escalation** — 3 consecutive errors → retry with feedback, 4 → checkpoint + replan, 5 → abort with diagnostics
 - **Mid-run checkpoints** — Save and resume from any iteration via `POST /api/runs/{id}/resume`
 - **Self-validation** — Post-execution verification step checks whether the agent's output satisfies the original goal
@@ -326,7 +381,11 @@ A self-improving pipeline that runs overnight via Claude Code CLI in isolated gi
 2. **nightwatch-build.py** (Monday, 3 AM) — Feature builds: picks up approved improvement proposals and implements them end-to-end, including tests.
 3. **nightwatch-research.py** (Sunday, 1 AM) — Competitive research: surveys the landscape, evaluates new tools and techniques, and writes structured reports.
 
-All three run in isolated git worktrees with branch protection. Draft PRs are labeled `nightwatch` for easy filtering. A **Failure Analyzer** agent (every 2h) classifies recent failures and creates CRM tasks that feed into the heal pipeline.
+All three run in isolated git worktrees and propose changes through draft PRs.
+Repository rulesets and required reviewers must be configured by the operator;
+the worktree alone is not branch protection. Draft PRs are labeled
+`nightwatch` for filtering. A **Failure Analyzer** agent (every 2h) classifies
+recent failures and creates CRM tasks that feed into the heal pipeline.
 
 ## The Helm
 
@@ -344,20 +403,28 @@ Not a dashboard — a control plane. Built with Next.js 16 and Dockview for a pa
 - **Service Health** — System topology with status indicators
 - **Component Registry** — 48 lazy-loaded components, add your own
 
+Model-generated dashboard documents are static, read-only presentation. They
+cannot contain scripts, links, forms, controls, event handlers, network calls,
+or an action channel. Native, authenticated UI routes remain the only dashboard
+mutation path. The dashboard sends its verified Bridge bearer identity to a
+same-tenant Engine completion endpoint; model selection and provider secrets do
+not enter the Next.js process.
+
 ## The CRM
 
 How agents coordinate. Native PostgreSQL tables — no external CRM dependency.
 
-- **Task state machine** — TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE with full audit trail and SLA tracking
+- **Task state machine** — TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE with structured task evidence and SLA tracking; validate audit completeness for each workflow
 - **Agent notifications** — Typed messages between agents (task assigned, review requested, blocked, errors)
 - **Cross-channel identity** — A single contact resolved across email, Telegram, voice, web, and API
-- **Multi-tenancy** — Every table scoped by `tenant_id`. Bridge middleware enforces isolation.
+- **Multi-tenancy** — Bridge middleware verifies tenant identity and enforces route scopes. Global/legacy paths are restricted, and database row-level security or equivalent isolation is still required before hostile multi-tenant use.
 - **Merge tools** — Deduplicate contacts and companies. Keeper absorbs loser's data, re-links all records.
-- **Agent RPG scoring** — Per-agent performance tracking with XP, levels, and stats (debugging, patience, chaos, wisdom, reliability). Daily snapshots track progression over time.
+- **Goal and achievement scoring** — Per-agent goals, evidence, reviews, and achievement snapshots support improvement workflows.
 
 ## Memory
 
-Two tiers of persistent memory, all local:
+Two tiers of persistent memory stored in the deployment database. Embedding,
+reranking, and generation remain local only when local providers are selected:
 
 | Tier | Storage | Lifetime | Purpose |
 |------|---------|----------|---------|
@@ -366,7 +433,10 @@ Two tiers of persistent memory, all local:
 
 **Hybrid search:** HNSW vector index (m=16, ef=200) for semantic similarity, BM25 keyword matching via tsvector for exact terms, fused by Reciprocal Rank Fusion (`1/(60+rank)`). Top results pass through a cross-encoder reranker before delivery.
 
-Facts are extracted from every input — email, calendar, conversations, vision events. Each fact carries a confidence score, category, entities, and lifecycle state. **Quality gates** reject vague or generic extractions. A knowledge graph of entities and relationships grows autonomously. **Lifecycle management** handles decay, consolidation (merging related facts), and forgetting (pruning low-quality facts that were never accessed).
+Configured ingestion pipelines can extract facts from email, calendar,
+conversations, and vision events. Each fact carries confidence, category,
+entity, and lifecycle metadata. Quality gates reject selected vague or generic
+extractions; lifecycle jobs support decay, consolidation, and pruning.
 
 ```python
 from robothor.memory.facts import store_fact, search_facts
@@ -383,11 +453,12 @@ fact_id = await store_fact(
 results = await search_facts("Acme contract status", limit=5)
 ```
 
-**RAG stack:** Qwen3-Embedding &rarr; pgvector (HNSW) + BM25 &rarr; RRF &rarr; Qwen3-Reranker &rarr; LLM generation. Fully local.
+**RAG stack:** Qwen3-Embedding &rarr; pgvector (HNSW) + BM25 &rarr; RRF &rarr; Qwen3-Reranker &rarr; LLM generation. This stack can be fully local when every configured model and connector is local.
 
 ## Vision
 
-Always-on camera monitoring with runtime mode switching:
+Continuous camera monitoring with runtime mode switching is supported when the
+vision service and camera source are operated continuously:
 
 | Mode | Behavior |
 |------|----------|
@@ -395,7 +466,7 @@ Always-on camera monitoring with runtime mode switching:
 | Basic | Motion &rarr; YOLO &rarr; InsightFace &rarr; instant alerts + async VLM analysis |
 | Armed | Per-frame tracking with full detection pipeline |
 
-**Pipeline:** Motion detection &rarr; YOLOv8 nano (6 MB) &rarr; InsightFace ArcFace (300 MB) &rarr; pluggable alerts. Unknown persons trigger a snapshot to your chosen channel in under 2 seconds. Scene analysis via vision LLM (Ollama). Any RTSP camera source. Mode switch at runtime, no restart.
+**Pipeline:** Motion detection &rarr; YOLOv8 nano (6 MB) &rarr; InsightFace ArcFace (300 MB) &rarr; pluggable alerts. Alert latency depends on hardware, model, channel, and network configuration and must be measured in the deployment. Scene analysis can use a local vision model; remote providers change the data boundary. Runtime mode changes do not require a process restart.
 
 ## Desktop Automation
 
@@ -444,7 +515,10 @@ The `auto-researcher` agent uses these tools to test hypotheses, track metrics, 
 
 ## Federation
 
-Enterprise AI doesn't live on a single server. Genus OS federation connects autonomous instances across offices, data centers, subsidiaries, and partner organizations into a peer-to-peer mesh — without sacrificing data sovereignty or creating single points of failure.
+Genus OS federation connects autonomous instances across offices, data centers,
+subsidiaries, and partner organizations into a peer-to-peer mesh with explicit
+exports and imports. Federation does not provide automatic workload failover,
+complete replication, or high availability inside an instance.
 
 ### Use Cases
 
@@ -454,7 +528,7 @@ Enterprise AI doesn't live on a single server. Genus OS federation connects auto
 | **Subsidiary governance** | Parent company connects to subsidiary instances as "parent." Scoped exports push compliance policies; scoped imports surface subsidiary health and alerts without exposing operational data. |
 | **Partner integration** | Two organizations connect as "peers" with explicitly negotiated exports/imports. Share only what's agreed — no implicit access, no transitive trust. |
 | **Dev/staging/production** | Federate staging instances to production for config sync and telemetry aggregation. Staging pushes test results; production pushes config templates. |
-| **Disaster recovery** | Peer-federated instances in separate regions. Each runs autonomously; federation keeps knowledge graphs synchronized. If one site goes down, the other continues with no interruption. |
+| **Disaster recovery** | A remote peer can continue its own workloads if another site fails. Recovery of the failed site's workloads and data is not automatic; replication scope, restore, traffic failover, and continuity must be designed and tested separately. |
 
 ### How It Works
 
@@ -513,28 +587,30 @@ Security is not a feature — it's the foundation. Genus OS is designed for envi
 
 | Layer | Controls |
 |---|---|
-| **Secrets management** | SOPS + age encryption. Secrets decrypted to tmpfs at runtime — never touch persistent disk unencrypted. Pre-commit gitleaks hook blocks accidental secret commits. |
-| **Agent sandboxing** | Per-agent `tools_allowed` / `tools_denied` lists enforced at the engine level. Agents cannot discover or invoke tools outside their authorization scope. 7 runtime guardrail policies block destructive writes, unauthorized HTTP calls, branch manipulation, rate limit violations, secret exposure, unapproved exec commands, and writes to restricted paths. |
+| **Secrets management** | Kubernetes deployments split database, cache, signing, SSO/OIDC, dashboard, and provider trust classes into independently rotatable HashiCorp VSO paths with enforced per-component references. Dashboard and migrations cannot request privileged/provider classes. Systemd deployments can use SOPS + age and tmpfs. Operators still own provisioning, rotation, backup, and audit. |
+| **Agent sandboxing** | Per-agent `tools_allowed` / `tools_denied` lists are enforced at the engine level. Twelve available runtime policies constrain destructive writes, HTTP, branches, rate limits, secret output, commands, paths, desktop actions, approvals, and selected domains. Policy assignment still requires threat modeling. |
 | **Event bus RBAC** | Redis Streams with consumer groups. Agents can only subscribe to and publish on streams declared in their manifest. |
-| **Network isolation** | All processing runs locally. No data sent to external APIs unless explicitly configured. Air-gap compatible for classified or regulated environments. Cloudflare Access with email OTP protects external-facing services. |
+| **Network isolation** | Production chart values default-deny pod ingress and egress, then allow the component graph, selector-scoped DNS, and exact operator-supplied destination CIDRs/ports. Unrestricted CIDRs fail rendering; dashboard external egress is IdP-only. Air-gapped operation requires local models and disabling every external connector. |
 | **Federation security** | Ed25519 cryptographic identity per instance. Signed one-time invite tokens. Scoped exports/imports with no transitive trust. NATS account isolation per connection. Private keys stored with `0600` permissions, never transmitted. |
-| **Infrastructure** | Systemd services with `Restart=always`, sd_notify watchdog with health pings, zombie run reaping. Cloudflare tunnel for TLS termination. |
+| **Infrastructure** | Kubernetes and systemd deployment models provide health checks and restart behavior. TLS termination, trusted database CA material, monitoring, backup storage, and external access policy remain deployment controls. |
 
 ## Enterprise Governance
 
-Every action in Genus OS is tracked, auditable, and controllable.
+Genus OS emits structured evidence for core agent and policy activity. Treat
+audit completeness as a workflow-specific property to test, not a blanket
+claim that every possible side effect is captured.
 
 | Capability | Detail |
 |---|---|
-| **Audit trails** | Every agent run records: trigger type, model used, tool calls made, tokens consumed, cost incurred, duration, output, and success/failure status. Stored in PostgreSQL with full queryable history. |
+| **Audit trails** | Agent runs and many tool, authentication, guardrail, task, and treasury events record structured actor, timing, outcome, and correlation data. Material integrations must add and test their own coverage. |
 | **Human-in-the-loop** | Task review workflows require human approval before agents can proceed. Configurable per agent via `review_workflow: true` in the manifest. |
 | **SLA tracking** | Tasks carry priority-based SLA targets. The system tracks time-to-resolution and flags breaches. |
-| **Cost controls** | Per-agent token and dollar budgets with hard enforcement. When a budget is exhausted, the agent shuts down gracefully — no runaway spending. |
-| **Graduated escalation** | 3 consecutive errors → retry with feedback. 4 → checkpoint + replan. 5 → abort with full diagnostics. No silent failures. |
+| **Cost controls** | Per-run token/cost budgets and fleet caps bound normal execution. External provider limits and billing alerts remain necessary defense in depth. |
+| **Graduated escalation** | Configured repeated-error thresholds can retry, checkpoint/replan, or abort with diagnostics; external side effects and alert delivery still need independent monitoring. |
 | **Distributed tracing** | OTel-compatible trace context propagated across agent runs, sub-agent spawns, and federated operations. Plug into Jaeger, Grafana Tempo, or any OTel collector. |
 | **Fleet analytics** | Cross-agent performance metrics, anomaly detection (rolling baselines, >2σ flagging), and failure pattern clustering. |
-| **Change management** | Agent manifests are declarative YAML checked into version control. Pre-commit validation hook enforces schema compliance. Changes are reviewed via standard PR workflows. |
-| **Multi-tenancy** | Every CRM table scoped by `tenant_id`. Bridge middleware enforces tenant isolation at the API layer. Separate agent fleets and data boundaries per business unit. |
+| **Change management** | Agent manifests are declarative YAML checked into version control. Local validation and CI check the schema; protected-branch rules and required PR review must be configured in the repository host. |
+| **Multi-tenancy** | CRM data and verified Bridge identity are tenant-scoped. Deployers should add database row-level security or equivalent defense in depth before hostile multi-tenant use. |
 
 ## Architecture
 
@@ -596,7 +672,7 @@ robothor/
 ├── app/                    # The Helm (Next.js 16, React 19, Dockview)
 ├── crm/                    # CRM stack: Bridge service, migrations, Docker Compose
 ├── docs/
-│   ├── agents/             # 24 YAML agent manifests + PLAYBOOK.md
+│   ├── agents/             # Agent schema, instruction contract, and tracked examples
 │   └── workflows/          # 5 declarative workflow pipelines
 ├── brain/                  # Scripts, voice, vision, agent instructions
 ├── scripts/                # Backup, validation, Nightwatch scripts
@@ -626,16 +702,23 @@ robothor/
 | `robothor federation invite` | Generate signed invite token for a peer |
 | `robothor federation connect <token>` | Accept connection from a peer |
 | `robothor federation status` | Show identity and all connections |
+| `robothor snapshot create` | Create an encrypted database/workspace recovery point |
+| `robothor snapshot list` | Inventory snapshots without decrypting them |
+| `robothor snapshot verify <file>` | Authenticate and verify snapshot contents and compatibility |
+| `robothor snapshot restore <file>` | Produce a restore plan; requires explicit flags to mutate state |
+| `robothor snapshot prune` | Dry-run or apply bounded local retention |
 
 ## Deployment Models
 
-Genus OS runs wherever your security policy requires — no cloud dependency, no vendor lock-in.
+Genus OS supports several deployment shapes. Whether a deployment has cloud or
+vendor dependencies is determined by its selected model, search, messaging,
+identity, payment, storage, and ingress providers.
 
 | Deployment | Description |
 |---|---|
 | **Single server** | All services on one machine. Suitable for teams, departments, or small organizations. |
 | **Federated multi-site** | Autonomous instances at each site, connected via federation. HQ aggregates health and pushes policy; branches operate independently. |
-| **Air-gapped** | Fully offline with local LLMs (Ollama). No internet dependency for core operations. Federation over private NATS links. |
+| **Air-gapped** | Possible with local models, private dependencies, and every external connector disabled or replaced. Validate images, packages, identity, time, updates, and federation inside the offline boundary. |
 | **Hybrid cloud** | On-prem instances for sensitive workloads, cloud instances for scale-out. Federation bridges the gap with scoped permissions. |
 | **Dev/staging/prod** | Separate instances per environment, federated for config sync and telemetry aggregation. |
 
@@ -665,7 +748,11 @@ All configuration via environment variables with sensible defaults:
 
 ## Infrastructure
 
-The system runs as systemd services behind a Cloudflare tunnel with encrypted secrets (SOPS + age). Internal services are protected by Cloudflare Access; public services are open.
+The repository includes Kubernetes/Helm, Docker Compose, and systemd patterns.
+Cloudflare Tunnel and SOPS + age describe one supported systemd deployment;
+Kubernetes production values use private ingress, NetworkPolicy, and HashiCorp
+Vault Secrets Operator. None of these external controls is automatically
+provisioned by installing the Python package.
 
 | Service | Purpose |
 |---------|---------|
@@ -679,7 +766,7 @@ The system runs as systemd services behind a Cloudflare tunnel with encrypted se
 | NATS Server | Federation transport (JetStream, leaf nodes) |
 | Xvfb + VNC | Virtual display for desktop automation (computer use) |
 | MediaMTX | RTSP/HLS camera streaming |
-| Cloudflare Tunnel | All `*.robothor.ai` routes with Access policies |
+| Cloudflare Tunnel | Optional ingress pattern; route exposure and Access policies are deployment-specific |
 
 **Local models (Ollama):**
 
@@ -694,13 +781,17 @@ The system runs as systemd services behind a Cloudflare tunnel with encrypted se
 
 ```bash
 pip install -e ".[dev]"
-pytest -m "not slow and not llm and not e2e"   # Fast unit tests
-pytest                                          # Full suite
-cd app && pnpm test                             # Helm tests
-python scripts/validate_agents.py               # Agent manifest validation
+pytest tests/ robothor/ -m "not integration and not llm and not slow and not e2e"
+pytest crm/bridge/tests/ -m "not integration and not slow and not e2e"
+python scripts/validate_agents.py --ci
+cd app && pnpm lint && pnpm exec tsc --noEmit && pnpm test && pnpm build
+cd app && pnpm exec playwright test
+helm unittest helm/genus-os --strict
 ```
 
-**9,000+ tests** across Python and TypeScript. See [TESTING.md](docs/TESTING.md) for the full strategy, markers, and coverage plan.
+The authoritative result is the required CI/release gate, not a static test
+count in documentation. See [TESTING.md](docs/TESTING.md) for markers and test
+strategy.
 
 ## Contributing
 

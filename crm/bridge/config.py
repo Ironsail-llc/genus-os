@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from robothor.config import get_config
+
 # Try to load .env if dotenv is available (dev convenience)
 try:
     from dotenv import load_dotenv
@@ -20,10 +22,11 @@ MEMORY_URL = os.getenv("MEMORY_URL", "http://localhost:9099")
 IMPETUS_ONE_URL = os.getenv("IMPETUS_ONE_BASE_URL", "http://localhost:8000")
 IMPETUS_ONE_TOKEN = os.getenv("IMPETUS_ONE_API_TOKEN", "")
 
-# Database (used by crm_dal.py for backward compat — new code uses robothor.db.connection)
+# Database (used by crm_dal.py for backward compat — new code uses
+# robothor.db.connection). Reuse the canonical builder so port, password, and
+# TLS policy are not silently dropped in container deployments.
+_DEFAULT_PG_DSN = get_config().db.dsn
 PG_DSN = os.getenv(
     "PG_DSN",
-    f"dbname={os.getenv('ROBOTHOR_DB_NAME', 'robothor_memory')} "
-    f"user={os.getenv('ROBOTHOR_DB_USER', 'robothor')} "
-    f"host={os.getenv('ROBOTHOR_DB_HOST', '/var/run/postgresql')}",
+    _DEFAULT_PG_DSN,
 )

@@ -617,10 +617,12 @@ _CATEGORY_FALLBACK: dict[str, list[str]] = {
         "Consider model upgrade if instruction-level fixes don't stick.",
     ],
     "efficiency": [
-        "Classify timeouts by in-flight tool call.",
-        "Lower stall_timeout_seconds to fail fast on wedged calls.",
-        "Reduce max_iterations if agent hits the cap without converging.",
-        "Trim instruction file and warmup size.",
+        "Pull slowest and most-expensive runs — is it a long tail or uniform drift?",
+        "Identify which tool calls dominate duration or token count.",
+        "Check whether the agent hits max_iterations without converging.",
+        "Trim instruction file and warmup context.",
+        "Prune tools_allowed to the set the agent actually uses.",
+        "Lower max_iterations only if the agent is looping unproductively.",
     ],
     "correctness": [
         "Group errors by tool + error type.",

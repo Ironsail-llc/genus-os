@@ -25,7 +25,17 @@ def test_access_token_round_trip():
     assert claims["tid"] == "tenant-a"
     assert claims["role"] == "admin"
     assert claims["typ"] == "user"
+    assert claims["type"] == "user"
+    assert claims["tenant"] == "tenant-a"
     assert claims["iss"] == "genus-os"
+    assert claims["aud"] == "genus-bridge"
+    assert set(claims["scope"].split()) == {
+        "audit:read",
+        "bridge:*",
+        "engine:*",
+        "tenant:admin",
+    }
+    assert claims["jti"]
 
 
 def test_expired_token_rejected():
@@ -49,9 +59,44 @@ def test_wrong_key_rejected(monkeypatch):
         tokens.decode_token(t)
 
 
+def test_short_signing_key_rejected(monkeypatch):
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "too-short")
+    tokens.reset_signing_key_cache()
+    with pytest.raises(TokenError, match="32 bytes"):
+        tokens.issue_access_token("u", "t", "member")
+
+
 def test_service_token_typ():
     t = tokens.issue_access_token("agent-x", "t", "", typ="service")
-    assert tokens.decode_token(t)["typ"] == "service"
+    claims = tokens.decode_token(t)
+    assert claims["typ"] == "service"
+    assert claims["agent_id"] == "agent-x"
+    assert claims["role"] == "service"
+
+
+def test_wrong_audience_rejected():
+    t = tokens.issue_access_token("u", "t", "member", audience="genus-engine")
+    with pytest.raises(TokenError):
+        tokens.decode_token(t)
+    assert tokens.decode_token(t, expected_audience="genus-engine")["aud"] == "genus-engine"
+
+
+def test_service_helper_binds_agent_scope_and_audience():
+    t = tokens.issue_service_token(
+        "engine",
+        "tenant-a",
+        agent_id="email-classifier",
+        scopes=("bridge:read",),
+    )
+    claims = tokens.decode_token(t)
+    assert claims["sub"] == "engine"
+    assert claims["agent_id"] == "email-classifier"
+    assert claims["scope"] == "bridge:read"
+
+
+def test_user_token_cannot_claim_agent_identity():
+    with pytest.raises(ValueError, match="cannot carry agent_id"):
+        tokens.issue_access_token("u", "t", "member", agent_id="main")
 
 
 def test_refresh_token_hash_deterministic():

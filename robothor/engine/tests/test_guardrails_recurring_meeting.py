@@ -44,7 +44,7 @@ class TestRecurringMeetingProposal:
             patch("robothor.engine.guardrails._resolve_owner_email", create=True),
             patch(
                 "robothor.engine.guardrails._owner_email_cached",
-                return_value="owner@example.com",
+                return_value="owner@example.org",
             ),
         ):
             res = _engine().check_pre_execution(

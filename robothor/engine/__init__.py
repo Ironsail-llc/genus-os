@@ -10,4 +10,4 @@ Usage:
     robothor engine start                   # Start daemon via CLI
 """
 
-__version__ = "0.1.0"
+from robothor import __version__ as __version__
