@@ -83,6 +83,25 @@ every sequence usable, so migration 082's grants are sufficient. The app uses no
 
 Live on: **engine, bridge, delphi-engine** (`ROBOTHOR_DB_USER=robothor_app`).
 
+## What broke, and why (2026-07-14)
+
+**`delphi-smart-money` issues `CREATE TABLE IF NOT EXISTS` at runtime.** Against the
+non-superuser role that fails with `permission denied for schema public`, and
+**pre-creating the table does not help** — Postgres checks the CREATE privilege on the
+schema *before* it checks whether the table exists, so `IF NOT EXISTS` still raises.
+
+Worked around with `GRANT CREATE ON SCHEMA public TO robothor_app`. Tenant isolation is
+unaffected (verified after the grant: one tenant visible, cross-tenant write still
+refused) — but the app role now holds more than it needs.
+
+Proper fix: move that DDL into `crm/migrations/`, then
+`REVOKE CREATE ON SCHEMA public FROM robothor_app`.
+
+**Lesson for the next cutover:** grep for runtime DDL across *every* service that reads
+`ROBOTHOR_DB_USER`, not just `robothor/` and `crm/`. The pre-flight missed delphi's own
+code, and the failure only surfaced because `systemctl is-system-running` went
+`degraded`.
+
 ## What is NOT yet isolated
 
 `robothor-app` (dashboard), `robothor-orchestrator` and `robothor-vision` use a
