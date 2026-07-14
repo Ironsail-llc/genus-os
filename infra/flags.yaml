@@ -47,17 +47,33 @@ flags:
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-07-16"
+    planned_promotion: "2026-09-01"
     soak: >
-      363 observes triaged 2026-07-13: all legitimate host-side exec (local
-      Postgres over the Unix socket, brain/ status files, localhost curls)
-      from four host-trusted agents, now opted out via `sandbox: host` in the
-      v2 block. Zero events since. GATE: 48h clean re-soak, then enforce.
-      Read the events, not a simulation — `_resolve_sandbox_decision` against a
-      *manifest* config says auto-agent would be Dockerized, but its 60 runs
-      are sub-agent spawns with a restricted tool set and they log no events.
-      The observe events are ground truth: the engine records exactly the runs
-      it would sandbox, so a clean 48h means enforce is a genuine no-op.
+      DO NOT PROMOTE ON A CLEAN SOAK. The soak is structurally incapable of
+      telling us anything, and enforcing today would break the email pipeline
+      while containing nothing.
+
+      The guardrail does not do what its name says. `exec` NEVER routes through
+      the sandbox: tools/handlers/filesystem.py runs subprocess.run(shell=True)
+      on the host and never consults get_current_sandbox(). Only browser.py and
+      desktop.py enter the container — and none of the three agents this flag
+      would sandbox (auto-agent, auto-researcher, email-analyst) use browser or
+      desktop tools at all. There are also no volume mounts in the docker run,
+      infra/sandbox/Dockerfile is never built or tagged, and the docker group
+      has no members, so Sandbox.start() cannot succeed on this box.
+
+      "Zero events" is a FALSE NEGATIVE, not evidence of safety: the observe
+      event fires at step 0 of every run of an exec-holding agent, and
+      auto-agent and auto-researcher are `enabled: false` — they cannot emit a
+      soak event at all. email-analyst is live but rare. On the next complex
+      inbound email after a flip, sandbox start fails, the run fail-closes
+      (correctly, #201), and the email pipeline silently loses its analysis
+      stage — a missing-infrastructure failure wearing a guardrail's clothes.
+
+      GATE (not a date): route exec through the sandbox, build the image, mount
+      the workspace, move to rootless podman. Then probe one real auto-agent run
+      INSIDE the container and confirm it works — not merely that it does not
+      error. See the Phase 2 plan.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops
