@@ -1,3 +1,9 @@
+## [1.20.4](https://github.com/Ironsail-llc/genus-os/compare/v1.20.3...v1.20.4) (2026-07-14)
+
+### Bug Fixes
+
+* **rls:** close the last superuser bypass, and make an inert RLS loud ([#212](https://github.com/Ironsail-llc/genus-os/issues/212)) ([755f79b](https://github.com/Ironsail-llc/genus-os/commit/755f79bf8e0cc87f599537e6b8727d611eed5dd0))
+
 ## [1.20.3](https://github.com/Ironsail-llc/genus-os/compare/v1.20.2...v1.20.3) (2026-07-14)
 
 ### Bug Fixes
