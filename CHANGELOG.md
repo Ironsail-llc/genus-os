@@ -1,3 +1,9 @@
+## [1.17.0](https://github.com/Ironsail-llc/genus-os/compare/v1.16.2...v1.17.0) (2026-07-14)
+
+### Features
+
+* **engine:** circuit breaker on the LLM fallback chain ([#202](https://github.com/Ironsail-llc/genus-os/issues/202)) ([18ab730](https://github.com/Ironsail-llc/genus-os/commit/18ab730c9fd5d74d1dde08b8e7610b0f0801a1ef))
+
 ## [1.16.2](https://github.com/Ironsail-llc/genus-os/compare/v1.16.1...v1.16.2) (2026-07-14)
 
 ### Bug Fixes
