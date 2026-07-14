@@ -54,8 +54,24 @@ if [[ "$VERIFY_ONLY" == "1" ]]; then
 fi
 
 # ── Replicate the database dumps ────────────────────────────────────────────
-log "replicating dumps: $SOURCE -> $REMOTE/db"
-rclone copy "$SOURCE" "$REMOTE/db" --transfers 2 --checkers 4 >>"$LOG" 2>&1 \
+# Upload ONLY the generations we intend to retain. Copying the whole directory
+# and pruning afterwards means shipping (and paying for) dumps that are deleted
+# minutes later — at ~1.1 GB and ~4.5 MB/s per dump that is roughly 45 wasted
+# minutes a night on a 17-dump source.
+mapfile -t keep_files < <(
+    find "$SOURCE" -maxdepth 1 -name "*.sql.gz" -printf "%f\n" 2>/dev/null | sort | tail -n "$KEEP"
+)
+if ((${#keep_files[@]} == 0)); then
+    fail "no *.sql.gz dumps found in $SOURCE"
+fi
+
+include_args=()
+for f in "${keep_files[@]}"; do
+    include_args+=(--include "$f")
+done
+
+log "replicating ${#keep_files[@]} newest dumps (of $(find "$SOURCE" -maxdepth 1 -name '*.sql.gz' | wc -l)): $SOURCE -> $REMOTE/db"
+rclone copy "$SOURCE" "$REMOTE/db" "${include_args[@]}" --transfers 2 --checkers 4 >>"$LOG" 2>&1 \
     || fail "rclone copy of database dumps failed"
 
 # ── Preserve the guardrail posture (it lives in /etc, not in git) ───────────
@@ -67,7 +83,7 @@ fi
 
 # ── Verify the copy landed intact before trusting it ────────────────────────
 log "verifying replicated dumps"
-rclone check "$SOURCE" "$REMOTE/db" --one-way --checkers 4 >>"$LOG" 2>&1 \
+rclone check "$SOURCE" "$REMOTE/db" "${include_args[@]}" --one-way --checkers 4 >>"$LOG" 2>&1 \
     || fail "post-upload verification failed — the offsite copy is not intact"
 
 # ── Retention: keep the newest N generations offsite ────────────────────────

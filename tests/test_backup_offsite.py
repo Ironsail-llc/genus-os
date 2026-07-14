@@ -137,3 +137,23 @@ def test_missing_source_fails_loudly(tmp_path: Path):
     result = _run(tmp_path, tmp_path / "nonexistent", tmp_path / "remote")
     assert result.returncode != 0
     assert "source" in (result.stdout + result.stderr).lower()
+
+
+def test_uploads_only_the_generations_it_intends_to_keep(tmp_path: Path):
+    """Do not ship dumps that retention deletes minutes later.
+
+    Copying the whole source and pruning afterwards uploads (and pays for)
+    generations that are immediately discarded — at ~1.1 GB and ~4.5 MB/s per
+    dump that is roughly 45 wasted minutes a night on a 17-dump source.
+    """
+    src = _make_source(tmp_path, days=5)  # 5 dumps on disk
+    dest = tmp_path / "remote"
+
+    result = _run(tmp_path, src, dest)  # KEEP=2
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    uploaded = sorted(f.name for f in (dest / "db").glob("*.sql.gz"))
+    assert len(uploaded) == 2, f"uploaded {len(uploaded)} dumps but KEEP=2: {uploaded}"
+    # and they are the newest two, not an arbitrary pair
+    newest = sorted(f.name for f in src.glob("*.sql.gz"))[-2:]
+    assert uploaded == newest
