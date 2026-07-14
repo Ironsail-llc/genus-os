@@ -1,3 +1,13 @@
+## [1.18.0](https://github.com/Ironsail-llc/genus-os/compare/v1.17.0...v1.18.0) (2026-07-14)
+
+### Features
+
+* **security:** row-level security backstop for tenant isolation ([#203](https://github.com/Ironsail-llc/genus-os/issues/203)) ([f4afe09](https://github.com/Ironsail-llc/genus-os/commit/f4afe093a1715a604be6e3ad359ed4b5ef8bebad))
+
+### Bug Fixes
+
+* **ops:** verify only the generations we actually retain offsite ([#204](https://github.com/Ironsail-llc/genus-os/issues/204)) ([1211564](https://github.com/Ironsail-llc/genus-os/commit/1211564a3aac241bde4137a52fe092452ecddb7b))
+
 ## [1.17.0](https://github.com/Ironsail-llc/genus-os/compare/v1.16.2...v1.17.0) (2026-07-14)
 
 ### Features
