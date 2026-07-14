@@ -318,7 +318,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     # Distinct from the secrets vault above. Stores reference data the agent
     # must recall exactly (numbers, ids, addresses). Only registered when
     # ROBOTHOR_RIP_12_ENABLED so the tools stay dark until the operator opts in.
-    from robothor.engine.feature_flags import is_rip_enabled
+    from robothor.engine.tools.rollout_gates import is_rip_enabled
 
     if is_rip_enabled(12):
         schemas["memory_vault_store"] = {
@@ -390,7 +390,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         }
 
     # ── Symbolic memory (Rip 13): drill into a condensed tool step ──
-    from robothor.engine.feature_flags import symbolic_memory_mode
+    from robothor.engine.tools.rollout_gates import symbolic_memory_mode
 
     if symbolic_memory_mode() != "off":
         schemas["recall_node"] = {

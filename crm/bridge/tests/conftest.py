@@ -78,6 +78,97 @@ def _make_response(status_code=200, json_data=None):
 
 
 @pytest.fixture
+def _controls_auth_key(monkeypatch):
+    """A stable signing key for tests that mint real tokens via robothor.auth.tokens."""
+    from robothor.auth import tokens
+
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "test-signing-key-at-least-32-bytes-long-xyz")
+    tokens.reset_signing_key_cache()
+    yield
+    tokens.reset_signing_key_cache()
+
+
+@pytest.fixture
+def controls_client_as_operator(_controls_auth_key):
+    """A verified human operator session (typ="user", role="owner").
+
+    ``AuthContext.is_service`` is False, so the controls router's
+    ``_require_operator`` check lets it through.
+
+    Deliberately NOT used as a context manager: entering/exiting
+    ``TestClient(app)`` runs the real ASGI lifespan (spins up the routine
+    trigger background task + a live ``httpx.AsyncClient``), which the
+    controls routes never touch and which was observed to perturb the tight
+    thread-scheduling timing in ``test_route_concurrency.py`` when run in the
+    same session. The bare client still serves requests correctly (see
+    ``bridge_service.http_client`` staying unused by these routes).
+    """
+    from fastapi.testclient import TestClient
+
+    from robothor.auth import tokens
+
+    token = tokens.issue_access_token("operator-1", "tenant-a", "owner")
+    client = TestClient(app)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
+
+
+@pytest.fixture
+def controls_client_as_service(_controls_auth_key, monkeypatch):
+    """A verified service (agent) session (typ="service") — what every agent
+    tool-call carries. ``AuthContext.is_service`` is True.
+
+    The capability manifest's endpoint whitelist is patched permissive here
+    on purpose: no agent's ``bridge_endpoints`` entry names ``/api/controls``
+    today, so leaving the manifest as-is would make ``RBACMiddleware`` reject
+    the request before it ever reaches the router — a green test for the
+    wrong reason. Patching it open proves the 403 in
+    ``test_patch_rejects_a_service_token`` comes from the router's own
+    ``auth.is_service`` check (lock #3), not an incidental manifest gap.
+
+    Bare (non-context-managed) ``TestClient`` for the same reason as
+    ``controls_client_as_operator`` above.
+    """
+    from fastapi.testclient import TestClient
+
+    from robothor.auth import tokens
+
+    monkeypatch.setattr("middleware.check_endpoint_access", lambda *a, **k: True)
+    token = tokens.issue_service_token("email-classifier", "tenant-a", agent_id="email-classifier")
+    client = TestClient(app)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
+
+
+@pytest.fixture
+def fake_store(monkeypatch):
+    """Records writes so an audited PATCH can be asserted without touching
+    the real DB-backed flag store."""
+    from robothor.flags.store import GOVERNED_FLAGS
+
+    class FakeStore:
+        def __init__(self):
+            self.GOVERNED_FLAGS = GOVERNED_FLAGS
+            self.last_write = None
+            self.last_actor = None
+            self.last_reason = None
+            self.values: dict = {}
+
+        def resolve(self, name):
+            return self.values.get(name)
+
+        def set_flag(self, name, value, actor, reason):
+            self.values[name] = value
+            self.last_write = (name, value)
+            self.last_actor = actor
+            self.last_reason = reason
+
+    fake = FakeStore()
+    monkeypatch.setattr("routers.controls.store", fake)
+    return fake
+
+
+@pytest.fixture
 def mock_services_healthy(mock_http_client):
     """Configure mock_http_client so all health checks return 200."""
 
