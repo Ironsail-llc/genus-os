@@ -1,3 +1,9 @@
+## [1.24.0](https://github.com/Ironsail-llc/genus-os/compare/v1.23.0...v1.24.0) (2026-07-15)
+
+### Features
+
+* **helm:** canvas bridge — the LLM's live, propose-only rendering surface ([#217](https://github.com/Ironsail-llc/genus-os/issues/217)) ([1e70530](https://github.com/Ironsail-llc/genus-os/commit/1e70530f7d59bfb23515ceb79511744d4b1509ee))
+
 ## [1.23.0](https://github.com/Ironsail-llc/genus-os/compare/v1.22.0...v1.23.0) (2026-07-15)
 
 ### Features
