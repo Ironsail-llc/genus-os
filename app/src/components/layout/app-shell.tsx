@@ -13,6 +13,7 @@ import { FleetView } from "@/components/views/fleet-view";
 import { RunsView } from "@/components/views/runs-view";
 import { WorkflowsView } from "@/components/views/workflows-view";
 import { HealthView } from "@/components/views/health-view";
+import { CanvasView } from "@/components/views/canvas-view";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
 import { useScreenSize } from "@/hooks/use-mobile";
@@ -28,6 +29,7 @@ const viewTitles: Record<ViewId, string> = {
   runs: "Runs",
   workflows: "Workflows",
   health: "Health",
+  canvas: "Canvas",
 };
 
 function HeaderClock() {
@@ -143,6 +145,7 @@ export function AppShell() {
             <RunsView visible={sidebarView === "runs"} />
             <WorkflowsView visible={sidebarView === "workflows"} />
             <HealthView visible={sidebarView === "health"} />
+            <CanvasView visible={sidebarView === "canvas"} />
           </div>
         </div>
       )}
