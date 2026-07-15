@@ -30,8 +30,18 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
   }, []);
 
   const openRun = useCallback(async (id: string) => {
-    const res = await fetch(`${BRIDGE_URL}/api/runs/${id}`);
-    if (res.ok) setDetail(await res.json());
+    setDetail(null);
+    setError(null);
+    try {
+      const res = await fetch(`${BRIDGE_URL}/api/runs/${id}`);
+      if (!res.ok) {
+        setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+        return;
+      }
+      setDetail(await res.json());
+    } catch {
+      setError("Could not reach the bridge.");
+    }
   }, []);
 
   useEffect(() => {
