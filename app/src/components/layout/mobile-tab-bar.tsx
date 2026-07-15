@@ -2,6 +2,10 @@
 
 import { LayoutDashboard, ListTodo, Bot, MessageSquare } from "lucide-react";
 
+// Space-constrained: only 4 slots fit the bottom bar (chat, dashboard, tasks,
+// agents). Marketplace and Controls are already desktop-only for the same
+// reason — Fleet follows that precedent and stays desktop-only too, reachable
+// via the sidebar on desktop.
 export type MobileViewId = "dashboard" | "tasks" | "agents" | "chat";
 
 interface TabItem {
