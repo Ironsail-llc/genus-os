@@ -79,6 +79,7 @@ def _read_db(name: str) -> str | None:
         row = cur.fetchone()
     if row is None:
         return None
+    value: str | None
     value, updated_by = row
     if updated_by == _SEED_ACTOR:
         return None  # seed row == "unset", let env win during cutover

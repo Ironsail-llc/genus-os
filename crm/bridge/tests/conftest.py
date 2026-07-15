@@ -234,6 +234,35 @@ def fake_store(monkeypatch):
 
 
 @pytest.fixture
+def fake_verdict(monkeypatch):
+    """Patches the ``verdict`` symbol as imported into ``routers.controls``
+    (``from robothor.flags.evidence import verdict``) so GET-path tests never
+    open a real DB connection — CI's unit lane runs this test module with no
+    database reachable at all.
+
+    Returns canned, deterministic ``Verdict`` objects keyed only by the flag
+    name/mode passed in, so callers asserting on payload *shape* (all 12
+    flags present, ``verdict.status`` present, ``valid_values`` present) get
+    a real router response without touching ``agent_guardrail_events`` or
+    any other evidence table.
+    """
+    from robothor.flags.evidence import Verdict
+
+    def _fake_verdict(name: str, mode: str) -> Verdict:
+        return Verdict(
+            name=name,
+            mode=mode,
+            status="UNPROVEN",
+            last_fired=None,
+            count_7d=0,
+            message="test-canned verdict — no DB in this lane",
+        )
+
+    monkeypatch.setattr("routers.controls.verdict", _fake_verdict)
+    return _fake_verdict
+
+
+@pytest.fixture
 def mock_services_healthy(mock_http_client):
     """Configure mock_http_client so all health checks return 200."""
 

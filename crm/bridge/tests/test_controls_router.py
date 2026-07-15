@@ -25,7 +25,7 @@ def test_operator_can_promote_and_it_is_audited(controls_client_as_operator, fak
     assert fake_store.last_write == ("ROBOTHOR_RBAC_MODE", "enforce")
 
 
-def test_get_lists_all_twelve_with_verdicts(controls_client_as_operator):
+def test_get_lists_all_twelve_with_verdicts(controls_client_as_operator, fake_store, fake_verdict):
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
     body = r.json()
@@ -92,12 +92,12 @@ def test_patch_rejects_a_human_user(controls_client_as_user):
     assert r.status_code == 403
 
 
-def test_get_allows_a_human_owner(controls_client_as_operator):
+def test_get_allows_a_human_owner(controls_client_as_operator, fake_store, fake_verdict):
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
 
 
-def test_get_allows_a_human_admin(controls_client_as_admin):
+def test_get_allows_a_human_admin(controls_client_as_admin, fake_store, fake_verdict):
     r = controls_client_as_admin.get("/api/controls")
     assert r.status_code == 200
 
@@ -129,7 +129,9 @@ def test_patch_rejects_an_owner_from_a_different_tenant(controls_client_as_other
     )
 
 
-def test_get_allows_the_platform_tenant_owner(controls_client_as_operator):
+def test_get_allows_the_platform_tenant_owner(
+    controls_client_as_operator, fake_store, fake_verdict
+):
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
 
@@ -160,7 +162,9 @@ def test_patch_accepts_enforce_on_rip_13_mode(controls_client_as_operator, fake_
     assert fake_store.last_write == ("ROBOTHOR_RIP_13_MODE", "enforce")
 
 
-def test_get_payload_includes_valid_values_per_flag(controls_client_as_operator):
+def test_get_payload_includes_valid_values_per_flag(
+    controls_client_as_operator, fake_store, fake_verdict
+):
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
     body = r.json()
