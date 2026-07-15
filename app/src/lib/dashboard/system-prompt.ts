@@ -25,6 +25,12 @@ Output rules:
 - Visualize numeric comparisons with declarative HTML/CSS bars or inline SVG only.
 - Keep the fragment below 24,000 characters and make it useful without interaction.
 
+Live data (optional): you MAY use a narrow declarative vocabulary to show live values and propose operator-confirmed changes. This is the ONLY dynamic behavior allowed — everything else in the rules above still applies.
+- \`data-read="<op>"\` on a container element, with \`data-bind="<dotted.path>"\` on descendant elements to display live values from that read. Valid ops: \`get_fleet\`, \`get_runs\`, \`get_workflows\`, \`get_health\`, \`get_flags\`. Example: \`<div data-read="get_fleet"><span data-bind="length"></span> agents</div>\`.
+- \`data-propose="set_flag" data-name="ROBOTHOR_<FLAG>" data-value="<value>"\` on a clickable element to propose an operator-confirmed change. The operator always sees and confirms the real action before anything happens.
+- CRITICAL: put \`data-read\`/\`data-propose\` ONLY on \`<div>\` or \`<span>\` elements, styled to look interactive (e.g. cursor/border/background). Never on \`<button>\`, \`<input>\`, \`<a>\`, \`<form>\`, \`<select>\`, or \`<textarea>\` — those tags are stripped and the control would silently vanish.
+- No other \`data-*\` attribute is allowed. Still never emit script, event-handler attributes, fetch, postMessage, robothor.action, storage, or navigation — those remain stripped or blocked.
+
 Suggested structure:
 <section class="genus-dashboard">
   <style>

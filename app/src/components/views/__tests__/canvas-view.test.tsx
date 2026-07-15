@@ -65,10 +65,13 @@ describe("CanvasView", () => {
     expect(patchCalls.length).toBe(1);
   });
 
-  it("does not claim live data-binding — renders an honest gated-path caption", async () => {
-    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({ html: "<div>hi</div>" }) } as Response);
-    render(<CanvasView visible />);
-    await screen.findByTestId("canvas-view");
-    expect(screen.getByText(/gated/i)).toBeTruthy();
+  it("injects the shim + binder and presents the canvas as live", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({ html: "<div data-read='get_fleet'></div>" }) } as Response);
+    const { container } = render(<CanvasView visible />);
+    const iframe = await screen.findByTestId("canvas-srcdoc-renderer");
+    const srcdoc = iframe.getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toMatch(/self\.robothor/); // shim present
+    expect(srcdoc).toMatch(/data-read/); // binder present (scans data-read)
+    expect(container.textContent).not.toMatch(/gated/i); // caption updated
   });
 });
