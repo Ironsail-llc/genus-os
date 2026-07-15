@@ -10,8 +10,15 @@ const BLOCKED_PATTERNS = [
   /<\s*(?:a|form|input|button|select|textarea|option|fieldset)\b/i,
   /\bon\w+\s*=/i,
   /javascript\s*:/i,
+  // Raw postMessage/fetch stay blocked unconditionally: only the trusted,
+  // parent-injected shim (never model-authored code) is allowed to talk to
+  // the host window or the network.
   /\bpostMessage\s*\(/i,
-  /\brobothor\s*\./i,
+  // Canvas bridge carve-out: model HTML may call the trusted shim's
+  // window.robothor.read()/propose() (mediated, allow-listed RPCs to the
+  // host), but every other robothor.* surface (e.g. robothor.action) stays
+  // blocked.
+  /\brobothor\s*\.(?!\s*(?:read|propose)\s*\()/i,
   /@import\b/i,
   /url\s*\(\s*["']?https?:/i,
   /\bfetch\s*\(/i,
