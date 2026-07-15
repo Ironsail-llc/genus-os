@@ -1,10 +1,10 @@
 "use client";
 
-import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store } from "lucide-react";
+import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import Image from "next/image";
 
-export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace";
+export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace" | "controls";
 
 interface NavItem {
   id: ViewId | "chat";
@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { id: "tasks", icon: <ListTodo className="w-5 h-5" />, label: "Tasks" },
   { id: "agents", icon: <Bot className="w-5 h-5" />, label: "Agents" },
   { id: "marketplace", icon: <Store className="w-5 h-5" />, label: "Marketplace" },
+  { id: "controls", icon: <ShieldAlert className="w-5 h-5" />, label: "Controls" },
 ];
 
 interface SidebarProps {

@@ -1,4 +1,16 @@
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
+
+// Safe default for every spec: no session, no role. Components (e.g.
+// ControlsView) that call `useSession()` would otherwise throw
+// "`useSession` must be wrapped in a <SessionProvider />" outside the real
+// app tree (only `src/app/layout.tsx` renders one). Specs that care about a
+// specific role (see controls-view.test.tsx) declare their own
+// `vi.mock("next-auth/react", ...)`, which takes precedence for that file.
+vi.mock("next-auth/react", () => ({
+  useSession: () => ({ data: null, status: "unauthenticated", update: vi.fn() }),
+  SessionProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
 
 // jsdom does not implement scrollIntoView (happy-dom did). The suite runs under
 // jsdom because that is what production's isomorphic-dompurify uses — and because

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { SessionProvider } from "next-auth/react";
 import { RuntimeConfigProvider } from "@/components/runtime-config";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -43,9 +44,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <RuntimeConfigProvider aiName={aiName}>
-          <TooltipProvider>{children}</TooltipProvider>
-        </RuntimeConfigProvider>
+        <SessionProvider>
+          <RuntimeConfigProvider aiName={aiName}>
+            <TooltipProvider>{children}</TooltipProvider>
+          </RuntimeConfigProvider>
+        </SessionProvider>
       </body>
     </html>
   );
