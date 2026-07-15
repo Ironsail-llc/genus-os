@@ -1,3 +1,10 @@
+## [1.23.0](https://github.com/Ironsail-llc/genus-os/compare/v1.22.0...v1.23.0) (2026-07-15)
+
+### Features
+
+* **controls:** add DB-backed guardrail control plane and Controls tab ([#215](https://github.com/Ironsail-llc/genus-os/issues/215)) ([557bc5a](https://github.com/Ironsail-llc/genus-os/commit/557bc5a5e9a11c15d75635dc765b9c2594ebf9d2))
+* **helm:** operator accounting tabs — fleet, runs, workflows, health ([#216](https://github.com/Ironsail-llc/genus-os/issues/216)) ([ffe85bf](https://github.com/Ironsail-llc/genus-os/commit/ffe85bfe295ec4ca2db44fefe37f2b05afac6ee4))
+
 ## [1.22.0](https://github.com/Ironsail-llc/genus-os/compare/v1.21.0...v1.22.0) (2026-07-14)
 
 ### Features
