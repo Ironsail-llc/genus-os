@@ -86,7 +86,9 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
       <p className="text-xs text-zinc-500">
         Sandboxed canvas. Live-data binding is gated pending a sanitization-posture decision.
       </p>
-      <SrcdocRenderer ref={iframeRef} html={code} bootstrap={CANVAS_SHIM_SOURCE} />
+      {visible && (
+        <SrcdocRenderer ref={iframeRef} html={code} bootstrap={CANVAS_SHIM_SOURCE} testId="canvas-srcdoc-renderer" />
+      )}
 
       {dropped.length > 0 && (
         <div data-testid="canvas-dropped" className="rounded border border-amber-500/50 bg-amber-500/5 p-2 text-xs text-amber-300">

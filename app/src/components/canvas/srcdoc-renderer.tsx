@@ -15,11 +15,21 @@ interface SrcdocRendererProps {
    * DOMPurify), exactly like the height/error script below it.
    */
   bootstrap?: string;
+  /**
+   * `data-testid` for the rendered iframe. Defaults to "srcdoc-renderer" so
+   * existing callers (and the isolation test, which renders this component
+   * directly) are unaffected. Callers that mount a second SrcdocRenderer
+   * alongside another one in the DOM at the same time (e.g. CanvasView,
+   * which mounts next to the welcome dashboard's SrcdocRenderer) must pass a
+   * distinct id so `[data-testid="srcdoc-renderer"]` locators stay
+   * unambiguous.
+   */
+  testId?: string;
 }
 
 /** Render model HTML as a read-only, isolated document with no action channel. */
 export const SrcdocRenderer = forwardRef<HTMLIFrameElement, SrcdocRendererProps>(function SrcdocRenderer(
-  { html, bootstrap },
+  { html, bootstrap, testId = "srcdoc-renderer" },
   forwardedRef,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -152,7 +162,7 @@ ${sanitized}
       style={{ height: `${height}px` }}
       sandbox="allow-scripts"
       title="Read-only generated dashboard"
-      data-testid="srcdoc-renderer"
+      data-testid={testId}
       referrerPolicy="no-referrer"
     />
   );

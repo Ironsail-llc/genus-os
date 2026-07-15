@@ -10,7 +10,7 @@ describe("CanvasView", () => {
     render(<CanvasView visible />);
     expect(await screen.findByTestId("canvas-view")).toBeTruthy();
     // the sandboxed iframe is present and never same-origin
-    const iframe = document.querySelector('[data-testid="srcdoc-renderer"]') as HTMLIFrameElement;
+    const iframe = document.querySelector('[data-testid="canvas-srcdoc-renderer"]') as HTMLIFrameElement;
     expect(iframe).toBeTruthy();
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
     expect(iframe.getAttribute("sandbox") ?? "").not.toMatch(/allow-same-origin/);
@@ -26,7 +26,7 @@ describe("CanvasView", () => {
   it("shows a confirm dialog in parent chrome built from the real action, not the iframe label", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({ html: "<div></div>" }) } as Response);
     render(<CanvasView visible />);
-    const iframe = (await screen.findByTestId("srcdoc-renderer")) as HTMLIFrameElement;
+    const iframe = (await screen.findByTestId("canvas-srcdoc-renderer")) as HTMLIFrameElement;
     // simulate a hostile propose arriving from the iframe
     act(() => {
       window.dispatchEvent(new MessageEvent("message", {
@@ -46,7 +46,7 @@ describe("CanvasView", () => {
   it("disables the Confirm button after the first click so a fast double-click cannot double-submit", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({ html: "<div></div>" }) } as Response);
     render(<CanvasView visible />);
-    const iframe = (await screen.findByTestId("srcdoc-renderer")) as HTMLIFrameElement;
+    const iframe = (await screen.findByTestId("canvas-srcdoc-renderer")) as HTMLIFrameElement;
     act(() => {
       window.dispatchEvent(new MessageEvent("message", {
         origin: "null", source: iframe.contentWindow,
