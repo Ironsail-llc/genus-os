@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -11,23 +11,29 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchWorkflows = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE_URL}/api/workflows`);
-      if (!res.ok) {
-        setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-        return;
-      }
-      setWorkflows(await res.json());
-      setError(null);
-    } catch {
-      setError("Could not reach the bridge.");
-    }
-  }, []);
-
   useEffect(() => {
-    if (visible) fetchWorkflows();
-  }, [visible, fetchWorkflows]);
+    if (!visible) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/api/workflows`);
+        if (!active) return;
+        if (!res.ok) {
+          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+          return;
+        }
+        const data = await res.json();
+        if (!active) return;
+        setWorkflows(data);
+        setError(null);
+      } catch {
+        if (active) setError("Could not reach the bridge.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [visible]);
 
   return (
     <div data-testid="workflows-view" className="flex-col gap-3 p-4"

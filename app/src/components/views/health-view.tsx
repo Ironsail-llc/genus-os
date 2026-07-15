@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -27,23 +27,29 @@ export function HealthView({ visible = true }: { visible?: boolean }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchHealth = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE_URL}/api/health/system`);
-      if (!res.ok) {
-        setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-        return;
-      }
-      setHealth(await res.json());
-      setError(null);
-    } catch {
-      setError("Could not reach the bridge.");
-    }
-  }, []);
-
   useEffect(() => {
-    if (visible) fetchHealth();
-  }, [visible, fetchHealth]);
+    if (!visible) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/api/health/system`);
+        if (!active) return;
+        if (!res.ok) {
+          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+          return;
+        }
+        const data = await res.json();
+        if (!active) return;
+        setHealth(data);
+        setError(null);
+      } catch {
+        if (active) setError("Could not reach the bridge.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [visible]);
 
   const wal = health?.wal;
   const walGood = wal?.status === "ok";

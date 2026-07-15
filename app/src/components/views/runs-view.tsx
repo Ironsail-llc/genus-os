@@ -15,20 +15,6 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRuns = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE_URL}/api/runs`);
-      if (!res.ok) {
-        setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-        return;
-      }
-      setRuns(await res.json());
-      setError(null);
-    } catch {
-      setError("Could not reach the bridge.");
-    }
-  }, []);
-
   const openRun = useCallback(async (id: string) => {
     setDetail(null);
     setError(null);
@@ -45,8 +31,28 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (visible) fetchRuns();
-  }, [visible, fetchRuns]);
+    if (!visible) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/api/runs`);
+        if (!active) return;
+        if (!res.ok) {
+          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+          return;
+        }
+        const data = await res.json();
+        if (!active) return;
+        setRuns(data);
+        setError(null);
+      } catch {
+        if (active) setError("Could not reach the bridge.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [visible]);
 
   return (
     <div data-testid="runs-view" className="flex-col gap-3 p-4"

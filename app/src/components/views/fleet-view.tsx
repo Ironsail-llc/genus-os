@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -26,23 +26,29 @@ export function FleetView({ visible = true }: { visible?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchFleet = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE_URL}/api/fleet`);
-      if (!res.ok) {
-        setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-        return;
-      }
-      setAgents(await res.json());
-      setError(null);
-    } catch {
-      setError("Could not reach the bridge.");
-    }
-  }, []);
-
   useEffect(() => {
-    if (visible) fetchFleet();
-  }, [visible, fetchFleet]);
+    if (!visible) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/api/fleet`);
+        if (!active) return;
+        if (!res.ok) {
+          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+          return;
+        }
+        const data = await res.json();
+        if (!active) return;
+        setAgents(data);
+        setError(null);
+      } catch {
+        if (active) setError("Could not reach the bridge.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [visible]);
 
   return (
     <div
