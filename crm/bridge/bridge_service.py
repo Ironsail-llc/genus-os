@@ -50,6 +50,7 @@ from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
 from routers.routines import router as routines_router
+from routers.runs import router as runs_router
 from routers.tenants import router as tenants_router
 
 # ─── Configuration ───────────────────────────────────────────────────────
@@ -152,6 +153,7 @@ app.include_router(installed_agents_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
 app.include_router(fleet_router)
+app.include_router(runs_router)
 
 
 if __name__ == "__main__":
