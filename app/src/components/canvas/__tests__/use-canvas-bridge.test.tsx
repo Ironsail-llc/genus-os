@@ -74,6 +74,25 @@ describe("useCanvasBridge", () => {
       expect.objectContaining({ method: "PATCH" }));
   });
 
+  it("confirmProposal guards against re-entrant double-submit (fast double-click)", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    const { ref, contentWindow } = makeIframeRef();
+    const { result } = renderHook(() => useCanvasBridge(ref));
+    act(() => fireMessage(contentWindow, {
+      __robothor: true, kind: "propose", reqId: "p3", action: "set_flag",
+      args: { name: "ROBOTHOR_INJECTION_SCAN_MODE", value: "off" }, label: "x",
+    }));
+    await waitFor(() => expect(result.current.pendingProposal).not.toBeNull());
+
+    // Fire two confirms back-to-back before either has settled — simulates a
+    // fast double-click racing ahead of the UI's own disabled-button guard.
+    await act(async () => {
+      await Promise.all([result.current.confirmProposal(), result.current.confirmProposal()]);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("cancel clears the pending proposal without executing", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
     const { ref, contentWindow } = makeIframeRef();

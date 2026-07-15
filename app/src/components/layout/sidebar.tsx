@@ -1,10 +1,10 @@
 "use client";
 
-import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse } from "lucide-react";
+import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse, Sparkles } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import Image from "next/image";
 
-export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace" | "controls" | "fleet" | "runs" | "workflows" | "health";
+export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace" | "controls" | "fleet" | "runs" | "workflows" | "health" | "canvas";
 
 interface NavItem {
   id: ViewId | "chat";
@@ -22,6 +22,7 @@ const navItems: NavItem[] = [
   { id: "runs", icon: <Activity className="w-5 h-5" />, label: "Runs" },
   { id: "workflows", icon: <Workflow className="w-5 h-5" />, label: "Workflows" },
   { id: "health", icon: <HeartPulse className="w-5 h-5" />, label: "Health" },
+  { id: "canvas", icon: <Sparkles className="w-5 h-5" />, label: "Canvas" },
 ];
 
 interface SidebarProps {

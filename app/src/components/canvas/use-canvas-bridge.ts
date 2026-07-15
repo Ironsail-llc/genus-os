@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { resolveReadOp, resolveProposeAction, isCanvasMessage } from "@/lib/canvas-bridge";
 
 const BRIDGE_URL = "/api/bridge";
@@ -11,6 +11,11 @@ export type DroppedOp = { reqId: string; op: string; at: number };
 export function useCanvasBridge(iframeRef: RefObject<HTMLIFrameElement | null>) {
   const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null);
   const [dropped, setDropped] = useState<DroppedOp[]>([]);
+  // Guards confirmProposal against re-entrant double-submit — e.g. a fast
+  // double-click that lands before React re-renders the disabled Confirm
+  // button. A ref (not state) so the check is synchronous and cannot itself
+  // race.
+  const confirmInFlight = useRef(false);
 
   // `iframeRef` is itself a stable ref object (from the caller's useRef); only its
   // `.current` mutates. Reading `.current` inside effect/callback closures always
@@ -66,13 +71,18 @@ export function useCanvasBridge(iframeRef: RefObject<HTMLIFrameElement | null>) 
 
   const confirmProposal = useCallback(async () => {
     const p = pendingProposal;
-    if (!p) return;
+    if (!p || confirmInFlight.current) return;
+    confirmInFlight.current = true;
     setPendingProposal(null);
-    await fetch(`${BRIDGE_URL}${p.path}`, {
-      method: p.method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(p.body),
-    });
+    try {
+      await fetch(`${BRIDGE_URL}${p.path}`, {
+        method: p.method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(p.body),
+      });
+    } finally {
+      confirmInFlight.current = false;
+    }
   }, [pendingProposal]);
 
   const cancelProposal = useCallback(() => setPendingProposal(null), []);

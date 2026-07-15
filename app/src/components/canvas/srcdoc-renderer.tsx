@@ -1,17 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import DOMPurify from "isomorphic-dompurify";
 
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
 
 interface SrcdocRendererProps {
   html: string;
+  /**
+   * Trusted, parent-authored script injected into the srcdoc BEFORE the
+   * sanitized model HTML — e.g. CANVAS_SHIM_SOURCE, which defines
+   * `window.robothor`. This is OUR code, never the model's, so it is
+   * concatenated directly into the srcdoc template (not passed through
+   * DOMPurify), exactly like the height/error script below it.
+   */
+  bootstrap?: string;
 }
 
 /** Render model HTML as a read-only, isolated document with no action channel. */
-export function SrcdocRenderer({ html }: SrcdocRendererProps) {
+export const SrcdocRenderer = forwardRef<HTMLIFrameElement, SrcdocRendererProps>(function SrcdocRenderer(
+  { html, bootstrap },
+  forwardedRef,
+) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  useImperativeHandle(forwardedRef, () => iframeRef.current as HTMLIFrameElement, []);
   const [height, setHeight] = useState(400);
   const srcdoc = useMemo(() => {
     const sanitized = DOMPurify.sanitize(html, {
@@ -87,6 +99,7 @@ export function SrcdocRenderer({ html }: SrcdocRendererProps) {
   </style>
 </head>
 <body>
+${bootstrap ? `<script>${bootstrap}<\/script>` : ""}
 ${sanitized}
 <script>
   function reportHeight() {
@@ -106,7 +119,7 @@ ${sanitized}
 <\/script>
 </body>
 </html>`;
-  }, [html]);
+  }, [html, bootstrap]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -143,4 +156,4 @@ ${sanitized}
       referrerPolicy="no-referrer"
     />
   );
-}
+});
