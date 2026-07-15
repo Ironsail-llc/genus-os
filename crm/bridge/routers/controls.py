@@ -1,7 +1,7 @@
 """Operator-only guardrail control.
 
-The write path is deliberately hostile to agents, via three independent
-locks:
+Both the read and write paths are deliberately hostile to agents, via three
+independent locks:
 
 1. No agent tool exists for this — see
    ``robothor/engine/tests/test_no_control_tool.py``, which scans
@@ -30,7 +30,15 @@ from robothor.flags.evidence import verdict
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
 
-_VALID_VALUES = frozenset({"off", "observe", "alert", "enforce", "true", "false"})
+_MODE_VALUES = frozenset({"off", "observe", "alert", "enforce"})
+_BOOL_VALUES = frozenset({"true", "false"})
+
+
+def _valid_values_for(name: str) -> frozenset[str]:
+    """Mode-ladder flags (``*_MODE``) and boolean flags (``*_ENABLED``) have
+    disjoint value sets — a boolean flag stuck at "observe" or a mode flag
+    stuck at "true" is a silent misconfiguration, not a valid state."""
+    return _BOOL_VALUES if name.endswith("_ENABLED") else _MODE_VALUES
 
 
 class FlagPatch(BaseModel):
@@ -46,7 +54,8 @@ def _require_operator(request: Request) -> str:
 
 
 @router.get("")
-def list_controls() -> list[dict]:
+def list_controls(request: Request) -> list[dict]:
+    _require_operator(request)
     out = []
     for name in sorted(store.GOVERNED_FLAGS):
         value = store.resolve(name) or "observe"
@@ -71,7 +80,7 @@ def set_control(name: str, patch: FlagPatch, request: Request) -> dict:
     actor = _require_operator(request)
     if name not in store.GOVERNED_FLAGS:
         raise HTTPException(status_code=404, detail="unknown flag")
-    if patch.value not in _VALID_VALUES:
+    if patch.value not in _valid_values_for(name):
         raise HTTPException(status_code=422, detail="invalid value")
     store.set_flag(name, patch.value, actor=actor, reason=patch.reason)
     return {"name": name, "value": patch.value}
