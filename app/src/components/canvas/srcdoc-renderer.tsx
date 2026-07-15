@@ -52,6 +52,15 @@ export const SrcdocRenderer = forwardRef<HTMLIFrameElement, SrcdocRendererProps>
           ],
           ADD_ATTR: [
             "data-testid",
+            // Declarative canvas binding attrs (Task 1's trusted binder reads
+            // these). ALLOW_DATA_ATTR stays false below, so these five names
+            // are the ONLY data-* attributes that survive sanitization — every
+            // other data-* (and all scripts/event handlers) is still stripped.
+            "data-read",
+            "data-bind",
+            "data-propose",
+            "data-name",
+            "data-value",
             "viewBox",
             "points",
             "stroke",
