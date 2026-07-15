@@ -52,6 +52,7 @@ from routers.people import router as people_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
 from routers.tenants import router as tenants_router
+from routers.workflows import router as workflows_router
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
@@ -154,6 +155,7 @@ app.include_router(audit_router)
 app.include_router(controls_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
+app.include_router(workflows_router)
 
 
 if __name__ == "__main__":
