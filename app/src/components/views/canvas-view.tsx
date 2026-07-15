@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { SrcdocRenderer } from "@/components/canvas/srcdoc-renderer";
 import { useCanvasBridge, type PendingProposal } from "@/components/canvas/use-canvas-bridge";
 import { CANVAS_SHIM_SOURCE } from "@/lib/canvas-shim";
+import { CANVAS_BINDER_SOURCE } from "@/lib/canvas-binder";
 
 export function CanvasView({ visible = true }: { visible?: boolean }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -84,10 +85,15 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
     <div data-testid="canvas-view" className="flex-col gap-3 p-4" style={{ display: visible ? "flex" : "none" }}>
       <h2 className="text-lg font-semibold text-zinc-100">Canvas</h2>
       <p className="text-xs text-zinc-500">
-        Sandboxed canvas. Live-data binding is gated pending a sanitization-posture decision.
+        Live canvas — the operator&apos;s system, rendered by the model. Reads are whitelisted; any change is confirmed by you.
       </p>
       {visible && (
-        <SrcdocRenderer ref={iframeRef} html={code} bootstrap={CANVAS_SHIM_SOURCE} testId="canvas-srcdoc-renderer" />
+        <SrcdocRenderer
+          ref={iframeRef}
+          html={code}
+          bootstrap={CANVAS_SHIM_SOURCE + "\n" + CANVAS_BINDER_SOURCE}
+          testId="canvas-srcdoc-renderer"
+        />
       )}
 
       {dropped.length > 0 && (
