@@ -6,7 +6,7 @@ global:
   # Union: main ships the release tag; this branch ships the hardening flags.
   # Dropping either side is a silent regression — the tag rolls production
   # backwards, the flags disable auth. Keep both.
-  imageTag: "v1.23.0"
+  imageTag: "v1.24.0"
   environment: production
   authEnforce: true
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
