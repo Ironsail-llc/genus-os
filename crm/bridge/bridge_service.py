@@ -41,6 +41,7 @@ from routers.audit import router as audit_router
 from routers.auth import router as auth_router
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
+from routers.fleet import router as fleet_router
 from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
@@ -150,6 +151,7 @@ app.include_router(integration_router)
 app.include_router(installed_agents_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
+app.include_router(fleet_router)
 
 
 if __name__ == "__main__":
