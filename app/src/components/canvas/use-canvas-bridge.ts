@@ -69,17 +69,21 @@ export function useCanvasBridge(iframeRef: RefObject<HTMLIFrameElement | null>) 
     return () => window.removeEventListener("message", onMessage);
   }, [postResult, iframeRef]);
 
-  const confirmProposal = useCallback(async () => {
+  const confirmProposal = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const p = pendingProposal;
-    if (!p || confirmInFlight.current) return;
+    if (!p || confirmInFlight.current) return { ok: false, error: "no pending proposal" };
     confirmInFlight.current = true;
     setPendingProposal(null);
     try {
-      await fetch(`${BRIDGE_URL}${p.path}`, {
+      const res = await fetch(`${BRIDGE_URL}${p.path}`, {
         method: p.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(p.body),
       });
+      if (!res.ok) return { ok: false, error: `error ${res.status}` };
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "bridge unreachable" };
     } finally {
       confirmInFlight.current = false;
     }

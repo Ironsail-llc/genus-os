@@ -93,6 +93,49 @@ describe("useCanvasBridge", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reports failure (not a thrown/unhandled rejection) when the PATCH resolves non-ok, and the in-flight guard still resets", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({ ok: false, status: 500 } as Response);
+    const { ref, contentWindow } = makeIframeRef();
+    const { result } = renderHook(() => useCanvasBridge(ref));
+    act(() => fireMessage(contentWindow, {
+      __robothor: true, kind: "propose", reqId: "p4", action: "set_flag",
+      args: { name: "ROBOTHOR_INJECTION_SCAN_MODE", value: "off" }, label: "x",
+    }));
+    await waitFor(() => expect(result.current.pendingProposal).not.toBeNull());
+
+    let outcome: { ok: boolean; error?: string } | undefined;
+    await act(async () => { outcome = await result.current.confirmProposal(); });
+    expect(outcome).toEqual({ ok: false, error: "error 500" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The in-flight guard reset (in `finally`) — a subsequent proposal can still confirm.
+    act(() => fireMessage(contentWindow, {
+      __robothor: true, kind: "propose", reqId: "p5", action: "set_flag",
+      args: { name: "ROBOTHOR_RBAC_MODE", value: "off" }, label: "x",
+    }));
+    await waitFor(() => expect(result.current.pendingProposal).not.toBeNull());
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    let secondOutcome: { ok: boolean; error?: string } | undefined;
+    await act(async () => { secondOutcome = await result.current.confirmProposal(); });
+    expect(secondOutcome).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports failure without throwing when the fetch itself rejects (network error)", async () => {
+    vi.spyOn(global, "fetch").mockRejectedValue(new Error("network down"));
+    const { ref, contentWindow } = makeIframeRef();
+    const { result } = renderHook(() => useCanvasBridge(ref));
+    act(() => fireMessage(contentWindow, {
+      __robothor: true, kind: "propose", reqId: "p6", action: "set_flag",
+      args: { name: "ROBOTHOR_INJECTION_SCAN_MODE", value: "off" }, label: "x",
+    }));
+    await waitFor(() => expect(result.current.pendingProposal).not.toBeNull());
+
+    let outcome: { ok: boolean; error?: string } | undefined;
+    await act(async () => { outcome = await result.current.confirmProposal(); });
+    expect(outcome).toEqual({ ok: false, error: "bridge unreachable" });
+  });
+
   it("cancel clears the pending proposal without executing", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
     const { ref, contentWindow } = makeIframeRef();

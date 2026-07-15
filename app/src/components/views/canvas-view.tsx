@@ -46,23 +46,38 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
   // commit+re-render an effect would cost, and keeps `react-hooks/set-state-in-effect` clean.
   const [shownProposal, setShownProposal] = useState<PendingProposal | null>(null);
   const [lastSeenProposal, setLastSeenProposal] = useState<PendingProposal | null>(null);
+  // Result of the last confirm attempt — null while nothing has been
+  // confirmed yet (or after a fresh proposal / cancel resets it). Shown to
+  // the operator so a failed write is never mistaken for a successful one.
+  const [writeResult, setWriteResult] = useState<{ ok: boolean; error?: string } | null>(null);
   if (pendingProposal !== lastSeenProposal) {
     setLastSeenProposal(pendingProposal);
     if (pendingProposal) {
       setShownProposal(pendingProposal);
       setSubmitting(false);
+      setWriteResult(null);
     }
   }
 
+  // Only clear the dialog once the PATCH's outcome is known. On success it
+  // closes as before (behavior-preserving happy path). On failure it stays
+  // open with a visible failure indicator — the operator must see the write
+  // did not land instead of the dialog silently vanishing as if it worked.
   const handleConfirm = () => {
     if (submitting) return;
     setSubmitting(true);
-    void confirmProposal().finally(() => setShownProposal(null));
+    setWriteResult(null);
+    void confirmProposal().then((result) => {
+      setWriteResult(result);
+      setSubmitting(false);
+      if (result.ok) setShownProposal(null);
+    });
   };
 
   const handleCancel = () => {
     cancelProposal();
     setShownProposal(null);
+    setWriteResult(null);
   };
 
   return (
@@ -84,6 +99,14 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
         <div data-testid="canvas-confirm" className="fixed inset-x-0 bottom-4 mx-auto w-max rounded-lg border border-zinc-600 bg-zinc-900 p-4 shadow-xl">
           <p className="text-sm text-zinc-100">The canvas proposes: <strong>{shownProposal.describe}</strong></p>
           <p className="mt-1 text-xs text-zinc-400">This is an operator write. Confirm to apply it.</p>
+          {writeResult && (
+            <p
+              data-testid="canvas-write-result"
+              className={writeResult.ok ? "mt-2 text-xs text-emerald-400" : "mt-2 text-xs text-amber-300"}
+            >
+              {writeResult.ok ? "Applied." : "Write failed — flag unchanged."}
+            </p>
+          )}
           <div className="mt-3 flex gap-2">
             <button data-testid="canvas-confirm-accept" disabled={submitting} onClick={handleConfirm}
               className="rounded bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-500 disabled:opacity-50">Confirm</button>
