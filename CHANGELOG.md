@@ -1,3 +1,9 @@
+## [1.25.0](https://github.com/Ironsail-llc/genus-os/compare/v1.24.0...v1.25.0) (2026-07-15)
+
+### Features
+
+* **canvas:** live declarative binding — the model renders your system ([#218](https://github.com/Ironsail-llc/genus-os/issues/218)) ([1f7596d](https://github.com/Ironsail-llc/genus-os/commit/1f7596d24f579c47034604a4eb656d31f5d6a881))
+
 ## [1.24.0](https://github.com/Ironsail-llc/genus-os/compare/v1.23.0...v1.24.0) (2026-07-15)
 
 ### Features
