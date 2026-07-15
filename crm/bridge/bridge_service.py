@@ -51,6 +51,7 @@ from routers.notifications import router as notifications_router
 from routers.people import router as people_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
+from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
 from routers.workflows import router as workflows_router
 
@@ -155,6 +156,7 @@ app.include_router(audit_router)
 app.include_router(controls_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
+app.include_router(system_health_router)
 app.include_router(workflows_router)
 
 
