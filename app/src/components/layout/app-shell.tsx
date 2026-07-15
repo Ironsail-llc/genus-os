@@ -9,6 +9,10 @@ import { TasksView } from "@/components/views/tasks-view";
 import { AgentsView } from "@/components/views/agents-view";
 import { MarketplaceView } from "@/components/views/marketplace-view";
 import { ControlsView } from "@/components/views/controls-view";
+import { FleetView } from "@/components/views/fleet-view";
+import { RunsView } from "@/components/views/runs-view";
+import { WorkflowsView } from "@/components/views/workflows-view";
+import { HealthView } from "@/components/views/health-view";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
 import { useScreenSize } from "@/hooks/use-mobile";
@@ -20,6 +24,10 @@ const viewTitles: Record<ViewId, string> = {
   agents: "Agents",
   marketplace: "Marketplace",
   controls: "Controls",
+  fleet: "Fleet",
+  runs: "Runs",
+  workflows: "Workflows",
+  health: "Health",
 };
 
 function HeaderClock() {
@@ -131,6 +139,10 @@ export function AppShell() {
             />
             <MarketplaceView visible={sidebarView === "marketplace"} />
             <ControlsView visible={sidebarView === "controls"} />
+            <FleetView visible={sidebarView === "fleet"} />
+            <RunsView visible={sidebarView === "runs"} />
+            <WorkflowsView visible={sidebarView === "workflows"} />
+            <HealthView visible={sidebarView === "health"} />
           </div>
         </div>
       )}

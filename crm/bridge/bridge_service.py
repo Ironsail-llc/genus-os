@@ -41,6 +41,7 @@ from routers.audit import router as audit_router
 from routers.auth import router as auth_router
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
+from routers.fleet import router as fleet_router
 from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
@@ -49,7 +50,10 @@ from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
 from routers.routines import router as routines_router
+from routers.runs import router as runs_router
+from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
+from routers.workflows import router as workflows_router
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
@@ -150,6 +154,10 @@ app.include_router(integration_router)
 app.include_router(installed_agents_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
+app.include_router(fleet_router)
+app.include_router(runs_router)
+app.include_router(system_health_router)
+app.include_router(workflows_router)
 
 
 if __name__ == "__main__":

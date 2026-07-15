@@ -31,45 +31,26 @@ must run them in its worker threadpool rather than the event loop (see
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from robothor.flags import store
 from robothor.flags.evidence import verdict
-
-router = APIRouter(prefix="/api/controls", tags=["controls"])
-
-# feature_flags is a single GLOBAL platform table (not tenant-scoped), so only
-# the platform/primary tenant's operator may touch it — see _require_operator.
-PLATFORM_TENANT = (
-    os.environ.get("ROBOTHOR_PLATFORM_TENANT")
-    or os.environ.get("ROBOTHOR_DEFAULT_TENANT")
-    or "robothor-primary"
+from routers._operator import (  # noqa: F401 - re-exported for existing importers (e.g. conftest.py)
+    OPERATOR_ROLES,
+    PLATFORM_TENANT,
+    require_operator,
 )
 
-# Human roles permitted to read AND write guardrail flags. Every other human
-# role (member, user, viewer, auditor) and every service (agent) token is
-# rejected — see ``_require_operator``.
-OPERATOR_ROLES = frozenset({"owner", "admin"})
+# keep the private name the handlers already call:
+_require_operator = require_operator
+
+router = APIRouter(prefix="/api/controls", tags=["controls"])
 
 
 class FlagPatch(BaseModel):
     value: str
     reason: str
-
-
-def _require_operator(request: Request) -> str:
-    auth = getattr(request.state, "auth", None)
-    if (
-        auth is None
-        or auth.is_service
-        or auth.role not in OPERATOR_ROLES
-        or auth.tenant_id != PLATFORM_TENANT
-    ):
-        raise HTTPException(status_code=403, detail="operator role required")
-    return f"operator:{auth.actor_id}"
 
 
 def _default_value_for(name: str) -> str:
