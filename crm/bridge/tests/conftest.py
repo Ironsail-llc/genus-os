@@ -113,6 +113,42 @@ def controls_client_as_operator(_controls_auth_key):
     return client
 
 
+def _make_controls_client_as_role(role: str):
+    """Mint a verified human session (typ="user") with a given role and wrap
+    it in a bare ``TestClient`` — see ``controls_client_as_operator`` for why
+    the client is not used as a context manager."""
+    from fastapi.testclient import TestClient
+
+    from robothor.auth import tokens
+
+    token = tokens.issue_access_token("human-1", "tenant-a", role)
+    client = TestClient(app)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
+
+
+@pytest.fixture
+def controls_client_as_viewer(_controls_auth_key):
+    """A verified human session with role="viewer" — a non-operator human
+    role that dashboard SSO admits, but which must not reach the controls
+    API (only ``owner``/``admin`` may)."""
+    return _make_controls_client_as_role("viewer")
+
+
+@pytest.fixture
+def controls_client_as_user(_controls_auth_key):
+    """A verified human session with role="user" — same non-operator
+    reasoning as ``controls_client_as_viewer``."""
+    return _make_controls_client_as_role("user")
+
+
+@pytest.fixture
+def controls_client_as_admin(_controls_auth_key):
+    """A verified human session with role="admin" — the second operator
+    role alongside "owner"."""
+    return _make_controls_client_as_role("admin")
+
+
 @pytest.fixture
 def controls_client_as_service(_controls_auth_key, monkeypatch):
     """A verified service (agent) session (typ="service") — what every agent

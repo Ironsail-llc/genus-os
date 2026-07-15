@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 
 interface ControlVerdict {
@@ -22,11 +23,18 @@ interface ControlsViewProps {
 
 // Browser calls stay on the authenticated same-origin BFF. The BFF alone owns
 // the internal Bridge address and forwards the signed-in caller's token — see
-// src/app/api/bridge/[...path]/route.ts. The controls API is operator-only at
-// the bridge handler itself (crm/bridge/routers/controls.py rejects service
-// tokens with 403), so the dashboard session reaching this view is always the
-// operator; no additional client-side role gate is needed here.
+// src/app/api/bridge/[...path]/route.ts.
+//
+// The bridge handler (crm/bridge/routers/controls.py::_require_operator) is
+// the real enforcement point: it 403s any service token AND any human whose
+// role isn't in {owner, admin} — dashboard SSO admits every verified org
+// member (viewer, user, member, auditor, ...), not just the operator. This
+// component mirrors that same allow-list to hide the write control from
+// non-operators; it's a UX nicety only, never the security boundary.
 const BRIDGE_URL = "/api/bridge";
+
+// Mirrors crm/bridge/routers/controls.py::OPERATOR_ROLES.
+const OPERATOR_ROLES = new Set(["owner", "admin"]);
 
 // Mirrors crm/bridge/routers/controls.py::_valid_values_for — mode-ladder
 // flags ("*_MODE") and boolean flags ("*_ENABLED") have disjoint value sets.
@@ -60,6 +68,8 @@ interface Draft {
 }
 
 export function ControlsView({ visible = true }: ControlsViewProps) {
+  const { data: session } = useSession();
+  const isOperator = OPERATOR_ROLES.has(session?.role ?? "");
   const [controls, setControls] = useState<Control[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,36 +221,45 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
                     </p>
                   )}
 
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <select
-                      value={draft.value}
-                      onChange={(e) => setDraftValue(control.name, e.target.value)}
-                      className="text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
-                      data-testid={`select-${control.name}`}
+                  {isOperator ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <select
+                        value={draft.value}
+                        onChange={(e) => setDraftValue(control.name, e.target.value)}
+                        className="text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+                        data-testid={`select-${control.name}`}
+                      >
+                        {values.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Reason (required)"
+                        value={draft.reason}
+                        onChange={(e) => setDraftReason(control.name, e.target.value)}
+                        className="flex-1 min-w-[160px] px-2 py-1 text-sm rounded-md border border-input bg-background"
+                        data-testid={`reason-${control.name}`}
+                      />
+                      <button
+                        onClick={() => handleSave(control)}
+                        disabled={saving === control.name || !canApply}
+                        className="px-3 py-1 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                        data-testid={`save-${control.name}`}
+                      >
+                        {saving === control.name ? "Saving..." : "Apply"}
+                      </button>
+                    </div>
+                  ) : (
+                    <p
+                      className="text-[10px] text-muted-foreground italic"
+                      data-testid={`readonly-note-${control.name}`}
                     >
-                      {values.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Reason (required)"
-                      value={draft.reason}
-                      onChange={(e) => setDraftReason(control.name, e.target.value)}
-                      className="flex-1 min-w-[160px] px-2 py-1 text-sm rounded-md border border-input bg-background"
-                      data-testid={`reason-${control.name}`}
-                    />
-                    <button
-                      onClick={() => handleSave(control)}
-                      disabled={saving === control.name || !canApply}
-                      className="px-3 py-1 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                      data-testid={`save-${control.name}`}
-                    >
-                      {saving === control.name ? "Saving..." : "Apply"}
-                    </button>
-                  </div>
+                      Operator only — ask an owner or admin to change this control.
+                    </p>
+                  )}
                 </div>
               );
             })}

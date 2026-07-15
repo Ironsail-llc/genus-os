@@ -12,7 +12,11 @@ independent locks:
 3. Operator-only at the handler: agents carry service tokens
    (``AuthContext.typ == "service"``, ``is_service == True``) and are
    rejected with 403 here, structurally, regardless of RBAC/capability
-   configuration elsewhere.
+   configuration elsewhere. Human callers are further gated on
+   ``AuthContext.role`` — only ``OPERATOR_ROLES`` (``owner``, ``admin``)
+   pass; every other human role (``member``, ``user``, ``viewer``,
+   ``auditor``) is also 403'd, since dashboard SSO admits any verified org
+   member, not just the operator.
 
 Handlers are plain ``def`` (not ``async def``) on purpose: ``robothor.flags.store``
 and ``robothor.flags.evidence.verdict`` call synchronous psycopg2, so FastAPI
@@ -33,6 +37,11 @@ router = APIRouter(prefix="/api/controls", tags=["controls"])
 _MODE_VALUES = frozenset({"off", "observe", "alert", "enforce"})
 _BOOL_VALUES = frozenset({"true", "false"})
 
+# Human roles permitted to read AND write guardrail flags. Every other human
+# role (member, user, viewer, auditor) and every service (agent) token is
+# rejected — see ``_require_operator``.
+OPERATOR_ROLES = frozenset({"owner", "admin"})
+
 
 def _valid_values_for(name: str) -> frozenset[str]:
     """Mode-ladder flags (``*_MODE``) and boolean flags (``*_ENABLED``) have
@@ -48,7 +57,7 @@ class FlagPatch(BaseModel):
 
 def _require_operator(request: Request) -> str:
     auth = getattr(request.state, "auth", None)
-    if auth is None or auth.is_service:
+    if auth is None or auth.is_service or auth.role not in OPERATOR_ROLES:
         raise HTTPException(status_code=403, detail="operator role required")
     return f"operator:{auth.actor_id}"
 
