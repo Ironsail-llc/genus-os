@@ -90,10 +90,15 @@ def _controls_auth_key(monkeypatch):
 
 @pytest.fixture
 def controls_client_as_operator(_controls_auth_key):
-    """A verified human operator session (typ="user", role="owner").
+    """A verified human operator session (typ="user", role="owner") in the
+    PLATFORM tenant.
 
     ``AuthContext.is_service`` is False, so the controls router's
-    ``_require_operator`` check lets it through.
+    ``_require_operator`` check lets it through. ``feature_flags`` is a
+    single GLOBAL table, so the tenant must also match
+    ``routers.controls.PLATFORM_TENANT`` — see
+    ``controls_client_as_other_tenant_owner`` for the tenant that must be
+    rejected despite carrying the same role.
 
     Deliberately NOT used as a context manager: entering/exiting
     ``TestClient(app)`` runs the real ASGI lifespan (spins up the routine
@@ -104,24 +109,28 @@ def controls_client_as_operator(_controls_auth_key):
     ``bridge_service.http_client`` staying unused by these routes).
     """
     from fastapi.testclient import TestClient
+    from routers.controls import PLATFORM_TENANT
 
     from robothor.auth import tokens
 
-    token = tokens.issue_access_token("operator-1", "tenant-a", "owner")
+    token = tokens.issue_access_token("operator-1", PLATFORM_TENANT, "owner")
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
 
 
-def _make_controls_client_as_role(role: str):
+def _make_controls_client_as_role(role: str, tenant_id: str | None = None):
     """Mint a verified human session (typ="user") with a given role and wrap
     it in a bare ``TestClient`` — see ``controls_client_as_operator`` for why
-    the client is not used as a context manager."""
+    the client is not used as a context manager. Defaults to the PLATFORM
+    tenant so role is the only variable under test unless a caller overrides
+    ``tenant_id`` (e.g. to exercise the cross-tenant reject path)."""
     from fastapi.testclient import TestClient
+    from routers.controls import PLATFORM_TENANT
 
     from robothor.auth import tokens
 
-    token = tokens.issue_access_token("human-1", "tenant-a", role)
+    token = tokens.issue_access_token("human-1", tenant_id or PLATFORM_TENANT, role)
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
@@ -147,6 +156,20 @@ def controls_client_as_admin(_controls_auth_key):
     """A verified human session with role="admin" — the second operator
     role alongside "owner"."""
     return _make_controls_client_as_role("admin")
+
+
+@pytest.fixture
+def controls_client_as_other_tenant_owner(_controls_auth_key):
+    """A verified human session with role="owner" — the operator role — but
+    in a DIFFERENT tenant ("acme-corp") than the platform tenant.
+
+    ``feature_flags`` is a single GLOBAL platform table, not tenant-scoped,
+    so an owner/admin role alone must not be sufficient: only the platform
+    tenant's operator may read or write it. This fixture proves the tenant
+    gate in ``_require_operator`` rejects an otherwise-valid operator role
+    from any other tenant.
+    """
+    return _make_controls_client_as_role("owner", tenant_id="acme-corp")
 
 
 @pytest.fixture
@@ -181,6 +204,7 @@ def fake_store(monkeypatch):
     """Records writes so an audited PATCH can be asserted without touching
     the real DB-backed flag store."""
     from robothor.flags.store import GOVERNED_FLAGS
+    from robothor.flags.store import valid_values_for as _valid_values_for
 
     class FakeStore:
         def __init__(self):
@@ -192,6 +216,11 @@ def fake_store(monkeypatch):
 
         def resolve(self, name):
             return self.values.get(name)
+
+        def valid_values_for(self, name):
+            # Delegate to the real (single-source-of-truth) implementation —
+            # this fixture only fakes DB-backed persistence, not flag typing.
+            return _valid_values_for(name)
 
         def set_flag(self, name, value, actor, reason):
             self.values[name] = value

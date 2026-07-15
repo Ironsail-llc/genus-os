@@ -14,6 +14,7 @@ interface ControlVerdict {
 interface Control {
   name: string;
   value: string;
+  valid_values: string[];
   verdict: ControlVerdict;
 }
 
@@ -35,15 +36,6 @@ const BRIDGE_URL = "/api/bridge";
 
 // Mirrors crm/bridge/routers/controls.py::OPERATOR_ROLES.
 const OPERATOR_ROLES = new Set(["owner", "admin"]);
-
-// Mirrors crm/bridge/routers/controls.py::_valid_values_for — mode-ladder
-// flags ("*_MODE") and boolean flags ("*_ENABLED") have disjoint value sets.
-const MODE_VALUES = ["off", "observe", "alert", "enforce"];
-const BOOL_VALUES = ["true", "false"];
-
-function validValuesFor(name: string): string[] {
-  return name.endsWith("_ENABLED") ? BOOL_VALUES : MODE_VALUES;
-}
 
 // THE ONE HONESTY RULE: a flag whose verdict.status is INERT / BLIND /
 // UNKNOWN must render as a warning, never as healthy/green. Only ENFORCING
@@ -189,7 +181,7 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
           <div className="space-y-2">
             {controls.map((control) => {
               const draft = draftFor(control);
-              const values = validValuesFor(control.name);
+              const values = control.valid_values;
               const canApply = draft.reason.trim().length > 0 && draft.value !== control.value;
               return (
                 <div

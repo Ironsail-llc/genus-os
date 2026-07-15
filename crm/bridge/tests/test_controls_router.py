@@ -108,3 +108,63 @@ def test_patch_allows_a_human_admin(controls_client_as_admin, fake_store):
     )
     assert r.status_code == 200
     assert fake_store.last_write == ("ROBOTHOR_RBAC_MODE", "enforce")
+
+
+# --- Platform-tenant gate: feature_flags is a GLOBAL table, not tenant-scoped ---
+
+
+def test_get_rejects_an_owner_from_a_different_tenant(controls_client_as_other_tenant_owner):
+    r = controls_client_as_other_tenant_owner.get("/api/controls")
+    assert r.status_code == 403, (
+        "an owner role from a non-platform tenant must not read the global flag table"
+    )
+
+
+def test_patch_rejects_an_owner_from_a_different_tenant(controls_client_as_other_tenant_owner):
+    r = controls_client_as_other_tenant_owner.patch(
+        "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "off", "reason": "x"}
+    )
+    assert r.status_code == 403, (
+        "an owner role from a non-platform tenant must not write the global flag table"
+    )
+
+
+def test_get_allows_the_platform_tenant_owner(controls_client_as_operator):
+    r = controls_client_as_operator.get("/api/controls")
+    assert r.status_code == 200
+
+
+def test_patch_allows_the_platform_tenant_owner(controls_client_as_operator, fake_store):
+    r = controls_client_as_operator.patch(
+        "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": "promote"}
+    )
+    assert r.status_code == 200
+    assert fake_store.last_write == ("ROBOTHOR_RBAC_MODE", "enforce")
+
+
+# --- Per-flag valid values: RIP_13 is a 2-value mode flag, not the full ladder ---
+
+
+def test_patch_rejects_alert_on_rip_13_mode(controls_client_as_operator):
+    r = controls_client_as_operator.patch(
+        "/api/controls/ROBOTHOR_RIP_13_MODE", json={"value": "alert", "reason": "x"}
+    )
+    assert r.status_code == 422, "RIP_13 only honors observe/enforce — the engine drops alert/off"
+
+
+def test_patch_accepts_enforce_on_rip_13_mode(controls_client_as_operator, fake_store):
+    r = controls_client_as_operator.patch(
+        "/api/controls/ROBOTHOR_RIP_13_MODE", json={"value": "enforce", "reason": "promote"}
+    )
+    assert r.status_code == 200
+    assert fake_store.last_write == ("ROBOTHOR_RIP_13_MODE", "enforce")
+
+
+def test_get_payload_includes_valid_values_per_flag(controls_client_as_operator):
+    r = controls_client_as_operator.get("/api/controls")
+    assert r.status_code == 200
+    body = r.json()
+    by_name = {f["name"]: f for f in body}
+    assert by_name["ROBOTHOR_RIP_13_MODE"]["valid_values"] == ["observe", "enforce"]
+    assert by_name["ROBOTHOR_RIP_1_ENABLED"]["valid_values"] == ["true", "false"]
+    assert by_name["ROBOTHOR_RBAC_MODE"]["valid_values"] == ["off", "observe", "alert", "enforce"]

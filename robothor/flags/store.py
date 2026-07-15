@@ -32,6 +32,31 @@ GOVERNED_FLAGS: frozenset[str] = frozenset(
     }
 )
 
+_MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
+_RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
+_BOOL_VALUES: tuple[str, ...] = ("true", "false")
+
+
+def valid_values_for(name: str) -> tuple[str, ...]:
+    """The single source of truth for what a governed flag may be set to.
+
+    Boolean flags (``*_ENABLED``) accept ``true``/``false``. ``ROBOTHOR_RIP_13_MODE``
+    is a mode flag that only honors ``observe``/``enforce`` — the engine silently
+    drops any other value, so the API must not accept the full mode ladder for it.
+    Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
+
+    Both the bridge's write-path validation (422 on an out-of-range value) and
+    its read-path payload (``valid_values`` per flag, so the frontend doesn't
+    hand-mirror this rule) import this function rather than duplicating the
+    logic.
+    """
+    if name.endswith("_ENABLED"):
+        return _BOOL_VALUES
+    if name == "ROBOTHOR_RIP_13_MODE":
+        return _RIP_13_VALUES
+    return _MODE_VALUES
+
+
 _SEED_ACTOR = "migration-084"
 _TTL_SECONDS = 5.0
 _cache: dict[str, tuple[float, str | None]] = {}

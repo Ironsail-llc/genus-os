@@ -30,6 +30,7 @@ describe("ControlsView", () => {
       ok: true,
       json: async () => ([{
         name: "ROBOTHOR_APPROVAL_MODE", value: "enforce",
+        valid_values: ["off", "observe", "alert", "enforce"],
         verdict: { status: "INERT", message: "NEVER FIRED — this control cannot protect you.",
                    last_fired: null, count_7d: 0 },
       }]),
@@ -48,6 +49,7 @@ describe("ControlsView", () => {
       ok: true,
       json: async () => ([{
         name: "ROBOTHOR_RBAC_MODE", value: "enforce",
+        valid_values: ["off", "observe", "alert", "enforce"],
         verdict: { status: "ENFORCING", message: "last fired 2026-07-14 09:00 (12 events / 7d)",
                    last_fired: "2026-07-14T09:00:00Z", count_7d: 12 },
       }]),
@@ -65,6 +67,7 @@ describe("ControlsView", () => {
       ok: true,
       json: async () => ([{
         name: "ROBOTHOR_JUDGE_ENABLED", value: "false",
+        valid_values: ["true", "false"],
         verdict: { status: "UNPROVEN", message: "disabled", last_fired: null, count_7d: 0 },
       }]),
     } as Response);
@@ -80,6 +83,7 @@ describe("ControlsView", () => {
       ok: true,
       json: async () => ([{
         name: "ROBOTHOR_RBAC_MODE", value: "enforce",
+        valid_values: ["off", "observe", "alert", "enforce"],
         verdict: { status: "ENFORCING", message: "last fired 2026-07-14 09:00 (12 events / 7d)",
                    last_fired: "2026-07-14T09:00:00Z", count_7d: 12 },
       }]),
@@ -103,6 +107,7 @@ describe("ControlsView", () => {
       ok: true,
       json: async () => ([{
         name: "ROBOTHOR_RBAC_MODE", value: "enforce",
+        valid_values: ["off", "observe", "alert", "enforce"],
         verdict: { status: "ENFORCING", message: "last fired 2026-07-14 09:00 (12 events / 7d)",
                    last_fired: "2026-07-14T09:00:00Z", count_7d: 12 },
       }]),
