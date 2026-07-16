@@ -117,6 +117,18 @@ class TestEffectiveSessionKeyEnforce:
         # when _config is None, matching the same fallback the rest of chat.py uses).
         assert _effective_session_key(auth, "no-colons-here") == "agent:main:user:bob"
 
+    def test_member_cannot_forge_another_users_session_key(self, monkeypatch):
+        """Security regression: a member authenticated as bob-uuid requesting
+        another user's session key (e.g., agent:main:user:alice-uuid) must have
+        it rebuilt from their own authenticated user_id, discarding the
+        client-supplied user segment."""
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+        auth = _member_auth(user_id="bob-uuid")
+        # Attacker tries to request alice's session by name
+        requested = "agent:main:user:alice-uuid"
+        # System rebuilds from authenticated user_id, discarding the forged name
+        assert _effective_session_key(auth, requested) == "agent:main:user:bob-uuid"
+
 
 class TestEffectiveSessionKeyObserve:
     def test_member_key_unchanged(self, monkeypatch):
