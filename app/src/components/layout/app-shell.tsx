@@ -14,6 +14,7 @@ import { RunsView } from "@/components/views/runs-view";
 import { WorkflowsView } from "@/components/views/workflows-view";
 import { HealthView } from "@/components/views/health-view";
 import { CanvasView } from "@/components/views/canvas-view";
+import { ThemeToggle } from "@/components/business/theme-toggle";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
 import { useScreenSize } from "@/hooks/use-mobile";
@@ -115,10 +116,11 @@ export function AppShell() {
 
             <div className="flex items-center gap-3">
               <div
-                className={`w-1.5 h-1.5 rounded-full ${allHealthy ? "bg-emerald-400" : "bg-amber-400"}`}
+                className={`w-1.5 h-1.5 rounded-full ${allHealthy ? "bg-success" : "bg-warning"}`}
                 data-testid="system-status-dot"
               />
               <HeaderClock />
+              <ThemeToggle />
             </div>
           </header>
 
