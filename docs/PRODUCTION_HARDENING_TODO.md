@@ -60,7 +60,10 @@ that require measured deployment evidence. They are not current service claims.
 - [x] Harden the SSO account lifecycle.
   - Require `email_verified=true` and an active local account.
   - Match an existing account by exact OIDC issuer plus subject; never auto-link
-    an existing account by email alone.
+    an existing account by email alone. Binding an existing account (e.g. the
+    bootstrapped owner) requires an operator-armed one-shot grant
+    (`robothor auth grant-binding`), consumed atomically on the next verified
+    sign-in.
   - Keep just-in-time accounts non-privileged, consume refresh tokens atomically,
     and clear session authority when Bridge exchange or refresh fails.
 - [x] Apply route-specific Bridge authorization and tenant binding for vault,

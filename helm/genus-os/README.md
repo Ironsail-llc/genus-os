@@ -99,7 +99,7 @@ boundary. Keep them limited to these classes:
 | `auth-signing` | `GENUS_AUTH_SIGNING_KEY`; Engine and Bridge enforce signed identity. It is currently also mounted to Orchestrator, which must remain network-restricted until it independently verifies tokens. |
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
-| `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name; dashboard only |
+| `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name, optional `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` (sign in via a fronting Cloudflare Access policy instead of a second IdP prompt); dashboard only |
 | `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
