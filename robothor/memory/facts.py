@@ -19,7 +19,10 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.identity.scope import DataScope
 
 from psycopg2.extras import RealDictCursor
 
@@ -806,6 +809,7 @@ async def search_facts(
     include_episodes: bool = False,
     include_chat_turns: bool = False,
     tenant_id: str = "",
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
 
@@ -823,6 +827,14 @@ async def search_facts(
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
         expand_entities: If True, pull related entity facts.
+        scope: Optional "own data + shared" DataScope (Task 5, Unified
+            Identity Context). ``None`` (the default — every pre-existing
+            caller) is unrestricted, byte-identical to pre-Task-5 SQL. A
+            restricted scope adds ``(person_id = %s OR person_id IS NULL)``
+            to both candidate-generating queries below — auxiliary paths
+            (entity expansion, insights, episodes) are unaffected; see
+            robothor/identity/scope.py and the Task 5 report for the
+            documented rationale.
 
     Returns:
         List of matching fact dictionaries sorted by relevance.
@@ -833,6 +845,11 @@ async def search_facts(
     embedding = await llm_client.get_embedding_async(query)
 
     active_clause = "AND is_active = TRUE" if active_only else ""
+    scope_clause = ""
+    scope_params: tuple[Any, ...] = ()
+    if scope is not None and scope.restricted:
+        scope_clause = "AND (person_id = %s OR person_id IS NULL)"
+        scope_params = (scope.person_id,)
     # WS-1.4: modestly widen the candidate pool when the wide-rerank path is on,
     # giving the blend more headroom. Kept conservative because the cross-encoder
     # scores every candidate (per-candidate Ollama cost).
@@ -852,14 +869,15 @@ async def search_facts(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
                    metadata, created_at, importance_score, access_count, superseded_by,
+                   person_id,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
-            WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause}
+            WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause} {scope_clause}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (embedding, _tenant, embedding, fetch_limit),
+            (embedding, _tenant, *scope_params, embedding, fetch_limit),
         )
         vector_results = [dict(r) for r in cur.fetchall()]
 
@@ -868,15 +886,16 @@ async def search_facts(
             f"""
             SELECT id, fact_text, category, entities, confidence, source_type,
                    metadata, created_at, importance_score, access_count, superseded_by,
+                   person_id,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
                    ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
             FROM memory_facts
             WHERE tsv @@ plainto_tsquery('english', %s) AND tenant_id = %s
-              {active_clause}
+              {active_clause} {scope_clause}
             ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
             LIMIT %s
             """,
-            (query, query, _tenant, query, fetch_limit),
+            (query, query, _tenant, *scope_params, query, fetch_limit),
         )
         bm25_results = [dict(r) for r in cur.fetchall()]
 

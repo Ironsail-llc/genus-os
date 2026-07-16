@@ -20,9 +20,12 @@ import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
+
+if TYPE_CHECKING:
+    from robothor.identity.scope import DataScope
 
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
 from robothor.crm import hooks
@@ -67,12 +70,20 @@ def search_people(
     name: str,
     tenant_id: str = DEFAULT_TENANT,
     prefer_owner: bool = False,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
     """Search people by name (ILIKE on first_name/last_name).
 
     When ``prefer_owner=True``, the operator's row (if any) is sorted first
     so bare first-name matches resolve to the operator before other contacts
     sharing the name. See :func:`get_owner_person`.
+
+    ``scope``: ``crm_people`` has no ``person_id`` column — it IS the person
+    row — so there is no org-general carve-out here. A restricted scope
+    (``scope.restricted``) limits results to the caller's own row
+    (``p.id = scope.person_id``); ``scope=None`` or ``scope.restricted=False``
+    is unaffected (pre-Task-5 behavior, every existing caller).
     """
     owner_id = get_owner_person(tenant_id)["id"] if prefer_owner else None
     if prefer_owner and owner_id is None:
@@ -82,32 +93,37 @@ def search_people(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         pattern = f"%{name}%"
+        own_row_clause = ""
+        own_row_params: tuple[Any, ...] = ()
+        if scope is not None and scope.restricted:
+            own_row_clause = " AND p.id = %s"
+            own_row_params = (scope.person_id,)
         if prefer_owner:
             cur.execute(
-                """
+                f"""
                 SELECT p.*, c.name AS company_name
                 FROM crm_people p
                 LEFT JOIN crm_companies c ON c.id = p.company_id
                 WHERE p.deleted_at IS NULL AND p.tenant_id = %s
-                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s)
+                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s){own_row_clause}
                 ORDER BY (CASE WHEN p.id = %s THEN 0 ELSE 1 END),
                          p.updated_at DESC
                 LIMIT 50
             """,
-                (tenant_id, pattern, pattern, owner_id),
+                (tenant_id, pattern, pattern, *own_row_params, owner_id),
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT p.*, c.name AS company_name
                 FROM crm_people p
                 LEFT JOIN crm_companies c ON c.id = p.company_id
                 WHERE p.deleted_at IS NULL AND p.tenant_id = %s
-                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s)
+                  AND (p.first_name ILIKE %s OR p.last_name ILIKE %s){own_row_clause}
                 ORDER BY p.updated_at DESC
                 LIMIT 50
             """,
-                (tenant_id, pattern, pattern),
+                (tenant_id, pattern, pattern, *own_row_params),
             )
         return [person_to_dict(r) for r in cur.fetchall()]
 
@@ -160,18 +176,33 @@ def create_person(
             return None
 
 
-def get_person(person_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
-    """Get a person by ID, with company JOIN."""
+def get_person(
+    person_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
+) -> dict[str, Any] | None:
+    """Get a person by ID, with company JOIN.
+
+    ``scope``: own-row-only when restricted (see ``search_people``) — a
+    restricted caller requesting someone else's row gets ``None`` (same
+    shape as "not found"), not an error that would confirm the id exists.
+    """
+    own_row_clause = ""
+    params: tuple[Any, ...] = (person_id, tenant_id)
+    if scope is not None and scope.restricted:
+        own_row_clause = " AND p.id = %s"
+        params = (*params, scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT p.*, c.name AS company_name
             FROM crm_people p
             LEFT JOIN crm_companies c ON c.id = p.company_id
-            WHERE p.id = %s AND p.deleted_at IS NULL AND p.tenant_id = %s
+            WHERE p.id = %s AND p.deleted_at IS NULL AND p.tenant_id = %s{own_row_clause}
         """,
-            (person_id, tenant_id),
+            params,
         )
         row = cur.fetchone()
         return person_to_dict(row) if row else None
@@ -481,27 +512,40 @@ def merge_companies(
 
 
 def list_people(
-    search: str | None = None, limit: int = 20, tenant_id: str = DEFAULT_TENANT
+    search: str | None = None,
+    limit: int = 20,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
     """List people, optionally filtered by search term.
 
     When ``search`` is a name that matches the operator, the operator's row
     is sorted first so agent-facing tools like ``list_people("<first-name>")``
     resolve to the operator before other contacts sharing the name.
+
+    ``scope``: own-row-only when restricted — see ``search_people``. A
+    restricted caller's unfiltered listing (no ``search``) returns at most
+    their own row.
     """
     if search:
-        return search_people(search, tenant_id, prefer_owner=True)
+        return search_people(search, tenant_id, prefer_owner=True, scope=scope)
+    own_row_clause = ""
+    params: tuple[Any, ...] = (tenant_id,)
+    if scope is not None and scope.restricted:
+        own_row_clause = " AND p.id = %s"
+        params = (*params, scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT p.*, c.name AS company_name
             FROM crm_people p
             LEFT JOIN crm_companies c ON c.id = p.company_id
-            WHERE p.deleted_at IS NULL AND p.tenant_id = %s
+            WHERE p.deleted_at IS NULL AND p.tenant_id = %s{own_row_clause}
             ORDER BY p.updated_at DESC LIMIT %s
         """,
-            (tenant_id, limit),
+            (*params, limit),
         )
         return [person_to_dict(r) for r in cur.fetchall()]
 
@@ -751,13 +795,27 @@ def create_note(
             return None
 
 
-def get_note(note_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
-    """Get a note by ID."""
+def get_note(
+    note_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
+) -> dict[str, Any] | None:
+    """Get a note by ID.
+
+    ``scope``: restricted callers only see notes linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) notes.
+    """
+    conditions = ["id = %s", "deleted_at IS NULL", "tenant_id = %s"]
+    params: list[Any] = [note_id, tenant_id]
+    if scope is not None and scope.restricted:
+        conditions.append("(person_id = %s OR person_id IS NULL)")
+        params.append(scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            "SELECT * FROM crm_notes WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s",
-            (note_id, tenant_id),
+            f"SELECT * FROM crm_notes WHERE {' AND '.join(conditions)}",
+            params,
         )
         row = cur.fetchone()
         return note_to_dict(row) if row else None
@@ -768,8 +826,14 @@ def list_notes(
     company_id: str | None = None,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
-    """List notes with optional person/company filter."""
+    """List notes with optional person/company filter.
+
+    ``scope``: restricted callers only see notes linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) notes.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         conditions = ["deleted_at IS NULL", "tenant_id = %s"]
@@ -780,6 +844,9 @@ def list_notes(
         if company_id:
             conditions.append("company_id = %s")
             params.append(company_id)
+        if scope is not None and scope.restricted:
+            conditions.append("(person_id = %s OR person_id IS NULL)")
+            params.append(scope.person_id)
         params.append(limit)
         cur.execute(
             f"SELECT * FROM crm_notes WHERE {' AND '.join(conditions)} "
@@ -1153,13 +1220,27 @@ def create_task(
             return None
 
 
-def get_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
-    """Get a task by ID."""
+def get_task(
+    task_id: str,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
+) -> dict[str, Any] | None:
+    """Get a task by ID.
+
+    ``scope``: restricted callers only see tasks linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) tasks.
+    """
+    conditions = ["id = %s", "deleted_at IS NULL", "tenant_id = %s"]
+    params: list[Any] = [task_id, tenant_id]
+    if scope is not None and scope.restricted:
+        conditions.append("(person_id = %s OR person_id IS NULL)")
+        params.append(scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            "SELECT * FROM crm_tasks WHERE id = %s AND deleted_at IS NULL AND tenant_id = %s",
-            (task_id, tenant_id),
+            f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)}",
+            params,
         )
         row = cur.fetchone()
         return task_to_dict(row) if row else None
@@ -1178,6 +1259,8 @@ def list_tasks(
     requires_human: bool | None = None,
     include_snoozed: bool = False,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
     """List tasks with optional filters.
 
@@ -1185,6 +1268,9 @@ def list_tasks(
     "snoozing" until the resurface job clears the field). Pass
     ``include_snoozed=True`` to see them anyway (useful for debugging /
     operator listings).
+
+    ``scope``: restricted callers only see tasks linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) tasks.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1221,6 +1307,9 @@ def list_tasks(
         # the user-visible side of the snooze semantic.
         if not include_snoozed:
             conditions.append("(follow_up_at IS NULL OR follow_up_at <= NOW())")
+        if scope is not None and scope.restricted:
+            conditions.append("(person_id = %s OR person_id IS NULL)")
+            params.append(scope.person_id)
         params.append(limit)
         cur.execute(
             f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)} "
@@ -2584,41 +2673,64 @@ def list_conversations(
     page: int = 1,
     page_size: int = 25,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
-    """List conversations by status with pagination."""
+    """List conversations by status with pagination.
+
+    ``scope``: restricted callers only see conversations linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) conversations.
+    """
     offset = (page - 1) * page_size
+    own_row_clause = ""
+    params: tuple[Any, ...] = (status, tenant_id)
+    if scope is not None and scope.restricted:
+        own_row_clause = " AND (c.person_id = %s OR c.person_id IS NULL)"
+        params = (*params, scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT c.*,
                    COALESCE(p.first_name || ' ' || p.last_name, '') AS person_name
             FROM crm_conversations c
             LEFT JOIN crm_people p ON p.id = c.person_id
-            WHERE c.status = %s AND c.tenant_id = %s
+            WHERE c.status = %s AND c.tenant_id = %s{own_row_clause}
             ORDER BY c.last_activity_at DESC NULLS LAST
             LIMIT %s OFFSET %s
         """,
-            (status, tenant_id, page_size, offset),
+            (*params, page_size, offset),
         )
         return [conversation_to_dict(r) for r in cur.fetchall()]
 
 
 def get_conversation(
-    conversation_id: int, tenant_id: str = DEFAULT_TENANT
+    conversation_id: int,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> dict[str, Any] | None:
-    """Get a conversation by ID."""
+    """Get a conversation by ID.
+
+    ``scope``: restricted callers only see conversations linked to their own
+    ``person_id`` or unlinked (org-general, ``person_id IS NULL``) conversations.
+    """
+    own_row_clause = ""
+    params: tuple[Any, ...] = (conversation_id, tenant_id)
+    if scope is not None and scope.restricted:
+        own_row_clause = " AND (c.person_id = %s OR c.person_id IS NULL)"
+        params = (*params, scope.person_id)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT c.*,
                    COALESCE(p.first_name || ' ' || p.last_name, '') AS person_name
             FROM crm_conversations c
             LEFT JOIN crm_people p ON p.id = c.person_id
-            WHERE c.id = %s AND c.tenant_id = %s
+            WHERE c.id = %s AND c.tenant_id = %s{own_row_clause}
         """,
-            (conversation_id, tenant_id),
+            params,
         )
         row = cur.fetchone()
         return conversation_to_dict(row) if row else None
@@ -4068,9 +4180,18 @@ def get_contact_360(
     *,
     tenant_id: str = DEFAULT_TENANT,
     timeline_limit: int = 50,
+    scope: DataScope | None = None,
 ) -> dict[str, Any]:
     """One-call holistic view: person + summary + recent timeline + open
-    tasks + recent notes + memory snippets. Agent-facing convenience."""
+    tasks + recent notes + memory snippets. Agent-facing convenience.
+
+    ``scope``: this is a "give me everything about person X" call, not a
+    row-filtered listing — there's no org-general carve-out to fall back to.
+    A restricted caller requesting anyone but their own ``person_id`` is
+    denied outright (own-row-only, same rule as ``get_person``/``search_people``).
+    """
+    if scope is not None and scope.restricted and person_id != scope.person_id:
+        return {"error": "Access denied — restricted to your own record"}
     person = get_person(person_id, tenant_id=tenant_id)
     if not person:
         return {"error": f"person not found: {person_id}"}

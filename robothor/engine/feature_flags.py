@@ -290,6 +290,35 @@ def telegram_role_gates_mode() -> TelegramRoleGatesMode:
     return "off"
 
 
+DataScopingMode = Literal["off", "observe", "enforce"]
+_VALID_DATA_SCOPING_MODES = frozenset(("off", "observe", "enforce"))
+
+
+def data_scoping_mode() -> DataScopingMode:
+    """Return the "own data + shared" row-scoping rollout mode (Task 5,
+    Unified Identity Context).
+
+    Single env var ``ROBOTHOR_DATA_SCOPING``, same single-var ladder shape as
+    ``per_user_sessions_mode`` (Task 3) and ``telegram_role_gates_mode``
+    (Task 4): there's no separate subsystem-enabled gate to flip
+    independently of rollout stage. Returns ``"off"`` (default — every data
+    read tool queries unrestricted, identical to pre-flag behavior),
+    ``"observe"`` (still query unrestricted, but log how many rows a
+    restricted caller's query WOULD have dropped under the "own data +
+    shared" rule — see ``robothor.identity.scope``), or ``"enforce"``
+    (restricted callers — role not in {owner, admin, service} — only see
+    their own person-linked rows plus org-general (person_id IS NULL) rows).
+
+    ``identity=None`` callers (system/cron/heartbeat runs that never resolve
+    an interactive identity) are unrestricted in every mode — see
+    ``robothor.identity.scope.scope_for``.
+    """
+    raw = _resolve_raw("ROBOTHOR_DATA_SCOPING", "off").strip().lower()
+    if raw in _VALID_DATA_SCOPING_MODES:
+        return raw  # type: ignore[return-value]
+    return "off"
+
+
 def allow_unregistered_owner_fallback() -> bool:
     """Escape hatch for a fresh install with no ``tenant_users`` rows yet.
 

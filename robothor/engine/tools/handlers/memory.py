@@ -30,7 +30,13 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     if is_rip_enabled(15):
         return await _search_memory_routed(args, ctx)
 
-    from robothor.engine.feature_flags import narrow_memory_search_enabled
+    from robothor.engine.feature_flags import data_scoping_mode, narrow_memory_search_enabled
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
     from robothor.memory.facts import search_facts
     from robothor.memory.outcomes import log_fact_access
 
@@ -38,6 +44,13 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # call — expensive for a narrow lookup. When MEMORY_NARROW_SEARCH is on, a
     # call defaults to facts-only and the caller opts into fan-out via args.
     fan_out = not narrow_memory_search_enabled()
+
+    # Task 5 (Unified Identity Context) — "own data + shared" row scoping.
+    # off/observe never touch the query; enforce restricts it to the
+    # caller's own person_id (+ org-general rows) for non-privileged
+    # identities. See robothor/identity/scope.py.
+    _scoping_mode = data_scoping_mode()
+    _query_scope = scope_for_query(_scoping_mode, ctx.identity)
     results = await search_facts(
         args.get("query", ""),
         limit=args.get("limit", 10),
@@ -45,7 +58,19 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         expand_entities=bool(args.get("expand_entities", fan_out)),
         include_insights=bool(args.get("include_insights", fan_out)),
         include_episodes=bool(args.get("include_episodes", fan_out)),
+        scope=_query_scope,
     )
+
+    _observe_scope = observe_scope(_scoping_mode, ctx.identity)
+    if _observe_scope:
+        _dropped = rows_dropped_by_scope(results, _observe_scope)
+        log_would_drop(
+            tool_name="search_memory",
+            user_id=ctx.user_id,
+            scope=_observe_scope,
+            dropped=_dropped,
+            table="memory_facts",
+        )
 
     # Log fact access for outcome attribution (best-effort).
     run_id = getattr(ctx, "run_id", None)

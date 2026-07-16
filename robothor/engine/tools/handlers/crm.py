@@ -46,10 +46,34 @@ async def _create_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 @_handler("get_person")
 async def _get_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_person
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        scope_for_query,
+    )
 
-    return await asyncio.to_thread(get_person, args["id"], tenant_id=ctx.tenant_id) or {
-        "error": "Person not found"
-    }
+    _mode = data_scoping_mode()
+    result = await asyncio.to_thread(
+        get_person,
+        args["id"],
+        tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
+    )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_identity_scope([result] if result else [], _obs_scope)
+        log_would_drop(
+            tool_name="get_person",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_people",
+        )
+
+    return result or {"error": "Person not found"}
 
 
 @_handler("update_person")
@@ -76,13 +100,34 @@ async def _update_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 @_handler("list_people")
 async def _list_people(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_people
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         list_people,
         search=args.get("search"),
         limit=args.get("limit", 20),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_identity_scope(results, _obs_scope)
+        log_would_drop(
+            tool_name="list_people",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_people",
+        )
+
     return {"people": results, "count": len(results)}
 
 
@@ -203,23 +248,68 @@ async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 @_handler("get_note")
 async def _get_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_note
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
-    return await asyncio.to_thread(get_note, args["id"], tenant_id=ctx.tenant_id) or {
-        "error": "Note not found"
-    }
+    _mode = data_scoping_mode()
+    result = await asyncio.to_thread(
+        get_note,
+        args["id"],
+        tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
+    )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope([result] if result else [], _obs_scope)
+        log_would_drop(
+            tool_name="get_note",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_notes",
+        )
+
+    return result or {"error": "Note not found"}
 
 
 @_handler("list_notes")
 async def _list_notes(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_notes
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         list_notes,
         person_id=args.get("personId"),
         company_id=args.get("companyId"),
         limit=args.get("limit", 50),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope(results, _obs_scope)
+        log_would_drop(
+            tool_name="list_notes",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_notes",
+        )
+
     return {"notes": results, "count": len(results)}
 
 
@@ -307,16 +397,48 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 @_handler("get_task")
 async def _get_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_task
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
-    return await asyncio.to_thread(get_task, args["id"], tenant_id=ctx.tenant_id) or {
-        "error": "Task not found"
-    }
+    _mode = data_scoping_mode()
+    result = await asyncio.to_thread(
+        get_task,
+        args["id"],
+        tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
+    )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope([result] if result else [], _obs_scope)
+        log_would_drop(
+            tool_name="get_task",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_tasks",
+        )
+
+    return result or {"error": "Task not found"}
 
 
 @_handler("list_tasks")
 async def _list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_tasks
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         list_tasks,
         status=args.get("status"),
@@ -329,7 +451,20 @@ async def _list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         requires_human=args.get("requiresHuman"),
         limit=args.get("limit", 50),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope(results, _obs_scope)
+        log_would_drop(
+            tool_name="list_tasks",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_tasks",
+        )
+
     return {"tasks": results, "count": len(results)}
 
 
@@ -660,23 +795,68 @@ async def _search_records(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 @_handler("list_conversations")
 async def _list_conversations(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_conversations
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     convos = await asyncio.to_thread(
         list_conversations,
         status=args.get("status", "open"),
         page=args.get("page", 1),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope(convos, _obs_scope)
+        log_would_drop(
+            tool_name="list_conversations",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_conversations",
+        )
+
     return {"conversations": convos, "count": len(convos)}
 
 
 @_handler("get_conversation")
 async def _get_conversation(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_conversation
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
-    return await asyncio.to_thread(
-        get_conversation, args["conversationId"], tenant_id=ctx.tenant_id
-    ) or {"error": "Conversation not found"}
+    _mode = data_scoping_mode()
+    result = await asyncio.to_thread(
+        get_conversation,
+        args["conversationId"],
+        tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
+    )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope([result] if result else [], _obs_scope)
+        log_would_drop(
+            tool_name="get_conversation",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_conversations",
+        )
+
+    return result or {"error": "Conversation not found"}
 
 
 @_handler("list_messages")
@@ -840,13 +1020,40 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         if not person_id:
             return {"error": f"no CRM person mapped to {channel}:{identifier}"}
 
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        scope_for_query,
+    )
+
+    # get_contact_360 is a "give me everything about person X" call, not a
+    # filtered listing — own-row-only, no org-general carve-out (see
+    # robothor.crm.dal.get_contact_360): a restricted mismatch is a hard
+    # denial in enforce, "the whole record" in observe/off.
+    _mode = data_scoping_mode()
     timeline_limit = int(args.get("timeline_limit", 50))
-    return await asyncio.to_thread(
+    result = await asyncio.to_thread(
         _dal_get_contact_360,
         person_id,
         tenant_id=ctx.tenant_id,
         timeline_limit=timeline_limit,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_identity_scope([{"id": person_id}], _obs_scope)
+        log_would_drop(
+            tool_name="get_contact_360",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_people",
+        )
+
+    return result
 
 
 @_handler("list_contact_messages")

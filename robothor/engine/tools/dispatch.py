@@ -12,6 +12,7 @@ from robothor.constants import DEFAULT_TENANT
 
 if TYPE_CHECKING:
     from robothor.config import Config
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,13 @@ class ToolContext:
     # CLI wrapper which sits outside the runner's allow-list guard) check
     # this to short-circuit mutations.
     is_benchmark: bool = False
+    # The run's resolved IdentityContext (Task 2), or None for system/cron/
+    # heartbeat runs that never resolve an interactive identity — see
+    # ``robothor.engine.runner``'s ``effective_identity`` / ``session.identity``.
+    # Data-read handlers use this (via ``robothor.identity.scope.scope_for``)
+    # to compute the "own data + shared" DataScope for a call; None is the
+    # unaffected, pre-Task-5 default every existing caller gets.
+    identity: IdentityContext | None = None
 
 
 def get_db() -> Any:
@@ -263,6 +271,7 @@ async def _execute_tool(
     accessible_tenant_ids: tuple[str, ...] = (),
     task_author_override: str = "",
     is_benchmark: bool = False,
+    identity: IdentityContext | None = None,
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -275,7 +284,9 @@ async def _execute_tool(
     # Permission lookup is database-backed and synchronous.  Keep it off the
     # Engine event loop so one slow RBAC query cannot stall unrelated chat,
     # health, or agent sessions.
-    denied = await asyncio.to_thread(check_tool_permission, user_role, tenant_id, name)
+    denied = await asyncio.to_thread(
+        check_tool_permission, user_role, tenant_id, name, user_id=user_id
+    )
     if denied:
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
         return {"error": denied}
@@ -320,6 +331,7 @@ async def _execute_tool(
         accessible_tenant_ids=accessible_tenant_ids,
         task_author_override=task_author_override,
         is_benchmark=is_benchmark,
+        identity=identity,
     )
     handlers = _get_handlers()
     handler = handlers.get(name)

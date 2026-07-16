@@ -17,11 +17,14 @@ from __future__ import annotations
 from robothor.identity.context import EnrichedIdentity, IdentityContext
 from robothor.identity.enrichment import enrich_identity
 from robothor.identity.resolvers import clear_cache, resolve_identity
+from robothor.identity.scope import DataScope, scope_for
 
 __all__ = [
+    "DataScope",
     "EnrichedIdentity",
     "IdentityContext",
     "clear_cache",
     "enrich_identity",
     "resolve_identity",
+    "scope_for",
 ]

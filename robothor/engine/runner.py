@@ -2503,6 +2503,7 @@ class AgentRunner:
                             accessible_tenant_ids=session.run.accessible_tenant_ids,
                             task_author_override=agent_config.task_author_override,
                             is_benchmark=session.run.is_benchmark,
+                            identity=getattr(session, "identity", None),
                         )
                 else:
                     result = await self.registry.execute(
@@ -2518,6 +2519,7 @@ class AgentRunner:
                         accessible_tenant_ids=session.run.accessible_tenant_ids,
                         task_author_override=agent_config.task_author_override,
                         is_benchmark=session.run.is_benchmark,
+                        identity=getattr(session, "identity", None),
                     )
                 tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 

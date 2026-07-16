@@ -43,14 +43,23 @@ def check_tool_permission(
     user_role: str,
     tenant_id: str,
     tool_name: str,
+    *,
+    user_id: str | None = None,
 ) -> str | None:
-    """Check if a user role is allowed to execute a tool.
+    """Check if a caller is allowed to execute a tool.
 
     Args:
         user_role: The user's role (viewer, user, admin, owner, service).
             Empty strings are invalid and fail closed.
         tenant_id: The tenant to check permissions for.
         tool_name: The tool being invoked.
+        user_id: Optional stable per-user identifier (``agent_runs.user_id``
+            semantics — ``user_accounts.id`` for webchat, ``tenant_users.user_id``
+            for Telegram). When given, a matching row in ``user_permissions``
+            (migration 086) is evaluated FIRST and wins outright — allow or
+            deny — over the role-level rules below. Omitted (the pre-Task-5
+            call shape) or empty, the user_permissions lookup is skipped
+            entirely: every existing caller is unaffected.
 
     Returns:
         Denial reason string, or None if allowed.
@@ -63,6 +72,41 @@ def check_tool_permission(
 
         with get_connection() as conn:
             cur = conn.cursor()
+
+            if user_id:
+                # Most-specific per-user override wins outright, before role
+                # rules are even considered — same specificity metric as the
+                # role-level evaluation below (exact > glob > catch-all;
+                # deny wins a true tie).
+                cur.execute(
+                    """
+                    SELECT tool_pattern, access
+                    FROM user_permissions
+                    WHERE tenant_id = %s AND user_id = %s
+                    """,
+                    (tenant_id, user_id),
+                )
+                user_rules = cur.fetchall()
+                matching_user = [
+                    (pattern, access)
+                    for pattern, access in user_rules
+                    if fnmatch.fnmatch(tool_name, pattern)
+                ]
+                if matching_user:
+                    pattern, access = max(
+                        matching_user,
+                        key=lambda rule: (
+                            rule[0] == tool_name,
+                            sum(character not in "*?[]" for character in rule[0]),
+                            rule[1] == "deny",
+                        ),
+                    )
+                    if access == "deny":
+                        return (
+                            f"User '{user_id}' denied '{tool_name}' "
+                            f"(user override pattern: {pattern})"
+                        )
+                    return None
 
             # Fetch both policy levels.  Precedence is evaluated below rather
             # than delegated to SQL ordering because pattern specificity must
