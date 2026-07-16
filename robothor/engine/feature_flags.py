@@ -31,6 +31,9 @@ _VALID_RIP_7_MODES = frozenset(("observe", "alert", "enforce"))
 
 SymbolicMode = Literal["off", "observe", "enforce"]
 _VALID_SYMBOLIC_MODES = frozenset(("observe", "enforce"))
+
+PerUserSessionsMode = Literal["off", "observe", "enforce"]
+_VALID_PER_USER_SESSIONS_MODES = frozenset(("off", "observe", "enforce"))
 # Generic observe→alert→enforce rollout ladder, shared by the Wave-1
 # hardening flags below. Same shape as ``rip_7_enforcement_mode``.
 #
@@ -233,6 +236,26 @@ def symbolic_memory_mode() -> SymbolicMode:
     if raw in _VALID_SYMBOLIC_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
+
+
+def per_user_sessions_mode() -> PerUserSessionsMode:
+    """Return the webchat per-user session-key derivation mode (Task 3, Unified
+    Identity Context).
+
+    Unlike the two-var ``*_ENABLED`` + ``*_MODE`` ladders above, this is a
+    single env var, ``ROBOTHOR_PER_USER_SESSIONS``, since there's no separate
+    subsystem-enabled gate to flip independently of rollout stage. Returns
+    ``"off"`` (default — every caller gets the requested session key
+    unchanged, identical to pre-flag behavior), ``"observe"`` (still return
+    the requested key unchanged, but log what would have been derived for
+    non-owner/non-service callers), or ``"enforce"`` (member callers are
+    isolated onto their own derived session; owner and service callers are
+    unaffected in every mode — see ``chat._effective_session_key``).
+    """
+    raw = _resolve_raw("ROBOTHOR_PER_USER_SESSIONS", "off").strip().lower()
+    if raw in _VALID_PER_USER_SESSIONS_MODES:
+        return raw  # type: ignore[return-value]
+    return "off"
 
 
 def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
