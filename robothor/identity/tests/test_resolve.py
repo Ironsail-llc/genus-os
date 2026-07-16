@@ -15,6 +15,12 @@ from robothor.identity import resolvers
 from robothor.identity.context import EnrichedIdentity, IdentityContext
 
 TENANT = "t-alpha"
+# user_accounts.id is a UUID column; resolve_identity's webchat resolver now
+# validates shape before querying (see test_resolve_identity_webchat_non_uuid_*
+# below), so webchat-resolver tests need identifiers that actually parse as
+# UUIDs to reach the (mocked) DB layer at all.
+WEBCHAT_ACCT = "11111111-1111-1111-1111-111111111111"
+WEBCHAT_ACCT_MISSING = "22222222-2222-2222-2222-222222222222"
 
 
 @pytest.fixture(autouse=True)
@@ -118,7 +124,7 @@ def test_resolve_identity_unknown_channel_returns_none_never_raises():
 
 def test_resolve_identity_webchat_active_account():
     account = {
-        "id": "acct-1",
+        "id": WEBCHAT_ACCT,
         "tenant_id": TENANT,
         "email": "alice@example.com",
         "display_name": "Alice",
@@ -127,37 +133,61 @@ def test_resolve_identity_webchat_active_account():
         "person_id": "person-1",
     }
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account):
-        ctx = resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        ctx = resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
 
     assert ctx is not None
     assert ctx.verified is True
     assert ctx.display_name == "Alice"
     assert ctx.role == "member"
-    assert ctx.user_account_id == "acct-1"
+    assert ctx.user_account_id == WEBCHAT_ACCT
     assert ctx.person_id == "person-1"
     assert ctx.email == "alice@example.com"
 
 
 def test_resolve_identity_webchat_missing_account_returns_none():
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=None):
-        assert resolvers.resolve_identity("webchat", "acct-missing", TENANT) is None
+        assert resolvers.resolve_identity("webchat", WEBCHAT_ACCT_MISSING, TENANT) is None
 
 
 def test_resolve_identity_webchat_tenant_mismatch_returns_none():
     account = {
-        "id": "acct-1",
+        "id": WEBCHAT_ACCT,
         "tenant_id": "some-other-tenant",
         "status": "active",
     }
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account):
-        assert resolvers.resolve_identity("webchat", "acct-1", TENANT) is None
+        assert resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT) is None
 
 
 @pytest.mark.parametrize("status", ["disabled", "invited", "suspended", ""])
 def test_resolve_identity_webchat_inactive_status_returns_none(status):
-    account = {"id": "acct-1", "tenant_id": TENANT, "status": status}
+    account = {"id": WEBCHAT_ACCT, "tenant_id": TENANT, "status": status}
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account):
-        assert resolvers.resolve_identity("webchat", "acct-1", TENANT) is None
+        assert resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT) is None
+
+
+def test_resolve_identity_webchat_non_uuid_identifier_returns_none_no_db_call():
+    """A non-UUID webchat identifier (e.g. a service caller's `service:<agent>`
+    marker slipping through) must short-circuit before any DB roundtrip —
+    ``user_accounts.id`` is a UUID column, so this used to reach Postgres,
+    raise `InvalidTextRepresentation`, get caught by `resolve_identity`'s
+    top-level `except Exception`, and log at `exception` level on every call
+    until the negative-result cache absorbed it."""
+    with patch("robothor.identity.resolvers.get_account_by_id") as mock_get:
+        ctx = resolvers.resolve_identity("webchat", "service:main", TENANT)
+    assert ctx is None
+    mock_get.assert_not_called()
+
+
+def test_resolve_identity_webchat_non_uuid_identifier_no_exception_log(caplog):
+    """No `logger.exception` noise for a malformed identifier."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="robothor.identity.resolvers"):
+        with patch("robothor.identity.resolvers.get_account_by_id") as mock_get:
+            assert resolvers.resolve_identity("webchat", "not-a-uuid", TENANT) is None
+    mock_get.assert_not_called()
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 # ── resolve_identity: telegram ────────────────────────────────────────────
@@ -268,41 +298,41 @@ def test_resolve_identity_vision_no_match_returns_none():
 
 def test_resolve_identity_caches_positive_result():
     account = {
-        "id": "acct-1",
+        "id": WEBCHAT_ACCT,
         "tenant_id": TENANT,
         "status": "active",
         "display_name": "Alice",
     }
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account) as mock_get:
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
     assert mock_get.call_count == 1
 
 
 def test_resolve_identity_caches_negative_result():
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=None) as mock_get:
-        resolvers.resolve_identity("webchat", "acct-missing", TENANT)
-        resolvers.resolve_identity("webchat", "acct-missing", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT_MISSING, TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT_MISSING, TENANT)
     assert mock_get.call_count == 1
 
 
 def test_resolve_identity_cache_expires_after_ttl(monkeypatch):
-    account = {"id": "acct-1", "tenant_id": TENANT, "status": "active"}
+    account = {"id": WEBCHAT_ACCT, "tenant_id": TENANT, "status": "active"}
     fake_now = [1000.0]
     monkeypatch.setattr(resolvers.time, "monotonic", lambda: fake_now[0])
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account) as mock_get:
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
         fake_now[0] += 61
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
     assert mock_get.call_count == 2
 
 
 def test_clear_cache_forces_refetch():
-    account = {"id": "acct-1", "tenant_id": TENANT, "status": "active"}
+    account = {"id": WEBCHAT_ACCT, "tenant_id": TENANT, "status": "active"}
     with patch("robothor.identity.resolvers.get_account_by_id", return_value=account) as mock_get:
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
         resolvers.clear_cache()
-        resolvers.resolve_identity("webchat", "acct-1", TENANT)
+        resolvers.resolve_identity("webchat", WEBCHAT_ACCT, TENANT)
     assert mock_get.call_count == 2
 
 

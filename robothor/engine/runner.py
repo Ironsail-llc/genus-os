@@ -144,6 +144,31 @@ _SYSTEM_TRIGGER_TYPES = frozenset(
     }
 )
 
+
+def _is_service_caller(user_role: str, user_id: str) -> bool:
+    """Whether this run's effective caller is a service/automated actor.
+
+    A WEBCHAT run can still arrive from a service-typ auth context (an
+    engine/bridge credential acting on an agent's behalf, not a human — see
+    ``AuthContext.is_service`` at the chat layer). ``chat.py`` already passes
+    ``identity=None`` for those, but the runner can't tell "deliberately
+    None" from "not provided", so the fallback below must re-derive
+    service-ness itself from the same conventions used elsewhere in this
+    module: the manifest's default ``service_role`` value of ``"service"``
+    (``AgentConfig.service_role``, ``issue_service_token``'s default role)
+    and the ``f"service:{agent_id}"`` / ``f"service:workflow:{id}"`` user_id
+    marker convention (``_SYSTEM_TRIGGER_TYPES`` branch above, workflow.py,
+    scheduler.py). Without this gate, a service caller's non-UUID user_id
+    reaches ``resolve_identity("webchat", ...)`` and triggers a DB error on
+    every single call until the negative cache absorbs it (60s TTL).
+    """
+    return (
+        user_role == "service"
+        or user_role.startswith("service:")
+        or user_id.startswith("service:")
+    )
+
+
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -468,7 +493,10 @@ class AgentRunner:
                 system prompt to enforce plan execution (no re-planning).
             identity: Unified identity context (``robothor.identity``) for the
                 human on the other end of an interactive run. Precedence when
-                unset: WEBCHAT triggers resolve it from ``user_id``/``tenant_id``;
+                unset: WEBCHAT triggers resolve it from ``user_id``/``tenant_id``
+                (skipped entirely for a service-like caller — see
+                ``_is_service_caller`` — since a service token has no human
+                behind it and its user_id is never a resolvable UUID);
                 TELEGRAM triggers fall back to the legacy `trigger_detail`
                 `|sender:` parse; a spawned child inherits its parent's via
                 ``spawn_context.identity`` (attribution only — a child's own
@@ -526,7 +554,9 @@ class AgentRunner:
         # after spawn inheritance is resolved.
         effective_identity = identity
         if effective_identity is None:
-            if trigger_type == TriggerType.WEBCHAT:
+            if trigger_type == TriggerType.WEBCHAT and not _is_service_caller(
+                effective_user_role, effective_user_id
+            ):
                 from robothor.identity import resolve_identity
 
                 effective_identity = resolve_identity(
@@ -788,7 +818,12 @@ class AgentRunner:
             try:
                 from robothor.identity import enrich_identity
 
-                _enriched = enrich_identity(effective_identity)
+                # enrich_identity does blocking DB work on a cache miss —
+                # offload to the executor so it never blocks the event loop,
+                # mirroring the first-turn warmup path just above.
+                _enriched = await loop.run_in_executor(
+                    None, enrich_identity, effective_identity
+                )
             except Exception as e:
                 logger.debug(
                     "Per-turn identity enrichment failed for %s: %s",
@@ -1535,7 +1570,11 @@ class AgentRunner:
             try:
                 from robothor.identity import enrich_identity
 
-                enriched = enrich_identity(identity)
+                # enrich_identity does blocking DB work on a cache miss —
+                # offload to the executor so it never blocks the event loop.
+                enriched = await asyncio.get_running_loop().run_in_executor(
+                    None, enrich_identity, identity
+                )
             except Exception as e:
                 logger.debug("Deep-mode identity enrichment failed: %s", _sanitize(e))
                 enriched = None

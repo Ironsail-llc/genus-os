@@ -248,6 +248,58 @@ class TestExecuteDeep:
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
     @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.rlm_tool.execute_deep_reason")
+    async def test_execute_deep_identity_enrichment_offloaded_to_executor(
+        self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
+    ):
+        """enrich_identity does blocking DB work on a cache miss — execute_deep
+        must run it via loop.run_in_executor rather than calling it
+        synchronously inside the coroutine (code-review fix; mirrors the
+        equivalent offload in the per-turn mini-preamble path of execute())."""
+        from robothor.identity import IdentityContext
+
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+        )
+        mock_rlm.return_value = {
+            "response": "ok",
+            "execution_time_s": 1.0,
+            "cost_usd": 0.01,
+        }
+
+        real_run_in_executor = asyncio.base_events.BaseEventLoop.run_in_executor
+        seen_funcs = []
+
+        def spy_run_in_executor(self_loop, executor, func, *args):
+            seen_funcs.append(func)
+            return real_run_in_executor(self_loop, executor, func, *args)
+
+        with (
+            patch(
+                "robothor.identity.enrich_identity", return_value=None
+            ) as mock_enrich,
+            patch.object(
+                asyncio.base_events.BaseEventLoop,
+                "run_in_executor",
+                spy_run_in_executor,
+            ),
+        ):
+            run = await runner.execute_deep(
+                query="what's up",
+                identity=identity,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        assert mock_enrich in seen_funcs
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.runner.create_run")
+    @patch("robothor.engine.runner.update_run")
+    @patch("robothor.engine.runner.create_step")
     @patch(
         "robothor.engine.rlm_tool.execute_deep_reason",
         side_effect=ImportError("rlms not installed"),

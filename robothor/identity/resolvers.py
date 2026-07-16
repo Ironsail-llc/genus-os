@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid as _uuid
 from typing import TYPE_CHECKING
 
 import psycopg2
@@ -75,7 +76,20 @@ def clear_cache() -> None:
 
 
 def _resolve_webchat(identifier: str, tenant_id: str) -> IdentityContext | None:
-    """webchat identifier = ``user_accounts.id``. DB-verified: always True."""
+    """webchat identifier = ``user_accounts.id``. DB-verified: always True.
+
+    ``user_accounts.id`` is a UUID column — validate the identifier's shape
+    before querying so a non-UUID (e.g. a service caller's ``"service:<agent>"``
+    marker slipping through) returns None immediately instead of round-tripping
+    to Postgres and raising ``InvalidTextRepresentation``, which the caller
+    catches but logs at ``exception`` level on every occurrence.
+    """
+    try:
+        _uuid.UUID(str(identifier))
+    except (ValueError, AttributeError, TypeError):
+        logger.debug("_resolve_webchat: identifier %r is not a UUID, skipping DB lookup", identifier)
+        return None
+
     account = get_account_by_id(identifier)
     if not account:
         return None
