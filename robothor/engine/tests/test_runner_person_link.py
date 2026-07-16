@@ -185,3 +185,40 @@ class TestSpawnContextInheritance:
             person_id="abc-123",
         )
         assert ctx.person_id == "abc-123"
+
+    def test_spawn_context_carries_identity(self):
+        """SpawnContext gains an `identity` slot so child runs can inherit
+        the parent's IdentityContext for person_id/user_id attribution —
+        children's prompts don't need the CURRENT USER block themselves
+        (trigger_type=SUB_AGENT never qualifies), but the identity still
+        rides along for attribution and further nesting."""
+        from robothor.engine.models import SpawnContext
+        from robothor.identity import IdentityContext
+
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            person_id="person-1",
+        )
+        ctx = SpawnContext(
+            parent_run_id=str(uuid.uuid4()),
+            parent_agent_id="main",
+            correlation_id="corr-1",
+            nesting_depth=0,
+            identity=identity,
+        )
+        assert ctx.identity is identity
+
+    def test_spawn_context_identity_defaults_to_none(self):
+        from robothor.engine.models import SpawnContext
+
+        ctx = SpawnContext(
+            parent_run_id=str(uuid.uuid4()),
+            parent_agent_id="main",
+            correlation_id="corr-1",
+            nesting_depth=0,
+        )
+        assert ctx.identity is None

@@ -1514,6 +1514,29 @@ class TelegramBot:
                     _detail += f"|sender:{_safe}"
                 _tenant = self._get_tenant_id(chat_id)
 
+                # Unified identity context (robothor.identity) — built from the
+                # same cached lookup_user()/fallback dict as _sender/user_id
+                # above. `verified` reflects whether _user came from a real
+                # tenant_users row (carries `user_id`) vs. a fabricated
+                # fallback (unregistered sender, primary-chat/group default).
+                # The legacy `|sender:` trigger_detail suffix stays for now
+                # (removed in a later phase) — execute() prefers this explicit
+                # identity over that parse.
+                _identity = None
+                if _user:
+                    from robothor.identity import IdentityContext
+
+                    _identity = IdentityContext(
+                        tenant_id=_user.get("tenant_id") or _tenant,
+                        channel="telegram",
+                        identifier=chat_id,
+                        verified="user_id" in _user,
+                        display_name=_user.get("display_name") or "",
+                        role=_user.get("role") or "",
+                        tenant_user_id=_user.get("user_id"),
+                        person_id=_user.get("person_id"),
+                    )
+
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
                     message=user_text,
@@ -1525,6 +1548,7 @@ class TelegramBot:
                     tenant_id=_tenant,
                     user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
                     user_role=str((_user or {}).get("role") or "user"),
+                    identity=_identity,
                 )
 
                 async with _lock:

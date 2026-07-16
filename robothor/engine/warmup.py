@@ -22,11 +22,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.identity import enrich_identity
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -431,6 +433,7 @@ def build_interactive_preamble(
     tenant_id: str = DEFAULT_TENANT,
     extra_memory_blocks: list[str] | None = None,
     sender_name: str = "",
+    identity: IdentityContext | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -443,17 +446,36 @@ def build_interactive_preamble(
         include_blocks: If True, inject core memory blocks (persona, user_profile,
             working_context). Set to False for ongoing sessions where blocks are
             already in conversation history.
-        sender_name: Display name of the current user. When set, injects an
-            identity section and excludes the name from entity context search
-            to avoid confusing the user with other people sharing the same name.
+        sender_name: Display name of the current user. When set (and ``identity``
+            is not), injects a legacy identity section and excludes the name
+            from entity context search. Kept for back-compat.
+        identity: Unified identity context (see ``robothor.identity``). When
+            set, takes precedence over ``sender_name`` — the agent gets the
+            full ``--- CURRENT USER ---`` block (enriched with CRM/memory-graph
+            context when available) instead of the bare-name legacy text, and
+            ``identity.display_name`` is what gets excluded from entity search.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
     """
     sections: list[str] = []
+    exclude_name = sender_name
 
-    # Sender identity — tell the agent exactly who it's talking to
-    if sender_name:
+    # Current-user identity — tell the agent exactly who it's talking to.
+    # `identity` (the unified context) always wins over the legacy
+    # `sender_name` string when both are present.
+    if identity is not None:
+        try:
+            enriched = enrich_identity(identity)
+        except Exception as e:
+            logger.debug("Interactive warmup identity enrichment failed: %s", e)
+            enriched = None
+        try:
+            sections.append(identity.prompt_block(enriched))
+        except Exception as e:
+            logger.debug("Interactive warmup identity prompt_block failed: %s", e)
+        exclude_name = identity.display_name or sender_name
+    elif sender_name:
         sections.append(
             f"--- CURRENT USER ---\n"
             f"You are speaking with {sender_name}. Address them by this name.\n"
@@ -479,7 +501,7 @@ def build_interactive_preamble(
     # tenant's persona/user_profile blocks, not from entity search.
     if user_message and len(user_message) > 5:
         try:
-            exclude = {sender_name} if sender_name else None
+            exclude = {exclude_name} if exclude_name else None
             context = _build_entity_context(
                 user_message, tenant_id=tenant_id, exclude_names=exclude
             )

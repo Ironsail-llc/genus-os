@@ -17,6 +17,8 @@ from robothor.constants import DEFAULT_TENANT
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from robothor.identity import IdentityContext
+
 
 class TriggerType(StrEnum):
     CRON = "cron"
@@ -548,6 +550,12 @@ class SpawnContext:
     remaining_cost_budget_usd: float = 0.0
     # Contact 360 linkage — propagates from parent run to all spawned children.
     person_id: str | None = None
+    # Unified identity context (robothor.identity) — propagates from parent
+    # run to all spawned children for person_id/user_id attribution. Children
+    # never render the CURRENT USER prompt block themselves (their
+    # trigger_type is SUB_AGENT, which the runner never treats as
+    # interactive), so this is attribution-only, not prompt content.
+    identity: IdentityContext | None = None
     parent_trace_id: str = ""
     parent_span_id: str = ""
     # Stage 5 — CRM task this child is advancing. Set when a caller spawns

@@ -15,6 +15,7 @@ from robothor.engine.warmup import (
     build_interactive_preamble,
     build_warmth_preamble,
 )
+from robothor.identity import EnrichedIdentity, IdentityContext
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -349,6 +350,121 @@ class TestBuildInteractivePreamble:
             )
 
             assert "Alice works at Acme" in result
+
+    def test_identity_injects_prompt_block_instead_of_sender_name(self) -> None:
+        """When identity is provided, its prompt_block() replaces the legacy
+        sender_name text — even if sender_name is also passed (back-compat)."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None) as mock_enrich,
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="Bob",  # should be ignored — identity wins
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "--- CURRENT USER ---" in result
+        assert "Alice" in result
+        assert "Bob" not in result
+        assert "Verified: yes" in result
+        mock_enrich.assert_called_once_with(identity)
+
+    def test_identity_enrichment_appears_in_block(self) -> None:
+        """Enrichment (company/job title) is folded into the CURRENT USER block."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        enriched = EnrichedIdentity(company="Acme", job_title="Ops Lead")
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=enriched),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "Acme" in result
+        assert "Ops Lead" in result
+
+    def test_no_identity_falls_back_to_sender_name(self) -> None:
+        """identity=None preserves the legacy sender_name behavior."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(BLOCK_PATCH, return_value=None):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="Alice",
+                    identity=None,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "CURRENT USER" in result
+        assert "You are speaking with Alice" in result
+
+    def test_identity_display_name_excluded_from_entity_context(self) -> None:
+        """The entity-context exclusion set uses identity.display_name, not
+        sender_name, when identity is present."""
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch(
+                    "robothor.engine.warmup._build_entity_context", return_value=""
+                ) as mock_entity_ctx,
+            ):
+                build_interactive_preamble(
+                    "main",
+                    user_message="Tell Alice about the project",
+                    include_blocks=False,
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert mock_entity_ctx.call_args.kwargs["exclude_names"] == {"Alice"}
 
 
 class TestInteractivePanoramicSections:

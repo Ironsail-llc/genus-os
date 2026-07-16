@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from robothor.engine.chat import _sessions, init_chat, router
 from robothor.engine.models import AgentRun, RunStatus, TriggerType
+from robothor.identity import IdentityContext
 
 
 @pytest.fixture
@@ -542,6 +543,109 @@ class TestSSEStatusEvents:
         assert len(tool_starts) == 1
         assert len(tool_ends) == 1
         assert len(iter_starts) == 1
+
+
+class TestIdentityThreading:
+    """Task 2 — chat.py resolves identity once per request and passes it to
+    every execute()/execute_deep() call. Service-typ tokens (no human on the
+    other end) get identity=None."""
+
+    @pytest.mark.asyncio
+    async def test_send_passes_resolved_identity(self, client, mock_runner):
+        identity = IdentityContext(
+            tenant_id="test-tenant",
+            channel="webchat",
+            identifier="loopback-development-operator",
+            verified=True,
+            display_name="Alice",
+        )
+        run = AgentRun(status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT)
+        mock_runner.execute = AsyncMock(return_value=run)
+
+        with patch("robothor.identity.resolve_identity", return_value=identity) as mock_resolve:
+            res = await client.post(
+                "/chat/send",
+                json={"session_key": "idtest:main:web", "message": "hi"},
+            )
+
+        assert res.status_code == 200
+        mock_resolve.assert_called_once_with(
+            "webchat", "loopback-development-operator", "test-tenant"
+        )
+        assert mock_runner.execute.call_args.kwargs["identity"] is identity
+
+    @pytest.mark.asyncio
+    async def test_send_service_auth_gets_no_identity(self, client, mock_runner):
+        """A service-typ token (agent/engine → bridge) is not a human —
+        resolve_identity is never called and identity=None reaches execute()."""
+        from robothor.auth.deps import AuthContext
+
+        service_auth = AuthContext(
+            user_id="svc-agent",
+            tenant_id="test-tenant",
+            role="service",
+            typ="service",
+            agent_id="main",
+        )
+        run = AgentRun(status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT)
+        mock_runner.execute = AsyncMock(return_value=run)
+
+        with (
+            patch("robothor.engine.chat._auth_context", return_value=service_auth),
+            patch("robothor.identity.resolve_identity") as mock_resolve,
+        ):
+            res = await client.post(
+                "/chat/send",
+                json={"session_key": "idtest:main:svc", "message": "hi"},
+            )
+
+        assert res.status_code == 200
+        mock_resolve.assert_not_called()
+        assert mock_runner.execute.call_args.kwargs["identity"] is None
+
+    @pytest.mark.asyncio
+    async def test_plan_start_passes_resolved_identity(self, client, mock_runner):
+        identity = IdentityContext(
+            tenant_id="test-tenant",
+            channel="webchat",
+            identifier="loopback-development-operator",
+            verified=True,
+            display_name="Alice",
+        )
+        run = AgentRun(
+            status=RunStatus.COMPLETED, output_text="[PLAN_READY]", trigger_type=TriggerType.WEBCHAT
+        )
+        mock_runner.execute = AsyncMock(return_value=run)
+
+        with patch("robothor.identity.resolve_identity", return_value=identity):
+            res = await client.post(
+                "/chat/plan/start",
+                json={"session_key": "idtest:main:plan", "message": "do a thing"},
+            )
+
+        assert res.status_code == 200
+        assert mock_runner.execute.call_args.kwargs["identity"] is identity
+
+    @pytest.mark.asyncio
+    async def test_deep_start_passes_resolved_identity(self, client, mock_runner):
+        identity = IdentityContext(
+            tenant_id="test-tenant",
+            channel="webchat",
+            identifier="loopback-development-operator",
+            verified=True,
+            display_name="Alice",
+        )
+        run = AgentRun(status=RunStatus.COMPLETED, output_text="deep answer")
+        mock_runner.execute_deep = AsyncMock(return_value=run)
+
+        with patch("robothor.identity.resolve_identity", return_value=identity):
+            res = await client.post(
+                "/chat/deep/start",
+                json={"session_key": "idtest:main:deep", "query": "what's up"},
+            )
+
+        assert res.status_code == 200
+        assert mock_runner.execute_deep.call_args.kwargs["identity"] is identity
 
 
 def _parse_sse(body: str) -> list[dict]:

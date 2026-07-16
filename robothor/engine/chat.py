@@ -50,6 +50,7 @@ from robothor.engine.sanitize import sanitize_log
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,20 @@ def _auth_context(request: Request) -> Any:
     from robothor.engine.auth import request_context
 
     return request_context(request)
+
+
+def _resolve_webchat_identity(auth: Any) -> IdentityContext | None:
+    """Resolve the CURRENT USER identity for a webchat request's auth context.
+
+    Service-typ tokens (engine/agent → bridge calls) have no human on the
+    other end, so they get identity=None rather than a resolution attempt.
+    """
+    if getattr(auth, "is_service", False):
+        return None
+
+    from robothor.identity import resolve_identity
+
+    return resolve_identity("webchat", auth.user_id, auth.tenant_id)
 
 
 router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
@@ -179,6 +194,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -228,6 +244,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             # Always record user message in session history
@@ -528,6 +545,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -591,6 +609,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             # Extract plan from output
@@ -708,6 +727,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -777,6 +797,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     tenant_id=auth.tenant_id,
                     user_id=auth.user_id,
                     user_role=auth.role,
+                    identity=identity,
                 )
 
                 # Track execution run ID
@@ -898,6 +919,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     tenant_id=auth.tenant_id,
                     user_id=auth.user_id,
                     user_role=auth.role,
+                    identity=identity,
                 )
 
                 # Track execution run ID
@@ -1032,6 +1054,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1115,6 +1138,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             revised_plan_text = _extract_plan_text(run.output_text or "")
@@ -1248,6 +1272,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1286,6 +1311,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             deep.completed_at = datetime.now(UTC).isoformat()

@@ -23,6 +23,7 @@ from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, Trigg
 
 if TYPE_CHECKING:
     from robothor.engine.todolist import TodoList
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,13 @@ class AgentSession:
             status=RunStatus.PENDING,
         )
         self.messages: list[dict[str, Any]] = []
+        # Unified identity context (robothor.identity) for the human on the
+        # other end of this run — set by AgentRunner.execute() after
+        # precedence resolution (explicit kwarg / webchat resolve / legacy
+        # Telegram parse / inherited SpawnContext). None for non-interactive
+        # (cron/service) runs. Read by _run_loop to carry onto a fresh
+        # SpawnContext for any children this run spawns.
+        self.identity: IdentityContext | None = None
         self._step_counter = 0
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold

@@ -211,6 +211,43 @@ class TestExecuteDeep:
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
     @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.rlm_tool.execute_deep_reason")
+    async def test_execute_deep_identity_prepended_to_context(
+        self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
+    ):
+        """execute_deep() accepts identity= and prepends its CURRENT USER
+        block to the RLM context (deep mode has no system-prompt/warmup
+        seam of its own, so this is the only place to fold it in)."""
+        from robothor.identity import IdentityContext
+
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+        )
+        mock_rlm.return_value = {
+            "response": "ok",
+            "execution_time_s": 1.0,
+            "cost_usd": 0.01,
+        }
+
+        with patch("robothor.identity.enrich_identity", return_value=None):
+            run = await runner.execute_deep(
+                query="what's up",
+                identity=identity,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        context = mock_rlm.call_args.kwargs.get("context", "")
+        assert "--- CURRENT USER ---" in context
+        assert "Alice" in context
+
+    @pytest.mark.asyncio
+    @patch("robothor.engine.runner.create_run")
+    @patch("robothor.engine.runner.update_run")
+    @patch("robothor.engine.runner.create_step")
     @patch(
         "robothor.engine.rlm_tool.execute_deep_reason",
         side_effect=ImportError("rlms not installed"),

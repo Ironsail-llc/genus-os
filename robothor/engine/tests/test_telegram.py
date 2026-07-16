@@ -807,6 +807,86 @@ class TestUserResolution:
             assert detail.count("|") == 1  # only the real delimiter
 
 
+class TestIdentityThreading:
+    """Task 2 — _run_interactive builds an IdentityContext from the cached
+    per-chat user info and passes it to execute(), alongside (not instead
+    of) the legacy `|sender:` trigger_detail suffix."""
+
+    @pytest.mark.asyncio
+    async def test_registered_user_passes_verified_identity(self, bot):
+        bot._chat_user_info["12345"] = {
+            "tenant_id": "acme",
+            "display_name": "Alice",
+            "role": "owner",
+            "user_id": "tu-1",
+            "person_id": "person-1",
+        }
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("12345", session_key, session, "test message")
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        identity = bot.runner.execute.call_args.kwargs.get("identity")
+        assert identity is not None
+        assert identity.verified is True
+        assert identity.display_name == "Alice"
+        assert identity.role == "owner"
+        assert identity.tenant_id == "acme"
+        assert identity.channel == "telegram"
+        assert identity.tenant_user_id == "tu-1"
+        assert identity.person_id == "person-1"
+
+    @pytest.mark.asyncio
+    async def test_fallback_user_passes_unverified_identity(self, bot):
+        """A fallback dict (no `user_id`/`person_id` — unregistered sender)
+        produces an unverified identity, not a DB-verified one."""
+        bot._chat_user_info["12345"] = {
+            "tenant_id": "test-tenant",
+            "display_name": "Alice",
+            "role": "owner",
+        }
+
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("12345", session_key, session, "test message")
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        identity = bot.runner.execute.call_args.kwargs.get("identity")
+        assert identity is not None
+        assert identity.verified is False
+        assert identity.display_name == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_no_cached_user_info_passes_no_identity(self, bot):
+        """No cached _chat_user_info entry (e.g. group message with no
+        from_user) — identity=None, execute still gets called."""
+        session_key = bot._session_key("99999")
+        session = get_shared_session(session_key)
+
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("99999", session_key, session, "test message")
+        task = bot._active_tasks.get("99999")
+        if task:
+            await task
+
+        assert bot.runner.execute.call_args.kwargs.get("identity") is None
+
+
 @pytest.fixture
 def _clear_session_registry():
     """Registered sessions are module-global state; reset between tests."""

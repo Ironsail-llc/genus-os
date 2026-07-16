@@ -122,6 +122,8 @@ RUNAWAY_TOKEN_HARD_CAP = 5_000_000
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from robothor.identity import IdentityContext
+
 logger = logging.getLogger(__name__)
 
 # Trigger types that run with no interactive human and are therefore governed by
@@ -457,12 +459,21 @@ class AgentRunner:
         tenant_id: str | None = None,
         user_id: str = "",
         user_role: str = "",
+        identity: IdentityContext | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
         Args:
             execution_mode: When True, prepend EXECUTION_MODE_PREAMBLE to
                 system prompt to enforce plan execution (no re-planning).
+            identity: Unified identity context (``robothor.identity``) for the
+                human on the other end of an interactive run. Precedence when
+                unset: WEBCHAT triggers resolve it from ``user_id``/``tenant_id``;
+                TELEGRAM triggers fall back to the legacy `trigger_detail`
+                `|sender:` parse; a spawned child inherits its parent's via
+                ``spawn_context.identity`` (attribution only — a child's own
+                prompt never renders the CURRENT USER block, since its
+                trigger_type is SUB_AGENT, not an interactive one).
         Returns the completed AgentRun with full metadata.
         """
         resolved_tenant = tenant_id or self.config.tenant_id
@@ -507,6 +518,41 @@ class AgentRunner:
                 session.start("", message, [])
                 return session.fail("Authentication identity required for interactive run")
 
+        # ── Identity — who is this run's message addressed to? ────────────
+        # Precedence: explicit `identity` kwarg > WEBCHAT DB resolution >
+        # legacy Telegram `|sender:` trigger_detail parse (back-compat until
+        # every caller passes `identity=` explicitly). A spawn_context-carried
+        # identity (sub-agent attribution only) is folded in further below,
+        # after spawn inheritance is resolved.
+        effective_identity = identity
+        if effective_identity is None:
+            if trigger_type == TriggerType.WEBCHAT:
+                from robothor.identity import resolve_identity
+
+                effective_identity = resolve_identity(
+                    "webchat", effective_user_id, resolved_tenant
+                )
+            elif (
+                trigger_type == TriggerType.TELEGRAM
+                and trigger_detail
+                and "|sender:" in trigger_detail
+            ):
+                from robothor.identity import IdentityContext as _IdentityContext
+
+                _legacy_sender = trigger_detail.split("|sender:", 1)[1]
+                effective_identity = _IdentityContext(
+                    tenant_id=resolved_tenant,
+                    channel="telegram",
+                    identifier=effective_user_id,
+                    verified=bool(effective_user_id and effective_user_role),
+                    display_name=_legacy_sender,
+                    role=effective_user_role or "",
+                )
+                logger.debug(
+                    "execute: using legacy sender parse fallback for identity (agent=%s)",
+                    _sanitize(agent_id),
+                )
+
         # Per-run reasoning effort → extended-thinking budget (task-local).
         from robothor.engine.model_registry import set_reasoning_effort
 
@@ -543,6 +589,20 @@ class AgentRunner:
             # Contact 360 linkage — inherit parent's person.
             if spawn_context.person_id:
                 session.run.person_id = spawn_context.person_id
+            # Identity — inherit parent's for person_id/user_id attribution
+            # only. A child's own trigger_type is SUB_AGENT, which never
+            # qualifies for the CURRENT USER prompt block (see the warmup /
+            # mini-preamble gating further below), so this never leaks a
+            # prompt section into a worker's context — attribution only.
+            if effective_identity is None and spawn_context.identity:
+                effective_identity = spawn_context.identity
+
+        # Contact 360 linkage — stamp person_id from the effective identity
+        # first (covers WEBCHAT, whose trigger_detail carries no chat_id for
+        # resolve_run_person_id to key off). Fall back to the existing
+        # trigger_detail-based resolver when identity has no person_id.
+        if not session.run.person_id and effective_identity and effective_identity.person_id:
+            session.run.person_id = effective_identity.person_id
 
         # Contact 360 linkage — resolve from trigger_detail for top-level runs
         # whose trigger_type is telegram/chat. Best-effort; a miss is fine.
@@ -562,6 +622,10 @@ class AgentRunner:
                 logger.debug(
                     "person_id resolution failed for %s: %s", _sanitize(agent_id), _sanitize(e)
                 )
+
+        # Stash the effective identity on the session so _run_loop can carry
+        # it onto a fresh SpawnContext for any children this run spawns.
+        session.identity = effective_identity
 
         # Resolve hierarchical tenant access.
         # owner/admin roles see child tenants; others see only their own.
@@ -674,6 +738,7 @@ class AgentRunner:
                         extra_memory_blocks=_extra_blocks,
                         tenant_id=_tenant,
                         sender_name=_sender,
+                        identity=effective_identity,
                     )
 
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)
@@ -709,6 +774,35 @@ class AgentRunner:
 
         if warmup_preamble:
             message = f"{warmup_preamble}\n\n{message}"
+        elif (
+            conversation_history
+            and effective_identity is not None
+            and trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT)
+        ):
+            # Follow-up turn (warmup skipped — see warmup_kind above): the
+            # first turn already got the CURRENT USER block via warmup, but
+            # every turn after that needs its own reminder of who's talking,
+            # since it's not re-sent as part of conversation_history. Identity
+            # only — no other warmup DB work (memory blocks, entity context,
+            # etc. are already in the transcript).
+            try:
+                from robothor.identity import enrich_identity
+
+                _enriched = enrich_identity(effective_identity)
+            except Exception as e:
+                logger.debug(
+                    "Per-turn identity enrichment failed for %s: %s",
+                    _sanitize(agent_id),
+                    _sanitize(e),
+                )
+                _enriched = None
+            try:
+                identity_block = effective_identity.prompt_block(_enriched)
+                message = f"{identity_block}\n\n{message}"
+            except Exception as e:
+                logger.debug(
+                    "Per-turn identity block failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+                )
         watchdog.touch("warmup_complete")
 
         # ── [INJECTION] Scan the assembled system-run prompt ──
@@ -1357,6 +1451,7 @@ class AgentRunner:
         tenant_id: str | None = None,
         user_id: str = "",
         user_role: str = "",
+        identity: IdentityContext | None = None,
     ) -> AgentRun:
         """Execute a deep reasoning session via the RLM, bypassing the LLM loop.
 
@@ -1369,6 +1464,9 @@ class AgentRunner:
             on_progress: Optional callback emitting {elapsed_s, status} every 5s.
             conversation_history: Recent conversation for context (not sent to RLM
                 as messages — summarised as context string).
+            identity: Unified identity context (``robothor.identity``). Deep
+                mode has no system-prompt/warmup seam of its own, so its
+                CURRENT USER block is prepended directly to the RLM context.
 
         Returns:
             AgentRun with output_text set to the RLM response, cost unified.
@@ -1432,6 +1530,20 @@ class AgentRunner:
                         context_parts.append(f"{role}: {content[:500]}")
                 if context_parts:
                     context = "Recent conversation context:\n" + "\n".join(context_parts)
+
+        if identity is not None:
+            try:
+                from robothor.identity import enrich_identity
+
+                enriched = enrich_identity(identity)
+            except Exception as e:
+                logger.debug("Deep-mode identity enrichment failed: %s", _sanitize(e))
+                enriched = None
+            try:
+                identity_block = identity.prompt_block(enriched)
+                context = f"{identity_block}\n\n{context}" if context else identity_block
+            except Exception as e:
+                logger.debug("Deep-mode identity block failed: %s", _sanitize(e))
 
         start_time = time.monotonic()
 
@@ -1597,6 +1709,7 @@ class AgentRunner:
                 parent_trace_id=trace.trace_id if trace else "",
                 parent_span_id="",
                 person_id=session.run.person_id,
+                identity=getattr(session, "identity", None),
             )
             _current_spawn_context.set(fresh_ctx)
 
@@ -3120,6 +3233,7 @@ class AgentRunner:
                 parent_trace_id=ctx.parent_trace_id,
                 parent_span_id=ctx.parent_span_id,
                 person_id=getattr(ctx, "person_id", None),
+                identity=getattr(ctx, "identity", None),
             )
 
             run = await self.execute(
