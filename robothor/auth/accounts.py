@@ -38,6 +38,10 @@ class UnsafeProvisioningRoleError(AccountProvisioningError):
     """JIT provisioning attempted to create a privileged account."""
 
 
+class GrantTargetError(RuntimeError):
+    """A binding grant was armed for an account that could never consume it."""
+
+
 def get_account_by_id(user_id: str) -> dict[str, Any] | None:
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -101,17 +105,62 @@ def jit_provision(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         # Never turn a matching email claim into an identity binding.  The
-        # explicit safe binding is a pre-populated (idp_issuer, idp_subject)
-        # pair, resolved by the branch above.
+        # explicit safe bindings are a pre-populated (idp_issuer, idp_subject)
+        # pair (resolved by the branch above) or an operator-armed one-shot
+        # grant consumed atomically below.
         cur.execute(
             "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
             (tenant_id, email),
         )
         row = cur.fetchone()
         if row:
-            raise AccountBindingRequiredError(
-                "existing account must be explicitly bound to the SSO identity"
+            # Inactive accounts fail before the grant lookup (the grant is not
+            # burned), and a grant never re-binds an already-bound account.
+            if row.get("status") != "active" or row.get("idp_issuer"):
+                raise AccountBindingRequiredError(
+                    "existing account must be explicitly bound to the SSO identity"
+                )
+            grant = _consume_binding_grant(cur, tenant_id, email, issuer)
+            if not grant:
+                # A concurrent sign-in from this same identity may have just
+                # consumed the grant and bound the account — that is a win,
+                # not an error, for the user standing at the login page.
+                won = _rebound_by_same_identity(cur, issuer, subject)
+                if won:
+                    return won
+                raise AccountBindingRequiredError(
+                    "existing account must be explicitly bound to the SSO identity"
+                )
+            cur.execute(
+                """UPDATE user_accounts
+                   SET idp_issuer = %s, idp_subject = %s,
+                       last_login_at = NOW(), updated_at = NOW()
+                   WHERE id = %s AND status = 'active' AND idp_issuer IS NULL
+                   RETURNING *""",
+                (issuer, subject, row["id"]),
             )
+            bound = cur.fetchone()
+            if not bound:
+                won = _rebound_by_same_identity(cur, issuer, subject)
+                if won:
+                    return won
+                # Raced with a different bind; roll back so the grant survives.
+                raise AccountBindingRequiredError(
+                    "existing account must be explicitly bound to the SSO identity"
+                )
+            cur.execute(
+                "UPDATE sso_binding_grants SET used_by_issuer = %s, used_by_subject = %s "
+                "WHERE id = %s",
+                (issuer, subject, grant["id"]),
+            )
+            conn.commit()
+            logger.info(
+                "jit_provision: binding grant %s consumed; account %s bound to issuer %s",
+                grant["id"],
+                bound["id"],
+                issuer,
+            )
+            return dict(bound)
 
         cur.execute(
             """INSERT INTO user_accounts
@@ -139,6 +188,143 @@ def _touch_login(user_id: str) -> dict[str, Any]:
             raise AccountInactiveError("SSO account is not active")
         conn.commit()
         return dict(row)
+
+
+# ── Binding grants (explicit one-shot account↔IdP binding) ──────────
+
+
+def create_binding_grant(
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    email: str,
+    ttl_seconds: int,
+    reason: str = "",
+    created_by: str = "cli",
+    issuer: str | None = None,
+) -> dict[str, Any]:
+    """Arm a one-shot grant allowing the next verified SSO login with this
+    email to bind its (issuer, subject) onto the existing account.
+
+    Fails loudly (GrantTargetError) when no active, unbound account exists for
+    the email — a grant that can never fire is an operator lockout waiting to
+    be diagnosed at sign-in time. Re-arming revokes any still-pending grant for
+    the same email so at most one grant is ever live. An ``issuer`` pin
+    restricts consumption to that IdP; otherwise any allowlisted IdP matches.
+    """
+    email = email.strip().casefold()
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
+            (tenant_id, email),
+        )
+        target = cur.fetchone()
+        if not target:
+            raise GrantTargetError(f"no account with email {email!r} in tenant {tenant_id!r}")
+        if target.get("idp_issuer"):
+            raise GrantTargetError("account is already bound to an SSO identity")
+        if target.get("status") != "active":
+            raise GrantTargetError("account is not active")
+        cur.execute(
+            "UPDATE sso_binding_grants SET revoked_at = NOW() "
+            "WHERE tenant_id = %s AND email = %s AND used_at IS NULL AND revoked_at IS NULL",
+            (tenant_id, email),
+        )
+        cur.execute(
+            """INSERT INTO sso_binding_grants
+                   (tenant_id, email, reason, created_by, expires_at, issuer)
+               VALUES (%s, %s, %s, %s, NOW() + make_interval(secs => %s), %s)
+               RETURNING *""",
+            (tenant_id, email, reason, created_by, ttl_seconds, issuer),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row)
+
+
+def list_binding_grants(
+    tenant_id: str = DEFAULT_TENANT, *, include_inactive: bool = False
+) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        state = """CASE
+                       WHEN revoked_at IS NOT NULL THEN 'revoked'
+                       WHEN used_at IS NOT NULL THEN 'used'
+                       WHEN expires_at <= NOW() THEN 'expired'
+                       ELSE 'pending'
+                   END AS state"""
+        if include_inactive:
+            cur.execute(
+                f"SELECT *, {state} FROM sso_binding_grants WHERE tenant_id = %s "
+                "ORDER BY created_at DESC",
+                (tenant_id,),
+            )
+        else:
+            cur.execute(
+                f"""SELECT *, {state} FROM sso_binding_grants
+                   WHERE tenant_id = %s
+                     AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+                   ORDER BY created_at DESC""",
+                (tenant_id,),
+            )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def revoke_binding_grant(grant_id: str, tenant_id: str | None = None) -> bool:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if tenant_id is None:
+            cur.execute(
+                "UPDATE sso_binding_grants SET revoked_at = NOW() "
+                "WHERE id = %s AND revoked_at IS NULL AND used_at IS NULL",
+                (grant_id,),
+            )
+        else:
+            cur.execute(
+                "UPDATE sso_binding_grants SET revoked_at = NOW() "
+                "WHERE id = %s AND tenant_id = %s AND revoked_at IS NULL AND used_at IS NULL",
+                (grant_id, tenant_id),
+            )
+        revoked = bool(cur.rowcount > 0)
+        conn.commit()
+        return revoked
+
+
+def _consume_binding_grant(
+    cur: Any, tenant_id: str, email: str, presenting_issuer: str
+) -> dict[str, Any] | None:
+    """Atomically spend one live grant (single UPDATE ... RETURNING, mirroring
+    ``consume_active_session``): two concurrent sign-ins must not both bind.
+    Issuer-pinned grants are only spendable by that IdP."""
+    cur.execute(
+        """UPDATE sso_binding_grants
+           SET used_at = NOW()
+           WHERE id = (
+               SELECT id FROM sso_binding_grants
+               WHERE tenant_id = %s AND email = %s
+                 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+                 AND (issuer IS NULL OR issuer = %s)
+               ORDER BY created_at DESC
+               LIMIT 1
+               FOR UPDATE SKIP LOCKED
+           )
+           RETURNING *""",
+        (tenant_id, email, presenting_issuer),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _rebound_by_same_identity(cur: Any, issuer: str, subject: str) -> dict[str, Any] | None:
+    """After losing a bind race, check whether the account is now bound to
+    exactly the presenting identity — if so the sign-in should succeed."""
+    cur.execute(
+        "SELECT * FROM user_accounts "
+        "WHERE idp_issuer = %s AND idp_subject = %s AND status = 'active'",
+        (issuer, subject),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
 
 
 # ── Sessions (refresh-token revocation) ─────────────────────────────

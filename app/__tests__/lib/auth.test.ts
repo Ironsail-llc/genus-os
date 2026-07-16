@@ -5,11 +5,25 @@ import type { JWT } from "next-auth/jwt";
 import {
   bridgeJwtCallback,
   bridgeSessionCallback,
-  oidcSignInAllowed,
   publicBridgeSessionCallback,
+  signInAllowed,
 } from "@/lib/auth";
 
 const account = { provider: "oidc" };
+const cfAccount = { provider: "cloudflare-access" };
+const cfClaims = {
+  issuer: "https://team.example.com",
+  subject: "cf-user-uuid-1",
+  email: "operator@example.com",
+  display_name: "Test Operator",
+  email_verified: true as const,
+};
+const cfUser = {
+  id: "https://team.example.com|cf-user-uuid-1",
+  email: "operator@example.com",
+  name: "Test Operator",
+  cfClaims,
+};
 const verifiedProfile = {
   iss: "https://idp.example.test",
   sub: "subject-1",
@@ -52,10 +66,10 @@ describe("dashboard OIDC and Bridge session binding", () => {
     vi.stubGlobal("fetch", fetchMock);
     const profile = { ...verifiedProfile, email_verified: false } satisfies Profile;
 
-    expect(oidcSignInAllowed({ account, profile })).toBe(false);
+    expect(signInAllowed({ account, profile })).toBe(false);
     await expect(
       bridgeJwtCallback({ token: {}, account, profile, trigger: "signIn" }),
-    ).rejects.toThrow("verified OIDC identity required");
+    ).rejects.toThrow("verified identity required");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -70,7 +84,7 @@ describe("dashboard OIDC and Bridge session binding", () => {
       }
       vi.stubGlobal("fetch", fetchMock);
 
-      expect(oidcSignInAllowed({ account, profile: verifiedProfile })).toBe(true);
+      expect(signInAllowed({ account, profile: verifiedProfile })).toBe(true);
       await expect(
         bridgeJwtCallback({
           token: {},
@@ -132,6 +146,72 @@ describe("dashboard OIDC and Bridge session binding", () => {
     expect(exposed.authError).toBe("BridgeRefreshFailed");
   });
 
+  it("accepts a cloudflare-access sign-in carrying verified claims", () => {
+    expect(signInAllowed({ account: cfAccount, user: cfUser })).toBe(true);
+  });
+
+  it("rejects a cloudflare-access sign-in without well-formed claims", () => {
+    expect(signInAllowed({ account: cfAccount, user: { ...cfUser, cfClaims: undefined } })).toBe(
+      false,
+    );
+    expect(
+      signInAllowed({
+        account: cfAccount,
+        user: { ...cfUser, cfClaims: { ...cfClaims, email: "" } },
+      }),
+    ).toBe(false);
+    const unverifiedClaims = { ...cfClaims, email_verified: false } as unknown as typeof cfClaims;
+    expect(
+      signInAllowed({
+        account: cfAccount,
+        user: { ...cfUser, cfClaims: unverifiedClaims },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects sign-ins from unknown providers", () => {
+    expect(signInAllowed({ account: { provider: "credentials" }, user: cfUser })).toBe(false);
+    expect(signInAllowed({ account: null, profile: verifiedProfile })).toBe(false);
+  });
+
+  it("exchanges cloudflare-access claims with the bridge on sign-in", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(true, exchangeResult));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const token = await bridgeJwtCallback({
+      token: {},
+      account: cfAccount,
+      user: cfUser,
+      trigger: "signIn",
+    });
+
+    expect(token.bridgeAccess).toBe("bridge-access-token");
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    ) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      issuer: "https://team.example.com",
+      subject: "cf-user-uuid-1",
+      email: "operator@example.com",
+      email_verified: true,
+    });
+  });
+
+  it("fails a cloudflare-access sign-in without claims instead of half-creating a session", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      bridgeJwtCallback({
+        token: {},
+        account: cfAccount,
+        user: { ...cfUser, cfClaims: undefined },
+        trigger: "signIn",
+      }),
+    ).rejects.toThrow("verified identity required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("never serializes the Bridge bearer into the browser-visible session", async () => {
     const session: Session = {
       expires: "2099-01-01T00:00:00.000Z",
@@ -151,5 +231,54 @@ describe("dashboard OIDC and Bridge session binding", () => {
     expect(exposed.bridgeAccess).toBeUndefined();
     expect(JSON.stringify(exposed)).not.toContain("secret-bridge-bearer");
     expect(JSON.stringify(exposed)).not.toContain("secret-refresh-token");
+  });
+});
+
+describe("conditional provider registration", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function providerIds(env: Record<string, string>): Promise<string[]> {
+    vi.resetModules();
+    for (const [key, value] of Object.entries({
+      AUTH_OIDC_ISSUER: "",
+      AUTH_OIDC_CLIENT_ID: "",
+      CF_ACCESS_TEAM_DOMAIN: "",
+      CF_ACCESS_AUD: "",
+      ...env,
+    })) {
+      vi.stubEnv(key, value);
+    }
+    const { authConfig } = await import("@/lib/auth");
+    return authConfig.providers.map((provider) => {
+      const p = provider as { id?: string; options?: { id?: string } };
+      return p.options?.id ?? p.id ?? "";
+    });
+  }
+
+  it("omits the oidc provider when the client id is missing (no InvalidEndpoints noise)", async () => {
+    const ids = await providerIds({ AUTH_OIDC_ISSUER: "https://accounts.example.com" });
+    expect(ids).not.toContain("oidc");
+  });
+
+  it("registers cloudflare-access only when its env gate is set", async () => {
+    const ids = await providerIds({
+      CF_ACCESS_TEAM_DOMAIN: "https://team.example.com",
+      CF_ACCESS_AUD: "aud-tag-1",
+    });
+    expect(ids).toEqual(["cloudflare-access"]);
+  });
+
+  it("registers both providers when both are fully configured", async () => {
+    const ids = await providerIds({
+      AUTH_OIDC_ISSUER: "https://accounts.example.com",
+      AUTH_OIDC_CLIENT_ID: "client-1",
+      CF_ACCESS_TEAM_DOMAIN: "https://team.example.com",
+      CF_ACCESS_AUD: "aud-tag-1",
+    });
+    expect(ids).toContain("oidc");
+    expect(ids).toContain("cloudflare-access");
   });
 });

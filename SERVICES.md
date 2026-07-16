@@ -122,7 +122,13 @@ psql -d robothor_memory -c "SELECT count(*) FROM long_term_memory;" 2>/dev/null
 | orchestrator.${INSTANCE_DOMAIN} | localhost:9099 | Cloudflare Access (email OTP) | RAG orchestrator API |
 | vision.${INSTANCE_DOMAIN} | localhost:8600 | Cloudflare Access (email OTP) | Vision API |
 | monitor.${INSTANCE_DOMAIN} | localhost:3010 | Cloudflare Access (email OTP) | Uptime Kuma monitoring |
-| app.${INSTANCE_DOMAIN} | localhost:3004 | Cloudflare Access (email OTP) | Helm — live dashboard |
+| app.${INSTANCE_DOMAIN} | localhost:3004 | Cloudflare Access (email OTP) → app session | Helm — live dashboard |
+
+The Helm dashboard trusts Cloudflare Access as its identity provider when
+`CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` are set: it verifies the
+edge-injected `Cf-Access-Jwt-Assertion` (JWKS signature, issuer, audience) and
+establishes its Auth.js session + bridge RBAC tokens from that identity — one
+authentication at the edge, no second sign-in prompt.
 
 All camera/vision ports (`8554`, `8889`, `8890`, `8600`) are bound to `127.0.0.1`. External access to the webcam is only possible through the Cloudflare tunnel with Zero Trust authentication.
 

@@ -10,6 +10,31 @@ Genus OS's command center. Live dashboard and chat interface in a two-panel Dock
 - **Canvas**: HTML-first rendering via iframe srcdoc (Tailwind CSS), native components as fallback
 - **Dashboard generation**: Gemini 2.5 Flash-Lite (Sep) via OpenRouter (~1-3s)
 
+## Authentication
+
+Auth.js (next-auth v5) with two env-gated sign-in paths; each provider
+registers only when fully configured, and the bridge remains the token/RBAC
+authority via the `/api/auth/sso` exchange:
+
+- **Cloudflare Access header trust** — set `CF_ACCESS_TEAM_DOMAIN` +
+  `CF_ACCESS_AUD` when the app is deployed behind a Cloudflare Access policy.
+  `/signin` verifies the edge-injected `Cf-Access-Jwt-Assertion` (JWKS
+  signature, issuer, audience — never header presence) and signs the user in
+  silently via `/signin/cloudflare`. One authentication, at the edge.
+  **Required:** the team domain must also be appended to the bridge's
+  `GENUS_OIDC_ISSUERS` allowlist — in production the bridge rejects any issuer
+  not listed there, and every sign-in would 403 with
+  `error=CloudflareAccessFailed`.
+- **Generic OIDC** — set `AUTH_OIDC_ISSUER` + `AUTH_OIDC_CLIENT_ID` (+ secret,
+  name) for a standard IdP redirect flow (Okta / Entra / Google / Keycloak…).
+
+Existing accounts (including the bootstrapped owner) bind to an IdP identity
+only through an operator-armed one-shot grant: `robothor auth grant-binding
+--email <email> [--issuer <idp-url>]`, then sign in once. Grants require an
+active, unbound account; re-arming replaces any pending grant; an `--issuer`
+pin confines the bind to that IdP. Local dev without either provider uses
+`GENUS_INSECURE_DEV_MODE=true` (non-production only).
+
 ## Architecture
 
 ```
