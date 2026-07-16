@@ -291,7 +291,7 @@ def revoke_binding_grant(grant_id: str, tenant_id: str | None = None) -> bool:
 
 
 def _consume_binding_grant(
-    cur, tenant_id: str, email: str, presenting_issuer: str
+    cur: Any, tenant_id: str, email: str, presenting_issuer: str
 ) -> dict[str, Any] | None:
     """Atomically spend one live grant (single UPDATE ... RETURNING, mirroring
     ``consume_active_session``): two concurrent sign-ins must not both bind.
@@ -315,7 +315,7 @@ def _consume_binding_grant(
     return dict(row) if row else None
 
 
-def _rebound_by_same_identity(cur, issuer: str, subject: str) -> dict[str, Any] | None:
+def _rebound_by_same_identity(cur: Any, issuer: str, subject: str) -> dict[str, Any] | None:
     """After losing a bind race, check whether the account is now bound to
     exactly the presenting identity — if so the sign-in should succeed."""
     cur.execute(

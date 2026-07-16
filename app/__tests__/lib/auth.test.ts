@@ -160,10 +160,11 @@ describe("dashboard OIDC and Bridge session binding", () => {
         user: { ...cfUser, cfClaims: { ...cfClaims, email: "" } },
       }),
     ).toBe(false);
+    const unverifiedClaims = { ...cfClaims, email_verified: false } as unknown as typeof cfClaims;
     expect(
       signInAllowed({
         account: cfAccount,
-        user: { ...cfUser, cfClaims: { ...cfClaims, email_verified: false } },
+        user: { ...cfUser, cfClaims: unverifiedClaims },
       }),
     ).toBe(false);
   });
