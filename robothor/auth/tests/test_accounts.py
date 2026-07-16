@@ -46,14 +46,16 @@ def test_jit_provision_creates_new_account():
 
 def test_jit_provision_never_links_privileged_account_by_email():
     # A verified email is not sufficient to bind an SSO subject to an existing
-    # account, especially an administrator account.
+    # account, especially an administrator account. (Trailing None: the lookup
+    # for an armed binding grant finds nothing.)
     existing = {
         "id": "uid-2",
         "email": "owner@example.com",
         "role": "owner",
         "status": "active",
+        "idp_issuer": None,
     }
-    conn, cur = _mock_conn([None, existing])
+    conn, cur = _mock_conn([None, existing, None])
     with patch("robothor.auth.accounts.get_connection", return_value=conn):
         with pytest.raises(accounts.AccountBindingRequiredError):
             accounts.jit_provision(
@@ -121,6 +123,148 @@ def test_jit_provision_refuses_privileged_default_role():
             display_name="Admin",
             default_role="admin",
         )
+
+
+def test_create_binding_grant_inserts_row():
+    row = {"id": "grant-1", "email": "owner@example.com", "tenant_id": "default"}
+    conn, cur = _mock_conn([row])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        out = accounts.create_binding_grant(
+            email="Owner@Example.com", ttl_seconds=900, reason="initial owner binding"
+        )
+    assert out == row
+    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+    assert "INSERT INTO sso_binding_grants" in sql
+    assert "RETURNING *" in sql
+    # email is normalized like every other accounts entry point
+    params = cur.execute.call_args_list[0][0][1]
+    assert "owner@example.com" in params
+    conn.commit.assert_called_once()
+
+
+def test_consume_binding_grant_is_single_atomic_update():
+    # Consume must be one UPDATE ... RETURNING, not read-then-write: two
+    # concurrent sign-ins must not both spend the same grant.
+    grant = {"id": "grant-1"}
+    cur = MagicMock()
+    cur.fetchone.return_value = grant
+    assert accounts._consume_binding_grant(cur, "default", "owner@example.com") == grant
+    assert cur.execute.call_count == 1
+    sql = str(cur.execute.call_args[0][0])
+    assert "UPDATE sso_binding_grants" in sql
+    assert "used_at IS NULL" in sql
+    assert "revoked_at IS NULL" in sql
+    assert "expires_at > NOW()" in sql
+    assert "RETURNING *" in sql
+
+
+def test_jit_provision_binds_existing_account_with_active_grant():
+    # idp lookup -> None; email lookup -> unbound active owner; grant consume
+    # -> grant row; account UPDATE RETURNING -> bound row.
+    existing = {
+        "id": "uid-owner",
+        "email": "owner@example.com",
+        "role": "owner",
+        "status": "active",
+        "idp_issuer": None,
+    }
+    bound = {**existing, "idp_issuer": "https://team.example", "idp_subject": "sub-9"}
+    grant = {"id": "grant-1", "email": "owner@example.com"}
+    conn, cur = _mock_conn([None, existing, grant, bound])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        out = accounts.jit_provision(
+            issuer="https://team.example",
+            subject="sub-9",
+            email="owner@example.com",
+            display_name="Owner",
+        )
+    assert out == bound
+    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+    assert "UPDATE sso_binding_grants" in sql
+    assert "UPDATE user_accounts" in sql
+    assert "SET idp_issuer" in sql.replace("\n", " ").replace("  ", " ")
+    assert "idp_issuer IS NULL" in sql  # never overwrites an existing binding
+    assert "INSERT INTO user_accounts" not in sql  # bound, not re-created
+    conn.commit.assert_called_once()  # one transaction, no partial state
+
+
+def test_jit_provision_without_grant_still_raises_binding_required():
+    existing = {
+        "id": "uid-owner",
+        "email": "owner@example.com",
+        "role": "owner",
+        "status": "active",
+        "idp_issuer": None,
+    }
+    conn, cur = _mock_conn([None, existing, None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        with pytest.raises(accounts.AccountBindingRequiredError):
+            accounts.jit_provision(
+                issuer="https://team.example",
+                subject="sub-9",
+                email="owner@example.com",
+                display_name="Owner",
+            )
+    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+    assert "UPDATE user_accounts" not in sql
+    conn.commit.assert_not_called()
+
+
+def test_jit_provision_grant_not_burned_for_inactive_account():
+    # An inactive email match fails BEFORE the grant lookup, so an armed grant
+    # survives for when the account is re-activated.
+    existing = {
+        "id": "uid-owner",
+        "email": "owner@example.com",
+        "role": "owner",
+        "status": "invited",
+        "idp_issuer": None,
+    }
+    conn, cur = _mock_conn([None, existing])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        with pytest.raises(accounts.AccountBindingRequiredError):
+            accounts.jit_provision(
+                issuer="https://team.example",
+                subject="sub-9",
+                email="owner@example.com",
+                display_name="Owner",
+            )
+    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+    assert "UPDATE sso_binding_grants" not in sql
+    conn.commit.assert_not_called()
+
+
+def test_jit_provision_grant_never_rebinds_bound_account():
+    # An account already bound to some (issuer, subject) is never re-bound via
+    # the email path — not even with a grant armed.
+    existing = {
+        "id": "uid-owner",
+        "email": "owner@example.com",
+        "role": "owner",
+        "status": "active",
+        "idp_issuer": "https://original-idp.example",
+    }
+    conn, cur = _mock_conn([None, existing])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        with pytest.raises(accounts.AccountBindingRequiredError):
+            accounts.jit_provision(
+                issuer="https://team.example",
+                subject="sub-9",
+                email="owner@example.com",
+                display_name="Owner",
+            )
+    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+    assert "UPDATE sso_binding_grants" not in sql
+    conn.commit.assert_not_called()
+
+
+def test_revoke_binding_grant_true_then_false():
+    conn, cur = _mock_conn([], rowcount=1)
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert accounts.revoke_binding_grant("grant-1") is True
+    conn2, cur2 = _mock_conn([], rowcount=0)
+    with patch("robothor.auth.accounts.get_connection", return_value=conn2):
+        assert accounts.revoke_binding_grant("grant-2") is False
 
 
 def test_consume_active_session_is_atomic():
