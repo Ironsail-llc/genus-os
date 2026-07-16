@@ -140,9 +140,7 @@ def test_create_binding_grant_inserts_row_and_supersedes_pending():
     assert "RETURNING *" in sql
     # Re-arming replaces: any still-pending grant for the email is revoked in
     # the same transaction, so at most one grant is ever live per account.
-    assert any(
-        "UPDATE sso_binding_grants" in s and "revoked_at = NOW()" in s for s in statements
-    )
+    assert any("UPDATE sso_binding_grants" in s and "revoked_at = NOW()" in s for s in statements)
     # email is normalized like every other accounts entry point
     params = cur.execute.call_args_list[0][0][1]
     assert "owner@example.com" in params
@@ -176,8 +174,7 @@ def test_consume_binding_grant_is_single_atomic_update():
     cur = MagicMock()
     cur.fetchone.return_value = grant
     assert (
-        accounts._consume_binding_grant(cur, "default", "owner@example.com", "https://idp")
-        == grant
+        accounts._consume_binding_grant(cur, "default", "owner@example.com", "https://idp") == grant
     )
     assert cur.execute.call_count == 1
     sql = str(cur.execute.call_args[0][0])
