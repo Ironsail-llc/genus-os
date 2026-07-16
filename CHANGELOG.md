@@ -1,3 +1,9 @@
+## [1.26.0](https://github.com/Ironsail-llc/genus-os/compare/v1.25.0...v1.26.0) (2026-07-16)
+
+### Features
+
+* **auth:** seamless dashboard sign-in via Cloudflare Access header trust ([#219](https://github.com/Ironsail-llc/genus-os/issues/219)) ([9aaa8ce](https://github.com/Ironsail-llc/genus-os/commit/9aaa8ce7f0bb29473f6c773f55a9d67fb6c1399d))
+
 ## [1.25.0](https://github.com/Ironsail-llc/genus-os/compare/v1.24.0...v1.25.0) (2026-07-15)
 
 ### Features
