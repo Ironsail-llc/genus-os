@@ -258,6 +258,67 @@ def per_user_sessions_mode() -> PerUserSessionsMode:
     return "off"
 
 
+TelegramRoleGatesMode = Literal["off", "observe", "enforce"]
+_VALID_TELEGRAM_ROLE_GATES_MODES = frozenset(("off", "observe", "enforce"))
+
+
+def telegram_role_gates_mode() -> TelegramRoleGatesMode:
+    """Return the Telegram owner-gate rollout mode (Task 4, Unified Identity
+    Context).
+
+    Single env var ``ROBOTHOR_TELEGRAM_ROLE_GATES``, same single-var ladder
+    shape as ``per_user_sessions_mode`` (Task 3): there's no separate
+    subsystem-enabled gate to flip independently of rollout stage. Returns
+    ``"off"`` (default — every owner-only Telegram surface (``/restart``,
+    ``/agents``, ``/steer``, the ``perm:``/``dp:``/``runctl:`` callbacks)
+    keeps its original chat_id-equality check only, identical to pre-flag
+    behavior — the hole this flag exists to close: a non-owner member
+    posting from the operator's own chat_id passes), ``"observe"`` (evaluate
+    both the legacy chat_id check and the new per-sender role check, but
+    still enforce the OLD chat_id check; log a structured divergence line
+    whenever they disagree so an operator can audit what enforce would
+    decide before flipping it), or ``"enforce"`` (role check only — chat_id
+    is irrelevant to authorization from here on).
+
+    See ``telegram.TelegramBot._check_owner_gate`` for the ladder
+    implementation and ``telegram.TelegramBot._sender_is_owner`` for the
+    per-sender role resolution.
+    """
+    raw = _resolve_raw("ROBOTHOR_TELEGRAM_ROLE_GATES", "off").strip().lower()
+    if raw in _VALID_TELEGRAM_ROLE_GATES_MODES:
+        return raw  # type: ignore[return-value]
+    return "off"
+
+
+def allow_unregistered_owner_fallback() -> bool:
+    """Escape hatch for a fresh install with no ``tenant_users`` rows yet.
+
+    ``ROBOTHOR_TELEGRAM_ROLE_GATES=enforce`` stops fabricating an owner
+    identity for an unregistered sender posting in the primary operator
+    chat (``_resolve_user``'s old ``default_chat_id`` fallback) — but a
+    brand-new instance has no registered owner row at all, so enforce would
+    otherwise lock the operator out of their own bot before they've had a
+    chance to run ``robothor user add``. Setting
+    ``ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK=1`` restores the
+    fabrication under enforce, for that bootstrap window only. Default off
+    — leave off once the owner row exists.
+    """
+    return _env_bool("ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK")
+
+
+def open_onboarding_enabled() -> bool:
+    """Return True iff unknown private Telegram senders get self-service
+    onboarding (``onboarding.start_onboarding``, creating a new tenant).
+
+    Default OFF (Task 4, Unified Identity Context, operator decision to
+    close self-provisioning): an unrecognized private sender gets a generic
+    refusal instead, and the operator is notified (rate-limited) with a
+    ``robothor user add`` hint. Gated by ``ROBOTHOR_OPEN_ONBOARDING`` — set
+    to a truthy value to restore the old open-signup flow.
+    """
+    return _env_bool("ROBOTHOR_OPEN_ONBOARDING")
+
+
 def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
     """Generic observe→alert→enforce ladder gated on two env vars.
 

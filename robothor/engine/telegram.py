@@ -68,6 +68,10 @@ MAX_MESSAGE_LENGTH = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
+# Closed-onboarding operator notification rate limit (Task 4, Unified
+# Identity Context) -- at most one alert per unregistered sender per hour.
+_ONBOARDING_NOTIFY_INTERVAL_SECONDS = 3600.0
+
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
@@ -270,11 +274,28 @@ class TelegramBot:
         self._reply_context_buffers: dict[str, dict[str, Any]] = {}
         self._user_message_id_buffers: dict[str, str] = {}
 
+        # Per-message resolved sender identity, captured once in the handler
+        # (where message.from_user.id is available) and popped alongside the
+        # buffer in _drain_and_run — threaded through as an explicit
+        # parameter rather than re-read from _chat_user_info at run_agent()
+        # execution time. Fixes the group-chat attribution race: a second
+        # sender's message landing in the async gap between message receipt
+        # and run execution used to be able to silently reattribute an
+        # in-flight run (Task 4, Unified Identity Context).
+        self._pending_sender_info: dict[str, dict[str, Any]] = {}
+
         # Max conversation history entries (user + assistant pairs)
         self._max_history = 40  # match chat.py MAX_HISTORY
 
-        # Per-chat resolved user identity (from tenant_users table)
+        # Per-chat resolved user identity (from tenant_users table). Kept for
+        # _get_tenant_id/_session_key and as the fallback source for
+        # run_agent() when no sender_info was threaded through explicitly.
         self._chat_user_info: dict[str, dict[str, Any]] = {}
+
+        # Rate limit for the closed-onboarding operator notification — at
+        # most once per Telegram sender id per hour, so a spammer retrying
+        # the refusal can't flood the operator's chat.
+        self._onboarding_notify_last: dict[str, float] = {}
 
         self._setup_handlers()
 
@@ -782,16 +803,19 @@ class TelegramBot:
         async def on_permission_decision(callback: CallbackQuery) -> None:
             from robothor.engine.permission_escalation import get_permission_manager
 
-            # Security: only the authorized chat can approve/deny escalations
+            # Security: only the authorized chat/owner can approve/deny escalations
             msg = callback.message
             if not msg or not hasattr(msg, "chat"):
                 await callback.answer("Unauthorized", show_alert=True)
                 return
-            if str(msg.chat.id) != str(self.config.default_chat_id):
+            sender_id = callback.from_user.id if callback.from_user else "unknown"
+            if not self._check_owner_gate(
+                chat_id=str(msg.chat.id), sender_id=str(sender_id), site="permission_callback"
+            ):
                 logger.warning(
                     "Unauthorized permission callback from chat_id=%s user_id=%s",
                     msg.chat.id,
-                    callback.from_user.id if callback.from_user else "unknown",
+                    sender_id,
                 )
                 await callback.answer("Unauthorized", show_alert=True)
                 return
@@ -853,11 +877,14 @@ class TelegramBot:
             if not msg or not hasattr(msg, "chat"):
                 await callback.answer("Unauthorized", show_alert=True)
                 return
-            if str(msg.chat.id) != str(self.config.default_chat_id):
+            sender_id = callback.from_user.id if callback.from_user else "unknown"
+            if not self._check_owner_gate(
+                chat_id=str(msg.chat.id), sender_id=str(sender_id), site="delphi_proposal_callback"
+            ):
                 logger.warning(
                     "Unauthorized delphi-proposal callback from chat_id=%s user_id=%s",
                     msg.chat.id,
-                    callback.from_user.id if callback.from_user else "unknown",
+                    sender_id,
                 )
                 await callback.answer("Unauthorized", show_alert=True)
                 return
@@ -1013,9 +1040,7 @@ class TelegramBot:
             # ── Resolve user identity ──
             user_info = self._resolve_user(chat_id, message)
             if user_info is None:
-                from robothor.engine.onboarding import start_onboarding
-
-                reply = start_onboarding(str(message.from_user.id))
+                reply = await self._handle_unregistered_sender(message, str(message.from_user.id))
                 await message.answer(reply)
                 return
 
@@ -1150,7 +1175,9 @@ class TelegramBot:
                 return
 
             # Execute via coalescing buffer (shared with handle_text)
-            await self._enqueue_message(chat_id, session_key, session, user_text)
+            await self._enqueue_message(
+                chat_id, session_key, session, user_text, sender_info=user_info
+            )
 
         # ── Interactive text messages ──
 
@@ -1185,15 +1212,14 @@ class TelegramBot:
             )
 
             # ── Resolve user identity ──
-            from robothor.engine.onboarding import (
-                is_onboarding,
-                process_onboarding,
-                start_onboarding,
-            )
+            from robothor.engine.onboarding import is_onboarding, process_onboarding
 
             telegram_user_id = str(message.from_user.id)
 
-            # Handle in-progress onboarding first
+            # Handle in-progress onboarding first (only reachable when
+            # ROBOTHOR_OPEN_ONBOARDING started a session for this sender —
+            # the closed-onboarding refusal path below never calls
+            # start_onboarding, so this dict stays empty by default).
             if is_onboarding(telegram_user_id):
                 reply = process_onboarding(telegram_user_id, user_text)
                 if reply:
@@ -1205,8 +1231,9 @@ class TelegramBot:
 
             user_info = self._resolve_user(chat_id, message)
             if user_info is None:
-                # Unregistered private chat user — start onboarding
-                reply = start_onboarding(telegram_user_id)
+                # Unregistered private chat user — closed-onboarding refusal
+                # (or legacy self-service onboarding under the escape flag).
+                reply = await self._handle_unregistered_sender(message, telegram_user_id)
                 await message.answer(reply)
                 return
 
@@ -1258,7 +1285,9 @@ class TelegramBot:
                 return
 
             # Execute via coalescing buffer (shared with handle_file)
-            await self._enqueue_message(chat_id, session_key, session, user_text)
+            await self._enqueue_message(
+                chat_id, session_key, session, user_text, sender_info=user_info
+            )
 
         @self.dp.message_reaction()
         async def on_message_reaction(event: Any) -> None:
@@ -1322,9 +1351,26 @@ class TelegramBot:
         session_key: str,
         session: Any,
         user_text: str,
+        *,
+        sender_info: dict[str, Any] | None = None,
     ) -> None:
-        """Buffer a message and schedule a drain if none is pending."""
+        """Buffer a message and schedule a drain if none is pending.
+
+        ``sender_info`` is the dict ``_resolve_user`` returned for THIS
+        specific incoming message, captured synchronously in the handler
+        (where ``message.from_user.id`` is available). It's stashed here —
+        same last-write-wins pattern as ``_reply_context_buffers`` /
+        ``_user_message_id_buffers`` — and popped in ``_drain_and_run``
+        atomically alongside the text buffer, then threaded through to
+        ``_run_interactive`` as an explicit parameter. This is what fixes
+        the group-chat attribution race: run_agent() no longer re-reads the
+        shared, chat_id-keyed ``_chat_user_info`` cache at execution time,
+        where a second sender's message arriving in the async gap could
+        silently overwrite it before this run gets to read it.
+        """
         self._message_buffers.setdefault(chat_id, []).append(user_text)
+        if sender_info is not None:
+            self._pending_sender_info[chat_id] = sender_info
 
         # If a run is already active, the message waits — the run's finally
         # block will kick off a new drain when it finishes.
@@ -1360,6 +1406,11 @@ class TelegramBot:
         combined_text = "\n".join(buf)
         reply_ctx = self._reply_context_buffers.pop(chat_id, None)
         user_message_id = self._user_message_id_buffers.pop(chat_id, None)
+        # Popped in the same synchronous stretch as `buf` above — no await
+        # in between — so this is exactly the sender info pending at the
+        # moment this batch was claimed, immune to a later message's
+        # overwrite of _pending_sender_info/_chat_user_info.
+        sender_info = self._pending_sender_info.pop(chat_id, None)
         await self._run_interactive(
             chat_id,
             session_key,
@@ -1367,6 +1418,7 @@ class TelegramBot:
             combined_text,
             reply_ctx=reply_ctx,
             user_message_id=user_message_id,
+            sender_info=sender_info,
         )
 
     async def _run_interactive(
@@ -1378,6 +1430,7 @@ class TelegramBot:
         *,
         reply_ctx: dict[str, Any] | None = None,
         user_message_id: str | None = None,
+        sender_info: dict[str, Any] | None = None,
     ) -> None:
         """Execute an interactive agent run with streaming, typing indicator, and history management.
 
@@ -1385,6 +1438,13 @@ class TelegramBot:
         interactive Telegram messages. ``reply_ctx`` carries the resolved
         channel-bus reply (when the user tapped "Reply to" on a surfaced
         message) so we can annotate the persisted user turn.
+
+        ``sender_info`` is the per-message identity dict threaded through
+        from ``_drain_and_run`` (Task 4) — when given, ``run_agent()`` uses
+        it verbatim instead of re-reading the shared ``_chat_user_info``
+        cache. When omitted (e.g. a caller invoking this directly, bypassing
+        the coalescing buffer), the legacy chat_id-keyed cache lookup is
+        used — this keeps flag-off/no-threading callers byte-identical.
         """
         # ── Idle timeout: compress stale sessions ──
         now = time.monotonic()
@@ -1506,13 +1566,18 @@ class TelegramBot:
                     history = list(session.history)
 
                 # Build trigger_detail with sender identity for warmup
-                _user = self._chat_user_info.get(chat_id)
+                # Task 4: prefer the identity threaded through explicitly for
+                # THIS message (captured in the handler, before any async
+                # gap) over the shared, chat_id-keyed cache — a caller that
+                # bypasses the coalescing buffer (direct _run_interactive
+                # call, no sender_info) falls back to the cache unchanged.
+                _user = sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
                 _sender = _user["display_name"] if _user else ""
                 _detail = f"chat:{chat_id}"
                 if _sender:
                     _safe = _sender.replace("|", "")
                     _detail += f"|sender:{_safe}"
-                _tenant = self._get_tenant_id(chat_id)
+                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(chat_id)
 
                 # Unified identity context (robothor.identity) — built from the
                 # same cached lookup_user()/fallback dict as _sender/user_id
@@ -1522,6 +1587,14 @@ class TelegramBot:
                 # The legacy `|sender:` trigger_detail suffix stays for now
                 # (removed in a later phase) — execute() prefers this explicit
                 # identity over that parse.
+                #
+                # `identifier` is the sender's Telegram user id when known
+                # (threaded via `_user["telegram_user_id"]`, set by
+                # `_resolve_user`) — not chat_id, which conflates every
+                # sender in a group chat into one identity (Task 4 carry-note
+                # from Task 2). Falls back to chat_id only when the
+                # telegram_user_id wasn't captured (e.g. a manually-seeded
+                # _chat_user_info entry, or no from_user on the message).
                 _identity = None
                 if _user:
                     from robothor.identity import IdentityContext
@@ -1529,7 +1602,7 @@ class TelegramBot:
                     _identity = IdentityContext(
                         tenant_id=_user.get("tenant_id") or _tenant,
                         channel="telegram",
-                        identifier=chat_id,
+                        identifier=str(_user.get("telegram_user_id") or chat_id),
                         verified="user_id" in _user,
                         display_name=_user.get("display_name") or "",
                         role=_user.get("role") or "",
@@ -2413,11 +2486,35 @@ class TelegramBot:
         """Resolve the Telegram sender to a tenant user.
 
         Returns a dict with tenant_id, display_name, role — or None if the
-        user is unregistered and should be routed to onboarding.
+        user is unregistered and should be routed to the closed-onboarding
+        refusal (or, when ``ROBOTHOR_OPEN_ONBOARDING`` is set, the legacy
+        self-service onboarding flow).
 
         For the primary operator chat (default_chat_id), falls back to
-        operator_name from config if tenant_users has no entry.
+        operator_name from config if tenant_users has no entry — this
+        fabrication is gated by ``ROBOTHOR_TELEGRAM_ROLE_GATES`` (Task 4,
+        Unified Identity Context):
+
+        - "off" (default): fabricates unconditionally, byte-identical to
+          pre-Task-4 behavior.
+        - "observe": still fabricates, but logs loudly (warning level) each
+          time, so the operator can see how often an unregistered sender is
+          riding the primary-chat fallback before enforce closes it.
+        - "enforce": no fabrication — an unregistered default-chat sender is
+          treated like any other unknown sender (group fallback below, or
+          the closed-onboarding path for a private chat) — UNLESS
+          ``ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK=1`` (escape hatch for
+          a fresh install with no owner row yet).
+
+        Similarly, an unregistered group-chat sender's fabricated role is
+        "user" only under "off" (byte-identical); "observe"/"enforce" use
+        "guest" instead — role_permissions is fail-closed (no guest rows
+        exist yet), so this is a safe default-off tightening on its own.
         """
+        from robothor.engine.feature_flags import (
+            allow_unregistered_owner_fallback,
+            telegram_role_gates_mode,
+        )
         from robothor.engine.users import lookup_user
 
         if not message.from_user:
@@ -2431,36 +2528,183 @@ class TelegramBot:
         user_info = lookup_user(telegram_user_id, tenant_id=self.config.tenant_id)
 
         if user_info is not None:
+            user_info = {**user_info, "telegram_user_id": telegram_user_id}
             self._chat_user_info[chat_id] = user_info
             return user_info
 
+        mode = telegram_role_gates_mode()
+
         # Unregistered user — primary operator gets a fallback
-        if chat_id == self.config.default_chat_id:
+        if chat_id == self.config.default_chat_id and (
+            mode != "enforce" or allow_unregistered_owner_fallback()
+        ):
+            if mode == "observe":
+                logger.warning(
+                    "telegram_role_gates: fabricating owner identity for unregistered "
+                    "default-chat sender telegram_id=%s tenant=%s — register them with "
+                    "`robothor user add` to stop seeing this",
+                    telegram_user_id,
+                    self.config.tenant_id,
+                )
             fallback = {
                 "tenant_id": self.config.tenant_id,
                 "display_name": self.config.operator_name or message.from_user.first_name or "",
                 "role": "owner",
+                "telegram_user_id": telegram_user_id,
             }
             self._chat_user_info[chat_id] = fallback
             return fallback
 
-        # Unregistered user in a group chat — use default tenant
+        # Unregistered user in a group chat — use default tenant. Role is
+        # "guest" once the flag leaves "off" (Phase 5 seeds actual
+        # role_permissions rows for it; fail-closed until then means zero
+        # tool grants, not a privilege increase).
         if message.chat.type != "private":
             fallback = {
                 "tenant_id": self.config.tenant_id,
                 "display_name": message.from_user.first_name or "",
-                "role": "user",
+                "role": "user" if mode == "off" else "guest",
+                "telegram_user_id": telegram_user_id,
             }
             self._chat_user_info[chat_id] = fallback
             return fallback
 
-        # Unregistered user in private chat — route to onboarding
+        # Unregistered user in private chat — route to closed-onboarding
+        # refusal (or legacy self-service onboarding under the escape flag).
         return None
+
+    def _sender_is_owner(self, telegram_user_id: str) -> bool:
+        """Resolve ``telegram_user_id`` directly (independent of the chat it
+        posted from) and report whether that sender's registered role is
+        "owner".
+
+        Used by ``_check_owner_gate`` under
+        ``ROBOTHOR_TELEGRAM_ROLE_GATES=observe|enforce`` so a non-owner
+        posting from the operator's own chat_id — or the owner posting from
+        a different chat — is judged by their own registered role, not by
+        which chat_id the message arrived on.
+        """
+        from robothor.engine.users import lookup_user
+
+        info = lookup_user(telegram_user_id, tenant_id=self.config.tenant_id)
+        return bool(info and info.get("role") == "owner")
+
+    def _check_owner_gate(self, *, chat_id: str, sender_id: str, site: str) -> bool:
+        """Authorize an owner-only Telegram surface, per the
+        ``ROBOTHOR_TELEGRAM_ROLE_GATES`` rollout ladder (Task 4, Unified
+        Identity Context).
+
+        Every owner-only command/callback (``/restart``, ``/agents``,
+        ``/steer``, the ``perm:``/``dp:``/``runctl:`` callbacks) used to gate
+        solely on ``chat_id == default_chat_id`` — which authorizes anyone
+        posting in the operator's chat, not just the operator. This is the
+        fix:
+
+        - "off" (default): the legacy chat_id-equality check only —
+          byte-identical to pre-flag behavior.
+        - "observe": evaluates BOTH checks but still enforces the OLD
+          (chat_id) check; logs a structured
+          ``telegram_role_gates: divergence`` line whenever they disagree,
+          so an operator can audit what enforce would decide before
+          flipping it.
+        - "enforce": the role check only — chat_id is irrelevant to
+          authorization from here on.
+        """
+        from robothor.engine.feature_flags import telegram_role_gates_mode
+
+        chat_ok = str(chat_id) == str(self.config.default_chat_id)
+        mode = telegram_role_gates_mode()
+        if mode == "off":
+            return chat_ok
+
+        role_ok = self._sender_is_owner(str(sender_id))
+        if mode == "observe":
+            if chat_ok != role_ok:
+                logger.warning(
+                    "telegram_role_gates: divergence site=%s chat_ok=%s role_ok=%s sender=%s",
+                    site,
+                    chat_ok,
+                    role_ok,
+                    sender_id,
+                )
+            return chat_ok
+
+        return role_ok
 
     def _get_tenant_id(self, chat_id: str) -> str:
         """Get the resolved tenant_id for a chat, falling back to config."""
         info = self._chat_user_info.get(chat_id)
         return info["tenant_id"] if info else self.config.tenant_id
+
+    async def _handle_unregistered_sender(self, message: Message, telegram_user_id: str) -> str:
+        """Route an unregistered private-chat sender to onboarding or refusal.
+
+        Gated by ``feature_flags.open_onboarding_enabled()`` — default OFF
+        (Task 4, Unified Identity Context: the operator decision to close
+        self-provisioning). When open, delegates to the legacy
+        ``onboarding.start_onboarding`` flow (any unknown private sender can
+        create their own tenant). When closed (default), returns a generic
+        refusal — no operator name, safe to ship as platform code — and
+        notifies the operator (rate-limited to once per sender per hour)
+        with a registration hint.
+        """
+        from robothor.engine.feature_flags import open_onboarding_enabled
+
+        if open_onboarding_enabled():
+            from robothor.engine.onboarding import start_onboarding
+
+            return start_onboarding(telegram_user_id)
+
+        await self._notify_operator_of_unregistered_sender(message, telegram_user_id)
+        return (
+            "This bot is not open for self-registration. "
+            "If you believe you should have access, please contact the workspace operator directly."
+        )
+
+    async def _notify_operator_of_unregistered_sender(
+        self, message: Message, telegram_user_id: str
+    ) -> None:
+        """Best-effort, rate-limited operator alert for a refused unregistered sender.
+
+        At most once per Telegram sender id per hour (in-process dict) — a
+        spammer retrying the closed-onboarding refusal must not be able to
+        flood the operator's chat with one notification per message. Sends
+        via ``self.send_message`` — the same wrapper ``delivery.py``
+        registers as the platform's Telegram sender — targeting
+        ``config.default_chat_id`` (the operator's primary chat).
+        """
+        now = time.monotonic()
+        last = self._onboarding_notify_last.get(telegram_user_id, 0.0)
+        if now - last < _ONBOARDING_NOTIFY_INTERVAL_SECONDS:
+            return
+        self._onboarding_notify_last[telegram_user_id] = now
+
+        try:
+            sender = message.from_user
+            username = getattr(sender, "username", None) if sender else None
+            preview = (getattr(message, "text", None) or getattr(message, "caption", None) or "")[
+                :100
+            ]
+            hint = (
+                f'robothor user add --tenant {self.config.tenant_id} --name "<name>" '
+                f"--role member --telegram-id {telegram_user_id}"
+            )
+            lines = [
+                "\U0001f6ab Unregistered sender messaged the bot (onboarding closed):",
+                f"Telegram id: {telegram_user_id}",
+                f"Username: @{username}" if username else "Username: (none)",
+                f"Message: {preview}" if preview else "Message: (none)",
+                "",
+                "To register them:",
+                hint,
+            ]
+            await self.send_message(self.config.default_chat_id, "\n".join(lines))
+        except Exception:
+            logger.warning(
+                "Failed to notify operator of unregistered sender %s",
+                telegram_user_id,
+                exc_info=True,
+            )
 
     async def _handle_restart_command(self, message: Message, unit_name: str) -> None:
         """Acknowledge in chat, then detach a `systemctl restart` via systemd-run.
@@ -2479,11 +2723,14 @@ class TelegramBot:
         import subprocess
 
         chat_id = str(message.chat.id)
-        if chat_id != str(self.config.default_chat_id):
+        sender_id = message.from_user.id if message.from_user else "unknown"
+        if not self._check_owner_gate(
+            chat_id=chat_id, sender_id=str(sender_id), site="restart_command"
+        ):
             logger.warning(
                 "Unauthorized /restart attempt from chat_id=%s user_id=%s",
                 chat_id,
-                message.from_user.id if message.from_user else "unknown",
+                sender_id,
             )
             await message.answer("Unauthorized.")
             return
@@ -2834,11 +3081,14 @@ class TelegramBot:
         GET /api/runs/active).
         """
         chat_id = str(message.chat.id)
-        if chat_id != str(self.config.default_chat_id):
+        sender_id = message.from_user.id if message.from_user else "unknown"
+        if not self._check_owner_gate(
+            chat_id=chat_id, sender_id=str(sender_id), site="agents_command"
+        ):
             logger.warning(
                 "Unauthorized /agents attempt from chat_id=%s user_id=%s",
                 chat_id,
-                message.from_user.id if message.from_user else "unknown",
+                sender_id,
             )
             await message.answer("Unauthorized.")
             return
@@ -2876,11 +3126,14 @@ class TelegramBot:
         if not msg or not hasattr(msg, "chat"):
             await callback.answer("Unauthorized", show_alert=True)
             return
-        if str(msg.chat.id) != str(self.config.default_chat_id):
+        sender_id = callback.from_user.id if callback.from_user else "unknown"
+        if not self._check_owner_gate(
+            chat_id=str(msg.chat.id), sender_id=str(sender_id), site="runctl_callback"
+        ):
             logger.warning(
                 "Unauthorized runctl callback from chat_id=%s user_id=%s",
                 msg.chat.id,
-                callback.from_user.id if callback.from_user else "unknown",
+                sender_id,
             )
             await callback.answer("Unauthorized", show_alert=True)
             return
@@ -2923,11 +3176,14 @@ class TelegramBot:
         targeting the single active run (only when exactly one is active).
         """
         chat_id = str(message.chat.id)
-        if chat_id != str(self.config.default_chat_id):
+        sender_id = message.from_user.id if message.from_user else "unknown"
+        if not self._check_owner_gate(
+            chat_id=chat_id, sender_id=str(sender_id), site="steer_command"
+        ):
             logger.warning(
                 "Unauthorized /steer attempt from chat_id=%s user_id=%s",
                 chat_id,
-                message.from_user.id if message.from_user else "unknown",
+                sender_id,
             )
             await message.answer("Unauthorized.")
             return

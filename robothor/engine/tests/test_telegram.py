@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -683,8 +686,11 @@ class TestUserResolution:
         with patch("robothor.engine.users.lookup_user", return_value=user_info):
             result = bot._resolve_user("99999", message)
 
-        assert result == user_info
-        assert bot._chat_user_info["99999"] == user_info
+        # Task 4: the sender's Telegram user id is attached so downstream
+        # IdentityContext construction can use it as `identifier` instead of
+        # chat_id — everything else from lookup_user() passes through as-is.
+        assert result == {**user_info, "telegram_user_id": "99999"}
+        assert bot._chat_user_info["99999"] == result
 
     def test_unregistered_primary_chat_fallback(self, bot):
         """Unregistered user on primary chat gets operator_name fallback."""
@@ -1388,3 +1394,868 @@ class TestPermissionCallbacks:
 
         callback.answer.assert_called_once_with("Approved")
         assert mgr._pending == {}
+
+
+# ── Task 4 — Telegram hardening: role gates, per-sender identity, no ──
+# ── fabricated owner, closed onboarding ────────────────────────────────
+
+
+def _get_registered_handler(bot: Any, handler_name: str, registrar: str = "message") -> Any:
+    """Recover a raw handler coroutine registered via ``@self.dp.<registrar>(...)``.
+
+    ``Dispatcher`` is mocked in the ``bot`` fixture, so every
+    ``self.dp.<registrar>(some_filter)`` call returns the same MagicMock
+    regardless of the filter it was applied with; each application of that
+    MagicMock as a decorator records the wrapped function in
+    ``call_args_list``, in registration order. Find the one whose
+    ``__name__`` matches — same technique as
+    ``TestPermissionCallbacks._get_handler`` above.
+    """
+    target = getattr(bot.dp, registrar)
+    for call in target.return_value.call_args_list:
+        func = call.args[0]
+        if func.__name__ == handler_name:
+            return func
+    raise AssertionError(f"{handler_name!r} was not registered via dp.{registrar}")
+
+
+class TestCheckOwnerGate:
+    """Unit coverage for the shared owner-gate ladder helper."""
+
+    def test_off_mode_uses_chat_check_only_ignores_role(self, bot):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "owner"}):
+                assert bot._check_owner_gate(chat_id="99999", sender_id="1", site="x") is False
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                assert bot._check_owner_gate(chat_id="12345", sender_id="1", site="x") is True
+
+    def test_observe_mode_still_returns_old_chat_check(self, bot):
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "observe"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "owner"}):
+                # chat_id mismatched but role is owner — observe still enforces
+                # the OLD (chat) check, so this must be refused.
+                assert bot._check_owner_gate(chat_id="99999", sender_id="1", site="x") is False
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "member"}):
+                # chat_id matches even though role is not owner — observe
+                # still allows it (old behavior wins).
+                assert bot._check_owner_gate(chat_id="12345", sender_id="2", site="x") is True
+
+    def test_observe_mode_logs_structured_divergence(self, bot, caplog):
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "observe"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "member"}):
+                with caplog.at_level(logging.WARNING):
+                    bot._check_owner_gate(chat_id="12345", sender_id="2", site="my_site")
+        records = [r.message for r in caplog.records if "telegram_role_gates" in r.message]
+        assert any("divergence" in m and "site=my_site" in m for m in records)
+
+    def test_enforce_mode_uses_role_only(self, bot):
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "owner"}):
+                assert bot._check_owner_gate(chat_id="99999", sender_id="1", site="x") is True
+            with patch("robothor.engine.users.lookup_user", return_value={"role": "member"}):
+                assert bot._check_owner_gate(chat_id="12345", sender_id="2", site="x") is False
+
+
+class TestRestartCommandRoleGate:
+    @pytest.mark.asyncio
+    async def test_off_mode_wrong_chat_refused(self, bot):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(self, bot):
+        """The hole this flag closes: a non-owner posting from the
+        operator's own chat_id must no longer pass."""
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 2
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_passes_gate(self, bot):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                with patch("shutil.which", return_value=None):
+                    await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        # Gate passed — got past "Unauthorized." to the next real check.
+        msg.answer.assert_called_once_with("systemd-run not available on this host.")
+
+
+class TestDelphiProposalCallbackGate:
+    """Gate coverage for the ``dp:`` (Delphi proposal) callback. HMAC/
+    subprocess dispatch is exercised by delphi_apply_proposal tests — this
+    only covers the authorization check."""
+
+    @staticmethod
+    def _get_handler(bot):
+        for call in bot.dp.callback_query.return_value.call_args_list:
+            func = call.args[0]
+            if func.__name__ == "on_delphi_proposal_decision":
+                return func
+        raise AssertionError("on_delphi_proposal_decision was not registered")
+
+    @staticmethod
+    def _make_callback(*, chat_id: str, user_id: int, data: Any = None) -> MagicMock:
+        callback = MagicMock()
+        callback.data = data
+        callback.message = MagicMock()
+        callback.message.chat.id = int(chat_id)
+        callback.from_user = MagicMock(id=user_id)
+        callback.answer = AsyncMock()
+        return callback
+
+    @pytest.mark.asyncio
+    async def test_off_mode_wrong_chat_refused(self, bot):
+        with patch.dict(os.environ, {}, clear=True):
+            handler = self._get_handler(bot)
+            callback = self._make_callback(chat_id="99999", user_id=1)
+            await handler(callback)
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(self, bot):
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                handler = self._get_handler(bot)
+                callback = self._make_callback(chat_id="12345", user_id=2)
+                await handler(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_passes_gate(self, bot):
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                handler = self._get_handler(bot)
+                callback = self._make_callback(chat_id="99999", user_id=1, data=None)
+                await handler(callback)
+
+        # Passed the gate — failed on the next check (missing callback.data)
+        # instead of on authorization.
+        callback.answer.assert_called_once_with("Invalid callback data")
+
+
+class TestAgentsCommandRoleGate:
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(
+        self, bot, _clear_session_registry
+    ):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 2
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_allowed(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                await bot._handle_agents_command(msg)
+
+        msg.answer.assert_called_once()
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+
+class TestRunctlCallbackRoleGate:
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(
+        self, bot, _clear_session_registry
+    ):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:i:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.from_user = MagicMock(id=2)
+        callback.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await bot._handle_runctl_callback(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+        assert s._interrupt_requested is False
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_allowed(self, bot, _clear_session_registry):
+        from robothor.engine import session_registry
+        from robothor.engine.session import AgentSession
+
+        s = AgentSession(agent_id="agent-a")
+        session_registry.register(s)
+
+        callback = MagicMock()
+        callback.data = f"runctl:i:{s.run_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 99999
+        callback.from_user = MagicMock(id=1)
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                await bot._handle_runctl_callback(callback)
+
+        assert s._interrupt_requested is True
+        callback.answer.assert_called_once()
+
+
+class TestSteerCommandRoleGate:
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(
+        self, bot, _clear_session_registry
+    ):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.text = "/steer x"
+        msg.from_user.id = 2
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await bot._handle_steer_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_allowed(self, bot, _clear_session_registry):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.text = "/steer x"
+        msg.from_user.id = 1
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                await bot._handle_steer_command(msg)
+
+        # Gate passed — got past "Unauthorized." to the real steer logic.
+        assert "No active runs" in msg.answer.call_args.args[0]
+
+
+class TestPermissionCallbackRoleGate:
+    """Enforce-mode coverage for the ``perm:`` gate (Task 4) — Task 3-era
+    ``TestPermissionCallbacks`` above covers the off-mode/chat_id behavior.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self):
+        from robothor.engine import permission_escalation as pe_mod
+
+        pe_mod._escalation_manager = None
+        yield
+        pe_mod._escalation_manager = None
+
+    @staticmethod
+    def _get_handler(bot):
+        for call in bot.dp.callback_query.return_value.call_args_list:
+            func = call.args[0]
+            if func.__name__ == "on_permission_decision":
+                return func
+        raise AssertionError("on_permission_decision was not registered")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="test-agent",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "ls"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=0.15,
+            )
+        )
+        await asyncio.sleep(0)
+        request_id = next(iter(mgr._pending))
+
+        callback = MagicMock()
+        callback.data = f"perm:approve:{request_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 12345
+        callback.from_user = MagicMock(id=2)
+        callback.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await handler(callback)
+
+        callback.answer.assert_called_once_with("Unauthorized", show_alert=True)
+        assert request_id in mgr._pending
+        assert await task is False
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_resolves(self, bot):
+        mgr = init_permission_manager(bot, "12345")
+        handler = self._get_handler(bot)
+
+        task = asyncio.create_task(
+            mgr.request_approval(
+                agent_id="test-agent",
+                run_id="run-1",
+                tool_name="exec_command",
+                tool_args={"command": "ls"},
+                guardrail_name="destructive_write",
+                reason="test",
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.sleep(0)
+        request_id = next(iter(mgr._pending))
+
+        callback = MagicMock()
+        callback.data = f"perm:approve:{request_id}"
+        callback.message = MagicMock()
+        callback.message.chat.id = 99999
+        callback.from_user = MagicMock(id=1)
+        callback.message.edit_reply_markup = AsyncMock()
+        callback.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                await handler(callback)
+
+        assert await task is True
+        callback.answer.assert_called_once_with("Approved")
+
+
+class TestOwnerFabricationFlag:
+    """Task 4 — under ``ROBOTHOR_TELEGRAM_ROLE_GATES``, ``_resolve_user``
+    stops silently fabricating ``role: owner`` for an unregistered sender in
+    the primary operator chat once the flag is promoted to enforce."""
+
+    def test_off_mode_fabricates_owner_unconditionally(self, bot):
+        message = MagicMock()
+        message.from_user.id = 55
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "private"
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("12345", message)
+
+        assert result is not None
+        assert result["role"] == "owner"
+
+    def test_observe_mode_still_fabricates_but_logs_loudly(self, bot, caplog):
+        message = MagicMock()
+        message.from_user.id = 55
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "private"
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "observe"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                with caplog.at_level(logging.WARNING):
+                    result = bot._resolve_user("12345", message)
+
+        assert result is not None
+        assert result["role"] == "owner"
+        assert any(
+            "fabricating owner identity" in r.message
+            for r in caplog.records
+            if "telegram_role_gates" in r.message
+        )
+
+    def test_enforce_mode_no_fabrication_without_escape_hatch(self, bot):
+        message = MagicMock()
+        message.from_user.id = 55
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "private"
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("12345", message)
+
+        # Private chat, unregistered, no fabrication -> None (closed-onboarding path)
+        assert result is None
+
+    def test_enforce_mode_group_chat_falls_back_to_guest_not_owner(self, bot):
+        message = MagicMock()
+        message.from_user.id = 55
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "group"
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("12345", message)
+
+        assert result is not None
+        assert result["role"] == "guest"
+
+    def test_enforce_mode_with_escape_hatch_still_fabricates(self, bot):
+        message = MagicMock()
+        message.from_user.id = 55
+        message.from_user.first_name = "Phil"
+        message.chat.id = 12345
+        message.chat.type = "private"
+
+        with patch.dict(
+            os.environ,
+            {
+                "ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce",
+                "ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK": "1",
+            },
+            clear=True,
+        ):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("12345", message)
+
+        assert result is not None
+        assert result["role"] == "owner"
+
+
+class TestGroupUnknownSenderRole:
+    """Task 4 — group unknown-sender fabrication changes role "user" ->
+    "guest" once the flag leaves "off". role_permissions is fail-closed
+    (no guest rows -> zero tool grants), so this alone is a safe default-off
+    change; Phase 5 seeds the actual guest permission rows."""
+
+    def test_off_mode_keeps_legacy_user_role(self, bot):
+        message = MagicMock()
+        message.from_user.id = 77777
+        message.from_user.first_name = "Bob"
+        message.chat.id = 55555
+        message.chat.type = "group"
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("55555", message)
+
+        assert result["role"] == "user"
+
+    def test_observe_mode_uses_guest_role(self, bot):
+        message = MagicMock()
+        message.from_user.id = 77777
+        message.from_user.first_name = "Bob"
+        message.chat.id = 55555
+        message.chat.type = "group"
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "observe"}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                result = bot._resolve_user("55555", message)
+
+        assert result["role"] == "guest"
+
+    @pytest.mark.asyncio
+    async def test_guest_identity_is_unverified(self, bot):
+        """The built IdentityContext for a fabricated guest carries
+        verified=False — no tenant_users row backs it."""
+        bot._chat_user_info["55555"] = {
+            "tenant_id": "test-tenant",
+            "display_name": "Bob",
+            "role": "guest",
+        }
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        await bot._run_interactive("55555", session_key, session, "hi")
+        task = bot._active_tasks.get("55555")
+        if task:
+            await task
+
+        identity = bot.runner.execute.call_args.kwargs.get("identity")
+        assert identity is not None
+        assert identity.verified is False
+        assert identity.role == "guest"
+
+
+class TestResolveUserAttachesTelegramUserId:
+    def test_registered_user_gets_telegram_user_id_attached(self, bot):
+        message = MagicMock()
+        message.from_user.id = 42424
+        message.chat.id = 12345
+        message.chat.type = "private"
+        user_info = {"tenant_id": "acme", "display_name": "Alice", "role": "owner"}
+
+        with patch("robothor.engine.users.lookup_user", return_value=user_info):
+            result = bot._resolve_user("12345", message)
+
+        assert result["telegram_user_id"] == "42424"
+
+    @pytest.mark.asyncio
+    async def test_identity_identifier_uses_telegram_user_id_not_chat_id(self, bot):
+        bot._chat_user_info["12345"] = {
+            "tenant_id": "test-tenant",
+            "display_name": "Alice",
+            "role": "owner",
+            "user_id": "tu-1",
+            "telegram_user_id": "999888",
+        }
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("12345", session_key, session, "test message")
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        identity = bot.runner.execute.call_args.kwargs.get("identity")
+        assert identity.identifier == "999888"
+
+
+class TestPerSenderIdentityThreading:
+    """Task 4 — the group-chat attribution race. Identity is resolved once
+    per incoming message (in the handler, where message.from_user.id is
+    available) and threaded through _enqueue_message -> _drain_and_run ->
+    _run_interactive -> run_agent as an explicit parameter, instead of
+    being re-read from the shared, chat_id-keyed ``_chat_user_info`` cache
+    at run_agent() execution time — a later-arriving sender's message can
+    overwrite that cache before an earlier sender's run gets to read it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_uses_threaded_identity_not_a_cache_read_at_execution_time(self, bot):
+        """Regression: previously run_agent() read
+        self._chat_user_info[chat_id] at execution time — inside a task
+        scheduled with asyncio.create_task, which only actually runs after
+        _run_interactive's own "Thinking..." send has already returned. A
+        second sender's message resolving (and overwriting the shared
+        per-chat cache) in that exact gap would silently reattribute the
+        in-flight run to the wrong sender. Now the identity is captured up
+        front and passed as a plain parameter, immune to a later overwrite
+        of the shared cache — this test mutates the cache from inside the
+        "Thinking..." send mock, i.e. strictly before run_agent()'s task
+        body (and its old chat_user_info read) would even begin."""
+        alice = {
+            "tenant_id": "t-alpha",
+            "display_name": "Alice",
+            "role": "member",
+            "user_id": "tu-1",
+        }
+        bob = {
+            "tenant_id": "t-alpha",
+            "display_name": "Bob",
+            "role": "member",
+            "user_id": "tu-2",
+        }
+
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        captured: dict[str, Any] = {}
+        send_calls = {"n": 0}
+
+        async def fake_bot_send_message(**_kwargs):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                # First call is the "Thinking..." message, sent by
+                # _run_interactive itself before run_agent's task is even
+                # created. Simulate Bob's message resolving and clobbering
+                # the shared per-chat cache right here.
+                bot._chat_user_info["55555"] = bob
+            return MagicMock(message_id=send_calls["n"])
+
+        async def fake_execute(**kwargs):
+            captured["identity"] = kwargs.get("identity")
+            return MagicMock(output_text="ok", error_message=None)
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot.bot.send_message = AsyncMock(side_effect=fake_bot_send_message)
+
+        await bot._run_interactive(
+            "55555", session_key, session, "hi from alice", sender_info=alice
+        )
+        task = bot._active_tasks.get("55555")
+        if task:
+            await task
+
+        identity = captured["identity"]
+        assert identity is not None
+        assert identity.display_name == "Alice"
+        assert identity.tenant_user_id == "tu-1"
+
+    @pytest.mark.asyncio
+    async def test_two_sequential_senders_each_attributed_correctly(self, bot):
+        """Two different senders in the same group chat, each threaded
+        through their own call, must each get their own run attributed to
+        their own identity — not to whichever sender resolved last."""
+        alice = {
+            "tenant_id": "t-alpha",
+            "display_name": "Alice",
+            "role": "member",
+            "user_id": "tu-1",
+        }
+        bob = {"tenant_id": "t-alpha", "display_name": "Bob", "role": "member", "user_id": "tu-2"}
+
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        captured: list[Any] = []
+
+        async def fake_execute(**kwargs):
+            captured.append(kwargs.get("identity"))
+            return MagicMock(output_text="ok", error_message=None)
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        await bot._run_interactive("55555", session_key, session, "hi alice", sender_info=alice)
+        t1 = bot._active_tasks.get("55555")
+        if t1:
+            await t1
+
+        await bot._run_interactive("55555", session_key, session, "hi bob", sender_info=bob)
+        t2 = bot._active_tasks.get("55555")
+        if t2:
+            await t2
+
+        assert captured[0].display_name == "Alice"
+        assert captured[0].tenant_user_id == "tu-1"
+        assert captured[1].display_name == "Bob"
+        assert captured[1].tenant_user_id == "tu-2"
+
+    @pytest.mark.asyncio
+    async def test_sender_info_falls_back_to_chat_user_info_when_not_threaded(self, bot):
+        """Backward compat: a caller that doesn't pass sender_info (e.g. a
+        direct _run_interactive call, as the rest of this test suite does)
+        still gets identity from the legacy _chat_user_info[chat_id]
+        cache — flag-off byte-identical behavior for the existing surface.
+        """
+        bot._chat_user_info["12345"] = {
+            "tenant_id": "test-tenant",
+            "display_name": "Alice",
+            "role": "owner",
+            "user_id": "tu-1",
+        }
+        session_key = bot._session_key("12345")
+        session = get_shared_session(session_key)
+
+        bot.runner.execute = AsyncMock(return_value=MagicMock(output_text="hi", error_message=None))
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=42))
+
+        await bot._run_interactive("12345", session_key, session, "test message")
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
+
+        identity = bot.runner.execute.call_args.kwargs.get("identity")
+        assert identity is not None
+        assert identity.display_name == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_and_drain_thread_sender_info_through(self, bot):
+        """End-to-end through the real coalescing buffer path:
+        _enqueue_message stores sender_info, _drain_and_run pops it and
+        threads it into _run_interactive/run_agent — the actual production
+        call path used by handle_text/handle_file."""
+        alice = {
+            "tenant_id": "t-alpha",
+            "display_name": "Alice",
+            "role": "member",
+            "user_id": "tu-1",
+        }
+
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        captured: dict[str, Any] = {}
+
+        async def fake_execute(**kwargs):
+            captured["identity"] = kwargs.get("identity")
+            return MagicMock(output_text="ok", error_message=None)
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        await bot._enqueue_message("55555", session_key, session, "hi", sender_info=alice)
+        # Give the scheduled drain (0.3s internal debounce) time to fire.
+        await asyncio.sleep(0.5)
+        task = bot._active_tasks.get("55555")
+        if task:
+            await task
+
+        identity = captured.get("identity")
+        assert identity is not None
+        assert identity.display_name == "Alice"
+
+
+class TestClosedOnboarding:
+    """Task 4 — self-provisioning is closed by default
+    (ROBOTHOR_OPEN_ONBOARDING off). Unknown private senders get a generic
+    refusal; the operator is notified (rate-limited) with a registration
+    hint. Restores the legacy open-signup flow when the flag is set."""
+
+    @pytest.mark.asyncio
+    async def test_default_off_refuses_and_notifies_operator(self, bot):
+        message = MagicMock()
+        message.from_user.id = 424242
+        message.from_user.username = "bobby"
+        message.text = "please let me in, this is urgent"
+        message.caption = None
+        # Mock the wrapper (not the raw aiogram bot) so this test asserts on
+        # the composed notification text, not on _md_to_html's HTML-escaping
+        # of "<" / ">" / '"' (tested separately, and necessary for the
+        # message to be valid Telegram HTML parse-mode content).
+        bot.send_message = AsyncMock(return_value=[MagicMock(message_id=1)])
+
+        with patch.dict(os.environ, {}, clear=True):
+            reply = await bot._handle_unregistered_sender(message, "424242")
+
+        assert "self-registration" in reply.lower() or "contact" in reply.lower()
+
+        bot.send_message.assert_called_once()
+        call = bot.send_message.call_args
+        sent_chat_id = call.args[0] if call.args else call.kwargs.get("chat_id")
+        assert str(sent_chat_id) == str(bot.config.default_chat_id)
+        text = call.args[1] if len(call.args) > 1 else call.kwargs.get("text", "")
+        assert "424242" in text
+        assert "bobby" in text
+        assert "please let me in" in text
+        assert (
+            'robothor user add --tenant test-tenant --name "<name>" '
+            "--role member --telegram-id 424242" in text
+        )
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_to_once_per_hour_per_sender(self, bot):
+        message = MagicMock()
+        message.from_user.id = 555
+        message.from_user.username = None
+        message.text = "hello"
+        message.caption = None
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        with patch.dict(os.environ, {}, clear=True):
+            r1 = await bot._handle_unregistered_sender(message, "555")
+            r2 = await bot._handle_unregistered_sender(message, "555")
+            r3 = await bot._handle_unregistered_sender(message, "555")
+
+        # The sender is still refused every time...
+        assert r1 and r2 and r3
+        # ...but the operator is notified only once within the rate-limit window.
+        assert bot.bot.send_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_different_senders_each_notify_independently(self, bot):
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        msg1 = MagicMock(text="hi", caption=None)
+        msg1.from_user.id = 1
+        msg1.from_user.username = None
+        msg2 = MagicMock(text="hi", caption=None)
+        msg2.from_user.id = 2
+        msg2.from_user.username = None
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bot._handle_unregistered_sender(msg1, "1")
+            await bot._handle_unregistered_sender(msg2, "2")
+
+        assert bot.bot.send_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_open_onboarding_flag_restores_legacy_flow(self, bot):
+        message = MagicMock()
+        message.from_user.id = 909090
+
+        with patch.dict(os.environ, {"ROBOTHOR_OPEN_ONBOARDING": "1"}, clear=True):
+            with patch(
+                "robothor.engine.onboarding.start_onboarding",
+                return_value="Hi! What's your name?",
+            ) as mock_start:
+                reply = await bot._handle_unregistered_sender(message, "909090")
+
+        mock_start.assert_called_once_with("909090")
+        assert reply == "Hi! What's your name?"
+        bot.bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_text_routes_unregistered_private_sender_to_refusal(self, bot):
+        """End-to-end through the real dp.message(F.text) handler."""
+        handler = _get_registered_handler(bot, "handle_text", "message")
+        message = MagicMock()
+        message.text = "let me in"
+        message.from_user.id = 313131
+        message.from_user.username = None
+        message.chat.id = "313131"
+        message.chat.type = "private"
+        message.reply_to_message = None
+        message.message_id = 1
+        message.answer = AsyncMock()
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("robothor.engine.users.lookup_user", return_value=None):
+                await handler(message)
+
+        message.answer.assert_called_once()
+        reply_text = message.answer.call_args.args[0].lower()
+        assert "self-registration" in reply_text or "contact" in reply_text
