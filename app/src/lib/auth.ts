@@ -17,9 +17,12 @@
  */
 
 import NextAuth from "next-auth";
-import type { NextAuthConfig, Profile, Session } from "next-auth";
+import type { NextAuthConfig, Profile, Session, User } from "next-auth";
 import type { JWT } from "next-auth/jwt";
+import Credentials from "next-auth/providers/credentials";
 
+import type { CfVerifiedClaims } from "@/lib/cf-access";
+import { CF_JWT_HEADER, cfAccessEnabled, verifyCfAccessJwt } from "@/lib/cf-access";
 import { getServiceUrl } from "@/lib/services/registry";
 
 const OIDC_ISSUER = process.env.AUTH_OIDC_ISSUER;
@@ -43,12 +46,14 @@ type JwtCallbackParams = {
   token: JWT;
   account?: { provider?: string } | null;
   profile?: Profile;
+  user?: User;
   trigger?: "signIn" | "signUp" | "update";
 };
 
 type SignInCallbackParams = {
   account?: { provider?: string } | null;
   profile?: Profile;
+  user?: User;
 };
 
 function profileString(profile: Profile | undefined, key: string): string {
@@ -77,6 +82,16 @@ function verifiedOidcClaims(profile: Profile | undefined): {
     display_name: profileString(profile, "name") || email,
     email_verified: true,
   };
+}
+
+// Credentials-style providers carry no `profile`; the authorize() return value
+// arrives as `user`. Re-validate the claim shape here so the jwt callback never
+// trusts a malformed object.
+function cfClaimsFromUser(user: User | undefined): CfVerifiedClaims | null {
+  const claims = user?.cfClaims;
+  if (!claims || claims.email_verified !== true) return null;
+  if (!claims.issuer?.trim() || !claims.subject?.trim() || !claims.email?.trim()) return null;
+  return claims;
 }
 
 function isSsoResult(value: unknown): value is SsoResult {
@@ -154,24 +169,30 @@ function invalidateBridgeToken(token: JWT, error: BridgeAuthError): JWT {
   return token;
 }
 
-export function oidcSignInAllowed({
-  account,
-  profile,
-}: SignInCallbackParams): boolean {
-  return account?.provider === "oidc" && verifiedOidcClaims(profile) !== null;
+export function signInAllowed({ account, profile, user }: SignInCallbackParams): boolean {
+  if (account?.provider === "oidc") return verifiedOidcClaims(profile) !== null;
+  if (account?.provider === "cloudflare-access") return cfClaimsFromUser(user) !== null;
+  return false;
 }
 
 export async function bridgeJwtCallback({
   token,
   profile,
   account,
+  user,
   trigger,
 }: JwtCallbackParams): Promise<JWT> {
-  // First sign-in: exchange only a verified, complete OIDC identity. Throwing
-  // aborts Auth.js sign-in instead of leaving a dashboard session half-created.
+  // First sign-in: exchange only a verified, complete identity — OIDC profile
+  // claims or a validated Cloudflare Access JWT. Throwing aborts Auth.js
+  // sign-in instead of leaving a dashboard session half-created.
   if (account || trigger === "signIn" || trigger === "signUp") {
-    const claims = verifiedOidcClaims(profile);
-    if (account?.provider !== "oidc" || !claims) {
+    const claims =
+      account?.provider === "oidc"
+        ? verifiedOidcClaims(profile)
+        : account?.provider === "cloudflare-access"
+          ? cfClaimsFromUser(user)
+          : null;
+    if (!claims) {
       throw new Error("verified OIDC identity required");
     }
     const exchange = await bridgeSsoExchange(claims);
@@ -254,22 +275,54 @@ export async function publicBridgeSessionCallback({
   return internal;
 }
 
+// Providers register only when fully configured: a half-configured OIDC env
+// (issuer without client id) must not produce a broken sign-in button or
+// InvalidEndpoints noise, and the Cloudflare path stays off unless the
+// deployment declares its team domain + application audience.
+const providers: NextAuthConfig["providers"] = [];
+if (OIDC_ISSUER?.trim() && process.env.AUTH_OIDC_CLIENT_ID?.trim()) {
+  providers.push({
+    id: "oidc",
+    name: process.env.AUTH_OIDC_NAME || "SSO",
+    type: "oidc",
+    issuer: OIDC_ISSUER,
+    clientId: process.env.AUTH_OIDC_CLIENT_ID,
+    clientSecret: process.env.AUTH_OIDC_CLIENT_SECRET,
+  });
+}
+if (cfAccessEnabled()) {
+  providers.push(
+    Credentials({
+      id: "cloudflare-access",
+      name: "Cloudflare Access",
+      credentials: {},
+      async authorize(_credentials, request) {
+        // The signIn() call is made server-side with the original incoming
+        // headers, so the edge-injected assertion is read (and cryptographically
+        // verified) here — a caller cannot fabricate a session without a JWT
+        // signed by the team's JWKS.
+        const assertion = request.headers.get(CF_JWT_HEADER);
+        if (!assertion) return null;
+        const claims = await verifyCfAccessJwt(assertion);
+        if (!claims) return null;
+        return {
+          id: `${claims.issuer}|${claims.subject}`,
+          email: claims.email,
+          name: claims.display_name,
+          cfClaims: claims,
+        };
+      },
+    }),
+  );
+}
+
 export const authConfig = {
   trustHost: true,
   pages: { signIn: "/signin" },
   session: { strategy: "jwt" },
-  providers: [
-    {
-      id: "oidc",
-      name: process.env.AUTH_OIDC_NAME || "SSO",
-      type: "oidc",
-      issuer: OIDC_ISSUER,
-      clientId: process.env.AUTH_OIDC_CLIENT_ID,
-      clientSecret: process.env.AUTH_OIDC_CLIENT_SECRET,
-    },
-  ],
+  providers,
   callbacks: {
-    signIn: oidcSignInAllowed,
+    signIn: signInAllowed,
     jwt: bridgeJwtCallback,
     session: publicBridgeSessionCallback,
   },

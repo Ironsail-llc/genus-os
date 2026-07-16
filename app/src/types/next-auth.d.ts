@@ -8,6 +8,8 @@
  */
 import type { DefaultSession } from "next-auth";
 
+import type { CfVerifiedClaims } from "@/lib/cf-access";
+
 declare module "next-auth" {
   interface Session {
     bridgeAccess?: string;
@@ -16,5 +18,11 @@ declare module "next-auth" {
     tenantId?: string;
     authError?: "BridgeRefreshFailed" | "BridgeSessionInvalid";
     user?: DefaultSession["user"] & { role?: string };
+  }
+
+  interface User {
+    // Set by the cloudflare-access provider's authorize(); consumed by the
+    // jwt callback for the bridge SSO exchange. Never serialized to clients.
+    cfClaims?: CfVerifiedClaims;
   }
 }
