@@ -609,6 +609,17 @@ class PlanState:
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)
 
+    # Creator identity (Task 4 Finding 1 fix) — the per-message resolved
+    # sender dict (same shape as TelegramBot._resolve_user()'s return value)
+    # captured at the moment the plan was CREATED (in plan mode), frozen for
+    # the lifetime of the plan. Approval/execution/iteration read this
+    # instead of re-resolving "whoever is cached for this chat_id right
+    # now" — a value any other sender in a group chat can overwrite between
+    # plan creation and a later approval click or revision message. Whoever
+    # clicks "Approve" does not change who the execution is attributed to;
+    # the plan's author owns it end to end.
+    creator_sender_info: dict[str, Any] | None = None
+
 
 # ─── Deep Mode ─────────────────────────────────────────────────────────
 

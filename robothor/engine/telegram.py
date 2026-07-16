@@ -59,6 +59,7 @@ from robothor.engine.task_registry import get_task_registry
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,24 @@ def _format_checklist_html(todos: list[dict[str, str]]) -> str:
     return TodoList.format_for_telegram(todos)
 
 
+def _sanitize_preview(text: str, max_len: int = 100) -> str:
+    """Collapse newlines/control characters to spaces and cap length.
+
+    Used to embed untrusted, attacker-controlled message text (an
+    unregistered sender's raw message) inside an operator-facing
+    notification (review Finding 2). Without this, a crafted multi-line
+    message could plant its own fake "To register them:" line followed by a
+    bogus CLI command, made to look identical to the genuine registration
+    hint that follows — tricking the operator into copy-pasting an
+    attacker-supplied command. Stripping every line break and control
+    character confines the preview to a single line no matter what the
+    sender sent, so it can never spawn a second line that impersonates the
+    notification's own structure.
+    """
+    collapsed = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", text)
+    return collapsed.strip()[:max_len]
+
+
 def _plan_state_to_dict(plan: PlanState) -> dict[str, Any]:
     """Serialize PlanState to dict for DB persistence."""
     return {
@@ -118,6 +137,7 @@ def _plan_state_to_dict(plan: PlanState) -> dict[str, Any]:
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
         "deep_plan": plan.deep_plan,
+        "creator_sender_info": plan.creator_sender_info,
     }
 
 
@@ -1164,14 +1184,18 @@ class TelegramBot:
                     session.active_plan.rejection_feedback = user_text
                     session.active_plan.status = "superseded"
                     session.active_plan = None
-                    await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                    await self._run_plan_mode(
+                        chat_id, session_key, session, user_text, message, sender_info=user_info
+                    )
                     return
                 session.active_plan.status = "expired"
                 session.active_plan = None
 
             if session.plan_mode:
                 session.plan_mode = False
-                await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                await self._run_plan_mode(
+                    chat_id, session_key, session, user_text, message, sender_info=user_info
+                )
                 return
 
             # Execute via coalescing buffer (shared with handle_text)
@@ -1273,7 +1297,9 @@ class TelegramBot:
             # Approval/rejection only via inline keyboard buttons.
             if session.active_plan and session.active_plan.status == "pending":
                 if not _plan_is_expired(session.active_plan):
-                    await self._iterate_plan(chat_id, session_key, session, user_text)
+                    await self._iterate_plan(
+                        chat_id, session_key, session, user_text, sender_info=user_info
+                    )
                     return
                 session.active_plan.status = "expired"
                 session.active_plan = None
@@ -1281,7 +1307,9 @@ class TelegramBot:
             # ── Check plan_mode toggle — route through plan pipeline ──
             if session.plan_mode:
                 session.plan_mode = False  # One-shot: auto-disable after use
-                await self._run_plan_mode(chat_id, session_key, session, user_text, message)
+                await self._run_plan_mode(
+                    chat_id, session_key, session, user_text, message, sender_info=user_info
+                )
                 return
 
             # Execute via coalescing buffer (shared with handle_file)
@@ -1595,20 +1623,7 @@ class TelegramBot:
                 # from Task 2). Falls back to chat_id only when the
                 # telegram_user_id wasn't captured (e.g. a manually-seeded
                 # _chat_user_info entry, or no from_user on the message).
-                _identity = None
-                if _user:
-                    from robothor.identity import IdentityContext
-
-                    _identity = IdentityContext(
-                        tenant_id=_user.get("tenant_id") or _tenant,
-                        channel="telegram",
-                        identifier=str(_user.get("telegram_user_id") or chat_id),
-                        verified="user_id" in _user,
-                        display_name=_user.get("display_name") or "",
-                        role=_user.get("role") or "",
-                        tenant_user_id=_user.get("user_id"),
-                        person_id=_user.get("person_id"),
-                    )
+                _identity = self._build_identity(_user, chat_id, _tenant)
 
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
@@ -1824,10 +1839,32 @@ class TelegramBot:
         user_text: str,
         message: Message,
         deep_plan: bool = False,
+        sender_info: dict[str, Any] | None = None,
     ) -> None:
-        """Execute agent in plan mode with read-only tools, display plan with approval keyboard."""
+        """Execute agent in plan mode with read-only tools, display plan with approval keyboard.
+
+        ``sender_info`` (Task 4 Finding 1 fix) is the per-message resolved
+        sender identity, threaded exactly like ``_run_interactive``'s
+        ``sender_info`` parameter. When the caller (``handle_text``/
+        ``handle_file``) already resolved it, it's passed straight through.
+        When omitted (``cmd_plan``/``cmd_deep`` invoke this directly with no
+        prior resolution), this resolves fresh from ``message`` here — still
+        a per-message resolution, keyed to THIS message's actual sender via
+        ``message.from_user.id`` — never the shared, chat_id-keyed
+        ``_chat_user_info`` cache, which reflects whichever sender happened
+        to message last and can be stale or, in a group chat with concurrent
+        senders, outright wrong for the message actually driving this run.
+        The resolved identity is frozen onto the created ``PlanState`` as
+        ``creator_sender_info`` so a later approval/execution reads the
+        plan's author, not whoever is cached (or merely clicked Approve) at
+        that later point.
+        """
         import uuid
         from datetime import datetime
+
+        user = sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        tenant_id = user.get("tenant_id") or self.config.tenant_id
+        _identity = self._build_identity(user, chat_id, tenant_id)
 
         # Typing indicator
         typing_active = True
@@ -1855,8 +1892,6 @@ class TelegramBot:
         try:
             model = self._model_override.get(chat_id)
             history = list(session.history)
-            user = self._chat_user_info.get(chat_id) or {}
-            tenant_id = self._get_tenant_id(chat_id)
 
             run = await self.runner.execute(
                 agent_id=self.config.default_chat_agent,
@@ -1870,6 +1905,7 @@ class TelegramBot:
                 tenant_id=tenant_id,
                 user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
                 user_role=str(user.get("role") or "user"),
+                identity=_identity,
             )
 
             plan_text = _extract_plan_text(run.output_text or "")
@@ -1895,6 +1931,7 @@ class TelegramBot:
                     created_at=datetime.now(UTC).isoformat(),
                     exploration_run_id=run.id,
                     deep_plan=deep_plan,
+                    creator_sender_info=user or None,
                 )
                 session.active_plan = plan
 
@@ -1903,7 +1940,7 @@ class TelegramBot:
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
-                        tenant_id=self._get_tenant_id(chat_id),
+                        tenant_id=tenant_id,
                     ),
                     name=f"tg-save-plan:{chat_id}",
                 )
@@ -1935,8 +1972,19 @@ class TelegramBot:
         session: Any,
         query: str,
         message: Message,
+        sender_info: dict[str, Any] | None = None,
     ) -> None:
-        """Execute deep reasoning via RLM, show progress edits and result."""
+        """Execute deep reasoning via RLM, show progress edits and result.
+
+        ``sender_info`` (Task 4 Finding 1 fix): same per-message-resolved
+        threading pattern as ``_run_plan_mode`` — captured up front (before
+        any await) and never re-read from the shared, chat_id-keyed
+        ``_chat_user_info`` cache.
+        """
+        user = sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        tenant_id = user.get("tenant_id") or self.config.tenant_id
+        _identity = self._build_identity(user, chat_id, tenant_id)
+
         # Typing indicator
         typing_active = True
 
@@ -1975,8 +2023,6 @@ class TelegramBot:
 
         try:
             history = list(session.history)
-            user = self._chat_user_info.get(chat_id) or {}
-            tenant_id = self._get_tenant_id(chat_id)
 
             run = await self.runner.execute_deep(
                 query=query,
@@ -1986,6 +2032,7 @@ class TelegramBot:
                 tenant_id=tenant_id,
                 user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
                 user_role=str(user.get("role") or "user"),
+                identity=_identity,
             )
 
             # Record in session history
@@ -2010,7 +2057,7 @@ class TelegramBot:
                         f"/deep {query}",
                         run.output_text,
                         channel="telegram",
-                        tenant_id=self._get_tenant_id(chat_id),
+                        tenant_id=tenant_id,
                     ),
                     name=f"tg-save-deep:{chat_id}",
                 )
@@ -2049,7 +2096,17 @@ class TelegramBot:
     ) -> None:
         """Execute an approved plan in background mode.
 
-        Runs as a fire-and-forget asyncio task (caller wraps in create_task).
+        Runs as a fire-and-forget asyncio task (caller wraps in create_task
+        -- the ``asyncio.create_task`` scheduling gap between the approval
+        click and this coroutine's body actually running is exactly the
+        window in which a group chat's shared ``_chat_user_info[chat_id]``
+        cache can be overwritten by an unrelated sender's message (Task 4
+        Finding 1). Attribution here instead comes from
+        ``plan.creator_sender_info`` -- the identity frozen at plan-creation
+        time in ``_run_plan_mode`` -- not whoever is cached for the chat, and
+        not whoever happened to click "Approve" (any group member can click
+        approve; the plan's author owns what it does end to end).
+
         Sends immediate acknowledgement, executes with continuous-mode overrides
         for long-running tasks, and delivers the final result as a new Telegram
         message (triggering a push notification).
@@ -2070,6 +2127,10 @@ class TelegramBot:
 
         plan.status = "approved"
 
+        user = plan.creator_sender_info or {}
+        tenant_id = user.get("tenant_id") or self.config.tenant_id
+        _identity = self._build_identity(user, chat_id, tenant_id)
+
         # Deep plan: route to RLM with rich context instead of agent execution
         if plan.deep_plan:
             await self._execute_deep_plan(chat_id, session_key, session)
@@ -2085,8 +2146,6 @@ class TelegramBot:
 
         try:
             model = self._model_override.get(chat_id)
-            user = self._chat_user_info.get(chat_id) or {}
-            tenant_id = self._get_tenant_id(chat_id)
 
             # Build agent config with continuous-mode overrides for background execution
             bg_config = self._build_background_config()
@@ -2115,6 +2174,7 @@ class TelegramBot:
                 tenant_id=tenant_id,
                 user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
                 user_role=str(user.get("role") or "user"),
+                identity=_identity,
             )
 
             # Track execution run ID on plan
@@ -2142,7 +2202,7 @@ class TelegramBot:
                         run.output_text,
                         channel="telegram",
                         model_override=model,
-                        tenant_id=self._get_tenant_id(chat_id),
+                        tenant_id=tenant_id,
                     ),
                     name=f"tg-save-plan-exec:{chat_id}",
                 )
@@ -2150,7 +2210,7 @@ class TelegramBot:
             # Clear plan + persist
             session.active_plan = None
             get_task_registry().spawn(
-                clear_plan_state_async(session_key, tenant_id=self._get_tenant_id(chat_id)),
+                clear_plan_state_async(session_key, tenant_id=tenant_id),
                 name=f"tg-clear-plan-exec:{chat_id}",
             )
 
@@ -2198,7 +2258,13 @@ class TelegramBot:
         session_key: str,
         session: Any,
     ) -> None:
-        """Execute approved deep plan — route to RLM with rich context."""
+        """Execute approved deep plan — route to RLM with rich context.
+
+        Attribution comes from ``plan.creator_sender_info`` (Task 4 Finding
+        1), same reasoning as ``_execute_approved_plan``: this runs off a
+        create_task fire-and-forget schedule and must not read whichever
+        sender happens to be cached for the chat by the time it executes.
+        """
         plan = session.active_plan
         if not plan:
             await self.send_message(chat_id, "No pending plan.")
@@ -2241,8 +2307,9 @@ class TelegramBot:
 
         try:
             # Build rich context from plan + exploration output
-            user = self._chat_user_info.get(chat_id) or {}
-            tenant_id = self._get_tenant_id(chat_id)
+            user = plan.creator_sender_info or {}
+            tenant_id = user.get("tenant_id") or self.config.tenant_id
+            _identity = self._build_identity(user, chat_id, tenant_id)
             exploration_output = ""
             for msg in reversed(session.history):
                 if msg.get("role") == "assistant" and msg.get("content"):
@@ -2263,6 +2330,7 @@ class TelegramBot:
                 tenant_id=tenant_id,
                 user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
                 user_role=str(user.get("role") or "user"),
+                identity=_identity,
             )
 
             # Track execution run ID
@@ -2293,7 +2361,7 @@ class TelegramBot:
                         run.output_text,
                         channel="telegram",
                         model_override=self._model_override.get(chat_id),
-                        tenant_id=self._get_tenant_id(chat_id),
+                        tenant_id=tenant_id,
                     ),
                     name=f"tg-save-deep-exec:{chat_id}",
                 )
@@ -2301,7 +2369,7 @@ class TelegramBot:
             # Clear plan + persist
             session.active_plan = None
             get_task_registry().spawn(
-                clear_plan_state_async(session_key, tenant_id=self._get_tenant_id(chat_id)),
+                clear_plan_state_async(session_key, tenant_id=tenant_id),
                 name=f"tg-clear-deep-exec:{chat_id}",
             )
 
@@ -2334,9 +2402,28 @@ class TelegramBot:
         session_key: str,
         session: Any,
         feedback: str,
+        sender_info: dict[str, Any] | None = None,
     ) -> None:
-        """Revise the active plan based on user feedback (keeps same plan_id)."""
+        """Revise the active plan based on user feedback (keeps same plan_id).
+
+        ``sender_info`` (Task 4 Finding 1 fix): the per-message resolved
+        identity of whoever sent this feedback text — threaded straight
+        through from ``handle_text``, exactly like ``_run_interactive``'s
+        ``sender_info``. Unlike the approval paths, revision feedback is
+        attributed to whoever is actively typing right now (same as plan
+        creation itself), not frozen to the plan's original creator — this
+        is still a read-only exploration step, not the privileged execution
+        phase. Falls back to the legacy ``_chat_user_info[chat_id]`` cache
+        read only when the caller doesn't thread anything through (keeps any
+        direct caller byte-identical).
+        """
         from datetime import datetime
+
+        user = (
+            sender_info if sender_info is not None else (self._chat_user_info.get(chat_id) or {})
+        )
+        tenant_id = user.get("tenant_id") or self._get_tenant_id(chat_id)
+        _identity = self._build_identity(user, chat_id, tenant_id)
 
         plan = session.active_plan
         if not plan:
@@ -2385,8 +2472,6 @@ class TelegramBot:
 
         try:
             model = self._model_override.get(chat_id)
-            user = self._chat_user_info.get(chat_id) or {}
-            tenant_id = self._get_tenant_id(chat_id)
 
             # Build iteration prompt with current plan + feedback
             iteration_message = (
@@ -2413,6 +2498,7 @@ class TelegramBot:
                 tenant_id=tenant_id,
                 user_id=str(user.get("user_id") or f"telegram:{chat_id}"),
                 user_role=str(user.get("role") or "user"),
+                identity=_identity,
             )
 
             revised_plan_text = _extract_plan_text(run.output_text or "")
@@ -2448,7 +2534,7 @@ class TelegramBot:
                     save_plan_state_async(
                         session_key,
                         _plan_state_to_dict(plan),
-                        tenant_id=self._get_tenant_id(chat_id),
+                        tenant_id=tenant_id,
                     ),
                     name=f"tg-save-plan-revision:{chat_id}",
                 )
@@ -2480,6 +2566,42 @@ class TelegramBot:
                     ),
                 ]
             ]
+        )
+
+    def _build_identity(
+        self, user: dict[str, Any] | None, chat_id: str, tenant_id: str
+    ) -> IdentityContext | None:
+        """Build the unified IdentityContext for a resolved Telegram sender.
+
+        Shared by every execution path — interactive ``run_agent``, ``/plan``,
+        ``/deep``, plan iteration, and post-approval execution — so this
+        construction logic lives in exactly one place (Task 4 Finding 1
+        follow-up). ``user`` must be a per-message-resolved sender dict (or,
+        for the plan-approval paths, the identity frozen on
+        ``PlanState.creator_sender_info`` at plan-creation time) — never a
+        fresh read of the shared, chat_id-keyed ``_chat_user_info`` cache,
+        which a different sender in a group chat can overwrite between
+        capture and execution.
+
+        ``identifier`` is the sender's Telegram user id when known (not
+        chat_id, which would conflate every sender in a group chat into one
+        identity). Falls back to chat_id only when telegram_user_id wasn't
+        captured (no ``from_user`` on the message, or a manually-seeded
+        legacy cache entry).
+        """
+        if not user:
+            return None
+        from robothor.identity import IdentityContext
+
+        return IdentityContext(
+            tenant_id=user.get("tenant_id") or tenant_id,
+            channel="telegram",
+            identifier=str(user.get("telegram_user_id") or chat_id),
+            verified="user_id" in user,
+            display_name=user.get("display_name") or "",
+            role=user.get("role") or "",
+            tenant_user_id=user.get("user_id"),
+            person_id=user.get("person_id"),
         )
 
     def _resolve_user(self, chat_id: str, message: Message) -> dict[str, Any] | None:
@@ -2672,6 +2794,14 @@ class TelegramBot:
         via ``self.send_message`` — the same wrapper ``delivery.py``
         registers as the platform's Telegram sender — targeting
         ``config.default_chat_id`` (the operator's primary chat).
+
+        The sender's raw message text is untrusted and attacker-controlled
+        (review Finding 2) — it is sanitized (newlines/control characters
+        collapsed to spaces via ``_sanitize_preview``) and rendered quoted on
+        a single line, clearly delimited from the "To register them:" hint
+        that follows. Without this, a crafted multi-line message could
+        embed its own fake hint line + bogus CLI command, formatted to look
+        identical to the genuine one, to trick the operator into running it.
         """
         now = time.monotonic()
         last = self._onboarding_notify_last.get(telegram_user_id, 0.0)
@@ -2682,9 +2812,8 @@ class TelegramBot:
         try:
             sender = message.from_user
             username = getattr(sender, "username", None) if sender else None
-            preview = (getattr(message, "text", None) or getattr(message, "caption", None) or "")[
-                :100
-            ]
+            raw_preview = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+            preview = _sanitize_preview(raw_preview)
             hint = (
                 f'robothor user add --tenant {self.config.tenant_id} --name "<name>" '
                 f"--role member --telegram-id {telegram_user_id}"
@@ -2693,7 +2822,7 @@ class TelegramBot:
                 "\U0001f6ab Unregistered sender messaged the bot (onboarding closed):",
                 f"Telegram id: {telegram_user_id}",
                 f"Username: @{username}" if username else "Username: (none)",
-                f"Message: {preview}" if preview else "Message: (none)",
+                f'Message (quoted, untrusted): "{preview}"' if preview else "Message: (none)",
                 "",
                 "To register them:",
                 hint,

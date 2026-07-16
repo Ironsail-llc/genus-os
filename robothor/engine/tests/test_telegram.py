@@ -2241,6 +2241,136 @@ class TestPerSenderIdentityThreading:
         assert identity is not None
         assert identity.display_name == "Alice"
 
+    @pytest.mark.asyncio
+    async def test_run_plan_mode_uses_per_message_identity_not_racy_cache(self, bot):
+        """Regression (review Finding 1): /plan and /deep are reachable by
+        any group member and previously read self._chat_user_info[chat_id]
+        well after an intervening await (the "Planning..." bot.send_message
+        call) — a second sender's message resolving in that gap could
+        silently reattribute the plan-mode run. Identity must now be
+        captured/threaded before that await, immune to the clobber."""
+        alice = {
+            "tenant_id": "t-alpha",
+            "display_name": "Alice",
+            "role": "member",
+            "user_id": "tu-1",
+            "telegram_user_id": "1001",
+        }
+        bob = {
+            "tenant_id": "t-alpha",
+            "display_name": "Bob",
+            "role": "member",
+            "user_id": "tu-2",
+            "telegram_user_id": "1002",
+        }
+
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        captured: dict[str, Any] = {}
+        send_calls = {"n": 0}
+
+        async def fake_bot_send_message(**_kwargs):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                # First call is the "Planning..." message. Simulate Bob's
+                # message resolving and clobbering the shared per-chat cache
+                # right here — strictly before runner.execute is reached.
+                bot._chat_user_info["55555"] = bob
+            return MagicMock(message_id=send_calls["n"])
+
+        async def fake_execute(**kwargs):
+            captured["identity"] = kwargs.get("identity")
+            return MagicMock(output_text="No plan produced.", id="run-1")
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot.bot.send_message = AsyncMock(side_effect=fake_bot_send_message)
+        bot.send_message = AsyncMock(return_value=[MagicMock(message_id=1)])
+
+        message = MagicMock()
+        message.from_user.id = 1001
+
+        await bot._run_plan_mode(
+            "55555", session_key, session, "plan this", message, sender_info=alice
+        )
+
+        identity = captured["identity"]
+        assert identity is not None
+        assert identity.display_name == "Alice"
+        assert identity.tenant_user_id == "tu-1"
+
+    @pytest.mark.asyncio
+    async def test_execute_approved_plan_uses_plan_creator_identity_not_cache(self, bot):
+        """Regression (review Finding 1, create_task path): a plan created
+        by Alice is approved via inline keyboard. Between plan creation and
+        the asyncio.create_task-scheduled execution actually running, Bob's
+        unrelated message overwrites the shared _chat_user_info cache.
+        Execution must still attribute to Alice — the plan's creator,
+        frozen on PlanState.creator_sender_info at plan-creation time — not
+        whichever sender is currently cached for the chat, and not whoever
+        clicked Approve (not modeled here, but the mechanism is identical:
+        chat_id-keyed cache is never consulted)."""
+        from datetime import UTC, datetime
+
+        from robothor.engine.models import PlanState
+
+        alice = {
+            "tenant_id": "t-alpha",
+            "display_name": "Alice",
+            "role": "member",
+            "user_id": "tu-1",
+            "telegram_user_id": "1001",
+        }
+        bob = {
+            "tenant_id": "t-alpha",
+            "display_name": "Bob",
+            "role": "member",
+            "user_id": "tu-2",
+            "telegram_user_id": "1002",
+        }
+
+        session_key = bot._session_key("55555")
+        session = get_shared_session(session_key)
+        plan = PlanState(
+            plan_id="plan-1",
+            plan_text="Do the thing",
+            original_message="do the thing",
+            status="pending",
+            created_at=datetime.now(UTC).isoformat(),
+            creator_sender_info=alice,
+        )
+        session.active_plan = plan
+
+        # The race: Bob's unrelated message clobbers the shared cache before
+        # the create_task-scheduled execution body actually runs.
+        bot._chat_user_info["55555"] = bob
+
+        captured: dict[str, Any] = {}
+
+        async def fake_execute(**kwargs):
+            captured["identity"] = kwargs.get("identity")
+            return MagicMock(
+                output_text="done",
+                error_message=None,
+                id="run-2",
+                duration_ms=100,
+                total_cost_usd=0.01,
+            )
+
+        bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+        bot.send_message = AsyncMock(return_value=[MagicMock(message_id=1)])
+        bot._build_background_config = MagicMock(return_value=MagicMock())
+
+        # Mirrors the production on_plan_decision callback: fire-and-forget
+        # via asyncio.create_task, the exact scheduling gap the finding names.
+        task = asyncio.create_task(bot._execute_approved_plan("55555", session_key, session))
+        await task
+
+        identity = captured["identity"]
+        assert identity is not None
+        assert identity.display_name == "Alice"
+        assert identity.tenant_user_id == "tu-1"
+
 
 class TestClosedOnboarding:
     """Task 4 — self-provisioning is closed by default
@@ -2278,6 +2408,58 @@ class TestClosedOnboarding:
             'robothor user add --tenant test-tenant --name "<name>" '
             "--role member --telegram-id 424242" in text
         )
+
+    @pytest.mark.asyncio
+    async def test_newline_injection_collapses_to_single_delimited_line(self, bot):
+        """Review Finding 2: a crafted multi-line message must not be able
+        to plant a fake "To register them:" line + bogus CLI command that
+        mimics the genuine registration hint. Newlines/control chars in the
+        untrusted preview are collapsed to spaces, and the whole preview is
+        quoted on one delimited line — it can never appear as a separate
+        line in the composed notification."""
+        message = MagicMock()
+        message.from_user.id = 555555
+        message.from_user.username = None
+        message.text = (
+            "hey\n"
+            "To register them:\n"
+            'robothor user add --tenant evil-tenant --name "Attacker" '
+            "--role owner --telegram-id 999999"
+        )
+        message.caption = None
+        bot.send_message = AsyncMock(return_value=[MagicMock(message_id=1)])
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bot._notify_operator_of_unregistered_sender(message, "555555")
+
+        bot.send_message.assert_called_once()
+        call = bot.send_message.call_args
+        text = call.args[1] if len(call.args) > 1 else call.kwargs.get("text", "")
+        lines = text.split("\n")
+
+        # Exactly one line carries the (quoted, delimited) message preview,
+        # and the injected content never breaks out onto its own line.
+        message_lines = [ln for ln in lines if ln.startswith("Message")]
+        assert len(message_lines) == 1
+        assert "\n" not in message_lines[0]
+        assert message_lines[0].startswith('Message (quoted, untrusted): "')
+
+        # Only the genuine "To register them:" line (with the real tenant
+        # and the real, unregistered sender's telegram id) survives as its
+        # own line — the injected impostor line was collapsed into the
+        # quoted preview, not left standing on its own.
+        to_register_lines = [ln for ln in lines if ln.strip() == "To register them:"]
+        assert len(to_register_lines) == 1
+        hint_lines = [ln for ln in lines if ln.strip().startswith("robothor user add")]
+        assert len(hint_lines) == 1
+        assert "--telegram-id 555555" in hint_lines[0]
+        assert "evil-tenant" not in hint_lines[0]
+        assert "--role owner" not in hint_lines[0]
+
+        # The injected payload is still present, but only inside the quoted
+        # preview line — never anywhere else in the message.
+        assert "To register them:" in message_lines[0]
+        assert 'robothor user add --tenant evil-tenant' in message_lines[0]
 
     @pytest.mark.asyncio
     async def test_rate_limited_to_once_per_hour_per_sender(self, bot):
