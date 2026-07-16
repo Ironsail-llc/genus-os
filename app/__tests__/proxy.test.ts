@@ -27,6 +27,12 @@ describe("dashboard proxy authentication gate", () => {
     expect(authorizeDashboardRequest(request("/api/ready"), null).status).toBe(200);
   });
 
+  it("keeps the Cloudflare Access sign-in handler publicly reachable", () => {
+    expect(
+      authorizeDashboardRequest(request("/signin/cloudflare?callbackUrl=%2F"), null).status,
+    ).toBe(200);
+  });
+
   it("returns 401 for an unauthenticated private API request", async () => {
     const response = authorizeDashboardRequest(request("/api/bridge/people"), null);
     expect(response.status).toBe(401);
