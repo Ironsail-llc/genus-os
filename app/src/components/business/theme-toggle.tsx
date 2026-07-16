@@ -1,15 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 
+// Server snapshot false, client snapshot true — the React-19-blessed way to
+// branch on hydration without setState-in-effect (same pattern as
+// default-dashboard's useIsClient).
+const subscribe = () => () => {};
+function useIsClient(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false,
+  );
+}
+
 export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
-  // Avoid hydration mismatch: theme is only known client-side.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  // Theme is only known client-side; render a stable icon until hydrated.
+  const mounted = useIsClient();
 
   const dark = resolvedTheme !== "light";
   const label = dark ? "Switch to light theme" : "Switch to dark theme";
