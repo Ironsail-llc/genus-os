@@ -78,12 +78,17 @@ def _cmd_grant_binding(args: Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    grant = accounts.create_binding_grant(
-        tenant_id=getattr(args, "tenant", None) or DEFAULT_TENANT,
-        email=args.email,
-        ttl_seconds=ttl_seconds,
-        reason=getattr(args, "reason", None) or "",
-    )
+    try:
+        grant = accounts.create_binding_grant(
+            tenant_id=getattr(args, "tenant", None) or DEFAULT_TENANT,
+            email=args.email,
+            ttl_seconds=ttl_seconds,
+            reason=getattr(args, "reason", None) or "",
+            issuer=getattr(args, "issuer", None) or None,
+        )
+    except accounts.GrantTargetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if getattr(args, "json_output", False):
         print(json.dumps(grant, default=str, indent=2))
     else:
@@ -110,7 +115,7 @@ def _cmd_grants(args: Namespace) -> int:
         print("No binding grants.")
         return 0
     for grant in grants:
-        state = (
+        state = grant.get("state") or (
             "revoked" if grant.get("revoked_at") else "used" if grant.get("used_at") else "pending"
         )
         line = f"{grant['id']}  {grant['email']}  {state}  expires {grant['expires_at']}"
@@ -121,9 +126,17 @@ def _cmd_grants(args: Namespace) -> int:
 
 
 def _cmd_revoke_binding(args: Namespace) -> int:
+    import uuid
+
     from robothor.auth import accounts
 
-    if accounts.revoke_binding_grant(args.grant_id):
+    try:
+        uuid.UUID(args.grant_id)
+    except ValueError:
+        print(f"error: {args.grant_id!r} is not a grant UUID", file=sys.stderr)
+        return 2
+
+    if accounts.revoke_binding_grant(args.grant_id, getattr(args, "tenant", None)):
         print(f"✓ Grant {args.grant_id} revoked.")
         return 0
     print(f"Grant {args.grant_id} not found or already used/revoked.")

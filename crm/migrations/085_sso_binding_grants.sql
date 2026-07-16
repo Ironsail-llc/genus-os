@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS sso_binding_grants (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       TEXT NOT NULL REFERENCES crm_tenants(id),
     email           CITEXT NOT NULL,
+    -- Optional IdP pin: when set, only a verified claim from this issuer can
+    -- consume the grant. NULL = any allowlisted IdP.
+    issuer          TEXT,
     reason          TEXT,
     created_by      TEXT NOT NULL DEFAULT 'cli',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

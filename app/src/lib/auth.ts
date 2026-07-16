@@ -193,7 +193,7 @@ export async function bridgeJwtCallback({
           ? cfClaimsFromUser(user)
           : null;
     if (!claims) {
-      throw new Error("verified OIDC identity required");
+      throw new Error("verified identity required");
     }
     const exchange = await bridgeSsoExchange(claims);
     if (!exchange) {
@@ -275,12 +275,16 @@ export async function publicBridgeSessionCallback({
   return internal;
 }
 
-// Providers register only when fully configured: a half-configured OIDC env
-// (issuer without client id) must not produce a broken sign-in button or
-// InvalidEndpoints noise, and the Cloudflare path stays off unless the
-// deployment declares its team domain + application audience.
+// A half-configured OIDC env (issuer without client id) must not produce a
+// broken sign-in button or InvalidEndpoints noise. Shared with /signin.
+export function oidcProviderConfigured(): boolean {
+  return Boolean(OIDC_ISSUER?.trim() && process.env.AUTH_OIDC_CLIENT_ID?.trim());
+}
+
+// Providers register only when fully configured; the Cloudflare path stays off
+// unless the deployment declares its team domain + application audience.
 const providers: NextAuthConfig["providers"] = [];
-if (OIDC_ISSUER?.trim() && process.env.AUTH_OIDC_CLIENT_ID?.trim()) {
+if (oidcProviderConfigured()) {
   providers.push({
     id: "oidc",
     name: process.env.AUTH_OIDC_NAME || "SSO",

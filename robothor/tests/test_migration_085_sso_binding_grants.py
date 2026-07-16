@@ -70,3 +70,29 @@ def test_consume_predicate_only_matches_pending_unexpired(db_cursor, db_conn):
              AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()"""
     )
     assert db_cursor.fetchone()["n"] == 1
+
+
+def test_issuer_pin_confines_consumption_to_that_idp(db_cursor, db_conn):
+    """An issuer-pinned grant matches only its IdP; NULL matches any."""
+    db_cursor.execute(MIGRATION.read_text())
+    db_cursor.execute(
+        """INSERT INTO sso_binding_grants (tenant_id, email, expires_at, issuer)
+           VALUES
+               ('default', 'bob@example.com', NOW() + INTERVAL '15 minutes',
+                'https://team.example.com'),
+               ('default', 'carol@example.com', NOW() + INTERVAL '15 minutes', NULL)
+        """
+    )
+    for email, presenting, expected in [
+        ("bob@example.com", "https://team.example.com", 1),
+        ("bob@example.com", "https://other-idp.example.com", 0),
+        ("carol@example.com", "https://any-idp.example.com", 1),
+    ]:
+        db_cursor.execute(
+            """SELECT count(*) AS n FROM sso_binding_grants
+               WHERE tenant_id = 'default' AND email = %s
+                 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+                 AND (issuer IS NULL OR issuer = %s)""",
+            (email, presenting),
+        )
+        assert db_cursor.fetchone()["n"] == expected, (email, presenting)

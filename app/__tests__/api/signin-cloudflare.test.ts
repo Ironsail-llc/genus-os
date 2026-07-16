@@ -59,7 +59,12 @@ describe("GET /signin/cloudflare", () => {
     expect(signIn).not.toHaveBeenCalled();
   });
 
-  it.each(["https://evil.example/phish", "//evil.example/phish"])(
+  it.each([
+    "https://evil.example/phish",
+    "//evil.example/phish",
+    "/\\evil.example/phish", // WHATWG URL treats "/\" as "//" — protocol-relative
+    "/\\/evil.example",
+  ])(
     "refuses an absolute callbackUrl (%s) — open redirect guard",
     async (target) => {
       signIn.mockResolvedValue("https://genus.example/");

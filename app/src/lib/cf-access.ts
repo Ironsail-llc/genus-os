@@ -71,10 +71,14 @@ export async function verifyCfAccessJwt(jwt: string): Promise<CfVerifiedClaims |
     const { payload } = await jwtVerify(jwt, jwksFor(teamDomain), {
       issuer: teamDomain,
       audience: audiences,
+      algorithms: ["RS256"],
     });
     const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
     const email = typeof payload.email === "string" ? payload.email.trim() : "";
-    if (!subject || !email) return null;
+    if (!subject || !email) {
+      console.error("[cf-access] token verified but has no user subject/email (service token?)");
+      return null;
+    }
     const name = typeof payload.name === "string" ? payload.name.trim() : "";
     return {
       issuer: teamDomain,
@@ -83,7 +87,14 @@ export async function verifyCfAccessJwt(jwt: string): Promise<CfVerifiedClaims |
       display_name: name || email,
       email_verified: true,
     };
-  } catch {
+  } catch (error) {
+    // Fail closed but never silently: a scheme-less team domain, unreachable
+    // JWKS endpoint, and a genuinely bad token all land here, and the operator
+    // needs to tell them apart from the journal.
+    console.error(
+      "[cf-access] JWT verification failed:",
+      error instanceof Error ? error.message : String(error),
+    );
     return null;
   }
 }

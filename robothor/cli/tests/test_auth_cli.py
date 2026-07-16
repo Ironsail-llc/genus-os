@@ -155,8 +155,60 @@ def test_auth_grants_all_includes_inactive(capsys) -> None:
 
 
 def test_auth_revoke_binding(capsys) -> None:
-    args = Namespace(auth_command="revoke-binding", grant_id="grant-1")
+    grant_id = "3e2a1a37-9d5f-4a2b-8f5e-1c2d3e4f5a6b"
+    args = Namespace(auth_command="revoke-binding", grant_id=grant_id)
     with patch("robothor.auth.accounts.revoke_binding_grant", return_value=True):
         assert cmd_auth(args) == 0
     with patch("robothor.auth.accounts.revoke_binding_grant", return_value=False):
         assert cmd_auth(args) == 1
+
+
+def test_auth_revoke_binding_rejects_non_uuid(capsys) -> None:
+    # Validate UUIDs at the boundary — garbage must not reach the database.
+    args = Namespace(auth_command="revoke-binding", grant_id="not-a-uuid")
+    with patch("robothor.auth.accounts.revoke_binding_grant") as revoke:
+        assert cmd_auth(args) == 2
+    revoke.assert_not_called()
+    assert "uuid" in capsys.readouterr().err.lower()
+
+
+def test_auth_grant_binding_passes_issuer_pin(capsys) -> None:
+    args = Namespace(
+        auth_command="grant-binding",
+        email="owner@example.com",
+        tenant=None,
+        ttl="15m",
+        reason="",
+        issuer="https://team.example.com",
+        json_output=False,
+    )
+    with patch("robothor.auth.accounts.create_binding_grant", return_value=_GRANT) as create:
+        assert cmd_auth(args) == 0
+    assert create.call_args.kwargs["issuer"] == "https://team.example.com"
+
+
+def test_auth_grant_binding_surfaces_unusable_target(capsys) -> None:
+    from robothor.auth.accounts import GrantTargetError
+
+    args = Namespace(
+        auth_command="grant-binding",
+        email="typo@example.com",
+        tenant=None,
+        ttl="15m",
+        reason="",
+        json_output=False,
+    )
+    with patch(
+        "robothor.auth.accounts.create_binding_grant",
+        side_effect=GrantTargetError("no account with email 'typo@example.com'"),
+    ):
+        assert cmd_auth(args) == 1
+    assert "no account" in capsys.readouterr().err
+
+
+def test_auth_grants_shows_expired_state(capsys) -> None:
+    args = Namespace(auth_command="grants", tenant=None, include_inactive=True, json_output=False)
+    expired = {**_GRANT, "state": "expired"}
+    with patch("robothor.auth.accounts.list_binding_grants", return_value=[expired]):
+        assert cmd_auth(args) == 0
+    assert "expired" in capsys.readouterr().out

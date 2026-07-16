@@ -464,6 +464,11 @@ def main(argv: list[str] | None = None) -> int:
     auth_grant.add_argument("--tenant", default=None, help="Tenant ID (default: platform default)")
     auth_grant.add_argument("--ttl", default="15m", help="Grant lifetime, e.g. 45s/15m/2h/1d")
     auth_grant.add_argument("--reason", default="", help="Audit reason")
+    auth_grant.add_argument(
+        "--issuer",
+        default=None,
+        help="Pin the grant to one IdP issuer URL (default: any allowlisted IdP)",
+    )
     auth_grant.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
     auth_grants = auth_sub.add_parser("grants", help="List SSO binding grants")
     auth_grants.add_argument("--tenant", default=None, help="Tenant ID (default: platform default)")
@@ -476,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     auth_grants.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
     auth_revoke = auth_sub.add_parser("revoke-binding", help="Revoke a pending binding grant")
     auth_revoke.add_argument("grant_id", help="Grant ID")
+    auth_revoke.add_argument("--tenant", default=None, help="Tenant ID (default: any)")
 
     # engine
     # run -- quick single-shot agent execution

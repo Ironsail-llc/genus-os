@@ -124,6 +124,47 @@ describe("Cloudflare Access JWT verification", () => {
     vi.stubEnv("CF_ACCESS_TEAM_DOMAIN", "");
     expect(await verifyCfAccessJwt(token)).toBeNull();
   });
+
+  it("rejects tokens signed with a non-RS256 algorithm", async () => {
+    const es = await generateKeyPair("ES256");
+    const esJwk = await exportJWK(es.publicKey);
+    const body = JSON.stringify({
+      keys: [
+        { ...(await exportJWK((await generateKeyPair("RS256")).publicKey)), kid: "test-key", alg: "RS256", use: "sig" },
+        { ...esJwk, kid: "es-key", alg: "ES256", use: "sig" },
+      ],
+    });
+    jwksResponse = () =>
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    resetCfJwks();
+    const token = await new SignJWT({ email: "operator@example.com" })
+      .setProtectedHeader({ alg: "ES256", kid: "es-key" })
+      .setIssuer(TEAM)
+      .setAudience(AUD)
+      .setSubject("cf-user-uuid-1")
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(es.privateKey);
+    expect(await verifyCfAccessJwt(token)).toBeNull();
+  });
+
+  it("logs the failure reason instead of swallowing it silently", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await verifyCfAccessJwt("not-a-jwt")).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+    expect(String(errorSpy.mock.calls[0][0])).toContain("cf-access");
+    errorSpy.mockRestore();
+  });
+
+  it("logs a config error for a scheme-less team domain instead of failing silently", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("CF_ACCESS_TEAM_DOMAIN", "team.example.com");
+    resetCfJwks();
+    const token = await signToken({ email: "operator@example.com", iss: "team.example.com" });
+    expect(await verifyCfAccessJwt(token)).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
 });
 
 describe("cfAccessEnabled", () => {

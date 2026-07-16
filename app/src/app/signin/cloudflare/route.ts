@@ -18,8 +18,10 @@ import { CF_JWT_HEADER, cfAccessEnabled } from "@/lib/cf-access";
 export const dynamic = "force-dynamic";
 
 function sanitizeCallbackUrl(raw: string | null): string {
-  // Relative paths only: "/x" is fine, "//host/x" and absolute URLs are not.
-  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
+  // Relative paths only: "/x" is fine; "//host", absolute URLs, and anything
+  // containing "\" are not (WHATWG URL parsing folds "/\" into "//", so a
+  // backslash would reopen the protocol-relative redirect).
+  if (raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\")) return raw;
   return "/";
 }
 

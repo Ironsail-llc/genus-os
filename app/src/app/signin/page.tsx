@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { signIn } from "@/lib/auth";
+import { oidcProviderConfigured, signIn } from "@/lib/auth";
 import { CF_JWT_HEADER, cfAccessEnabled, resolveSignInMode } from "@/lib/cf-access";
 
 /**
@@ -19,12 +19,6 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Cloudflare Access sign-in is not available for this request.",
 };
 
-function oidcConfigured(): boolean {
-  return Boolean(
-    process.env.AUTH_OIDC_ISSUER?.trim() && process.env.AUTH_OIDC_CLIENT_ID?.trim(),
-  );
-}
-
 export default async function SignInPage({
   searchParams,
 }: {
@@ -32,11 +26,13 @@ export default async function SignInPage({
 }) {
   const { callbackUrl, error } = await searchParams;
   const requestHeaders = await headers();
+  const cfEnabled = cfAccessEnabled();
+  const hasCfHeader = Boolean(requestHeaders.get(CF_JWT_HEADER));
 
   const mode = resolveSignInMode({
-    hasCfHeader: Boolean(requestHeaders.get(CF_JWT_HEADER)),
-    cfEnabled: cfAccessEnabled(),
-    oidcConfigured: oidcConfigured(),
+    hasCfHeader,
+    cfEnabled,
+    oidcConfigured: oidcProviderConfigured(),
     errorParam: error,
   });
 
@@ -74,7 +70,9 @@ export default async function SignInPage({
       ) : (
         !errorMessage && (
           <p className="max-w-md text-center text-sm text-muted-foreground">
-            No sign-in method is configured for this deployment.
+            {cfEnabled && !hasCfHeader
+              ? "This deployment signs in through its access-protected hostname. Open the dashboard via its public URL."
+              : "No sign-in method is configured for this deployment."}
           </p>
         )
       )}

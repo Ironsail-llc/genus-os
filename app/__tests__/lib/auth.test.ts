@@ -69,7 +69,7 @@ describe("dashboard OIDC and Bridge session binding", () => {
     expect(signInAllowed({ account, profile })).toBe(false);
     await expect(
       bridgeJwtCallback({ token: {}, account, profile, trigger: "signIn" }),
-    ).rejects.toThrow("verified OIDC identity required");
+    ).rejects.toThrow("verified identity required");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -207,7 +207,7 @@ describe("dashboard OIDC and Bridge session binding", () => {
         user: { ...cfUser, cfClaims: undefined },
         trigger: "signIn",
       }),
-    ).rejects.toThrow("verified OIDC identity required");
+    ).rejects.toThrow("verified identity required");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
