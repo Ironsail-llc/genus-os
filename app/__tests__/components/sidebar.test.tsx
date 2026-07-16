@@ -45,11 +45,10 @@ describe("Sidebar", () => {
   it("highlights active view with accent border", () => {
     renderSidebar({ activeView: "tasks" });
     const tasksBtn = screen.getByTestId("nav-tasks");
-    expect(tasksBtn.className).toMatch(/\bbg-sidebar-accent\b/);
-    expect(tasksBtn.className).toContain("text-sidebar-accent-foreground");
-    expect(tasksBtn.className).toContain("border-l-primary");
+    expect(tasksBtn.className).toContain("bg-primary/10");
+    expect(tasksBtn.className).toContain("border-primary/25");
     const dashboardBtn = screen.getByTestId("nav-dashboard");
-    expect(dashboardBtn.className).not.toContain("text-sidebar-accent-foreground");
+    expect(dashboardBtn.className).not.toContain("bg-primary/10");
   });
 
   it("calls onViewChange when nav item clicked", () => {
@@ -92,6 +91,6 @@ describe("Sidebar", () => {
   it("highlights chat icon when chatOpen", () => {
     renderSidebar({ chatOpen: true });
     const chatBtn = screen.getByTestId("nav-chat");
-    expect(chatBtn.className).toContain("bg-sidebar-accent");
+    expect(chatBtn.className).toContain("bg-primary/10");
   });
 });

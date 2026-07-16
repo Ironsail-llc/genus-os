@@ -1,8 +1,6 @@
 "use client";
 
-import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse, Sparkles } from "lucide-react";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import Image from "next/image";
+import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse, Sparkles, Zap } from "lucide-react";
 
 export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace" | "controls" | "fleet" | "runs" | "workflows" | "health" | "canvas";
 
@@ -12,17 +10,37 @@ interface NavItem {
   label: string;
 }
 
-const navItems: NavItem[] = [
-  { id: "dashboard", icon: <LayoutDashboard className="w-5 h-5" />, label: "Dashboard" },
-  { id: "tasks", icon: <ListTodo className="w-5 h-5" />, label: "Tasks" },
-  { id: "agents", icon: <Bot className="w-5 h-5" />, label: "Agents" },
-  { id: "marketplace", icon: <Store className="w-5 h-5" />, label: "Marketplace" },
-  { id: "controls", icon: <ShieldAlert className="w-5 h-5" />, label: "Controls" },
-  { id: "fleet", icon: <Users className="w-5 h-5" />, label: "Fleet" },
-  { id: "runs", icon: <Activity className="w-5 h-5" />, label: "Runs" },
-  { id: "workflows", icon: <Workflow className="w-5 h-5" />, label: "Workflows" },
-  { id: "health", icon: <HeartPulse className="w-5 h-5" />, label: "Health" },
-  { id: "canvas", icon: <Sparkles className="w-5 h-5" />, label: "Canvas" },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    label: "Workspace",
+    items: [
+      { id: "dashboard", icon: <LayoutDashboard className="w-4 h-4" />, label: "Dashboard" },
+      { id: "tasks", icon: <ListTodo className="w-4 h-4" />, label: "Tasks" },
+      { id: "agents", icon: <Bot className="w-4 h-4" />, label: "Agents" },
+      { id: "marketplace", icon: <Store className="w-4 h-4" />, label: "Marketplace" },
+    ],
+  },
+  {
+    label: "Operator",
+    items: [
+      { id: "controls", icon: <ShieldAlert className="w-4 h-4" />, label: "Controls" },
+      { id: "fleet", icon: <Users className="w-4 h-4" />, label: "Fleet" },
+      { id: "runs", icon: <Activity className="w-4 h-4" />, label: "Runs" },
+      { id: "workflows", icon: <Workflow className="w-4 h-4" />, label: "Workflows" },
+      { id: "health", icon: <HeartPulse className="w-4 h-4" />, label: "Health" },
+    ],
+  },
+  {
+    label: "AI",
+    items: [
+      { id: "canvas", icon: <Sparkles className="w-4 h-4" />, label: "Canvas" },
+    ],
+  },
 ];
 
 interface SidebarProps {
@@ -49,78 +67,77 @@ export function Sidebar({
 
   return (
     <nav
-      className="hidden md:flex flex-col items-center w-12 shrink-0 bg-sidebar border-r border-sidebar-border py-3 gap-1"
+      className="hidden md:flex flex-col w-[196px] shrink-0 bg-sidebar border-r border-sidebar-border px-2.5 py-3 gap-0.5"
       data-testid="sidebar"
     >
-      {/* Brand bolt */}
-      <div className="mb-2" data-testid="sidebar-bolt">
-        <Image
-          src="/robothor-bolt.svg"
-          alt="Genus OS"
-          width={20}
-          height={20}
-          className="opacity-80"
-        />
+      {/* Brand lockup — bolt on a gradient tile */}
+      <div className="flex items-center gap-2.5 px-1.5 pb-3" data-testid="sidebar-bolt">
+        <span
+          aria-hidden
+          className="flex size-6 shrink-0 items-center justify-center rounded-[7px] bg-gradient-to-br from-primary to-brand-2 text-white shadow-sm"
+        >
+          <Zap className="size-3.5" fill="currentColor" strokeWidth={0} />
+        </span>
+        <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
+          Genus&thinsp;
+          <span className="font-medium text-muted-foreground">OS</span>
+        </span>
       </div>
 
-      <div className="w-6 border-t border-sidebar-border mb-1" data-testid="sidebar-separator" />
+      <div className="border-t border-sidebar-border mb-1" data-testid="sidebar-separator" />
 
-      {navItems.map((item) => {
-        const isActive = activeView === item.id;
-        const badge = badgeCounts[item.id] || 0;
-        return (
-          <Tooltip key={item.id}>
-            <TooltipTrigger asChild>
+      {navGroups.map((group) => (
+        <div key={group.label} className="flex flex-col gap-0.5">
+          <div className="px-1.5 pt-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.09em] text-muted-foreground/70">
+            {group.label}
+          </div>
+          {group.items.map((item) => {
+            const isActive = activeView === item.id;
+            const badge = badgeCounts[item.id] || 0;
+            return (
               <button
+                key={item.id}
                 onClick={() => onViewChange(item.id as ViewId)}
-                className={`relative flex items-center justify-center w-9 h-9 rounded-md transition-colors ${
+                className={`relative flex items-center gap-2.5 rounded-md border px-2 py-1.5 text-[13px] transition-colors ${
                   isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground border-l-2 border-l-primary"
-                    : "text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+                    ? "border-primary/25 bg-primary/10 text-sidebar-foreground"
+                    : "border-transparent text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
                 }`}
                 data-testid={`nav-${item.id}`}
               >
-                {item.icon}
+                <span className={isActive ? "text-primary" : ""}>{item.icon}</span>
+                {item.label}
                 {badge > 0 && (
                   <span
-                    className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 rounded-full bg-destructive text-[10px] font-medium flex items-center justify-center px-1 text-white"
+                    className="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 font-mono text-[10px] font-medium text-white"
                     data-testid={`badge-${item.id}`}
                   >
                     {badge > 99 ? "99+" : badge}
                   </span>
                 )}
               </button>
-            </TooltipTrigger>
-            <TooltipContent side="right" sideOffset={8}>
-              {item.label}
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
 
       <div className="flex-1" />
 
-      <div className="w-6 border-t border-sidebar-border mb-1" />
+      <div className="border-t border-sidebar-border mb-1" />
 
       {/* Chat toggle at bottom */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={onChatToggle}
-            className={`relative flex items-center justify-center w-9 h-9 rounded-md transition-colors ${
-              chatOpen
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
-            }`}
-            data-testid="nav-chat"
-          >
-            <MessageSquare className="w-5 h-5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          Chat
-        </TooltipContent>
-      </Tooltip>
+      <button
+        onClick={onChatToggle}
+        className={`relative flex items-center gap-2.5 rounded-md border px-2 py-1.5 text-[13px] transition-colors ${
+          chatOpen
+            ? "border-primary/25 bg-primary/10 text-sidebar-foreground"
+            : "border-transparent text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+        }`}
+        data-testid="nav-chat"
+      >
+        <MessageSquare className={`w-4 h-4 ${chatOpen ? "text-primary" : ""}`} />
+        Chat
+      </button>
     </nav>
   );
 }

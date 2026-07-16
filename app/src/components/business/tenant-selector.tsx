@@ -55,7 +55,7 @@ export function TenantSelector({ onSelect, currentTenantId }: TenantSelectorProp
       <select
         value={selected}
         onChange={handleChange}
-        className="text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+        className="h-8 appearance-none rounded-md border border-input bg-card px-2.5 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring"
         data-testid="tenant-select"
       >
         {tenants.map((t) => (

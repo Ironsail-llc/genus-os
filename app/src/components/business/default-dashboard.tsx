@@ -138,24 +138,49 @@ export function DefaultDashboard() {
         </span>
       </div>
 
-      {/* Metric summary row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3" data-testid="metric-summary">
-        <div className="glass-panel p-4">
-          <p className="text-xs text-muted-foreground mb-1">Active Tasks</p>
-          <p className="text-2xl font-bold text-primary">{activeTasks}</p>
-        </div>
-        <div className="glass-panel p-4">
-          <p className="text-xs text-muted-foreground mb-1">Agents Online</p>
-          <p className="text-2xl font-bold text-emerald-400">{agentSummary.healthy}</p>
-          {agentSummary.failed > 0 && (
-            <p className="text-[10px] text-red-400">{agentSummary.failed} failed</p>
-          )}
-        </div>
-        <div className="glass-panel p-4">
-          <p className="text-xs text-muted-foreground mb-1">System Health</p>
-          <p className="text-2xl font-bold text-emerald-400">
-            {totalServices > 0 ? `${healthyCount}/${totalServices}` : "-"}
+      {/* Metric summary — bento grid; color appears only when a threshold is
+          crossed, so a calm all-gray board reads as "everything is fine". */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="metric-summary">
+        <div className="glass-panel col-span-2 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground/80 mb-1">
+            System Health
           </p>
+          <p
+            className={`font-mono text-3xl font-semibold tabular-nums ${
+              totalServices > 0 && healthyCount < totalServices ? "text-warning" : "text-foreground"
+            }`}
+          >
+            {totalServices > 0 ? (
+              <>
+                {healthyCount}
+                <span className="text-lg text-muted-foreground/60">/{totalServices}</span>
+              </>
+            ) : (
+              "-"
+            )}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {totalServices > 0 && healthyCount === totalServices
+              ? "All services nominal"
+              : totalServices > 0
+                ? "Degraded — see service grid"
+                : "Awaiting first probe"}
+          </p>
+        </div>
+        <div className="glass-panel p-4">
+          <p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground/80 mb-1">
+            Active Tasks
+          </p>
+          <p className="font-mono text-2xl font-semibold tabular-nums text-foreground">{activeTasks}</p>
+        </div>
+        <div className="glass-panel p-4">
+          <p className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground/80 mb-1">
+            Agents Online
+          </p>
+          <p className="font-mono text-2xl font-semibold tabular-nums text-foreground">{agentSummary.healthy}</p>
+          {agentSummary.failed > 0 && (
+            <p className="text-[10px] text-destructive">{agentSummary.failed} failed</p>
+          )}
         </div>
       </div>
 

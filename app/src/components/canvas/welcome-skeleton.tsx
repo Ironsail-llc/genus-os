@@ -1,42 +1,38 @@
 "use client";
 
+import { Skeleton } from "@/components/ui/skeleton";
+
+/** Loading placeholder mirroring DefaultDashboard's greeting + metric grid layout. */
 export function WelcomeSkeleton() {
   return (
-    <div className="p-6 space-y-6 animate-pulse" data-testid="welcome-skeleton">
-      {/* Greeting skeleton */}
+    <div className="p-6 space-y-6" data-testid="welcome-skeleton" aria-hidden>
+      {/* Greeting */}
       <div className="space-y-2">
-        <div className="h-8 w-64 bg-zinc-800 rounded-lg" />
-        <div className="h-4 w-48 bg-zinc-800/60 rounded" />
+        <Skeleton className="h-8 w-64 rounded-lg" />
+        <Skeleton className="h-4 w-48" />
       </div>
 
-      {/* Metric cards skeleton */}
+      {/* Metric tiles — same glass-panel grid the real dashboard renders */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="p-4 rounded-xl border border-zinc-800 space-y-2"
-          >
-            <div className="h-3 w-20 bg-zinc-800/60 rounded" />
-            <div className="h-7 w-16 bg-zinc-800 rounded" />
-            <div className="h-3 w-28 bg-zinc-800/40 rounded" />
+          <div key={i} className="glass-panel p-4 space-y-2">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-7 w-16" />
+            <Skeleton className="h-3 w-28" />
           </div>
         ))}
       </div>
 
-      {/* Content area skeleton */}
+      {/* Content panels */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-4 rounded-xl border border-zinc-800 space-y-3">
-          <div className="h-4 w-32 bg-zinc-800/60 rounded" />
-          <div className="h-3 w-full bg-zinc-800/30 rounded" />
-          <div className="h-3 w-5/6 bg-zinc-800/30 rounded" />
-          <div className="h-3 w-4/6 bg-zinc-800/30 rounded" />
-        </div>
-        <div className="p-4 rounded-xl border border-zinc-800 space-y-3">
-          <div className="h-4 w-32 bg-zinc-800/60 rounded" />
-          <div className="h-3 w-full bg-zinc-800/30 rounded" />
-          <div className="h-3 w-5/6 bg-zinc-800/30 rounded" />
-          <div className="h-3 w-4/6 bg-zinc-800/30 rounded" />
-        </div>
+        {[1, 2].map((i) => (
+          <div key={i} className="rounded-lg border border-border bg-card p-4 space-y-3">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-5/6" />
+            <Skeleton className="h-3 w-4/6" />
+          </div>
+        ))}
       </div>
     </div>
   );

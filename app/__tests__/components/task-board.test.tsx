@@ -52,9 +52,9 @@ describe("TaskBoard", () => {
 
   it("applies SLA overdue styling", () => {
     render(<TaskBoard tasks={mockTasks} />);
-    // The overdue task should have a red ring
+    // The overdue task should have a destructive ring
     const overdueCard = screen.getByText("Overdue").closest("[data-testid='task-card']");
-    expect(overdueCard?.className).toContain("ring-red-500");
+    expect(overdueCard?.className).toContain("ring-destructive");
   });
 
   it("does not apply SLA overdue styling to DONE tasks", () => {
@@ -63,7 +63,7 @@ describe("TaskBoard", () => {
     ];
     render(<TaskBoard tasks={doneTasks} />);
     const card = screen.getByText("Done task").closest("[data-testid='task-card']");
-    expect(card?.className).not.toContain("ring-red-500");
+    expect(card?.className).not.toContain("ring-destructive");
   });
 
   it("renders approve/reject buttons on REVIEW tasks", () => {

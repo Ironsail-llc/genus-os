@@ -28,19 +28,19 @@ interface AgentStatusProps {
 }
 
 const tierConfig: Record<HealthTier, { color: string; bg: string; dotBg: string; border: string; label: string }> = {
-  healthy: { color: "text-emerald-400", bg: "bg-emerald-500/20", dotBg: "bg-emerald-400", border: "border-l-emerald-400", label: "Healthy" },
-  degraded: { color: "text-amber-400", bg: "bg-amber-500/20", dotBg: "bg-amber-400", border: "border-l-amber-400", label: "Degraded" },
-  failed: { color: "text-red-400", bg: "bg-red-500/20", dotBg: "bg-red-400", border: "border-l-red-400", label: "Failed" },
-  sleeping: { color: "text-blue-400", bg: "bg-blue-500/20", dotBg: "bg-blue-400", border: "border-l-blue-400", label: "Sleeping" },
-  unknown: { color: "text-zinc-500", bg: "bg-zinc-700/20", dotBg: "bg-zinc-500", border: "border-l-zinc-500", label: "Unknown" },
+  healthy: { color: "text-success", bg: "bg-success/20", dotBg: "bg-success", border: "border-l-success", label: "Healthy" },
+  degraded: { color: "text-warning", bg: "bg-warning/20", dotBg: "bg-warning", border: "border-l-warning", label: "Degraded" },
+  failed: { color: "text-destructive", bg: "bg-destructive/20", dotBg: "bg-destructive", border: "border-l-destructive", label: "Failed" },
+  sleeping: { color: "text-info", bg: "bg-info/20", dotBg: "bg-info", border: "border-l-info", label: "Sleeping" },
+  unknown: { color: "text-muted-foreground", bg: "bg-muted", dotBg: "bg-muted-foreground", border: "border-l-muted-foreground", label: "Unknown" },
 };
 
 const scoreBarConfig: { key: keyof AgentRPG["scores"]; label: string; color: string }[] = [
-  { key: "reliability", label: "REL", color: "bg-emerald-400" },
-  { key: "debugging", label: "DBG", color: "bg-blue-400" },
-  { key: "patience", label: "PAT", color: "bg-violet-400" },
-  { key: "wisdom", label: "WIS", color: "bg-amber-400" },
-  { key: "chaos", label: "CHA", color: "bg-red-400" },
+  { key: "reliability", label: "REL", color: "bg-success" },
+  { key: "debugging", label: "DBG", color: "bg-info" },
+  { key: "patience", label: "PAT", color: "bg-primary" },
+  { key: "wisdom", label: "WIS", color: "bg-warning" },
+  { key: "chaos", label: "CHA", color: "bg-destructive" },
 ];
 
 function formatDuration(ms?: number): string {
@@ -67,15 +67,15 @@ function humanCron(expr: string): string {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 70) return "text-emerald-400";
-  if (score >= 40) return "text-amber-400";
-  return "text-red-400";
+  if (score >= 70) return "text-success";
+  if (score >= 40) return "text-warning";
+  return "text-destructive";
 }
 
 function scoreBgColor(score: number): string {
-  if (score >= 70) return "bg-emerald-500/20";
-  if (score >= 40) return "bg-amber-500/20";
-  return "bg-red-500/20";
+  if (score >= 70) return "bg-success/20";
+  if (score >= 40) return "bg-warning/20";
+  return "bg-destructive/20";
 }
 
 function ScoreBars({ scores }: { scores: AgentRPG["scores"] }) {
@@ -86,7 +86,7 @@ function ScoreBars({ scores }: { scores: AgentRPG["scores"] }) {
         return (
           <div key={key} className="flex items-center gap-1.5">
             <span className="text-[9px] text-muted-foreground w-6 text-right font-mono">{label}</span>
-            <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
+            <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
               <div
                 className={`h-full rounded-full ${color} transition-all`}
                 style={{ width: `${value}%` }}

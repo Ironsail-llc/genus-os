@@ -116,7 +116,8 @@ describe("AppShell", () => {
   it("renders the header bar", () => {
     render(<AppShell />);
     expect(screen.getByTestId("header-bar")).toBeInTheDocument();
-    expect(screen.getByText("Genus OS")).toBeInTheDocument();
+    // brand lockup lives in the sidebar since the B3 chrome rework
+    expect(screen.getByTestId("sidebar-bolt")).toHaveTextContent(/Genus\s*OS/);
   });
 
   it("header shows current view title", () => {
