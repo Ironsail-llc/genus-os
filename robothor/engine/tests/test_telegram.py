@@ -395,6 +395,8 @@ class TestGoalCommand:
         mock_get.return_value = None
         mock_create.return_value = "task-1"
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal set Keep improving the main agent"
         msg.answer = AsyncMock()
 
@@ -418,6 +420,8 @@ class TestGoalCommand:
             },
         }
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal set Replace without intent"
         msg.answer = AsyncMock()
 
@@ -438,6 +442,8 @@ class TestGoalCommand:
         }
         mock_add.return_value = True
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal evidence implementation did stuff"
         msg.answer = AsyncMock()
 
@@ -458,6 +464,8 @@ class TestGoalCommand:
             "session_goal_meta": {"success_criteria": ["c"], "evidence": [], "completion_note": ""},
         }
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal done shipped"
         msg.answer = AsyncMock()
 
@@ -486,6 +494,8 @@ class TestGoalCommand:
         }
         mock_add.return_value = True
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal evidence-test pytest:passed:42"
         msg.answer = AsyncMock()
 
@@ -517,6 +527,8 @@ class TestGoalCommand:
         }
         mock_add.return_value = True
         msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
         msg.text = "/goal evidence-commit HEAD"
         msg.answer = AsyncMock()
 
@@ -524,6 +536,88 @@ class TestGoalCommand:
         kwargs = mock_add.call_args.kwargs
         assert kwargs["kind"] == "commit"
         assert kwargs["reference"] == "abcdef1234567890"
+
+
+class TestGoalCommandRoleGate:
+    """/goal had NO authorization gate at all (unlike /restart, /agents,
+    /steer, and the perm:/dp:/runctl: callbacks) — any sender in any chat
+    could mutate the operator's session goal. This brings it under the same
+    ``ROBOTHOR_TELEGRAM_ROLE_GATES`` ladder (Task 4, Unified Identity
+    Context) via ``_check_owner_gate``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_off_mode_wrong_chat_refused(self, bot):
+        """off (default): legacy chat_id-equality gate now applies — this is
+        the intended behavior change from the pre-fix "no gate at all"."""
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.text = "/goal set Should be refused"
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bot._handle_goal_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_off_mode_default_chat_passes_gate(self, bot):
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 1
+        msg.text = "/goal status"
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "robothor.engine.session_goal.dal.get_active_session_goal",
+                return_value=None,
+            ):
+                await bot._handle_goal_command(msg)
+
+        assert msg.answer.call_args.args[0] != "Unauthorized."
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_non_owner_in_default_chat_refused(self, bot):
+        """The hole this flag closes: a non-owner posting from the
+        operator's own chat_id must no longer pass."""
+        msg = MagicMock()
+        msg.chat.id = 12345
+        msg.from_user.id = 2
+        msg.text = "/goal set Should be refused"
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Bob", "role": "member"},
+            ):
+                await bot._handle_goal_command(msg)
+
+        msg.answer.assert_called_once_with("Unauthorized.")
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_owner_in_other_chat_passes_gate(self, bot):
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 1
+        msg.text = "/goal status"
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
+            with patch(
+                "robothor.engine.users.lookup_user",
+                return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
+            ):
+                with patch(
+                    "robothor.engine.session_goal.dal.get_active_session_goal",
+                    return_value=None,
+                ):
+                    await bot._handle_goal_command(msg)
+
+        # Gate passed — got past "Unauthorized." to the real goal-status logic.
+        assert msg.answer.call_args.args[0] != "Unauthorized."
 
 
 class TestGoalsBotCommand:

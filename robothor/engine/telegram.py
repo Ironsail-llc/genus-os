@@ -2777,7 +2777,25 @@ class TelegramBot:
         Shortcuts:
           /goal evidence-commit HEAD          — resolves HEAD via `git rev-parse`
           /goal evidence-test pytest:passed:N — short alias for `evidence test_run …`
+
+        Owner-only (gated via ``_check_owner_gate``, Task 4/5 follow-up,
+        Unified Identity Context). Previously this handler had NO
+        authorization check of any kind — any sender in any chat could
+        mutate the operator's session goal.
         """
+        chat_id = str(message.chat.id)
+        sender_id = message.from_user.id if message.from_user else "unknown"
+        if not self._check_owner_gate(
+            chat_id=chat_id, sender_id=str(sender_id), site="goal_command"
+        ):
+            logger.warning(
+                "Unauthorized /goal attempt from chat_id=%s user_id=%s",
+                chat_id,
+                sender_id,
+            )
+            await message.answer("Unauthorized.")
+            return
+
         from robothor.engine.session_goal import (
             add_criterion,
             add_evidence,
