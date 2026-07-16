@@ -134,8 +134,8 @@ describe("AppShell", () => {
     render(<AppShell />);
     const dot = screen.getByTestId("system-status-dot");
     expect(dot).toBeInTheDocument();
-    // 1 failed agent -> amber dot
-    expect(dot.className).toContain("bg-amber");
+    // 1 failed agent -> warning-token dot
+    expect(dot.className).toContain("bg-warning");
   });
 
   it("renders chat panel", () => {
