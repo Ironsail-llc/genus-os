@@ -2,7 +2,9 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import DOMPurify from "isomorphic-dompurify";
+import { useTheme } from "next-themes";
 
+import { CANVAS_BASE_STYLES } from "@/lib/canvas-theme";
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
 
 interface SrcdocRendererProps {
@@ -35,6 +37,7 @@ export const SrcdocRenderer = forwardRef<HTMLIFrameElement, SrcdocRendererProps>
   const iframeRef = useRef<HTMLIFrameElement>(null);
   useImperativeHandle(forwardedRef, () => iframeRef.current as HTMLIFrameElement, []);
   const [height, setHeight] = useState(400);
+  const { resolvedTheme } = useTheme();
   const srcdoc = useMemo(() => {
     const sanitized = DOMPurify.sanitize(html, {
           ADD_TAGS: [
@@ -105,16 +108,13 @@ export const SrcdocRenderer = forwardRef<HTMLIFrameElement, SrcdocRendererProps>
         });
 
     return `<!DOCTYPE html>
-<html>
+<html class="${resolvedTheme === "light" ? "" : "dark"}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none';">
   <style>
-    html, body { margin: 0; padding: 0; background: #18181b; color: #fafafa; }
-    body { padding: 16px; overflow: hidden; font-family: system-ui, sans-serif; }
-    table { border-collapse: collapse; max-width: 100%; }
-    img, svg { max-width: 100%; }
+${CANVAS_BASE_STYLES}
   </style>
 </head>
 <body>
@@ -138,7 +138,7 @@ ${sanitized}
 <\/script>
 </body>
 </html>`;
-  }, [html, bootstrap]);
+  }, [html, bootstrap, resolvedTheme]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {

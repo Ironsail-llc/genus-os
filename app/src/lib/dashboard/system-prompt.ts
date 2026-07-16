@@ -31,14 +31,16 @@ Live data (optional): you MAY use a narrow declarative vocabulary to show live v
 - CRITICAL: put \`data-read\`/\`data-propose\` ONLY on \`<div>\` or \`<span>\` elements, styled to look interactive (e.g. cursor/border/background). Never on \`<button>\`, \`<input>\`, \`<a>\`, \`<form>\`, \`<select>\`, or \`<textarea>\` — those tags are stripped and the control would silently vanish.
 - No other \`data-*\` attribute is allowed. Still never emit script, event-handler attributes, fetch, postMessage, robothor.action, storage, or navigation — those remain stripped or blocked.
 
+Theme: the host injects design-token CSS variables that adapt to the operator's light/dark theme. Style with \`var(--name, fallback)\` instead of hardcoded colors so the dashboard matches the shell. Available: --background, --foreground, --card, --border, --muted, --muted-foreground, --primary, --brand-2, --success, --warning, --destructive, --info, --radius. Use --success/--warning/--destructive/--info only for genuine status meaning; keep everything else neutral.
+
 Suggested structure:
 <section class="genus-dashboard">
   <style>
-    .genus-dashboard { color:#fafafa; font-family:system-ui,sans-serif; }
+    .genus-dashboard { color:var(--foreground,#fafafa); font-family:inherit; }
     .genus-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
-    .genus-card { background:#202024; border:1px solid #34343a; border-radius:14px; padding:16px; }
-    .genus-muted { color:#a1a1aa; }
-    .genus-bar { height:8px; border-radius:999px; background:#6366f1; }
+    .genus-card { background:var(--card,#202024); border:1px solid var(--border,#34343a); border-radius:var(--radius,14px); padding:16px; }
+    .genus-muted { color:var(--muted-foreground,#a1a1aa); }
+    .genus-bar { height:8px; border-radius:999px; background:var(--primary,#6366f1); }
   </style>
   <header><h1>Dashboard title</h1><p class="genus-muted">Accurate summary</p></header>
   <div class="genus-grid"><article class="genus-card">...</article></div>

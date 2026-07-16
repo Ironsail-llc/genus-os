@@ -46,22 +46,22 @@ const statusLabels: Record<string, string> = {
   DONE: "Done",
 };
 const statusColors: Record<string, string> = {
-  TODO: "border-t-zinc-500",
-  IN_PROGRESS: "border-t-blue-500",
-  REVIEW: "border-t-amber-500",
-  DONE: "border-t-emerald-500",
+  TODO: "border-t-muted-foreground",
+  IN_PROGRESS: "border-t-info",
+  REVIEW: "border-t-warning",
+  DONE: "border-t-success",
 };
 const columnTints: Record<string, string> = {
-  TODO: "bg-zinc-500/[0.03]",
-  IN_PROGRESS: "bg-blue-500/[0.03]",
-  REVIEW: "bg-amber-500/[0.03]",
-  DONE: "bg-emerald-500/[0.03]",
+  TODO: "bg-muted-foreground/[0.03]",
+  IN_PROGRESS: "bg-info/[0.03]",
+  REVIEW: "bg-warning/[0.03]",
+  DONE: "bg-success/[0.03]",
 };
 const priorityColors: Record<string, string> = {
-  urgent: "bg-red-500/20 text-red-400",
-  high: "bg-orange-500/20 text-orange-400",
-  normal: "bg-zinc-500/20 text-zinc-400",
-  low: "bg-zinc-700/20 text-zinc-500",
+  urgent: "bg-destructive/20 text-destructive",
+  high: "bg-warning/20 text-warning",
+  normal: "bg-muted text-muted-foreground",
+  low: "bg-muted/50 text-muted-foreground",
 };
 
 function isSlaOverdue(slaDeadlineAt?: string): boolean {
@@ -183,7 +183,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
             {columnTasks.map((task) => (
               <Card
                 key={task.id}
-                className={`glass-panel ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-red-500/50 animate-pulse" : ""}`}
+                className={`glass-panel ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-destructive/50 animate-pulse" : ""}`}
                 data-testid="task-card"
               >
                 <CardHeader className="pb-1 pt-3 px-3">
@@ -194,13 +194,13 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                       </Badge>
                     )}
                     {task.requiresHuman && (
-                      <Badge className="text-[10px] px-1 py-0 bg-red-500/20 text-red-400" data-testid="requires-human-badge">
+                      <Badge className="text-[10px] px-1 py-0 bg-destructive/20 text-destructive" data-testid="requires-human-badge">
                         needs you
                       </Badge>
                     )}
                     {task.escalationCount != null && task.escalationCount > 0 && (
                       <Badge
-                        className="text-[10px] px-1 py-0 bg-amber-500/20 text-amber-400"
+                        className="text-[10px] px-1 py-0 bg-warning/20 text-warning"
                         data-testid="escalation-badge"
                         title={`Escalated ${task.escalationCount}× since last operator answer`}
                       >
@@ -254,11 +254,11 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                   {/* Question + Answer UI — primary path on REVIEW when the planner asked something. */}
                   {status === "REVIEW" && task.questionForOperator && (
                     <div
-                      className="mt-2 rounded border border-amber-500/30 bg-amber-500/[0.05] p-2"
+                      className="mt-2 rounded border border-warning/30 bg-warning/[0.05] p-2"
                       data-testid="question-block"
                     >
-                      <p className="text-xs font-medium text-amber-300/90 mb-1">Question</p>
-                      <p className="text-xs text-amber-100/90 mb-2" data-testid="question-text">
+                      <p className="text-xs font-medium text-warning/90 mb-1">Question</p>
+                      <p className="text-xs text-foreground/90 mb-2" data-testid="question-text">
                         {task.questionForOperator}
                       </p>
                       <textarea
@@ -273,7 +273,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                       <div className="flex gap-1.5 mt-1.5">
                         <Button
                           size="sm"
-                          className="h-7 text-xs px-3 bg-amber-600 hover:bg-amber-700"
+                          className="h-7 text-xs px-3 bg-warning hover:bg-warning/90 text-warning-foreground"
                           disabled={actionPending === task.id || !(answerText[task.id] || "").trim()}
                           onClick={() => handleAnswer(task.id, "IN_PROGRESS")}
                           data-testid="answer-button"
@@ -300,7 +300,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                       <Button
                         size="sm"
                         variant="default"
-                        className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700"
+                        className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
                         disabled={actionPending === task.id}
                         onClick={() => handleApprove(task.id)}
                         data-testid="approve-button"
@@ -334,7 +334,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                           />
                           <Button
                             size="sm"
-                            className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700"
+                            className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
                             disabled={actionPending === task.id || !resolutionText.trim()}
                             onClick={() => handleResolve(task.id)}
                             data-testid="confirm-resolve-button"

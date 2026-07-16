@@ -77,8 +77,8 @@ export function AgentsView({ visible, agents, summary, isLoading }: AgentsViewPr
               onClick={() => setSortBy(mode)}
               className={`text-xs px-2 py-0.5 rounded transition-colors ${
                 sortBy === mode
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "text-muted-foreground hover:text-zinc-300"
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               {mode.charAt(0).toUpperCase() + mode.slice(1)}

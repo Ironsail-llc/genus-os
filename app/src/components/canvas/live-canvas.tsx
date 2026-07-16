@@ -8,7 +8,7 @@ import { DefaultDashboard } from "@/components/business/default-dashboard";
 import { WelcomeSkeleton } from "./welcome-skeleton";
 import { SrcdocRenderer } from "./srcdoc-renderer";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
 
 export function LiveCanvas() {
@@ -130,7 +130,7 @@ export function LiveCanvas() {
             onClick={popView}
             data-testid="back-button"
           >
-            &larr; Back
+            <ArrowLeft className="size-3.5" /> Back
           </Button>
           {currentView && (
             <span className="text-sm font-medium">{currentView.title}</span>
@@ -151,11 +151,11 @@ export function LiveCanvas() {
       {/* Updating spinner overlay — top-right corner */}
       {isUpdating && canvasMode === "dashboard" && (
         <div
-          className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/80 backdrop-blur-sm border border-zinc-700/50"
+          className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-popover/80 backdrop-blur-sm border border-border"
           data-testid="updating-spinner"
         >
-          <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
-          <span className="text-xs text-zinc-400">Updating</span>
+          <Loader2 className="w-3 h-3 animate-spin text-primary" />
+          <span className="text-xs text-muted-foreground">Updating</span>
         </div>
       )}
 

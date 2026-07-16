@@ -33,3 +33,17 @@ describe("FleetView", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("FleetView states", () => {
+  it("shows a loading skeleton while fetching", () => {
+    vi.spyOn(global, "fetch").mockReturnValue(new Promise(() => {}) as never);
+    render(<FleetView visible />);
+    expect(screen.getByTestId("fleet-loading")).toBeTruthy();
+  });
+
+  it("shows an empty state when there is nothing to list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByTestId("fleet-empty")).toBeTruthy();
+  });
+});

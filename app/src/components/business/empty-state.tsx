@@ -8,16 +8,18 @@ export function EmptyState({
   description,
   action,
   className,
+  testId = "empty-state",
 }: {
   icon?: LucideIcon;
   title: string;
   description?: string;
   action?: { label: string; onClick: () => void };
   className?: string;
+  testId?: string;
 }) {
   return (
     <div
-      data-testid="empty-state"
+      data-testid={testId}
       className={cn("flex flex-col items-center justify-center px-4 py-10 text-center", className)}
     >
       {Icon && <Icon aria-hidden className="mb-3 size-6 text-muted-foreground/60" strokeWidth={1.5} />}
