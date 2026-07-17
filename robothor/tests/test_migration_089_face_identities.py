@@ -63,7 +63,7 @@ def test_migration_is_idempotent(db_cursor, db_conn):
 def test_unique_tenant_face_label_constraint(db_cursor, db_conn):
     db_cursor.execute(MIGRATION.read_text())
     db_cursor.execute(
-        "INSERT INTO crm_tenants (id, name) VALUES ('t-face-089', 't-face-089') "
+        "INSERT INTO crm_tenants (id, display_name) VALUES ('t-face-089', 't-face-089') "
         "ON CONFLICT (id) DO NOTHING"
     )
     db_cursor.execute(
@@ -82,7 +82,7 @@ def test_person_delete_sets_face_identities_person_id_null(db_cursor, db_conn):
     cascade-delete the enrollment -- the label stays registered, unlinked."""
     db_cursor.execute(MIGRATION.read_text())
     db_cursor.execute(
-        "INSERT INTO crm_tenants (id, name) VALUES ('t-face-del', 't-face-del') "
+        "INSERT INTO crm_tenants (id, display_name) VALUES ('t-face-del', 't-face-del') "
         "ON CONFLICT (id) DO NOTHING"
     )
     db_cursor.execute(
