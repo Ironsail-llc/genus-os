@@ -41,7 +41,11 @@ def _owner_auth(user_id: str = "loopback-development-operator") -> AuthContext:
 
 def _service_auth(agent_id: str = "main") -> AuthContext:
     return AuthContext(
-        user_id="svc-agent", tenant_id="test-tenant", role="service", typ="service", agent_id=agent_id
+        user_id="svc-agent",
+        tenant_id="test-tenant",
+        role="service",
+        typ="service",
+        agent_id=agent_id,
     )
 
 
@@ -81,9 +85,7 @@ class TestEffectiveSessionKeyEnforce:
     def test_agent_id_parsed_from_requested_key(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
         auth = _member_auth(user_id="bob")
-        assert (
-            _effective_session_key(auth, "agent:research:primary") == "agent:research:user:bob"
-        )
+        assert _effective_session_key(auth, "agent:research:primary") == "agent:research:user:bob"
 
     def test_owner_unchanged_even_in_enforce(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
@@ -373,9 +375,7 @@ class TestExportEndpointIsolation:
                 "/chat/inject",
                 json={"session_key": "agent:main:primary", "message": "bob only"},
             )
-            res = await client.get(
-                "/chat/export?session_key=agent:main:primary&format=json"
-            )
+            res = await client.get("/chat/export?session_key=agent:main:primary&format=json")
         assert res.status_code == 200
         data = res.json()
         assert data["session_key"] == "agent:main:user:bob"
@@ -424,9 +424,7 @@ class TestPlanEndpointsIsolation:
         assert res.json()["active"] is True
 
     @pytest.mark.asyncio
-    async def test_plan_approve_executes_in_derived_session(
-        self, client, mock_runner, monkeypatch
-    ):
+    async def test_plan_approve_executes_in_derived_session(self, client, mock_runner, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
         plan_run = AgentRun(
             status=RunStatus.COMPLETED,
@@ -540,7 +538,9 @@ class TestDeepEndpointsIsolation:
 
             await _asyncio.sleep(0.05)
             return AgentRun(
-                status=RunStatus.COMPLETED, output_text="deep answer", trigger_type=TriggerType.WEBCHAT
+                status=RunStatus.COMPLETED,
+                output_text="deep answer",
+                trigger_type=TriggerType.WEBCHAT,
             )
 
         mock_runner.execute_deep = AsyncMock(side_effect=slow_execute_deep)

@@ -163,9 +163,7 @@ def _is_service_caller(user_role: str, user_id: str) -> bool:
     every single call until the negative cache absorbs it (60s TTL).
     """
     return (
-        user_role == "service"
-        or user_role.startswith("service:")
-        or user_id.startswith("service:")
+        user_role == "service" or user_role.startswith("service:") or user_id.startswith("service:")
     )
 
 
@@ -559,9 +557,7 @@ class AgentRunner:
             ):
                 from robothor.identity import resolve_identity
 
-                effective_identity = resolve_identity(
-                    "webchat", effective_user_id, resolved_tenant
-                )
+                effective_identity = resolve_identity("webchat", effective_user_id, resolved_tenant)
             elif (
                 trigger_type == TriggerType.TELEGRAM
                 and trigger_detail
@@ -821,9 +817,7 @@ class AgentRunner:
                 # enrich_identity does blocking DB work on a cache miss —
                 # offload to the executor so it never blocks the event loop,
                 # mirroring the first-turn warmup path just above.
-                _enriched = await loop.run_in_executor(
-                    None, enrich_identity, effective_identity
-                )
+                _enriched = await loop.run_in_executor(None, enrich_identity, effective_identity)
             except Exception as e:
                 logger.debug(
                     "Per-turn identity enrichment failed for %s: %s",

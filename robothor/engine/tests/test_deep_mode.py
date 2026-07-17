@@ -279,9 +279,7 @@ class TestExecuteDeep:
             return real_run_in_executor(self_loop, executor, func, *args)
 
         with (
-            patch(
-                "robothor.identity.enrich_identity", return_value=None
-            ) as mock_enrich,
+            patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
             patch.object(
                 asyncio.base_events.BaseEventLoop,
                 "run_in_executor",

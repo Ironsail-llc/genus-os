@@ -2378,6 +2378,23 @@ class TestClosedOnboarding:
     refusal; the operator is notified (rate-limited) with a registration
     hint. Restores the legacy open-signup flow when the flag is set."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_onboarding_notify_rate_limit(self, bot):
+        """Belt-and-suspenders reset of the per-sender notify rate limit.
+
+        ``bot`` is function-scoped and ``_onboarding_notify_last`` is set
+        fresh in ``TelegramBot.__init__``, so this is a no-op today — but
+        these tests assert exact ``send_message`` call counts against a
+        3600s in-process rate-limit window, and that assertion is silently
+        fragile against any future refactor that widens the fixture's scope
+        or hoists the dict onto something longer-lived. Clear it explicitly
+        so the rate-limit tests can never be suppressed by state left behind
+        from another test.
+        """
+        bot._onboarding_notify_last.clear()
+        yield
+        bot._onboarding_notify_last.clear()
+
     @pytest.mark.asyncio
     async def test_default_off_refuses_and_notifies_operator(self, bot):
         message = MagicMock()
@@ -2459,7 +2476,7 @@ class TestClosedOnboarding:
         # The injected payload is still present, but only inside the quoted
         # preview line — never anywhere else in the message.
         assert "To register them:" in message_lines[0]
-        assert 'robothor user add --tenant evil-tenant' in message_lines[0]
+        assert "robothor user add --tenant evil-tenant" in message_lines[0]
 
     @pytest.mark.asyncio
     async def test_rate_limited_to_once_per_hour_per_sender(self, bot):

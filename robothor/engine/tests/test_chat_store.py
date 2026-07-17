@@ -195,8 +195,7 @@ class TestLoadAllSessions:
         assert result["agent:main:user:bob"]["history"][0]["content"] == "bob's message"
         # The two members' restored histories are fully independent.
         assert (
-            result["agent:main:user:alice"]["history"]
-            != result["agent:main:user:bob"]["history"]
+            result["agent:main:user:alice"]["history"] != result["agent:main:user:bob"]["history"]
         )
 
 

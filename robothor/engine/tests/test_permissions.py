@@ -208,9 +208,7 @@ class TestCheckToolPermissionUserOverride:
                 [("*", "allow", "__default__")],  # role_permissions (never needed)
             ]
 
-            result = check_tool_permission(
-                "owner", "test-tenant", "delete_task", user_id="user-1"
-            )
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
             assert result is not None
             assert "denied" in result
 
@@ -236,9 +234,7 @@ class TestCheckToolPermissionUserOverride:
                 [("*", "allow"), ("delete_task", "deny")],  # user_permissions
             ]
 
-            result = check_tool_permission(
-                "owner", "test-tenant", "delete_task", user_id="user-1"
-            )
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
             assert result is not None
             assert "denied" in result
 
@@ -252,9 +248,7 @@ class TestCheckToolPermissionUserOverride:
                 [("*", "allow", "__default__")],  # role_permissions
             ]
 
-            result = check_tool_permission(
-                "user", "test-tenant", "create_person", user_id="user-1"
-            )
+            result = check_tool_permission("user", "test-tenant", "create_person", user_id="user-1")
             assert result is None
             assert mock_cursor.execute.call_count == 2
 
@@ -278,18 +272,12 @@ class TestCheckToolPermissionUserOverride:
                 [],  # role_permissions
             ]
 
-            result = check_tool_permission(
-                "user", "test-tenant", "create_person", user_id="user-1"
-            )
+            result = check_tool_permission("user", "test-tenant", "create_person", user_id="user-1")
             assert result is not None
             assert "denied" in result
 
     def test_db_error_during_user_lookup_fails_closed(self):
-        with patch(
-            "robothor.db.connection.get_connection", side_effect=Exception("DB down")
-        ):
-            result = check_tool_permission(
-                "owner", "test-tenant", "delete_task", user_id="user-1"
-            )
+        with patch("robothor.db.connection.get_connection", side_effect=Exception("DB down")):
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
             assert result is not None
             assert "denied" in result

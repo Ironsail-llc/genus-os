@@ -1599,13 +1599,17 @@ class TelegramBot:
                 # gap) over the shared, chat_id-keyed cache — a caller that
                 # bypasses the coalescing buffer (direct _run_interactive
                 # call, no sender_info) falls back to the cache unchanged.
-                _user = sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
+                _user = (
+                    sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
+                )
                 _sender = _user["display_name"] if _user else ""
                 _detail = f"chat:{chat_id}"
                 if _sender:
                     _safe = _sender.replace("|", "")
                     _detail += f"|sender:{_safe}"
-                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(chat_id)
+                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(
+                    chat_id
+                )
 
                 # Unified identity context (robothor.identity) — built from the
                 # same cached lookup_user()/fallback dict as _sender/user_id
@@ -1862,7 +1866,9 @@ class TelegramBot:
         import uuid
         from datetime import datetime
 
-        user = sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        user = (
+            sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        )
         tenant_id = user.get("tenant_id") or self.config.tenant_id
         _identity = self._build_identity(user, chat_id, tenant_id)
 
@@ -1981,7 +1987,9 @@ class TelegramBot:
         any await) and never re-read from the shared, chat_id-keyed
         ``_chat_user_info`` cache.
         """
-        user = sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        user = (
+            sender_info if sender_info is not None else (self._resolve_user(chat_id, message) or {})
+        )
         tenant_id = user.get("tenant_id") or self.config.tenant_id
         _identity = self._build_identity(user, chat_id, tenant_id)
 
@@ -2419,9 +2427,7 @@ class TelegramBot:
         """
         from datetime import datetime
 
-        user = (
-            sender_info if sender_info is not None else (self._chat_user_info.get(chat_id) or {})
-        )
+        user = sender_info if sender_info is not None else (self._chat_user_info.get(chat_id) or {})
         tenant_id = user.get("tenant_id") or self._get_tenant_id(chat_id)
         _identity = self._build_identity(user, chat_id, tenant_id)
 

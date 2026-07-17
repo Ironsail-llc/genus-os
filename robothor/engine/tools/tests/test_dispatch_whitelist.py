@@ -20,7 +20,7 @@ def seeded_service_permission(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "robothor.engine.permissions.check_tool_permission",
-        lambda role, tenant, tool: (
+        lambda role, tenant, tool, *, user_id=None: (
             None if role == "service" else "Missing execution role — access denied"
         ),
     )

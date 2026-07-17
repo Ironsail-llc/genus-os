@@ -387,9 +387,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch(
                 "robothor.engine.warmup.build_interactive_preamble", return_value=""
             ) as mock_warmup,
@@ -428,9 +426,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.engine.run_person_link.resolve_run_person_id") as mock_resolve,
         ):
             run = await runner.execute(
@@ -466,9 +462,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity", return_value=resolved) as mock_resolve,
         ):
             run = await runner.execute(
@@ -502,9 +496,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity") as mock_resolve,
         ):
             run = await runner.execute(
@@ -534,9 +526,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity") as mock_resolve,
         ):
             run = await runner.execute(
@@ -625,12 +615,8 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
-            patch(
-                "robothor.identity.enrich_identity", return_value=None
-            ) as mock_enrich,
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
             patch.object(
                 _asyncio.base_events.BaseEventLoop,
                 "run_in_executor",
@@ -707,9 +693,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ) as mock_llm,
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_llm,
         ):
             run = await runner.execute(
                 "test-agent",
@@ -747,9 +731,7 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
             patch("robothor.engine.runner.create_step"),
-            patch(
-                "litellm.acompletion", new_callable=AsyncMock, return_value=response
-            ),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
         ):
             run = await runner.execute(
                 "test-agent",

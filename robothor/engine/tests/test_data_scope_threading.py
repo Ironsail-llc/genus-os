@@ -50,9 +50,7 @@ async def test_execute_tool_threads_identity_into_tool_context() -> None:
         return {"ok": True}
 
     with patch.object(dispatch, "_get_handlers", return_value={"probe": _capture}):
-        await dispatch._execute_tool(
-            "probe", {}, user_role="member", identity=identity
-        )
+        await dispatch._execute_tool("probe", {}, user_role="member", identity=identity)
 
     assert captured["identity"] is identity
 

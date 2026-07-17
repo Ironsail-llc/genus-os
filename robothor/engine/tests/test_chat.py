@@ -559,7 +559,9 @@ class TestIdentityThreading:
             verified=True,
             display_name="Alice",
         )
-        run = AgentRun(status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT)
+        run = AgentRun(
+            status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT
+        )
         mock_runner.execute = AsyncMock(return_value=run)
 
         with patch("robothor.identity.resolve_identity", return_value=identity) as mock_resolve:
@@ -587,7 +589,9 @@ class TestIdentityThreading:
             typ="service",
             agent_id="main",
         )
-        run = AgentRun(status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT)
+        run = AgentRun(
+            status=RunStatus.COMPLETED, output_text="hi", trigger_type=TriggerType.WEBCHAT
+        )
         mock_runner.execute = AsyncMock(return_value=run)
 
         with (
