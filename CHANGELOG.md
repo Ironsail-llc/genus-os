@@ -1,3 +1,9 @@
+## [1.27.1](https://github.com/Ironsail-llc/genus-os/compare/v1.27.0...v1.27.1) (2026-07-17)
+
+### Bug Fixes
+
+* **migrate:** tolerate instance-local legacy migrations in reconcile ([#222](https://github.com/Ironsail-llc/genus-os/issues/222)) ([5900a71](https://github.com/Ironsail-llc/genus-os/commit/5900a71e78f4e5418dac7934266e60b91d56c688))
+
 ## [1.27.0](https://github.com/Ironsail-llc/genus-os/compare/v1.26.0...v1.27.0) (2026-07-17)
 
 ### Features
