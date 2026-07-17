@@ -14,7 +14,12 @@ All three are single-var `off → observe → enforce` ladders (see
 `robothor/engine/feature_flags.py` for the authoritative docstrings).
 `off` is always byte-identical to pre-Unified-Identity-Context behavior.
 `observe` never changes output/authorization — it only logs what `enforce`
-would have done, for soak review. `enforce` is the real behavior change.
+would have done, for soak review — with one deliberate exception:
+`ROBOTHOR_TELEGRAM_ROLE_GATES=observe` fabricates an unregistered GROUP-chat
+sender as `role=guest` (zero tool grants, fail-closed) instead of `off`'s
+`role=user`, the same value `enforce` uses, so observe soak already reflects
+the real deny-all outcome for that path (`telegram.py::_resolve_user`,
+`~telegram.py:2688`). `enforce` is the real behavior change everywhere else.
 
 | Flag | Off (default) | Observe | Enforce |
 |------|----------------|---------|---------|

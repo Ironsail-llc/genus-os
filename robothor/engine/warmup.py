@@ -386,20 +386,47 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
+def _open_tasks_section(
+    tenant_id: str,
+    limit: int = 10,
+    scope: DataScope | None = None,
+    observe_scope_obj: DataScope | None = None,
+    user_id: str | None = None,
+) -> str:
     """Render the top open tasks grouped by assigned agent.
 
     For main's Telegram warmup — lets the supervisor answer 'what's open?'
     without spinning tool calls.
+
+    ``scope`` (final-review Fix 2 / Task 5 follow-up): threaded straight into
+    ``list_tasks`` — under enforce, a restricted identity's FIRST Telegram
+    message otherwise pre-loaded the tenant's whole open-task queue with no
+    prior tool call to filter it through. ``observe_scope_obj`` is
+    dry-run-only would-drop counting, same as ``_build_entity_context``.
     """
     try:
         from robothor.crm.dal import list_tasks
+        from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
         rows = list_tasks(
             tenant_id=tenant_id,
             exclude_resolved=True,
             limit=limit,
+            scope=scope,
         )
+
+        if observe_scope_obj is not None and rows:
+            # list_tasks() rows are task_to_dict() output (camelCase keys),
+            # not raw DB columns — person_key must match that shape.
+            _dropped = rows_dropped_by_scope(rows, observe_scope_obj, person_key="personId")
+            log_would_drop(
+                tool_name="warmup:open_tasks",
+                user_id=user_id,
+                scope=observe_scope_obj,
+                dropped=_dropped,
+                table="crm_tasks",
+            )
+
         if not rows:
             return "--- OPEN TASKS ---\nNothing open."
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -423,12 +450,29 @@ def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
         return ""
 
 
-def _recent_fleet_surfaces(tenant_id: str, hours: int = 6, limit: int = 6) -> str:
+def _recent_fleet_surfaces(
+    tenant_id: str,
+    hours: int = 6,
+    limit: int = 6,
+    scope: DataScope | None = None,
+    observe_scope_obj: DataScope | None = None,
+    user_id: str | None = None,
+) -> str:
     """Pull recent fleet agent deliveries from the channel bus (dual-writes
     into main's session with origin='channel_bus'). Gives main awareness of
     what other agents posted to the operator's Telegram channel in the last
     few hours.
+
+    ``scope`` (final-review Fix 2 / Task 5 follow-up): fleet surfaces are
+    operator-oriented (what other agents told the operator on their own
+    Telegram channel) — they carry no ``person_id`` to filter row-by-row, so
+    under enforce a restricted identity skips the section entirely rather
+    than the "own data + shared" row rule used elsewhere. ``observe_scope_obj``
+    is dry-run-only would-drop counting: every row surfaced counts as a drop
+    since the whole section would have been skipped under enforce.
     """
+    if scope is not None and scope.restricted:
+        return ""
     try:
         from robothor.db import get_connection
 
@@ -453,6 +497,18 @@ def _recent_fleet_surfaces(tenant_id: str, hours: int = 6, limit: int = 6) -> st
                 rows = cur.fetchall()
         if not rows:
             return ""
+
+        if observe_scope_obj is not None:
+            from robothor.identity.scope import log_would_drop
+
+            log_would_drop(
+                tool_name="warmup:fleet_surfaces",
+                user_id=user_id,
+                scope=observe_scope_obj,
+                dropped=len(rows),
+                table="chat_messages",
+            )
+
         lines = [f"--- RECENT FLEET SURFACES (last {hours}h) ---"]
         for created_at, author, content in rows:
             ts = created_at.strftime("%H:%M") if created_at else "?"
@@ -606,10 +662,20 @@ def build_interactive_preamble(
     # Main-only panoramic sections: open task queue + recent fleet surfaces.
     # These let the supervisor answer "what's going on?" from context alone.
     if agent_id == "main":
-        tasks_section = _open_tasks_section(tenant_id=tenant_id)
+        tasks_section = _open_tasks_section(
+            tenant_id=tenant_id,
+            scope=_enforce_scope,
+            observe_scope_obj=_observe_scope,
+            user_id=_scope_user_id,
+        )
         if tasks_section:
             sections.append(tasks_section)
-        fleet_section = _recent_fleet_surfaces(tenant_id=tenant_id)
+        fleet_section = _recent_fleet_surfaces(
+            tenant_id=tenant_id,
+            scope=_enforce_scope,
+            observe_scope_obj=_observe_scope,
+            user_id=_scope_user_id,
+        )
         if fleet_section:
             sections.append(fleet_section)
 
