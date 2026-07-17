@@ -693,6 +693,35 @@ The `contact_identifiers` table maps every channel+identifier tuple to:
 
 This allows a single person to be recognized whether they email, call, text, or appear on camera.
 
+#### Unified Identity Context
+
+`robothor/identity/` is the platform seam every channel resolves an
+interactive caller through, so the rest of the system reasons about one
+identity shape instead of one per channel:
+
+- **`crm_people` is the canonical identity** — one row per human. Every
+  other identity table is a *credential/channel binding* pointing at a
+  person: `user_accounts` (SSO/webchat), `tenant_users` (Telegram),
+  `face_identities` (vision, migration 089), and `contact_identifiers`
+  (all channels, plus the bridge into the memory graph). One human, one
+  person, many bindings.
+- **`resolve_identity(channel, identifier, tenant_id) -> IdentityContext`**
+  resolves any channel-native id (webchat account UUID, Telegram user id,
+  a recognized face label) down to a common shape — `role`, `person_id`,
+  `verified`, etc. — used uniformly by prompt assembly, permissions, and
+  audit.
+- **The `--- CURRENT USER ---` prompt block** (`IdentityContext.prompt_block`)
+  is injected on the first turn of every interactive run (and re-injected
+  on later turns in a lightweight form) so the agent always knows who it's
+  talking to, enriched with CRM affiliation and memory-graph relationships
+  when a `person_id` is resolvable.
+- **"Own data + shared" scoping** — non-privileged identities (role not in
+  `{owner, admin, service}`) draw only on rows linked to their own
+  `person_id`, plus org-general (`person_id IS NULL`) rows; owner/admin/
+  service and system/cron callers see everything in-tenant unchanged. See
+  `robothor/identity/scope.py` and `docs/runbooks/IDENTITY_ROLLOUT.md` for
+  the flags, rollout order, and CLI.
+
 ---
 
 ## Memory System
