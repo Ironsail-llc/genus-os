@@ -563,7 +563,15 @@ async def _resolve_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 @_handler("list_agent_tasks")
 async def _list_agent_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_agent_tasks
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         list_agent_tasks,
         agent_id=args.get("agentId", ctx.agent_id),
@@ -572,14 +580,35 @@ async def _list_agent_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str,
         exclude_resolved=args.get("excludeResolved", True),
         limit=args.get("limit", 50),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope(results, _obs_scope)
+        log_would_drop(
+            tool_name="list_agent_tasks",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_tasks",
+        )
+
     return {"tasks": results, "count": len(results)}
 
 
 @_handler("list_my_tasks")
 async def _list_my_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_agent_tasks
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         list_agent_tasks,
         agent_id=ctx.agent_id,
@@ -588,7 +617,20 @@ async def _list_my_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         exclude_resolved=args.get("excludeResolved", True),
         limit=args.get("limit", 50),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_scope(results, _obs_scope)
+        log_would_drop(
+            tool_name="list_my_tasks",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="crm_tasks",
+        )
+
     return {"tasks": results, "count": len(results)}
 
 
@@ -778,14 +820,50 @@ async def _get_object_metadata(args: dict[str, Any], ctx: ToolContext) -> dict[s
 @_handler("search_records")
 async def _search_records(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import search_records
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        rows_dropped_by_scope,
+        scope_for_query,
+    )
 
+    _mode = data_scoping_mode()
     results = await asyncio.to_thread(
         search_records,
         query=args.get("query", ""),
         object_name=args.get("objectName"),
         limit=args.get("limit", 20),
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        # search_records fans out across sub-tables with different
+        # ownership shapes (crm_people is own-row-only via id; crm_notes/
+        # crm_tasks are own+shared via person_id; crm_companies is
+        # deliberately unscoped — see robothor.crm.dal.search_records
+        # docstring) — count would-drop per table, not globally.
+        by_table: dict[str, list[dict[str, Any]]] = {}
+        for r in results:
+            by_table.setdefault(r.get("_table", ""), []).append(r)
+        for table, rows in by_table.items():
+            if table == "crm_people":
+                _dropped = rows_dropped_by_identity_scope(rows, _obs_scope)
+            elif table in ("crm_notes", "crm_tasks"):
+                _dropped = rows_dropped_by_scope(rows, _obs_scope)
+            else:
+                _dropped = 0  # crm_companies: unscoped by design
+            log_would_drop(
+                tool_name="search_records",
+                user_id=ctx.user_id,
+                scope=_obs_scope,
+                dropped=_dropped,
+                table=table,
+            )
+
     return {"results": results, "count": len(results)}
 
 
@@ -862,12 +940,40 @@ async def _get_conversation(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 @_handler("list_messages")
 async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import list_messages
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
 
-    return {
-        "payload": await asyncio.to_thread(
-            list_messages, args["conversationId"], tenant_id=ctx.tenant_id
+    _mode = data_scoping_mode()
+    result = await asyncio.to_thread(
+        list_messages,
+        args["conversationId"],
+        tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
+    )
+    if isinstance(result, dict) and "error" in result:
+        return result
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        # list_messages is all-or-nothing (own conversation or refused, no
+        # per-row filtering) — dry-run the same ownership check enforce
+        # mode would apply and log the would-be refusal, without denying.
+        from robothor.crm.dal import get_conversation
+
+        convo = await asyncio.to_thread(
+            get_conversation, args["conversationId"], tenant_id=ctx.tenant_id
         )
-    }
+        convo_person = (convo or {}).get("person_id") if convo else None
+        if convo_person not in (None, _obs_scope.person_id):
+            log_would_drop(
+                tool_name="list_messages",
+                user_id=ctx.user_id,
+                scope=_obs_scope,
+                dropped=len(result) if isinstance(result, list) else 0,
+                table="crm_messages",
+            )
+
+    return {"payload": result}
 
 
 @_handler("create_message")

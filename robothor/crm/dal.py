@@ -2177,8 +2177,17 @@ def list_agent_tasks(
     exclude_resolved: bool = True,
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
-    """Get an agent's task inbox, priority-ordered."""
+    """Get an agent's task inbox, priority-ordered.
+
+    ``scope``: filtering by ``agent_id`` alone is not row-ownership — a
+    restricted caller's agent could be assigned a task linked to someone
+    else's ``person_id``. Restricted scopes additionally get the "own data
+    + shared" predicate (``person_id = scope.person_id OR person_id IS
+    NULL``), same rule as ``list_tasks``/``get_task``.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         conditions = ["deleted_at IS NULL", "tenant_id = %s"]
@@ -2194,6 +2203,9 @@ def list_agent_tasks(
             params.append(status)
         if exclude_resolved and not status:
             conditions.append("status != 'DONE'")
+        if scope is not None and scope.restricted:
+            conditions.append("(person_id = %s OR person_id IS NULL)")
+            params.append(scope.person_id)
         params.append(limit)
         cur.execute(
             f"""SELECT * FROM crm_tasks
@@ -2736,10 +2748,34 @@ def get_conversation(
         return conversation_to_dict(row) if row else None
 
 
-def list_messages(conversation_id: int, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
-    """List all messages in a conversation."""
+def list_messages(
+    conversation_id: int,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """List all messages in a conversation.
+
+    ``scope``: a bare ``conversationId`` with no ownership check is an IDOR
+    — a restricted caller could enumerate ids and read any conversation's
+    messages. When restricted, the conversation's ``person_id`` linkage is
+    checked FIRST (same "own data + shared" rule as
+    ``list_conversations``/``get_conversation``: own person, or unlinked/
+    ``person_id IS NULL`` conversations, are readable). A mismatch returns
+    ``{"error": ...}`` instead of messages — fail closed, don't silently
+    return an empty list that could be confused with "no messages".
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        if scope is not None and scope.restricted:
+            cur.execute(
+                "SELECT person_id FROM crm_conversations WHERE id = %s AND tenant_id = %s",
+                (conversation_id, tenant_id),
+            )
+            convo = cur.fetchone()
+            convo_person = convo["person_id"] if convo else None
+            if convo_person not in (None, scope.person_id):
+                return {"error": "Access denied — conversation not linked to your record"}
         cur.execute(
             """
             SELECT * FROM crm_messages
@@ -3422,9 +3458,30 @@ def get_object_metadata(object_name: str) -> dict[str, Any] | None:
 
 
 def search_records(
-    query: str, object_name: str | None = None, limit: int = 20, tenant_id: str = DEFAULT_TENANT
+    query: str,
+    object_name: str | None = None,
+    limit: int = 20,
+    tenant_id: str = DEFAULT_TENANT,
+    *,
+    scope: DataScope | None = None,
 ) -> list[dict[str, Any]]:
-    """Cross-table keyword search on CRM entities."""
+    """Cross-table keyword search on CRM entities.
+
+    ``scope``: applied per sub-table since each has a different ownership
+    shape —
+
+      - ``crm_people`` has no ``person_id`` column (a person row IS the
+        person, same as ``search_people``/``get_person``): restricted
+        callers are limited to their own row (``id = scope.person_id``),
+        with no org-general carve-out.
+      - ``crm_notes`` / ``crm_tasks``: the usual "own data + shared" rule
+        (``person_id = scope.person_id OR person_id IS NULL``), same as
+        ``list_notes``/``list_tasks``.
+      - ``crm_companies``: deliberately left UNSCOPED. Companies are
+        org-general reference data with no ``person_id``/ownership concept
+        at all, so every in-tenant caller may search them regardless of
+        scope — there is nothing to restrict.
+    """
     results: list[dict[str, Any]] = []
     pattern = f"%{query}%"
 
@@ -3438,14 +3495,25 @@ def search_records(
     if object_name and object_name in tables:
         tables = {object_name: tables[object_name]}
 
+    restricted = scope is not None and scope.restricted
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         for table, cols in tables.items():
             conditions = " OR ".join(f"{c} ILIKE %s" for c in cols)
-            params = [pattern] * len(cols)
+            params: list[Any] = [pattern] * len(cols)
+            scope_clause = ""
+            if restricted:
+                if table == "crm_people":
+                    scope_clause = " AND id = %s"
+                    params.append(scope.person_id)  # type: ignore[union-attr]
+                elif table in ("crm_notes", "crm_tasks"):
+                    scope_clause = " AND (person_id = %s OR person_id IS NULL)"
+                    params.append(scope.person_id)  # type: ignore[union-attr]
+                # crm_companies: unscoped by design — see docstring.
             cur.execute(
                 f"SELECT *, '{table}' as _table FROM {table} "
-                f"WHERE deleted_at IS NULL AND tenant_id = %s AND ({conditions}) "
+                f"WHERE deleted_at IS NULL AND tenant_id = %s AND ({conditions}){scope_clause} "
                 f"ORDER BY updated_at DESC LIMIT %s",
                 [tenant_id, *params, limit],
             )

@@ -831,8 +831,12 @@ async def search_facts(
             Identity Context). ``None`` (the default — every pre-existing
             caller) is unrestricted, byte-identical to pre-Task-5 SQL. A
             restricted scope adds ``(person_id = %s OR person_id IS NULL)``
-            to both candidate-generating queries below — auxiliary paths
-            (entity expansion, insights, episodes) are unaffected; see
+            to both candidate-generating queries below, AND to the
+            entity-graph expansion query (``expand_entities=True`` — it
+            queries the same ``memory_facts`` table and must not be able to
+            pull in another person's facts through the expansion fan-out).
+            Other auxiliary paths (insights, episodes, chat-turn merge in
+            ``_append_auxiliary``) are unaffected — see
             robothor/identity/scope.py and the Task 5 report for the
             documented rationale.
 
@@ -946,18 +950,20 @@ async def search_facts(
                             with get_connection() as conn:
                                 cur = conn.cursor(cursor_factory=RealDictCursor)
                                 cur.execute(
-                                    """
+                                    f"""
                                     SELECT id, fact_text, category, entities, confidence,
-                                           source_type, metadata, created_at, importance_score
+                                           source_type, metadata, created_at, importance_score,
+                                           person_id
                                     FROM memory_facts
                                     WHERE is_active = TRUE AND tenant_id = %s
                                       AND %s = ANY(entities)
                                       AND importance_score > 0.5
                                       AND id != ALL(%s)
+                                      {scope_clause}
                                     ORDER BY importance_score DESC, created_at DESC
                                     LIMIT 2
                                     """,
-                                    (_tenant, related_name, list(expansion_ids)),
+                                    (_tenant, related_name, list(expansion_ids), *scope_params),
                                 )
                                 for r in cur.fetchall():
                                     r = dict(r)

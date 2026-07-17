@@ -106,18 +106,14 @@ class TestListNotesScoping:
     async def test_off_mode_scope_none(self):
         with _mode_env("off"), patch("robothor.crm.dal.list_notes") as mock_list:
             mock_list.return_value = []
-            await _call(
-                "list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member"
-            )
+            await _call("list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         assert mock_list.call_args.kwargs.get("scope") is None
 
     @pytest.mark.asyncio
     async def test_enforce_mode_restricted_identity_passes_scope(self):
         with _mode_env("enforce"), patch("robothor.crm.dal.list_notes") as mock_list:
             mock_list.return_value = []
-            await _call(
-                "list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member"
-            )
+            await _call("list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         scope = mock_list.call_args.kwargs.get("scope")
         assert scope is not None
         assert scope.restricted is True
@@ -147,9 +143,7 @@ class TestListNotesScoping:
                 {"id": "n1", "person_id": "person-1"},
                 {"id": "n2", "person_id": "person-9"},
             ]
-            await _call(
-                "list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member"
-            )
+            await _call("list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         assert mock_list.call_args.kwargs.get("scope") is None
         msgs = [r.getMessage() for r in caplog.records]
         assert any("would_drop=1" in m and "table=crm_notes" in m for m in msgs)
@@ -205,9 +199,7 @@ class TestOtherCrmHandlersWireScope:
     async def test_list_conversations(self):
         with _mode_env("enforce"), patch("robothor.crm.dal.list_conversations") as mock_list:
             mock_list.return_value = []
-            await _call(
-                "list_conversations", {}, identity=RESTRICTED_IDENTITY, user_role="member"
-            )
+            await _call("list_conversations", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         assert mock_list.call_args.kwargs.get("scope") is not None
 
     @pytest.mark.asyncio
@@ -233,3 +225,131 @@ class TestOtherCrmHandlersWireScope:
                 user_role="member",
             )
         assert mock_get.call_args.kwargs.get("scope") is not None
+
+    @pytest.mark.asyncio
+    async def test_search_records(self):
+        with _mode_env("enforce"), patch("robothor.crm.dal.search_records") as mock_search:
+            mock_search.return_value = []
+            await _call(
+                "search_records",
+                {"query": "alice"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert mock_search.call_args.kwargs.get("scope") is not None
+
+    @pytest.mark.asyncio
+    async def test_list_messages(self):
+        with _mode_env("enforce"), patch("robothor.crm.dal.list_messages") as mock_list:
+            mock_list.return_value = []
+            await _call(
+                "list_messages",
+                {"conversationId": 1},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert mock_list.call_args.kwargs.get("scope") is not None
+
+    @pytest.mark.asyncio
+    async def test_list_agent_tasks(self):
+        with _mode_env("enforce"), patch("robothor.crm.dal.list_agent_tasks") as mock_list:
+            mock_list.return_value = []
+            await _call("list_agent_tasks", {}, identity=RESTRICTED_IDENTITY, user_role="member")
+        assert mock_list.call_args.kwargs.get("scope") is not None
+
+    @pytest.mark.asyncio
+    async def test_list_my_tasks(self):
+        with _mode_env("enforce"), patch("robothor.crm.dal.list_agent_tasks") as mock_list:
+            mock_list.return_value = []
+            await _call("list_my_tasks", {}, identity=RESTRICTED_IDENTITY, user_role="member")
+        assert mock_list.call_args.kwargs.get("scope") is not None
+
+
+class TestListMessagesRefusal:
+    """Finding 2 (Task 5 review): list_messages IDOR — a restricted caller
+    with a bare conversationId could read any tenant conversation's
+    messages. Enforce mode refuses; observe mode logs without refusing."""
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_denies_other_persons_conversation(self):
+        with _mode_env("enforce"), patch("robothor.crm.dal.list_messages") as mock_list:
+            mock_list.return_value = {
+                "error": "Access denied — conversation not linked to your record"
+            }
+            result = await _call(
+                "list_messages",
+                {"conversationId": 1},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_observe_mode_logs_would_refuse_without_denying(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.list_messages") as mock_list,
+            patch("robothor.crm.dal.get_conversation") as mock_get_convo,
+        ):
+            mock_list.return_value = [{"id": "m1"}, {"id": "m2"}]
+            mock_get_convo.return_value = {"id": 1, "person_id": "person-9"}
+            result = await _call(
+                "list_messages",
+                {"conversationId": 1},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        # Observe must not filter/deny — the real (unrestricted) messages
+        # still come back.
+        assert result == {"payload": [{"id": "m1"}, {"id": "m2"}]}
+        assert mock_list.call_args.kwargs.get("scope") is None
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any(
+            "data_scoping" in m and "would_drop=2" in m and "table=crm_messages" in m for m in msgs
+        )
+
+    @pytest.mark.asyncio
+    async def test_observe_mode_own_conversation_no_log(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.list_messages") as mock_list,
+            patch("robothor.crm.dal.get_conversation") as mock_get_convo,
+        ):
+            mock_list.return_value = [{"id": "m1"}]
+            mock_get_convo.return_value = {"id": 1, "person_id": "person-1"}
+            await _call(
+                "list_messages",
+                {"conversationId": 1},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("data_scoping" in m for m in msgs)
+
+
+class TestSearchRecordsPerTableObserve:
+    @pytest.mark.asyncio
+    async def test_observe_mode_logs_per_table(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with _mode_env("observe"), patch("robothor.crm.dal.search_records") as mock_search:
+            mock_search.return_value = [
+                {"id": "p1", "_table": "crm_people"},  # not own row -> dropped
+                {"id": "n1", "person_id": "person-9", "_table": "crm_notes"},  # dropped
+                {"id": "c1", "_table": "crm_companies"},  # unscoped, never dropped
+            ]
+            await _call(
+                "search_records", {"query": "x"}, identity=RESTRICTED_IDENTITY, user_role="member"
+            )
+        assert mock_search.call_args.kwargs.get("scope") is None
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("would_drop=1" in m and "table=crm_people" in m for m in msgs)
+        assert any("would_drop=1" in m and "table=crm_notes" in m for m in msgs)
+        assert not any("table=crm_companies" in m for m in msgs)
