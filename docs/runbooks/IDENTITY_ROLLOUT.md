@@ -108,9 +108,10 @@ robothor user link-face --label LABEL --person-id PERSON_ID
   backfilled for `081`–`085`, which the runner had never actually applied in
   production (wedged on a checksum mismatch at migration 039 — see the
   2026-07-16 CF Access sign-in incident). **Before deploying this branch,
-  check applied-migration status against prod first** (`robothor status`
-  surfaces any migration not yet applied) — do not assume 081–085 are
-  already live just because they predate this branch.
+  check applied-migration status against prod first** (`python -m
+  robothor.db.migrate status` reports applied/pending/DRIFT/MISSING per
+  migration) — do not assume 081–085 are already live just because they
+  predate this branch.
 - **Migration 088 is a live behavior change**, not a pure addition: it
   UPDATEs the `role_permissions` row migration 071 seeded
   (`tenant_id='__default__', role='member', tool_pattern='*'`) from `allow`
