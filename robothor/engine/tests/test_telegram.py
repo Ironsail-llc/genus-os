@@ -2498,6 +2498,33 @@ class TestClosedOnboarding:
         assert bot.bot.send_message.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_first_notification_never_rate_limited_regardless_of_host_uptime(self, bot):
+        """Root cause of a CI-only failure (never reproduced locally): the rate
+        limiter compared ``time.monotonic()`` directly against a ``last`` default
+        of ``0.0`` instead of treating "never notified" as its own state.
+        ``time.monotonic()``'s epoch is arbitrary (time since boot on Linux) — on
+        a long-lived dev box it is always far past the 3600s window, so the bug
+        was invisible locally, but a freshly booted CI VM can have an uptime
+        under 3600s, making the very first notification for any sender look like
+        it happened "less than an hour ago" and get silently dropped. This test
+        pins that the first notification always fires no matter how small
+        ``time.monotonic()`` is."""
+        message = MagicMock()
+        message.from_user.id = 777
+        message.from_user.username = None
+        message.text = "hello"
+        message.caption = None
+        bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("robothor.engine.telegram.time.monotonic", return_value=500.0),
+        ):
+            await bot._handle_unregistered_sender(message, "777")
+
+        assert bot.bot.send_message.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_different_senders_each_notify_independently(self, bot):
         bot.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
 

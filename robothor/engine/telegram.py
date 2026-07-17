@@ -2810,8 +2810,14 @@ class TelegramBot:
         identical to the genuine one, to trick the operator into running it.
         """
         now = time.monotonic()
-        last = self._onboarding_notify_last.get(telegram_user_id, 0.0)
-        if now - last < _ONBOARDING_NOTIFY_INTERVAL_SECONDS:
+        # ``last`` must default to "never notified", not to 0.0. time.monotonic()'s
+        # epoch is arbitrary (time since boot on Linux) — comparing against a
+        # literal 0.0 silently drops the very first notification for any sender
+        # whenever process/system uptime is under the rate-limit window (e.g. a
+        # freshly booted CI runner), while never manifesting on a long-lived host
+        # where monotonic() is always far past the window.
+        last = self._onboarding_notify_last.get(telegram_user_id)
+        if last is not None and now - last < _ONBOARDING_NOTIFY_INTERVAL_SECONDS:
             return
         self._onboarding_notify_last[telegram_user_id] = now
 
