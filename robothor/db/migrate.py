@@ -21,6 +21,7 @@ Usage::
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import sys
 from contextlib import contextmanager
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 from robothor.db.connection import get_connection
+
+logger = logging.getLogger(__name__)
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -313,20 +316,28 @@ def _insert_history(
     )
 
 
-def _reconcile_legacy_history(conn: Any, migrations: list[Migration]) -> None:
+def _reconcile_legacy_history(conn: Any, migrations: list[Migration]) -> list[tuple[str, str]]:
     """Adopt the old numeric-key ledger without conflating duplicate IDs.
 
     Exact historical filenames take precedence.  Thus an old ``071`` row for
     ``071_memory_vault.sql`` adopts only that migration and leaves
     ``071_user_accounts.sql`` pending.  A filename-less duplicate numeric key
     is rejected unless its checksum identifies exactly one file.
+
+    A legacy row that matches no manifest entry by filename, checksum, or
+    version is instance-local SQL the manifest deliberately excludes (for
+    example the delphi persona set) rather than a reconciliation failure.
+    Such rows are skipped and returned as ``(version, filename)`` pairs so
+    callers can surface them, instead of raising.  A numeric version that
+    *does* collide with a manifest version, but not exactly, remains a hard
+    error: that is genuine ambiguity/rename risk, not an excluded migration.
     """
 
     cursor = conn.cursor()
     cursor.execute("SELECT to_regclass(%s)", ("public.schema_migrations",))
     relation = cursor.fetchone()
     if not relation or relation[0] is None:
-        return
+        return []
 
     cursor.execute(
         "SELECT version, filename, applied_at, checksum "
@@ -340,6 +351,7 @@ def _reconcile_legacy_history(conn: Any, migrations: list[Migration]) -> None:
         by_version.setdefault(discovered_migration.version, []).append(discovered_migration)
         by_checksum.setdefault(discovered_migration.checksum, []).append(discovered_migration)
 
+    unmanaged: list[tuple[str, str]] = []
     for legacy_version, legacy_filename, applied_at, legacy_checksum in legacy_rows:
         filename = Path(str(legacy_filename)).name if legacy_filename else ""
         migration: Migration | None = by_filename.get(filename)
@@ -360,10 +372,15 @@ def _reconcile_legacy_history(conn: Any, migrations: list[Migration]) -> None:
                     f"without an exact filename/checksum; candidates: {choices}"
                 )
             else:
-                raise MigrationHistoryError(
-                    f"Legacy migration {legacy_version!r}/{filename!r} is not present "
-                    "in the canonical manifest"
+                display_filename = filename or str(legacy_filename or "")
+                logger.warning(
+                    "legacy migration %r/%r not in canonical manifest — treated as "
+                    "instance-local, left unmanaged",
+                    legacy_version,
+                    display_filename,
                 )
+                unmanaged.append((str(legacy_version), display_filename))
+                continue
 
         if legacy_checksum and str(legacy_checksum) != migration.checksum:
             raise MigrationDriftError(
@@ -378,11 +395,14 @@ def _reconcile_legacy_history(conn: Any, migrations: list[Migration]) -> None:
             reconciled_from_legacy=True,
         )
 
+    return unmanaged
 
-def _prepare_history(conn: Any, migrations: list[Migration]) -> None:
+
+def _prepare_history(conn: Any, migrations: list[Migration]) -> list[tuple[str, str]]:
     _ensure_history_table(conn)
-    _reconcile_legacy_history(conn, migrations)
+    unmanaged = _reconcile_legacy_history(conn, migrations)
     conn.commit()
+    return unmanaged
 
 
 def _applied(conn: Any) -> dict[str, AppliedMigration]:
@@ -464,7 +484,7 @@ def status(
 
     migrations = _discover(migrations_dir)
     with _connection(connection) as conn, _advisory_lock(conn):
-        _prepare_history(conn, migrations)
+        unmanaged = _prepare_history(conn, migrations)
         applied = _applied(conn)
 
     rows: list[dict[str, Any]] = []
@@ -506,6 +526,18 @@ def status(
                     "applied_at": record.applied_at,
                 }
             )
+
+    for legacy_version, legacy_filename in unmanaged:
+        rows.append(
+            {
+                "migration_id": f"unmanaged:{legacy_filename or legacy_version}",
+                "version": legacy_version,
+                "filename": legacy_filename,
+                "source": "",
+                "status": "unmanaged",
+                "applied_at": None,
+            }
+        )
     return rows
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -206,6 +207,51 @@ def test_legacy_duplicate_version_adopts_exact_file_only(tmp_path: Path) -> None
 
 
 def test_legacy_duplicate_version_without_identity_is_rejected(tmp_path: Path) -> None:
+    _write_migration(tmp_path, "071_alpha.sql", "SELECT 'alpha';")
+    _write_migration(tmp_path, "071_beta.sql", "SELECT 'beta';")
+    connection = _FakeConnection(legacy=[("071", "unknown.sql", "then", None)])
+
+    with pytest.raises(migrate.MigrationHistoryError, match="ambiguous"):
+        migrate.status(migrations_dir=tmp_path, connection=connection)
+
+
+def test_legacy_instance_local_migration_is_left_unmanaged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A legacy row for a migration deliberately excluded from the manifest
+    (e.g. delphi persona SQL, per manifest.txt's own contract) must not wedge
+    reconciliation. Its version does not collide with any manifest version at
+    all, so it is skipped rather than raising.
+    """
+    _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
+    connection = _FakeConnection(
+        legacy=[("058", "058_delphi_proposals.sql", "then", "f" * 64)]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="robothor.db.migrate"):
+        rows = migrate.status(migrations_dir=tmp_path, connection=connection)
+
+    # The instance-local row was not adopted into the canonical ledger.
+    assert connection.history == {}
+    # It is surfaced in status output as unmanaged, not silently dropped.
+    unmanaged_rows = [row for row in rows if row["status"] == "unmanaged"]
+    assert len(unmanaged_rows) == 1
+    assert unmanaged_rows[0]["filename"] == "058_delphi_proposals.sql"
+    assert unmanaged_rows[0]["version"] == "058"
+    # The canonical migration is still reported normally.
+    assert any(row["migration_id"] == "001_first" for row in rows)
+    assert any(
+        "058" in record.message and "instance-local" in record.message
+        for record in caplog.records
+    )
+
+
+def test_legacy_version_collision_with_manifest_still_raises(tmp_path: Path) -> None:
+    """A legacy version that DOES collide with the manifest (multiple files
+    share that numeric prefix) but can't be disambiguated by filename or
+    checksum remains a hard failure — this is genuine ambiguity/rename risk,
+    not an excluded instance-local migration.
+    """
     _write_migration(tmp_path, "071_alpha.sql", "SELECT 'alpha';")
     _write_migration(tmp_path, "071_beta.sql", "SELECT 'beta';")
     connection = _FakeConnection(legacy=[("071", "unknown.sql", "then", None)])
