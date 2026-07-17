@@ -15,6 +15,7 @@ from robothor.engine.warmup import (
     build_interactive_preamble,
     build_warmth_preamble,
 )
+from robothor.identity import EnrichedIdentity, IdentityContext
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -350,6 +351,121 @@ class TestBuildInteractivePreamble:
 
             assert "Alice works at Acme" in result
 
+    def test_identity_injects_prompt_block_instead_of_sender_name(self) -> None:
+        """When identity is provided, its prompt_block() replaces the legacy
+        sender_name text — even if sender_name is also passed (back-compat)."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None) as mock_enrich,
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="Bob",  # should be ignored — identity wins
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "--- CURRENT USER ---" in result
+        assert "Alice" in result
+        assert "Bob" not in result
+        assert "Verified: yes" in result
+        mock_enrich.assert_called_once_with(identity)
+
+    def test_identity_enrichment_appears_in_block(self) -> None:
+        """Enrichment (company/job title) is folded into the CURRENT USER block."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        enriched = EnrichedIdentity(company="Acme", job_title="Ops Lead")
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=enriched),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "Acme" in result
+        assert "Ops Lead" in result
+
+    def test_no_identity_falls_back_to_sender_name(self) -> None:
+        """identity=None preserves the legacy sender_name behavior."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with patch(BLOCK_PATCH, return_value=None):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    sender_name="Alice",
+                    identity=None,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "CURRENT USER" in result
+        assert "You are speaking with Alice" in result
+
+    def test_identity_display_name_excluded_from_entity_context(self) -> None:
+        """The entity-context exclusion set uses identity.display_name, not
+        sender_name, when identity is present."""
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch(
+                    "robothor.engine.warmup._build_entity_context", return_value=""
+                ) as mock_entity_ctx,
+            ):
+                build_interactive_preamble(
+                    "main",
+                    user_message="Tell Alice about the project",
+                    include_blocks=False,
+                    identity=identity,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert mock_entity_ctx.call_args.kwargs["exclude_names"] == {"Alice"}
+
 
 class TestInteractivePanoramicSections:
     """Phase 4 — main's interactive warmup gets two new sections:
@@ -480,3 +596,476 @@ class TestInteractivePanoramicSections:
 
         assert "OPEN TASKS" in result
         assert "Nothing open" in result or "nothing open" in result.lower()
+
+
+class TestWarmupDataScoping:
+    """Fix 1 (final-review, Unified Identity Context): warmup prompt assembly
+    must respect ``ROBOTHOR_DATA_SCOPING`` the same way tool handlers do
+    (``robothor.identity.scope``) — a restricted identity's FIRST message
+    (no prior tool call, no filter) must not pre-load operator-private
+    memory blocks or another person's entity facts into the prompt.
+    """
+
+    RESTRICTED = IdentityContext(
+        tenant_id="tenant-a",
+        channel="webchat",
+        identifier="user-1",
+        verified=True,
+        display_name="Bob",
+        role="member",
+        person_id="person-1",
+    )
+    PRIVILEGED = IdentityContext(
+        tenant_id="tenant-a",
+        channel="webchat",
+        identifier="user-owner",
+        verified=True,
+        display_name="Owner",
+        role="owner",
+        person_id="person-owner",
+    )
+
+    @staticmethod
+    def _mode_env(mode: str):
+        import os
+
+        return patch.dict(os.environ, {"ROBOTHOR_DATA_SCOPING": mode}, clear=False)
+
+    @staticmethod
+    def _block_side_effect(name: str, tenant_id: str = "default") -> dict | None:
+        return {"content": f"OPERATOR-SECRET-{name.upper()}", "last_written_at": None}
+
+    # ── Memory blocks ──────────────────────────────────────────────
+
+    def test_enforce_restricted_identity_drops_operator_blocks(self) -> None:
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello there",
+                    include_blocks=True,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        # The agent's own persona is not operator-private — it stays.
+        assert "OPERATOR-SECRET-PERSONA" in result
+        # user_profile / user_model / working_context describe the OPERATOR —
+        # a restricted identity under enforce must never see them.
+        assert "OPERATOR-SECRET-USER_PROFILE" not in result
+        assert "OPERATOR-SECRET-USER_MODEL" not in result
+        assert "OPERATOR-SECRET-WORKING_CONTEXT" not in result
+
+    def test_enforce_privileged_identity_keeps_operator_blocks(self) -> None:
+        """Owner/admin/service identities are unaffected — byte-identical."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello there",
+                    include_blocks=True,
+                    identity=self.PRIVILEGED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPERATOR-SECRET-USER_PROFILE" in result
+        assert "OPERATOR-SECRET-USER_MODEL" in result
+        assert "OPERATOR-SECRET-WORKING_CONTEXT" in result
+
+    def test_off_mode_restricted_identity_keeps_operator_blocks(self) -> None:
+        """Flag off: byte-identical to pre-Task-5 behavior, even restricted."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("off"),
+                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello there",
+                    include_blocks=True,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPERATOR-SECRET-USER_PROFILE" in result
+        assert "OPERATOR-SECRET-USER_MODEL" in result
+        assert "OPERATOR-SECRET-WORKING_CONTEXT" in result
+
+    def test_no_identity_keeps_operator_blocks(self) -> None:
+        """identity=None (system/cron path) is unaffected regardless of mode."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello there",
+                    include_blocks=True,
+                    identity=None,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "OPERATOR-SECRET-USER_PROFILE" in result
+
+    def test_observe_mode_keeps_output_but_logs_would_drop(self, caplog) -> None:
+        import logging
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        try:
+            with (
+                self._mode_env("observe"),
+                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello there",
+                    include_blocks=True,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        # Observe mode never changes output.
+        assert "OPERATOR-SECRET-USER_PROFILE" in result
+        assert "OPERATOR-SECRET-USER_MODEL" in result
+        assert "OPERATOR-SECRET-WORKING_CONTEXT" in result
+        # ...but it must log what enforce would have dropped.
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("would_drop" in m and "warmup:memory_blocks" in m for m in msgs)
+
+    # ── Entity context SQL ─────────────────────────────────────────
+
+    def test_enforce_restricted_identity_scopes_entity_sql(self) -> None:
+        from robothor.engine.warmup import _build_entity_context
+        from robothor.identity.scope import scope_for_query
+
+        scope = scope_for_query("enforce", self.RESTRICTED)
+        assert scope is not None
+        assert scope.restricted is True
+
+        with patch("robothor.db.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = []
+
+            _build_entity_context("Tell Carol about the project", scope=scope)
+
+            sql, params = mock_cursor.execute.call_args[0]
+            assert "person_id" in sql
+            assert scope.person_id in params
+
+    def test_off_mode_entity_sql_unscoped(self) -> None:
+        from robothor.engine.warmup import _build_entity_context
+
+        with patch("robothor.db.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = []
+
+            _build_entity_context("Tell Carol about the project", scope=None)
+
+            sql, _params = mock_cursor.execute.call_args[0]
+            assert "person_id = %s OR person_id IS NULL" not in sql
+
+    def test_observe_mode_entity_sql_unscoped_but_logs_would_drop(self, caplog) -> None:
+        import logging
+
+        from robothor.engine.warmup import _build_entity_context
+        from robothor.identity.scope import observe_scope
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        obs = observe_scope("observe", self.RESTRICTED)
+        assert obs is not None
+
+        with patch("robothor.db.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = [
+                {"fact_text": "own fact", "category": "x", "importance_score": 0.9,
+                 "person_id": "person-1"},
+                {"fact_text": "someone else's fact", "category": "x", "importance_score": 0.9,
+                 "person_id": "person-9"},
+            ]  # fmt: skip
+
+            result = _build_entity_context(
+                "Tell Carol about the project",
+                scope=None,
+                observe_scope_obj=obs,
+            )
+
+        # Observe mode must not filter the actual output.
+        assert "own fact" in result
+        assert "someone else's fact" in result
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("would_drop" in m and "warmup:entity_context" in m for m in msgs)
+
+    def test_full_preamble_enforce_threads_scope_into_entity_context(self) -> None:
+        """End-to-end: build_interactive_preamble under enforce actually
+        passes the restricted scope down into _build_entity_context — this
+        is the exact leak path (entity mention on the FIRST message, no
+        prior tool call to filter through)."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch(
+                    "robothor.engine.warmup._build_entity_context", return_value=""
+                ) as mock_entity_ctx,
+            ):
+                build_interactive_preamble(
+                    "main",
+                    user_message="Tell Carol about the project",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        passed_scope = mock_entity_ctx.call_args.kwargs.get("scope")
+        assert passed_scope is not None
+        assert passed_scope.restricted is True
+        assert passed_scope.person_id == "person-1"
+
+    # ── Open tasks + fleet surfaces (final-review Fix 2) ─────────────
+    # _open_tasks_section called list_tasks() with no scope at all — a
+    # restricted member's first-turn "main" preamble pre-loaded the whole
+    # tenant's open task queue. _recent_fleet_surfaces was ungated entirely.
+
+    def test_enforce_restricted_identity_scopes_open_tasks_query(self) -> None:
+        """Fix: the derived enforce scope must reach list_tasks() so a
+        restricted caller's SQL is actually filtered — not just displayed
+        the same query everyone else gets."""
+        from robothor.identity.scope import scope_for_query
+
+        scope = scope_for_query("enforce", self.RESTRICTED)
+        assert scope is not None
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]) as mock_list,
+                patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+            ):
+                build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        passed_scope = mock_list.call_args.kwargs.get("scope")
+        assert passed_scope is not None
+        assert passed_scope.restricted is True
+        assert passed_scope.person_id == "person-1"
+
+    def test_off_mode_open_tasks_query_unscoped(self) -> None:
+        """Byte-identical pre-Fix-2 behavior: scope=None reaches list_tasks."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("off"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]) as mock_list,
+                patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+            ):
+                build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert mock_list.call_args.kwargs.get("scope") is None
+
+    def test_observe_mode_open_tasks_logs_would_drop(self, caplog) -> None:
+        """Observe never filters the queue — but a task belonging to another
+        person must be counted and logged as a would-drop."""
+        import logging
+
+        mock_tasks = [
+            {"id": "t1", "title": "My task", "status": "TODO",
+             "assignedToAgent": "main", "personId": "person-1"},
+            {"id": "t2", "title": "Someone else's task", "status": "TODO",
+             "assignedToAgent": "main", "personId": "person-9"},
+        ]  # fmt: skip
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        try:
+            with (
+                self._mode_env("observe"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=mock_tasks),
+                patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+            ):
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        # Observe mode never changes output — both tasks still render.
+        assert "My task" in result
+        assert "Someone else's task" in result
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("would_drop" in m and "warmup:open_tasks" in m for m in msgs)
+
+    def test_enforce_restricted_identity_skips_fleet_surfaces(self) -> None:
+        """Fix: fleet surfaces are operator-oriented — a restricted identity
+        under enforce must not see them at all, not just a filtered subset."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch("robothor.db.get_connection") as mock_conn,
+            ):
+                mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                mock_cursor.fetchall.return_value = [
+                    (datetime.now(UTC), "devops-manager", "weekly report clean"),
+                ]
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "RECENT FLEET SURFACES" not in result
+        assert "devops-manager" not in result
+
+    def test_enforce_privileged_identity_keeps_fleet_surfaces(self) -> None:
+        """Owner/admin/service identities are unaffected — byte-identical."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("enforce"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch("robothor.db.get_connection") as mock_conn,
+            ):
+                mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                mock_cursor.fetchall.return_value = [
+                    (datetime.now(UTC), "devops-manager", "weekly report clean"),
+                ]
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.PRIVILEGED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "RECENT FLEET SURFACES" in result
+        assert "devops-manager" in result
+
+    def test_off_mode_keeps_fleet_surfaces_for_restricted_identity(self) -> None:
+        """Flag off: byte-identical to pre-Fix-2 behavior, even restricted."""
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        try:
+            with (
+                self._mode_env("off"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch("robothor.db.get_connection") as mock_conn,
+            ):
+                mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                mock_cursor.fetchall.return_value = [
+                    (datetime.now(UTC), "devops-manager", "weekly report clean"),
+                ]
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        assert "RECENT FLEET SURFACES" in result
+        assert "devops-manager" in result
+
+    def test_observe_mode_fleet_surfaces_logs_would_drop(self, caplog) -> None:
+        """Observe never filters the section — but the whole section is
+        operator-oriented, so every row surfaced is a would-drop."""
+        import logging
+
+        saved = _CONTEXT_HOOKS.copy()
+        _CONTEXT_HOOKS.clear()
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        try:
+            with (
+                self._mode_env("observe"),
+                patch(BLOCK_PATCH, return_value=None),
+                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                patch("robothor.crm.dal.list_tasks", return_value=[]),
+                patch("robothor.db.get_connection") as mock_conn,
+            ):
+                mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                mock_cursor.fetchall.return_value = [
+                    (datetime.now(UTC), "devops-manager", "weekly report clean"),
+                ]
+                result = build_interactive_preamble(
+                    "main",
+                    user_message="hello",
+                    include_blocks=False,
+                    identity=self.RESTRICTED,
+                )
+        finally:
+            _CONTEXT_HOOKS[:] = saved
+
+        # Observe mode never changes output.
+        assert "RECENT FLEET SURFACES" in result
+        assert "devops-manager" in result
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("would_drop" in m and "warmup:fleet_surfaces" in m for m in msgs)

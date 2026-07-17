@@ -22,11 +22,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.identity import enrich_identity
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
+    from robothor.identity import IdentityContext
+    from robothor.identity.scope import DataScope
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +323,43 @@ def _build_memory_blocks_section(block_names: list[str], tenant_id: str = DEFAUL
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+# Memory blocks that describe the OPERATOR (not the agent) — under
+# ``ROBOTHOR_DATA_SCOPING=enforce`` a restricted (non-privileged) identity
+# must not have these pre-loaded into its prompt. ``persona`` is excluded —
+# it describes the AGENT, not the operator, so every caller keeps it.
+_OPERATOR_PERSONAL_BLOCKS: tuple[str, ...] = ("user_profile", "user_model", "working_context")
+
+
+def _count_operator_blocks_with_content(
+    block_names: tuple[str, ...] = _OPERATOR_PERSONAL_BLOCKS, tenant_id: str = DEFAULT_TENANT
+) -> int:
+    """How many of ``block_names`` currently have content.
+
+    Used only for observe-mode would-drop counting (Task 5 warmup fix) —
+    counts blocks that enforce mode would have excluded, without altering
+    output. Mirrors the content-extraction logic in
+    ``_build_memory_blocks_section``.
+    """
+    from robothor.memory.blocks import read_block
+
+    count = 0
+    for name in block_names:
+        try:
+            result = read_block(name, tenant_id=tenant_id)
+            content = (
+                result.get("content", "")
+                if isinstance(result, dict)
+                else str(result)
+                if result
+                else ""
+            )
+            if content:
+                count += 1
+        except Exception as e:
+            logger.debug("Observe-scope block count failed for %s: %s", name, e)
+    return count
+
+
 def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
     """Read context files (status files etc.) and format them."""
     if not file_paths:
@@ -346,20 +386,47 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
+def _open_tasks_section(
+    tenant_id: str,
+    limit: int = 10,
+    scope: DataScope | None = None,
+    observe_scope_obj: DataScope | None = None,
+    user_id: str | None = None,
+) -> str:
     """Render the top open tasks grouped by assigned agent.
 
     For main's Telegram warmup — lets the supervisor answer 'what's open?'
     without spinning tool calls.
+
+    ``scope`` (final-review Fix 2 / Task 5 follow-up): threaded straight into
+    ``list_tasks`` — under enforce, a restricted identity's FIRST Telegram
+    message otherwise pre-loaded the tenant's whole open-task queue with no
+    prior tool call to filter it through. ``observe_scope_obj`` is
+    dry-run-only would-drop counting, same as ``_build_entity_context``.
     """
     try:
         from robothor.crm.dal import list_tasks
+        from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
         rows = list_tasks(
             tenant_id=tenant_id,
             exclude_resolved=True,
             limit=limit,
+            scope=scope,
         )
+
+        if observe_scope_obj is not None and rows:
+            # list_tasks() rows are task_to_dict() output (camelCase keys),
+            # not raw DB columns — person_key must match that shape.
+            _dropped = rows_dropped_by_scope(rows, observe_scope_obj, person_key="personId")
+            log_would_drop(
+                tool_name="warmup:open_tasks",
+                user_id=user_id,
+                scope=observe_scope_obj,
+                dropped=_dropped,
+                table="crm_tasks",
+            )
+
         if not rows:
             return "--- OPEN TASKS ---\nNothing open."
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -383,12 +450,29 @@ def _open_tasks_section(tenant_id: str, limit: int = 10) -> str:
         return ""
 
 
-def _recent_fleet_surfaces(tenant_id: str, hours: int = 6, limit: int = 6) -> str:
+def _recent_fleet_surfaces(
+    tenant_id: str,
+    hours: int = 6,
+    limit: int = 6,
+    scope: DataScope | None = None,
+    observe_scope_obj: DataScope | None = None,
+    user_id: str | None = None,
+) -> str:
     """Pull recent fleet agent deliveries from the channel bus (dual-writes
     into main's session with origin='channel_bus'). Gives main awareness of
     what other agents posted to the operator's Telegram channel in the last
     few hours.
+
+    ``scope`` (final-review Fix 2 / Task 5 follow-up): fleet surfaces are
+    operator-oriented (what other agents told the operator on their own
+    Telegram channel) — they carry no ``person_id`` to filter row-by-row, so
+    under enforce a restricted identity skips the section entirely rather
+    than the "own data + shared" row rule used elsewhere. ``observe_scope_obj``
+    is dry-run-only would-drop counting: every row surfaced counts as a drop
+    since the whole section would have been skipped under enforce.
     """
+    if scope is not None and scope.restricted:
+        return ""
     try:
         from robothor.db import get_connection
 
@@ -413,6 +497,18 @@ def _recent_fleet_surfaces(tenant_id: str, hours: int = 6, limit: int = 6) -> st
                 rows = cur.fetchall()
         if not rows:
             return ""
+
+        if observe_scope_obj is not None:
+            from robothor.identity.scope import log_would_drop
+
+            log_would_drop(
+                tool_name="warmup:fleet_surfaces",
+                user_id=user_id,
+                scope=observe_scope_obj,
+                dropped=len(rows),
+                table="chat_messages",
+            )
+
         lines = [f"--- RECENT FLEET SURFACES (last {hours}h) ---"]
         for created_at, author, content in rows:
             ts = created_at.strftime("%H:%M") if created_at else "?"
@@ -431,6 +527,7 @@ def build_interactive_preamble(
     tenant_id: str = DEFAULT_TENANT,
     extra_memory_blocks: list[str] | None = None,
     sender_name: str = "",
+    identity: IdentityContext | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -443,17 +540,55 @@ def build_interactive_preamble(
         include_blocks: If True, inject core memory blocks (persona, user_profile,
             working_context). Set to False for ongoing sessions where blocks are
             already in conversation history.
-        sender_name: Display name of the current user. When set, injects an
-            identity section and excludes the name from entity context search
-            to avoid confusing the user with other people sharing the same name.
+        sender_name: Display name of the current user. When set (and ``identity``
+            is not), injects a legacy identity section and excludes the name
+            from entity context search. Kept for back-compat.
+        identity: Unified identity context (see ``robothor.identity``). When
+            set, takes precedence over ``sender_name`` — the agent gets the
+            full ``--- CURRENT USER ---`` block (enriched with CRM/memory-graph
+            context when available) instead of the bare-name legacy text, and
+            ``identity.display_name`` is what gets excluded from entity search.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
     """
     sections: list[str] = []
+    exclude_name = sender_name
 
-    # Sender identity — tell the agent exactly who it's talking to
-    if sender_name:
+    # "Own data + shared" row scoping (Task 5 / final-review Fix 1) — a
+    # restricted (non-privileged) identity's FIRST message has no prior tool
+    # call to filter through, so this pipeline is the one place scoping must
+    # be applied at build time rather than at the DAL layer. Off mode /
+    # identity=None / privileged identity all resolve to ``None`` here, so
+    # the rest of this function is byte-identical to pre-Task-5 behavior in
+    # those cases — see ``robothor.identity.scope``.
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
+
+    _scoping_mode = data_scoping_mode()
+    _enforce_scope: DataScope | None = scope_for_query(_scoping_mode, identity)
+    _observe_scope: DataScope | None = observe_scope(_scoping_mode, identity)
+    _scope_user_id = (
+        (identity.user_account_id or identity.tenant_user_id or identity.identifier)
+        if identity is not None
+        else None
+    )
+
+    # Current-user identity — tell the agent exactly who it's talking to.
+    # `identity` (the unified context) always wins over the legacy
+    # `sender_name` string when both are present.
+    if identity is not None:
+        try:
+            enriched = enrich_identity(identity)
+        except Exception as e:
+            logger.debug("Interactive warmup identity enrichment failed: %s", e)
+            enriched = None
+        try:
+            sections.append(identity.prompt_block(enriched))
+        except Exception as e:
+            logger.debug("Interactive warmup identity prompt_block failed: %s", e)
+        exclude_name = identity.display_name or sender_name
+    elif sender_name:
         sections.append(
             f"--- CURRENT USER ---\n"
             f"You are speaking with {sender_name}. Address them by this name.\n"
@@ -466,6 +601,15 @@ def build_interactive_preamble(
         # Also include agent-configured warmup blocks (e.g. devops_latest_report)
         if extra_memory_blocks:
             core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
+
+        # user_profile/user_model/working_context describe the OPERATOR —
+        # a restricted identity under enforce must not have them pre-loaded.
+        # persona describes the AGENT and always stays; the identity's own
+        # CRM/memory-graph enrichment (above, via enrich_identity) is what a
+        # restricted caller gets instead.
+        if _enforce_scope is not None:
+            core_blocks = [b for b in core_blocks if b not in _OPERATOR_PERSONAL_BLOCKS]
+
         try:
             blocks_section = _build_memory_blocks_section(core_blocks, tenant_id=tenant_id)
             if blocks_section:
@@ -473,15 +617,34 @@ def build_interactive_preamble(
         except Exception as e:
             logger.debug("Interactive warmup blocks failed: %s", e)
 
+        if _observe_scope is not None:
+            try:
+                _dropped_blocks = _count_operator_blocks_with_content(tenant_id=tenant_id)
+                if _dropped_blocks:
+                    log_would_drop(
+                        tool_name="warmup:memory_blocks",
+                        user_id=_scope_user_id,
+                        scope=_observe_scope,
+                        dropped=_dropped_blocks,
+                        table="agent_memory_blocks",
+                    )
+            except Exception as e:
+                logger.debug("Interactive warmup observe-scope block count failed: %s", e)
+
     # Entity-aware context — if user mentions a name, pull relevant facts
     # Exclude the sender's name to avoid pulling facts about other people
     # who share the same name — the sender's identity comes from their
     # tenant's persona/user_profile blocks, not from entity search.
     if user_message and len(user_message) > 5:
         try:
-            exclude = {sender_name} if sender_name else None
+            exclude = {exclude_name} if exclude_name else None
             context = _build_entity_context(
-                user_message, tenant_id=tenant_id, exclude_names=exclude
+                user_message,
+                tenant_id=tenant_id,
+                exclude_names=exclude,
+                scope=_enforce_scope,
+                observe_scope_obj=_observe_scope,
+                user_id=_scope_user_id,
             )
             if context:
                 sections.append(context)
@@ -499,10 +662,20 @@ def build_interactive_preamble(
     # Main-only panoramic sections: open task queue + recent fleet surfaces.
     # These let the supervisor answer "what's going on?" from context alone.
     if agent_id == "main":
-        tasks_section = _open_tasks_section(tenant_id=tenant_id)
+        tasks_section = _open_tasks_section(
+            tenant_id=tenant_id,
+            scope=_enforce_scope,
+            observe_scope_obj=_observe_scope,
+            user_id=_scope_user_id,
+        )
         if tasks_section:
             sections.append(tasks_section)
-        fleet_section = _recent_fleet_surfaces(tenant_id=tenant_id)
+        fleet_section = _recent_fleet_surfaces(
+            tenant_id=tenant_id,
+            scope=_enforce_scope,
+            observe_scope_obj=_observe_scope,
+            user_id=_scope_user_id,
+        )
         if fleet_section:
             sections.append(fleet_section)
 
@@ -581,12 +754,27 @@ def _build_entity_context(
     user_message: str,
     tenant_id: str = DEFAULT_TENANT,
     exclude_names: set[str] | None = None,
+    scope: DataScope | None = None,
+    observe_scope_obj: DataScope | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
     Args:
         exclude_names: Names to skip during entity search (e.g. the current
             user's name, to avoid confusing them with other people).
+        scope: "Own data + shared" DataScope (Task 5 / final-review Fix 1).
+            ``None`` (the default — every pre-existing caller) issues the
+            exact same SQL as before Task 5. A restricted scope adds
+            ``AND (person_id = %s OR person_id IS NULL)`` to both candidate
+            queries — see ``robothor.identity.scope`` and
+            ``robothor.memory.facts.search_facts`` for the same pattern.
+        observe_scope_obj: When set (observe mode + restricted identity),
+            the query itself is NOT filtered (``scope`` should be ``None``
+            in this case) but every fetched row is checked against this
+            scope and a would-drop count is logged — never used to alter
+            the returned text.
+        user_id: Identity's stable id, for the observe-mode log line only.
 
     Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
     run inside the sync warmup path; recency awareness is done in SQL.
@@ -604,25 +792,34 @@ def _build_entity_context(
     from psycopg2.extras import RealDictCursor
 
     from robothor.db import get_connection
+    from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
+
+    scope_clause = ""
+    scope_params: tuple[Any, ...] = ()
+    if scope is not None and scope.restricted:
+        scope_clause = "AND (person_id = %s OR person_id IS NULL)"
+        scope_params = (scope.person_id,)
 
     lines = ["--- RELEVANT CONTEXT ---"]
     chars_used = 0
     # V2 looks at a few more candidates (lowercase queries are noisier) and
     # ranks by a recency/importance blend; legacy keeps the importance-only sort.
     max_candidates = 5 if v2 else 3
+    _would_drop = 0
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         for entity_name in candidates[:max_candidates]:
             if v2:
                 cur.execute(
-                    """
-                    SELECT fact_text, category, importance_score
+                    f"""
+                    SELECT fact_text, category, importance_score, person_id
                     FROM memory_facts
                     WHERE is_active = TRUE AND tenant_id = %s
                       AND EXISTS (
                         SELECT 1 FROM unnest(entities) e WHERE lower(e) = lower(%s)
                       )
+                      {scope_clause}
                     ORDER BY
                       0.55 * COALESCE(importance_score, 0.5)
                       + 0.45 * POWER(
@@ -631,26 +828,39 @@ def _build_entity_context(
                         ) DESC
                     LIMIT 3
                     """,
-                    (tenant_id, entity_name),
+                    (tenant_id, entity_name, *scope_params),
                 )
             else:
                 cur.execute(
-                    """
-                    SELECT fact_text, category, importance_score
+                    f"""
+                    SELECT fact_text, category, importance_score, person_id
                     FROM memory_facts
                     WHERE is_active = TRUE AND %s = ANY(entities)
                       AND tenant_id = %s
+                      {scope_clause}
                     ORDER BY importance_score DESC, created_at DESC
                     LIMIT 3
                     """,
-                    (entity_name, tenant_id),
+                    (entity_name, tenant_id, *scope_params),
                 )
-            for f in cur.fetchall():
+            rows = cur.fetchall()
+            if observe_scope_obj is not None:
+                _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
+            for f in rows:
                 line = f"- {f['fact_text']}"
                 if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
                     break
                 lines.append(line)
                 chars_used += len(line)
+
+    if observe_scope_obj is not None and _would_drop > 0:
+        log_would_drop(
+            tool_name="warmup:entity_context",
+            user_id=user_id,
+            scope=observe_scope_obj,
+            dropped=_would_drop,
+            table="memory_facts",
+        )
 
     return "\n".join(lines) if len(lines) > 1 else ""
 

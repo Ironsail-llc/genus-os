@@ -18,6 +18,13 @@ Endpoints:
   GET  /chat/plan/status  — Check plan state for a session
   POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
   GET  /chat/deep/status  — Check active deep reasoning state
+
+TODO(per-user sessions): the in-memory ``_sessions`` dict is unbounded in
+number of keys — each session's *history* is capped at MAX_HISTORY, but with
+ROBOTHOR_PER_USER_SESSIONS=enforce every distinct member gets their own
+long-lived entry that is never evicted. Fine at current tenant scale; a
+large tenant will want LRU eviction (or a TTL sweep) over ``_sessions``
+itself, not just per-session history trimming. Future work, not this task.
 """
 
 from __future__ import annotations
@@ -44,12 +51,14 @@ from robothor.engine.chat_store import (
     save_message_async,
     save_plan_state_async,
 )
+from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +90,75 @@ def _auth_context(request: Request) -> Any:
     from robothor.engine.auth import request_context
 
     return request_context(request)
+
+
+def _resolve_webchat_identity(auth: Any) -> IdentityContext | None:
+    """Resolve the CURRENT USER identity for a webchat request's auth context.
+
+    Service-typ tokens (engine/agent → bridge calls) have no human on the
+    other end, so they get identity=None rather than a resolution attempt.
+    """
+    if getattr(auth, "is_service", False):
+        return None
+
+    from robothor.identity import resolve_identity
+
+    return resolve_identity("webchat", auth.user_id, auth.tenant_id)
+
+
+def _effective_session_key(auth: Any, requested_key: str) -> str:
+    """Resolve the session key a chat request should actually operate on.
+
+    Every dashboard user has historically shared ONE engine session, and
+    every endpoint below accepted any session_key from any authenticated
+    same-tenant caller with no ownership check. This is the fix, gated by
+    ``ROBOTHOR_PER_USER_SESSIONS`` (see ``feature_flags.per_user_sessions_mode``):
+
+    - Service-typ tokens (ops tooling, the Telegram bridge writing into
+      main's session) always keep ``requested_key`` verbatim, in every flag
+      mode — there is no human on the other end to isolate.
+    - The tenant owner always keeps ``requested_key`` verbatim, in every
+      flag mode — the operator's webchat<->Telegram shared-session
+      continuity (``telegram.py``'s ``main_session_key``) and existing
+      history must survive this rollout untouched.
+    - Everyone else ("member" and other non-owner human roles) is isolated
+      onto ``agent:{agent_id}:user:{auth.user_id}`` — but only when the mode
+      is ``enforce``. ``agent_id`` is parsed the same way the rest of this
+      module derives it from a session key: the ``parts[1]`` segment of
+      ``agent:main:primary``, falling back to the configured default agent
+      when the requested key doesn't have that shape.
+    - ``observe`` mode returns ``requested_key`` unchanged (no behavior
+      change) but logs the derivation that enforce mode WOULD have made, so
+      the rollout can be evaluated before it changes anyone's session.
+    - ``off`` (the default) always returns ``requested_key`` unchanged.
+    """
+    if getattr(auth, "is_service", False):
+        return requested_key
+
+    mode = per_user_sessions_mode()
+    if mode == "off":
+        return requested_key
+
+    role = getattr(auth, "role", "")
+    if role == "owner":
+        return requested_key
+
+    parts = requested_key.split(":")
+    agent_id = parts[1] if len(parts) >= 2 else (_config.default_chat_agent if _config else "main")
+    derived = f"agent:{agent_id}:user:{auth.user_id}"
+
+    if mode == "observe":
+        if derived != requested_key:
+            logger.info(
+                "per_user_sessions: would derive %s from %s for user=%s role=%s",
+                derived,
+                requested_key,
+                auth.user_id,
+                role,
+            )
+        return requested_key
+
+    return derived
 
 
 router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
@@ -179,6 +257,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -187,6 +266,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     if not session_key or not message:
         return JSONResponse({"error": "session_key and message required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -228,6 +308,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             # Always record user message in session history
@@ -353,6 +434,8 @@ async def chat_history(request: Request, session_key: str = "", limit: int = 50)
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    auth = _auth_context(request)
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
     messages = session.history[-limit:] if limit > 0 else session.history
 
@@ -371,6 +454,7 @@ async def chat_inject(request: Request) -> JSONResponse:
     if not session_key or not message:
         return JSONResponse({"error": "session_key and message required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
     session.history.append({"role": "system", "content": message})
 
@@ -403,6 +487,8 @@ async def chat_abort(request: Request) -> JSONResponse:
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    auth = _auth_context(request)
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
     aborted = False
 
@@ -423,6 +509,7 @@ async def chat_clear(request: Request) -> JSONResponse:
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     # Cancel any active task first
@@ -457,6 +544,8 @@ async def chat_export(request: Request) -> JSONResponse:
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    auth = _auth_context(request)
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     if format_ == "json":
@@ -528,6 +617,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -537,6 +627,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     if not session_key or not message:
         return JSONResponse({"error": "session_key and message required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     # Expire stale plan if any
@@ -591,6 +682,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             # Extract plan from output
@@ -708,6 +800,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -716,6 +809,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if not session_key or not plan_id:
         return JSONResponse({"error": "session_key and plan_id required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     if not session.active_plan or session.active_plan.plan_id != plan_id:
@@ -777,6 +871,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     tenant_id=auth.tenant_id,
                     user_id=auth.user_id,
                     user_role=auth.role,
+                    identity=identity,
                 )
 
                 # Track execution run ID
@@ -898,6 +993,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     tenant_id=auth.tenant_id,
                     user_id=auth.user_id,
                     user_role=auth.role,
+                    identity=identity,
                 )
 
                 # Track execution run ID
@@ -1000,6 +1096,7 @@ async def plan_reject(request: Request) -> JSONResponse:
     if not session_key or not plan_id:
         return JSONResponse({"error": "session_key and plan_id required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     if not session.active_plan or session.active_plan.plan_id != plan_id:
@@ -1032,6 +1129,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1043,6 +1141,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             {"error": "session_key, plan_id, and feedback required"}, status_code=400
         )
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     if not session.active_plan or session.active_plan.plan_id != plan_id:
@@ -1115,6 +1214,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             revised_plan_text = _extract_plan_text(run.output_text or "")
@@ -1205,6 +1305,8 @@ async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    auth = _auth_context(request)
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     # Auto-expire stale plans
@@ -1248,6 +1350,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
+    identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1256,6 +1359,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     if not session_key or not query:
         return JSONResponse({"error": "session_key and query required"}, status_code=400)
 
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -1286,6 +1390,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
+                identity=identity,
             )
 
             deep.completed_at = datetime.now(UTC).isoformat()
@@ -1401,6 +1506,8 @@ async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
     if not session_key:
         return JSONResponse({"error": "session_key required"}, status_code=400)
 
+    auth = _auth_context(request)
+    session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
     if session.active_deep:

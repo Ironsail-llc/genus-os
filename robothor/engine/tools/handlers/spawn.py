@@ -219,6 +219,7 @@ async def _handle_spawn_agent(
         parent_trace_id=spawn_ctx.parent_trace_id,
         parent_span_id=spawn_ctx.parent_span_id,
         parent_task_id=parent_task_id,  # Stage 5 — lift unfinished todos back to this task
+        identity=spawn_ctx.identity,
     )
 
     # Namespaced dedup key — includes message hash so the same agent can be

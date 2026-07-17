@@ -86,3 +86,12 @@ crm/077_message_reactions_unique.sql
 crm/078_memory_facts_content_hash_unique.sql
 crm/079_guardrail_event_modes.sql
 crm/080_judge_reviewer_type.sql
+crm/081_tenant_rls_backstop.sql
+crm/082_tenant_rls_app_role.sql
+crm/083_rls_global_role_defaults.sql
+crm/084_feature_flags.sql
+crm/085_sso_binding_grants.sql
+crm/086_user_permissions.sql
+crm/087_role_permission_guardrails.sql
+crm/088_member_role_read_only.sql
+crm/089_face_identities.sql

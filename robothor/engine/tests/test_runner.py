@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.runner import AgentRunner
+from robothor.identity import IdentityContext
 
 
 @pytest.fixture
@@ -325,6 +327,427 @@ class TestAgentRunnerExecute:
 
         assert run.trigger_type == TriggerType.CRON
         assert run.trigger_detail == "0 * * * *"
+
+
+class TestIsServiceCaller:
+    """Unit coverage for the runner-level service-caller gate itself
+    (Task 2 code-review fix — the WEBCHAT `resolve_identity` fallback must
+    never fire for a service-typ caller, since its user_id is a synthetic
+    marker rather than a resolvable UUID)."""
+
+    def test_service_role_is_service(self):
+        from robothor.engine.runner import _is_service_caller
+
+        assert _is_service_caller("service", "svc-agent") is True
+
+    def test_service_prefixed_role_is_service(self):
+        from robothor.engine.runner import _is_service_caller
+
+        assert _is_service_caller("service:workflow", "wf-1") is True
+
+    def test_service_prefixed_user_id_is_service(self):
+        from robothor.engine.runner import _is_service_caller
+
+        assert _is_service_caller("owner", "service:main") is True
+
+    def test_human_role_is_not_service(self):
+        from robothor.engine.runner import _is_service_caller
+
+        assert _is_service_caller("owner", "u1") is False
+        assert _is_service_caller("member", "acct-1") is False
+
+
+class TestIdentityThreading:
+    """Task 2 — IdentityContext threaded through execute().
+
+    Precedence: explicit `identity` kwarg > webchat DB resolution > legacy
+    Telegram `|sender:` parse. Effective identity feeds both the CURRENT USER
+    prompt block (warmup on first turn, mini-preamble on follow-ups) and
+    `run.person_id` attribution (ahead of the existing resolve_run_person_id
+    fallback).
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_identity_passed_to_warmup(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Explicit `identity=` reaches build_interactive_preamble on a
+        first-turn (no history) interactive run."""
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            role="owner",
+        )
+        response = mock_litellm_response(content="Hi Alice")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch(
+                "robothor.engine.warmup.build_interactive_preamble", return_value=""
+            ) as mock_warmup,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="u1",
+                user_role="owner",
+                identity=identity,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        assert mock_warmup.call_args.kwargs["identity"] is identity
+
+    @pytest.mark.asyncio
+    async def test_person_id_set_from_identity_before_fallback(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """run.person_id is stamped from identity.person_id, and the
+        resolve_run_person_id fallback is skipped entirely."""
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+            person_id="person-99",
+        )
+        response = mock_litellm_response(content="Hi")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.engine.run_person_link.resolve_run_person_id") as mock_resolve,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="u1",
+                user_role="owner",
+                identity=identity,
+            )
+
+        assert run.person_id == "person-99"
+        mock_resolve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_webchat_resolves_identity_via_resolve_identity(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """No explicit identity + WEBCHAT trigger resolves via resolve_identity."""
+        resolved = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="u1",
+            verified=True,
+            display_name="Alice",
+            person_id="person-7",
+        )
+        response = mock_litellm_response(content="Hi")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.resolve_identity", return_value=resolved) as mock_resolve,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="u1",
+                user_role="owner",
+            )
+
+        mock_resolve.assert_called_once_with("webchat", "u1", "t-alpha")
+        assert run.person_id == "person-7"
+
+    @pytest.mark.asyncio
+    async def test_webchat_service_caller_never_resolves_identity(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """A WEBCHAT run from a service-typ caller (chat.py deliberately
+        passes identity=None for these — see AuthContext.is_service) must
+        never call resolve_identity: the service's user_id is a synthetic
+        marker (e.g. `svc-agent` / `service:<agent>`), never a resolvable
+        UUID, and calling resolve_identity for it used to log a DB exception
+        on every single call until the negative cache absorbed it. This
+        exercises the REAL precedence chain in execute() end to end — only
+        resolve_identity is mocked, not execute() itself."""
+        response = mock_litellm_response(content="ok")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.resolve_identity") as mock_resolve,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="svc-agent",
+                user_role="service",
+                identity=None,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        mock_resolve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_webchat_service_id_prefix_never_resolves_identity(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Same gate, keyed off the `service:<agent>` user_id marker
+        convention (used by `_SYSTEM_TRIGGER_TYPES`, workflow.py,
+        scheduler.py) instead of an explicit `user_role="service"`."""
+        response = mock_litellm_response(content="ok")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.resolve_identity") as mock_resolve,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="service:test-agent",
+                user_role="owner",
+                identity=None,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        mock_resolve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_telegram_legacy_sender_parse_fallback_on_followup(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """No explicit identity + Telegram `|sender:` trigger_detail still
+        produces a CURRENT USER mini-preamble on a follow-up turn."""
+        response = mock_litellm_response(content="Hi Bob")
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        captured: dict[str, Any] = {}
+
+        async def mock_completion(**kwargs):
+            # Snapshot now — the runner mutates this same list object in
+            # place (appends the assistant reply) after the call returns.
+            captured["last_user_msg"] = kwargs["messages"][-1]["content"]
+            return response
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("robothor.identity.enrich_identity", return_value=None),
+            patch("litellm.acompletion", side_effect=mock_completion),
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "follow-up",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail="chat:123|sender:Bob",
+                conversation_history=history,
+                tenant_id="t-alpha",
+                user_id="tg-1",
+                user_role="member",
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        last_user_msg = captured["last_user_msg"]
+        assert "--- CURRENT USER ---" in last_user_msg
+        assert "Bob" in last_user_msg
+        assert "Verified: yes" in last_user_msg
+
+    @pytest.mark.asyncio
+    async def test_per_turn_identity_enrichment_offloaded_to_executor(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """enrich_identity does blocking DB work on a cache miss — the
+        per-turn mini-preamble path (follow-up turns, warmup skipped) must
+        run it via loop.run_in_executor rather than calling it synchronously
+        inside the coroutine, mirroring the first-turn warmup path's own use
+        of run_in_executor (code-review fix)."""
+        import asyncio as _asyncio
+
+        response = mock_litellm_response(content="Hi Bob")
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+
+        real_run_in_executor = _asyncio.base_events.BaseEventLoop.run_in_executor
+        seen_funcs = []
+
+        def spy_run_in_executor(self_loop, executor, func, *args):
+            seen_funcs.append(func)
+            return real_run_in_executor(self_loop, executor, func, *args)
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
+            patch.object(
+                _asyncio.base_events.BaseEventLoop,
+                "run_in_executor",
+                spy_run_in_executor,
+            ),
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "follow-up",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail="chat:123|sender:Bob",
+                conversation_history=history,
+                tenant_id="t-alpha",
+                user_id="tg-1",
+                user_role="member",
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        assert mock_enrich in seen_funcs
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_block_on_first_turn(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """First turn (no history): CURRENT USER appears exactly once, from
+        warmup — the mini-preamble path must not also fire."""
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+        )
+        response = mock_litellm_response(content="Hi Alice")
+        captured: dict[str, Any] = {}
+
+        async def mock_completion(**kwargs):
+            captured["last_user_msg"] = kwargs["messages"][-1]["content"]
+            return response
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("robothor.identity.enrich_identity", return_value=None),
+            patch("robothor.memory.blocks.read_block", return_value=None),
+            patch("litellm.acompletion", side_effect=mock_completion),
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="u1",
+                user_role="owner",
+                identity=identity,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        last_user_msg = captured["last_user_msg"]
+        assert last_user_msg.count("--- CURRENT USER ---") == 1
+
+    @pytest.mark.asyncio
+    async def test_no_identity_no_block_for_manual_trigger(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """Non-interactive (manual/cron) triggers are untouched — no identity
+        resolution attempted, no CURRENT USER block."""
+        response = mock_litellm_response(content="Hi")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_llm,
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                conversation_history=[{"role": "user", "content": "hi"}],
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        messages = mock_llm.call_args.kwargs["messages"]
+        last_user_msg = messages[-1]["content"]
+        assert "CURRENT USER" not in last_user_msg
+
+    @pytest.mark.asyncio
+    async def test_child_spawn_context_carries_identity(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        """A top-level run that can spawn children stashes its effective
+        identity on the fresh SpawnContext so children inherit it for
+        person_id/user_id attribution (children's own prompts don't render
+        the block — their trigger_type is SUB_AGENT, never interactive)."""
+        from robothor.engine.tools import _current_spawn_context
+
+        sample_agent_config.can_spawn_agents = True
+        identity = IdentityContext(
+            tenant_id="t-alpha",
+            channel="webchat",
+            identifier="acct-1",
+            verified=True,
+            display_name="Alice",
+        )
+        response = mock_litellm_response(content="done")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "hello",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id="t-alpha",
+                user_id="u1",
+                user_role="owner",
+                identity=identity,
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        ctx = _current_spawn_context.get()
+        assert ctx is not None
+        assert ctx.identity is identity
 
 
 class TestBrokenModelTracking:

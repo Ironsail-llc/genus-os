@@ -192,11 +192,19 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "enroll_face",
-            "description": "Enroll a person's face for future recognition. Person must be visible to the camera.",
+            "description": "Enroll a person's face for future recognition. Person must be visible to the camera. Optionally link the enrolled label to a person in the CRM identity graph (person_id, or a free-text person_name if no CRM record exists yet).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Name of the person to enroll"}
+                    "name": {"type": "string", "description": "Name of the person to enroll"},
+                    "person_id": {
+                        "type": "string",
+                        "description": "Optional crm_people id to link this face label to (takes precedence over person_name for display_name)",
+                    },
+                    "person_name": {
+                        "type": "string",
+                        "description": "Optional free-text display name for this face label, used when no person_id is given or resolvable",
+                    },
                 },
                 "required": ["name"],
             },
@@ -218,7 +226,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "enroll_face_from_image",
-            "description": "Enroll a person's face from saved image files (snapshots, photos). Does not require the person to be in front of the camera.",
+            "description": "Enroll a person's face from saved image files (snapshots, photos). Does not require the person to be in front of the camera. Optionally link the enrolled label to a person in the CRM identity graph (person_id, or a free-text person_name if no CRM record exists yet).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -227,6 +235,14 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of absolute file paths to images containing the person's face",
+                    },
+                    "person_id": {
+                        "type": "string",
+                        "description": "Optional crm_people id to link this face label to (takes precedence over person_name for display_name)",
+                    },
+                    "person_name": {
+                        "type": "string",
+                        "description": "Optional free-text display name for this face label, used when no person_id is given or resolvable",
                     },
                 },
                 "required": ["name", "image_paths"],

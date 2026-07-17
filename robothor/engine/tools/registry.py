@@ -18,6 +18,7 @@ from robothor.engine.tools.schemas import get_engine_schemas
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ class ToolRegistry:
         timeout: int = 120,
         task_author_override: str = "",
         is_benchmark: bool = False,
+        identity: IdentityContext | None = None,
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -296,6 +298,10 @@ class ToolRegistry:
                 (resolved from user role + tenant hierarchy).
             is_benchmark: When True, side-effect tool wrappers refuse
                 mutations (see ToolContext.is_benchmark).
+            identity: The run's resolved IdentityContext (Task 2), or None
+                for system/cron/heartbeat runs. Threaded onto ToolContext for
+                data-scoping (Task 5); every existing caller omitting this
+                gets the unaffected default.
         """
         try:
             if timeout > 0:
@@ -312,6 +318,7 @@ class ToolRegistry:
                         accessible_tenant_ids=accessible_tenant_ids,
                         task_author_override=task_author_override,
                         is_benchmark=is_benchmark,
+                        identity=identity,
                     )
             else:
                 return await _execute_tool(
@@ -326,6 +333,7 @@ class ToolRegistry:
                     accessible_tenant_ids=accessible_tenant_ids,
                     task_author_override=task_author_override,
                     is_benchmark=is_benchmark,
+                    identity=identity,
                 )
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)

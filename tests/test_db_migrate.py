@@ -97,7 +97,7 @@ def test_discovers_complete_manifest_with_unique_immutable_ids() -> None:
     migrations = migrate._discover()
     ids = [migration.migration_id for migration in migrations]
 
-    assert len(migrations) == 83
+    assert len(migrations) == 92
     assert len(ids) == len(set(ids))
     assert ids[0] == "001_init"
     assert "001_crm_tables" in ids

@@ -173,6 +173,31 @@ class TestLoadAllSessions:
         query_params = chat_db["cursor"].execute.call_args[0][1]
         assert 3 in query_params
 
+    def test_per_user_session_key_round_trips(self, chat_db):
+        """Task 3 (Unified Identity Context): per-user session keys have the
+        shape ``agent:{agent_id}:user:{user_id}`` — chat_store treats
+        session_key as an opaque string, so two different members' derived
+        keys must restore to two distinct, correctly-populated entries with
+        no special-casing needed here."""
+        sessions = [
+            {"id": 1, "session_key": "agent:main:user:alice", "model_override": None},
+            {"id": 2, "session_key": "agent:main:user:bob", "model_override": None},
+        ]
+        messages_alice = [{"message": {"role": "user", "content": "alice's message"}}]
+        messages_bob = [{"message": {"role": "user", "content": "bob's message"}}]
+
+        chat_db["cursor"].fetchall.side_effect = [sessions, messages_alice, messages_bob]
+
+        result = load_all_sessions()
+
+        assert set(result.keys()) == {"agent:main:user:alice", "agent:main:user:bob"}
+        assert result["agent:main:user:alice"]["history"][0]["content"] == "alice's message"
+        assert result["agent:main:user:bob"]["history"][0]["content"] == "bob's message"
+        # The two members' restored histories are fully independent.
+        assert (
+            result["agent:main:user:alice"]["history"] != result["agent:main:user:bob"]["history"]
+        )
+
 
 class TestClearSession:
     def test_deletes_session(self, chat_db):

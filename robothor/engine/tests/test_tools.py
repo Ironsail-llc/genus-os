@@ -611,6 +611,7 @@ class TestMergeAndAliasTools:
             exclude_resolved=True,
             limit=10,
             tenant_id="test",
+            scope=None,
         )
 
     @pytest.mark.asyncio

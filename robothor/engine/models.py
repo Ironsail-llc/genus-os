@@ -17,6 +17,8 @@ from robothor.constants import DEFAULT_TENANT
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from robothor.identity import IdentityContext
+
 
 class TriggerType(StrEnum):
     CRON = "cron"
@@ -548,6 +550,12 @@ class SpawnContext:
     remaining_cost_budget_usd: float = 0.0
     # Contact 360 linkage — propagates from parent run to all spawned children.
     person_id: str | None = None
+    # Unified identity context (robothor.identity) — propagates from parent
+    # run to all spawned children for person_id/user_id attribution. Children
+    # never render the CURRENT USER prompt block themselves (their
+    # trigger_type is SUB_AGENT, which the runner never treats as
+    # interactive), so this is attribution-only, not prompt content.
+    identity: IdentityContext | None = None
     parent_trace_id: str = ""
     parent_span_id: str = ""
     # Stage 5 — CRM task this child is advancing. Set when a caller spawns
@@ -600,6 +608,17 @@ class PlanState:
 
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)
+
+    # Creator identity (Task 4 Finding 1 fix) — the per-message resolved
+    # sender dict (same shape as TelegramBot._resolve_user()'s return value)
+    # captured at the moment the plan was CREATED (in plan mode), frozen for
+    # the lifetime of the plan. Approval/execution/iteration read this
+    # instead of re-resolving "whoever is cached for this chat_id right
+    # now" — a value any other sender in a group chat can overwrite between
+    # plan creation and a later approval click or revision message. Whoever
+    # clicks "Approve" does not change who the execution is attributed to;
+    # the plan's author owns it end to end.
+    creator_sender_info: dict[str, Any] | None = None
 
 
 # ─── Deep Mode ─────────────────────────────────────────────────────────

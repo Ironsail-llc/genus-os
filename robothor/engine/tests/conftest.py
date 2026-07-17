@@ -57,8 +57,14 @@ def seeded_unit_test_permissions(
 
     from robothor.engine import permissions
 
-    def _seeded_check(user_role: str, tenant_id: str, tool_name: str) -> str | None:
-        del tenant_id
+    def _seeded_check(
+        user_role: str,
+        tenant_id: str,
+        tool_name: str,
+        *,
+        user_id: str | None = None,
+    ) -> str | None:
+        del tenant_id, user_id
         if not user_role:
             return "Missing execution role — access denied"
         if user_role in {"service", "user", "member", "admin", "owner"}:

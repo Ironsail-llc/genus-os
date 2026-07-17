@@ -172,3 +172,112 @@ class TestResolveAccessibleTenants:
         ):
             result = resolve_accessible_tenants("test-tenant", "owner")
             assert result == ("test-tenant",)
+
+
+class TestCheckToolPermissionUserOverride:
+    """Per-user permission overrides (Task 5, Unified Identity Context).
+
+    A ``user_permissions`` row is the most-specific match and is evaluated
+    BEFORE role rules; when no user rule matches the tool, the existing
+    role-based logic runs completely unchanged. Omitting ``user_id``
+    (the pre-Task-5 call shape) must skip the user-rule lookup entirely —
+    every pre-existing caller of ``check_tool_permission`` is unaffected.
+    """
+
+    def test_no_user_id_skips_user_lookup_entirely(self):
+        """Positional-only calls (the old signature) must issue exactly the
+        same role query as before — no user_permissions round-trip at all."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = [("*", "allow", "__default__")]
+
+            result = check_tool_permission("user", "test-tenant", "create_person")
+
+            assert result is None
+            assert mock_cursor.execute.call_count == 1
+            sql = mock_cursor.execute.call_args[0][0]
+            assert "role_permissions" in sql
+            assert "user_permissions" not in sql
+
+    def test_user_deny_overrides_role_allow(self):
+        """A user-level deny wins even though the role allows everything."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.side_effect = [
+                [("delete_*", "deny")],  # user_permissions
+                [("*", "allow", "__default__")],  # role_permissions (never needed)
+            ]
+
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
+            assert result is not None
+            assert "denied" in result
+
+    def test_user_allow_overrides_role_deny(self):
+        """A user-level allow carves an exception out of a role-level deny."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.side_effect = [
+                [("search_memory", "allow")],  # user_permissions
+            ]
+
+            result = check_tool_permission(
+                "viewer", "test-tenant", "search_memory", user_id="user-1"
+            )
+            assert result is None
+
+    def test_most_specific_user_rule_wins(self):
+        """Same specificity metric as role rules: exact pattern beats glob,
+        more literal characters beats fewer, deny wins a true tie."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.side_effect = [
+                [("*", "allow"), ("delete_task", "deny")],  # user_permissions
+            ]
+
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
+            assert result is not None
+            assert "denied" in result
+
+    def test_no_matching_user_rule_falls_through_to_role_logic(self):
+        """A user_id with rules that don't match the tool falls through to the
+        unchanged role-based path — this must issue the second (role) query."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.side_effect = [
+                [("send_email", "deny")],  # user_permissions — doesn't match
+                [("*", "allow", "__default__")],  # role_permissions
+            ]
+
+            result = check_tool_permission("user", "test-tenant", "create_person", user_id="user-1")
+            assert result is None
+            assert mock_cursor.execute.call_count == 2
+
+    def test_empty_user_id_skips_user_lookup(self):
+        """An empty string is falsy — treated the same as omitted user_id."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.return_value = [("*", "allow", "__default__")]
+
+            result = check_tool_permission("user", "test-tenant", "create_person", user_id="")
+            assert result is None
+            assert mock_cursor.execute.call_count == 1
+
+    def test_no_user_rules_at_all_falls_through(self):
+        """user_id given but the user_permissions table has no rows for them
+        — falls straight through to role logic (fail-closed if that's empty too)."""
+        with patch("robothor.db.connection.get_connection") as mock_conn:
+            mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+            mock_cursor.fetchall.side_effect = [
+                [],  # user_permissions
+                [],  # role_permissions
+            ]
+
+            result = check_tool_permission("user", "test-tenant", "create_person", user_id="user-1")
+            assert result is not None
+            assert "denied" in result
+
+    def test_db_error_during_user_lookup_fails_closed(self):
+        with patch("robothor.db.connection.get_connection", side_effect=Exception("DB down")):
+            result = check_tool_permission("owner", "test-tenant", "delete_task", user_id="user-1")
+            assert result is not None
+            assert "denied" in result

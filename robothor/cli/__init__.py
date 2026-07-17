@@ -13,6 +13,7 @@ Usage:
     robothor migrate        # Run database migrations
     robothor snapshot       # Backup, verify, restore, and retain instance state
     robothor auth           # Manage user accounts / identity
+    robothor user           # Register/link users into the identity graph
     robothor pipeline       # (coming in v0.2)
 """
 
@@ -483,6 +484,56 @@ def main(argv: list[str] | None = None) -> int:
     auth_revoke.add_argument("grant_id", help="Grant ID")
     auth_revoke.add_argument("--tenant", default=None, help="Tenant ID (default: any)")
 
+    # user — closed-allowlist registration: link a human into the identity graph
+    user_parser = subparsers.add_parser(
+        "user", help="Register/link users into the identity graph (closed-allowlist onboarding)"
+    )
+    user_sub = user_parser.add_subparsers(dest="user_command")
+
+    user_list = user_sub.add_parser("list", help="List tenant users")
+    user_list.add_argument("--tenant", default=None, help="Filter by tenant (default: all tenants)")
+
+    user_add = user_sub.add_parser("add", help="Register a new user with full identity linkage")
+    user_add.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+    user_add.add_argument("--name", required=True, help="Display name")
+    user_add.add_argument(
+        "--role", required=True, help="Role: owner/admin/member/user/viewer/auditor"
+    )
+    user_add.add_argument("--telegram-id", default=None, help="Telegram user id")
+    user_add.add_argument("--email", default=None, help="Email address")
+    user_add_person = user_add.add_mutually_exclusive_group()
+    user_add_person.add_argument(
+        "--person-id", default=None, help="Link to an existing crm_people row"
+    )
+    user_add_person.add_argument(
+        "--create-person", action="store_true", help="Force-create a new crm_people row"
+    )
+
+    user_link = user_sub.add_parser("link", help="Link a Telegram id to a person")
+    user_link.add_argument("--telegram-id", required=True, help="Telegram user id")
+    user_link.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+    user_link_person = user_link.add_mutually_exclusive_group(required=True)
+    user_link_person.add_argument("--person-id", default=None, help="Existing crm_people id")
+    user_link_person.add_argument(
+        "--email", default=None, help="Look up the existing person by email"
+    )
+
+    user_link_face = user_sub.add_parser("link-face", help="Upsert a face label -> person binding")
+    user_link_face.add_argument("--label", required=True, help="Face label")
+    user_link_face.add_argument("--person-id", required=True, help="crm_people id")
+    user_link_face.add_argument(
+        "--display-name",
+        default=None,
+        help="Display name to store (default: derived from the person's CRM first+last name)",
+    )
+    user_link_face.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+
     # engine
     # run -- quick single-shot agent execution
     run_parser = subparsers.add_parser("run", help="Run agent with a message (non-interactive)")
@@ -631,6 +682,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.auth import cmd_auth
 
         return cmd_auth(args)
+    if args.command == "user":
+        from robothor.cli.user import cmd_user
+
+        return cmd_user(args)
     if args.command == "run":
         from robothor.cli.engine import cmd_run
 

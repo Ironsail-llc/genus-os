@@ -380,10 +380,11 @@ class TestListPeopleOwnerPriority:
         """Agent-facing list_people must route name searches through owner-preferring order."""
         captured: dict[str, Any] = {}
 
-        def fake_search_people(name, tenant_id=DEFAULT_TENANT, prefer_owner=False):
+        def fake_search_people(name, tenant_id=DEFAULT_TENANT, prefer_owner=False, *, scope=None):
             captured["prefer_owner"] = prefer_owner
             captured["name"] = name
             captured["tenant_id"] = tenant_id
+            captured["scope"] = scope
             return []
 
         monkeypatch.setattr("robothor.crm.dal.search_people", fake_search_people)
