@@ -491,13 +491,9 @@ def main(argv: list[str] | None = None) -> int:
     user_sub = user_parser.add_subparsers(dest="user_command")
 
     user_list = user_sub.add_parser("list", help="List tenant users")
-    user_list.add_argument(
-        "--tenant", default=None, help="Filter by tenant (default: all tenants)"
-    )
+    user_list.add_argument("--tenant", default=None, help="Filter by tenant (default: all tenants)")
 
-    user_add = user_sub.add_parser(
-        "add", help="Register a new user with full identity linkage"
-    )
+    user_add = user_sub.add_parser("add", help="Register a new user with full identity linkage")
     user_add.add_argument(
         "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
     )
@@ -526,11 +522,14 @@ def main(argv: list[str] | None = None) -> int:
         "--email", default=None, help="Look up the existing person by email"
     )
 
-    user_link_face = user_sub.add_parser(
-        "link-face", help="Upsert a face label -> person binding"
-    )
+    user_link_face = user_sub.add_parser("link-face", help="Upsert a face label -> person binding")
     user_link_face.add_argument("--label", required=True, help="Face label")
     user_link_face.add_argument("--person-id", required=True, help="crm_people id")
+    user_link_face.add_argument(
+        "--display-name",
+        default=None,
+        help="Display name to store (default: derived from the person's CRM first+last name)",
+    )
     user_link_face.add_argument(
         "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
     )

@@ -247,8 +247,7 @@ def _cmd_add(args: Namespace) -> int:
             )
         elif constraint == "tenant_users_telegram_tenant_key":
             print(
-                f"error: telegram id {telegram_id} is already registered in "
-                f"tenant '{tenant}'",
+                f"error: telegram id {telegram_id} is already registered in tenant '{tenant}'",
                 file=sys.stderr,
             )
         else:
@@ -279,13 +278,14 @@ def _cmd_add(args: Namespace) -> int:
     # ── Report what was created/linked ──
     print(f"✓ Person: {resolved_person_id} ({'created' if person_created else 'linked existing'})")
     print(
-        f"✓ tenant_users: id={tenant_user_id} user_id={stable_user_id} "
-        f"role={role} tenant={tenant}"
+        f"✓ tenant_users: id={tenant_user_id} user_id={stable_user_id} role={role} tenant={tenant}"
     )
     if identifiers_created:
         print(f"✓ contact_identifiers: {', '.join(identifiers_created)}")
     else:
-        print("  contact_identifiers: none created (no --telegram-id/--email given, or already mapped)")
+        print(
+            "  contact_identifiers: none created (no --telegram-id/--email given, or already mapped)"
+        )
     if memory_note:
         print(f"  {memory_note}")
     else:
@@ -404,6 +404,11 @@ def _cmd_link_face(args: Namespace) -> int:
         print(f"error: person {person_id} not found in tenant '{tenant}'", file=sys.stderr)
         return 1
 
+    display_name = getattr(args, "display_name", None)
+    if not display_name:
+        name = person.get("name") or {}
+        display_name = f"{name.get('firstName', '')} {name.get('lastName', '')}".strip()
+
     missing_table_msg = (
         "error: face_identities not present — run migrations / ships with vision linkage"
     )
@@ -417,13 +422,14 @@ def _cmd_link_face(args: Namespace) -> int:
                 return 1
             cur.execute(
                 """
-                INSERT INTO face_identities (tenant_id, face_label, person_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO face_identities (tenant_id, face_label, person_id, display_name)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (tenant_id, face_label) DO UPDATE
-                    SET person_id = EXCLUDED.person_id
+                    SET person_id = EXCLUDED.person_id,
+                        display_name = EXCLUDED.display_name
                 RETURNING person_id
                 """,
-                (tenant, label, person_id),
+                (tenant, label, person_id, display_name),
             )
             cur.fetchone()
     except psycopg2.errors.UndefinedTable:

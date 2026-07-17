@@ -425,6 +425,77 @@ def test_user_link_face_table_missing_degrades_gracefully(capsys) -> None:
     assert "face_identities not present" in err
 
 
+def test_user_link_face_default_display_name_derived_from_person(capsys) -> None:
+    """No --display-name given: derive it from the person's CRM first+last name."""
+    args = Namespace(
+        user_command="link-face",
+        label="alice-front",
+        person_id="person-99",
+        tenant="acme",
+    )
+    cur = MagicMock()
+    cur.fetchone.side_effect = [("public.face_identities",), ("person-99",)]
+    person = {"id": "person-99", "name": {"firstName": "Alice", "lastName": "Rivera"}}
+    with (
+        patch("robothor.crm.dal.get_person", return_value=person),
+        patch("robothor.db.connection.get_connection", return_value=_mock_conn(cur)),
+    ):
+        rc = cmd_user(args)
+
+    assert rc == 0
+    insert_call = cur.execute.call_args_list[1]
+    params = insert_call.args[1]
+    assert "Alice Rivera" in params
+
+
+def test_user_link_face_explicit_display_name_overrides_default(capsys) -> None:
+    """--display-name is used verbatim, even when the person has a CRM name."""
+    args = Namespace(
+        user_command="link-face",
+        label="alice-front",
+        person_id="person-99",
+        tenant="acme",
+        display_name="Front Door Alice",
+    )
+    cur = MagicMock()
+    cur.fetchone.side_effect = [("public.face_identities",), ("person-99",)]
+    person = {"id": "person-99", "name": {"firstName": "Alice", "lastName": "Rivera"}}
+    with (
+        patch("robothor.crm.dal.get_person", return_value=person),
+        patch("robothor.db.connection.get_connection", return_value=_mock_conn(cur)),
+    ):
+        rc = cmd_user(args)
+
+    assert rc == 0
+    insert_call = cur.execute.call_args_list[1]
+    params = insert_call.args[1]
+    assert "Front Door Alice" in params
+    assert "Alice Rivera" not in params
+
+
+def test_user_link_face_no_name_available_defaults_to_empty_string(capsys) -> None:
+    """Person row with no name fields (mirrors test_user_link_face_success's
+    bare {"id": ...} fixture): display_name must not crash, defaults to ''."""
+    args = Namespace(
+        user_command="link-face",
+        label="alice-front",
+        person_id="person-99",
+        tenant="acme",
+    )
+    cur = MagicMock()
+    cur.fetchone.side_effect = [("public.face_identities",), ("person-99",)]
+    with (
+        patch("robothor.crm.dal.get_person", return_value={"id": "person-99"}),
+        patch("robothor.db.connection.get_connection", return_value=_mock_conn(cur)),
+    ):
+        rc = cmd_user(args)
+
+    assert rc == 0
+    insert_call = cur.execute.call_args_list[1]
+    params = insert_call.args[1]
+    assert "" in params
+
+
 def test_user_link_face_person_not_found_returns_1(capsys) -> None:
     args = Namespace(
         user_command="link-face",

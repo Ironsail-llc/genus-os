@@ -87,7 +87,9 @@ def _resolve_webchat(identifier: str, tenant_id: str) -> IdentityContext | None:
     try:
         _uuid.UUID(str(identifier))
     except (ValueError, AttributeError, TypeError):
-        logger.debug("_resolve_webchat: identifier %r is not a UUID, skipping DB lookup", identifier)
+        logger.debug(
+            "_resolve_webchat: identifier %r is not a UUID, skipping DB lookup", identifier
+        )
         return None
 
     account = get_account_by_id(identifier)
@@ -159,11 +161,17 @@ def _resolve_telegram(identifier: str, tenant_id: str) -> IdentityContext | None
 def _resolve_vision(identifier: str, tenant_id: str) -> IdentityContext | None:
     """vision identifier = a face label.
 
-    ``face_identities`` does not exist yet (a later phase adds the
-    migration) — probe for it with ``to_regclass`` and return ``None``
-    gracefully rather than raising, so this module ships ahead of that
-    migration. Always ``verified=False``: a face match is probabilistic,
-    never DB/crypto-verified.
+    ``face_identities`` (migration 089, Task 7) maps a vision-service face
+    label to a ``crm_people`` row, written by the engine's vision tool
+    handlers (``enroll_face``/``unenroll_face``) and the
+    ``robothor user link-face`` CLI. Still probed with ``to_regclass`` and
+    returns ``None`` gracefully on a DB error or an environment that hasn't
+    applied the migration yet — this sits on the hot path of every vision
+    identity lookup and must never raise. Always ``verified=False``: a face
+    match is probabilistic, never DB/crypto-verified. ``display_name``
+    prefers the row's own value and falls back (single query, ``LEFT JOIN
+    crm_people`` + ``COALESCE``) to the linked person's first+last name when
+    the row was upserted with an empty display_name.
     """
     try:
         with get_connection() as conn:
@@ -173,8 +181,13 @@ def _resolve_vision(identifier: str, tenant_id: str) -> IdentityContext | None:
             if not row or row[0] is None:
                 return None
             cur.execute(
-                "SELECT person_id, display_name FROM face_identities "
-                "WHERE tenant_id = %s AND face_label = %s LIMIT 1",
+                "SELECT fi.person_id, "
+                "COALESCE(NULLIF(fi.display_name, ''), "
+                "NULLIF(TRIM(CONCAT_WS(' ', cp.first_name, cp.last_name)), ''), '') "
+                "AS display_name "
+                "FROM face_identities fi "
+                "LEFT JOIN crm_people cp ON cp.id = fi.person_id "
+                "WHERE fi.tenant_id = %s AND fi.face_label = %s LIMIT 1",
                 (tenant_id, identifier),
             )
             match = cur.fetchone()

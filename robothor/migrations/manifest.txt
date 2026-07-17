@@ -94,3 +94,4 @@ crm/085_sso_binding_grants.sql
 crm/086_user_permissions.sql
 crm/087_role_permission_guardrails.sql
 crm/088_member_role_read_only.sql
+crm/089_face_identities.sql

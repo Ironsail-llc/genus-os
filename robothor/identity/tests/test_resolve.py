@@ -293,6 +293,25 @@ def test_resolve_identity_vision_no_match_returns_none():
     assert ctx is None
 
 
+def test_resolve_identity_vision_single_query_joins_crm_people_for_display_name():
+    """face_identities.display_name can be '' (e.g. a row upserted before the
+    linked person's name was known). The resolver does the fallback in ONE
+    query (LEFT JOIN crm_people + COALESCE), not a second round trip, so a
+    linked person_id still surfaces a name.
+    """
+    conn, cur = _mock_conn(fetchone_seq=[("public.face_identities",), ("person-5", "Dana Lee")])
+    with patch("robothor.identity.resolvers.get_connection", return_value=conn):
+        ctx = resolvers.resolve_identity("vision", "face-label-1", TENANT)
+    assert ctx is not None
+    assert ctx.display_name == "Dana Lee"
+    # Exactly two queries total: the to_regclass probe + one SELECT (no
+    # separate crm_people lookup).
+    assert cur.execute.call_count == 2
+    select_sql = cur.execute.call_args_list[1].args[0].lower()
+    assert "left join crm_people" in select_sql
+    assert "face_identities" in select_sql
+
+
 # ── caching ────────────────────────────────────────────────────────────────
 
 
