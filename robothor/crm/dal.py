@@ -4080,8 +4080,20 @@ def get_person_messages(
     channel: str | None = None,
     limit: int = 100,
     tenant_id: str = DEFAULT_TENANT,
-) -> list[dict[str, Any]]:
-    """Full message bodies joined via message_participant."""
+    scope: DataScope | None = None,
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Full message bodies joined via message_participant.
+
+    ``scope``: a caller-supplied ``person_id`` with no ownership check is an
+    IDOR — a restricted caller could read anyone's message bodies by
+    supplying their ``person_id``. A person's messages are inherently
+    person-linked — unlike ``list_messages``'s conversation, there is no
+    ``person_id IS NULL`` org-general case here. Fail closed, same own-row-
+    only rule as ``get_contact_360``: a restricted caller requesting anyone
+    but their own ``person_id`` is refused outright, no query issued.
+    """
+    if scope is not None and scope.restricted and person_id != scope.person_id:
+        return {"error": "Access denied — restricted to your own record"}
     where = ["m.tenant_id = %s", "mp.person_id = %s"]
     params: list[Any] = [tenant_id, person_id]
     if channel:

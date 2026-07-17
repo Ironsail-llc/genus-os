@@ -1166,17 +1166,46 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 async def _list_contact_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Fetch message bodies for a person, optionally filtered by channel."""
     from robothor.crm.dal import get_person_messages
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        scope_for_query,
+    )
 
     person_id = (args.get("id") or "").strip()
     if not person_id:
         return {"error": "id is required"}
     channel = args.get("channel")
     limit = int(args.get("limit", 100))
+
+    # get_person_messages is a "give me this person's messages" call — a
+    # person's messages are inherently person-linked, unlike list_messages's
+    # conversation which can be unlinked. Own-row-only, no org-general
+    # carve-out (see robothor.crm.dal.get_person_messages): a restricted
+    # mismatch is a hard denial in enforce, the real messages in observe/off.
+    _mode = data_scoping_mode()
     rows = await asyncio.to_thread(
         get_person_messages,
         person_id,
         channel=channel,
         limit=limit,
         tenant_id=ctx.tenant_id,
+        scope=scope_for_query(_mode, ctx.identity),
     )
+
+    _obs_scope = observe_scope(_mode, ctx.identity)
+    if _obs_scope:
+        _dropped = rows_dropped_by_identity_scope([{"id": person_id}], _obs_scope)
+        log_would_drop(
+            tool_name="list_contact_messages",
+            user_id=ctx.user_id,
+            scope=_obs_scope,
+            dropped=_dropped,
+            table="message",
+        )
+
+    if isinstance(rows, dict) and "error" in rows:
+        return rows
     return {"messages": rows}

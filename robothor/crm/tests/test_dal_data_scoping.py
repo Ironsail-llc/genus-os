@@ -593,3 +593,64 @@ class TestGetContact360:
         result = get_contact_360("someone-else", tenant_id="tenant-a")
 
         assert "error" not in result
+
+
+class TestGetPersonMessages:
+    """``get_person_messages`` (backing the ``list_contact_messages`` tool)
+    took a caller-supplied ``person_id`` with no ownership check — a
+    restricted caller could read anyone's full message bodies by supplying
+    their ``person_id`` (IDOR), same class as Finding 2's ``list_messages``.
+    Unlike ``list_messages``, a person's messages are inherently
+    person-linked — there is no ``person_id IS NULL`` org-general case, so
+    this mirrors ``get_contact_360``'s own-row-only rule: a restricted
+    caller requesting anyone but their own ``person_id`` is refused
+    outright, no query issued.
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_scope_none_unaffected(self, mock_get_conn):
+        from robothor.crm.dal import get_person_messages
+
+        mock_conn, mock_cur = _mock_conn(fetchall_return=[])
+        mock_get_conn.return_value = mock_conn
+
+        result = get_person_messages("someone-else", tenant_id="tenant-a")
+
+        assert mock_cur.execute.call_count == 1
+        assert result == []
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_unrestricted_scope_unaffected(self, mock_get_conn):
+        from robothor.crm.dal import get_person_messages
+
+        mock_conn, mock_cur = _mock_conn(fetchall_return=[])
+        mock_get_conn.return_value = mock_conn
+
+        result = get_person_messages("someone-else", tenant_id="tenant-a", scope=UNRESTRICTED)
+
+        assert mock_cur.execute.call_count == 1
+        assert result == []
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_restricted_scope_denies_other_persons_messages(self, mock_get_conn):
+        from robothor.crm.dal import get_person_messages
+
+        mock_conn, mock_cur = _mock_conn(fetchall_return=[{"id": "m1"}])
+        mock_get_conn.return_value = mock_conn
+
+        result = get_person_messages("someone-else", tenant_id="tenant-a", scope=RESTRICTED)
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        mock_cur.execute.assert_not_called()
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_restricted_scope_allows_own_messages(self, mock_get_conn):
+        from robothor.crm.dal import get_person_messages
+
+        mock_conn, mock_cur = _mock_conn(fetchall_return=[{"id": "m1"}])
+        mock_get_conn.return_value = mock_conn
+
+        result = get_person_messages("person-1", tenant_id="tenant-a", scope=RESTRICTED)
+
+        assert result == [{"id": "m1"}]

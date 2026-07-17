@@ -264,6 +264,21 @@ class TestOtherCrmHandlersWireScope:
             await _call("list_my_tasks", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         assert mock_list.call_args.kwargs.get("scope") is not None
 
+    @pytest.mark.asyncio
+    async def test_list_contact_messages(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_person_messages") as mock_get,
+        ):
+            mock_get.return_value = []
+            await _call(
+                "list_contact_messages",
+                {"id": "person-1"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert mock_get.call_args.kwargs.get("scope") is not None
+
 
 class TestListMessagesRefusal:
     """Finding 2 (Task 5 review): list_messages IDOR — a restricted caller
@@ -326,6 +341,73 @@ class TestListMessagesRefusal:
             await _call(
                 "list_messages",
                 {"conversationId": 1},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("data_scoping" in m for m in msgs)
+
+
+class TestListContactMessagesRefusal:
+    """list_contact_messages -> get_person_messages IDOR: a restricted
+    caller with a bare person_id could read anyone's full message bodies.
+    Unlike list_messages/conversations, a person's messages have no
+    NULL/org-general case — own-row-only, same rule as get_contact_360.
+    Enforce mode refuses; observe mode logs without refusing."""
+
+    @pytest.mark.asyncio
+    async def test_enforce_mode_denies_other_persons_messages(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_person_messages") as mock_get,
+        ):
+            mock_get.return_value = {"error": "Access denied — restricted to your own record"}
+            result = await _call(
+                "list_contact_messages",
+                {"id": "person-9"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_observe_mode_logs_would_refuse_without_denying(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.get_person_messages") as mock_get,
+        ):
+            mock_get.return_value = [{"id": "m1"}, {"id": "m2"}]
+            result = await _call(
+                "list_contact_messages",
+                {"id": "person-9"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        # Observe must not filter/deny — the real (unrestricted) messages
+        # still come back.
+        assert result == {"messages": [{"id": "m1"}, {"id": "m2"}]}
+        assert mock_get.call_args.kwargs.get("scope") is None
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any(
+            "data_scoping" in m and "would_drop=1" in m and "table=message" in m for m in msgs
+        )
+
+    @pytest.mark.asyncio
+    async def test_observe_mode_own_record_no_log(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.get_person_messages") as mock_get,
+        ):
+            mock_get.return_value = [{"id": "m1"}]
+            await _call(
+                "list_contact_messages",
+                {"id": "person-1"},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
