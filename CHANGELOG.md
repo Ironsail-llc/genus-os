@@ -1,3 +1,9 @@
+## [1.27.0](https://github.com/Ironsail-llc/genus-os/compare/v1.26.0...v1.27.0) (2026-07-17)
+
+### Features
+
+* **identity:** unified identity context and per-user access control ([#221](https://github.com/Ironsail-llc/genus-os/issues/221)) ([bcec304](https://github.com/Ironsail-llc/genus-os/commit/bcec30473a989417cb765e2b0213f0a9530c42bc))
+
 ## [1.26.0](https://github.com/Ironsail-llc/genus-os/compare/v1.25.0...v1.26.0) (2026-07-16)
 
 ### Features
