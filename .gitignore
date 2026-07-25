@@ -16,6 +16,10 @@ brain/*.bak.*
 !brain/README.md
 brain/agents/
 brain/delphi/
+# Instance research and analysis write-ups. These quote live corpus counts,
+# tenant ids, filesystem paths and open security findings — instance data by
+# CLAUDE.md rule 1, not platform docs.
+brain/docs/
 brain/instructions/
 brain/scripts/
 brain/memory/
@@ -126,6 +130,11 @@ status/
 .robothor/
 local/
 !local/owner.env.example
+# Ad-hoc analysis scratch. Holds live corpus snapshots and generated eval
+# questions containing real names and business facts — never committable.
+# Durable artifacts belong under local/ (also ignored); anything worth keeping
+# as platform code gets parameterised and moved into robothor/ first.
+.debug/
 crm/cleanup_crm.py
 crm/cleanup_backup.json
 crm/migrate_contacts.py
@@ -182,6 +191,8 @@ scripts/seed_dev_team_identities.py
 /crm/migrations/061_delphi_*.sql
 /crm/migrations/063_delphi_*.sql
 /crm/migrations/064_delphi_*.sql
+/crm/migrations/090_delphi_*.sql
+/crm/migrations/091_delphi_*.sql
 /scripts/delphi_*.py
 /scripts/delphi-*.sh
 /scripts/provision_delphi_tenant.py
