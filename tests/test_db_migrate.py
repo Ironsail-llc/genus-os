@@ -98,12 +98,13 @@ def test_discovers_complete_manifest_with_unique_immutable_ids() -> None:
     migrations = migrate._discover()
     ids = [migration.migration_id for migration in migrations]
 
-    assert len(migrations) == 92
+    assert len(migrations) == 93
     assert len(ids) == len(set(ids))
     assert ids[0] == "001_init"
     assert "001_crm_tables" in ids
     assert "071_memory_vault" in ids
     assert "071_user_accounts" in ids
+    assert "092_memory_access_rollup" in ids
     # This ignored, installation-specific SQL exists in some workspaces but is
     # intentionally absent from the product manifest.
     assert "063_delphi_pmf_experiments" not in ids

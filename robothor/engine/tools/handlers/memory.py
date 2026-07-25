@@ -23,58 +23,50 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 @_handler("search_memory")
 async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    from robothor.engine.feature_flags import is_rip_enabled
+    """Search memory, applying identity scoping regardless of which path runs.
 
-    # RIP 15: route through the query-classed memory router instead of the
-    # hard-coded full fan-out. Falls back below when the flag is off.
-    if is_rip_enabled(15):
-        return await _search_memory_routed(args, ctx)
-
-    from robothor.engine.feature_flags import data_scoping_mode, narrow_memory_search_enabled
+    Scoping is computed *above* the RIP 15 branch deliberately. It previously
+    lived inside the fallback body, so enabling the router silently skipped it:
+    the routed path never read ctx.identity and never passed a scope, meaning
+    promoting ROBOTHOR_DATA_SCOPING to enforce would have filtered nothing
+    through the primary memory read tool. Hoisting it makes the shape of the
+    code enforce the invariant rather than a reviewer's memory.
+    """
+    from robothor.engine.feature_flags import data_scoping_mode, is_rip_enabled
     from robothor.identity.scope import (
         log_would_drop,
         observe_scope,
         rows_dropped_by_scope,
         scope_for_query,
     )
-    from robothor.memory.facts import search_facts
     from robothor.memory.outcomes import log_fact_access
 
-    # R2: by default the tool fans out (entities + insights + episodes) on every
-    # call — expensive for a narrow lookup. When MEMORY_NARROW_SEARCH is on, a
-    # call defaults to facts-only and the caller opts into fan-out via args.
-    fan_out = not narrow_memory_search_enabled()
-
     # Task 5 (Unified Identity Context) — "own data + shared" row scoping.
-    # off/observe never touch the query; enforce restricts it to the
-    # caller's own person_id (+ org-general rows) for non-privileged
-    # identities. See robothor/identity/scope.py.
+    # off/observe never touch the query; enforce restricts it to the caller's
+    # own person_id (+ org-general rows) for non-privileged identities.
+    identity = getattr(ctx, "identity", None)
     _scoping_mode = data_scoping_mode()
-    _query_scope = scope_for_query(_scoping_mode, ctx.identity)
-    results = await search_facts(
-        args.get("query", ""),
-        limit=args.get("limit", 10),
-        tenant_id=ctx.tenant_id,
-        expand_entities=bool(args.get("expand_entities", fan_out)),
-        include_insights=bool(args.get("include_insights", fan_out)),
-        include_episodes=bool(args.get("include_episodes", fan_out)),
-        scope=_query_scope,
-    )
+    _query_scope = scope_for_query(_scoping_mode, identity)
 
-    _observe_scope = observe_scope(_scoping_mode, ctx.identity)
+    if is_rip_enabled(15):
+        results, query_class = await _recall_routed(args, ctx, scope=_query_scope)
+    else:
+        results, query_class = await _recall_fallback(args, ctx, scope=_query_scope)
+
+    # Observe runs against the raw rows, which still carry person_id — the
+    # formatted output deliberately does not expose it.
+    _observe_scope = observe_scope(_scoping_mode, identity)
     if _observe_scope:
-        _dropped = rows_dropped_by_scope(results, _observe_scope)
         log_would_drop(
             tool_name="search_memory",
             user_id=ctx.user_id,
             scope=_observe_scope,
-            dropped=_dropped,
+            dropped=rows_dropped_by_scope(results, _observe_scope),
             table="memory_facts",
         )
 
     # Log fact access for outcome attribution (best-effort).
     run_id = getattr(ctx, "run_id", None)
-    agent_id = getattr(ctx, "agent_id", None)
     if run_id:
         fact_ids = [
             r["id"]
@@ -82,56 +74,90 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             if r.get("source") in (None, "fact", "entity_expansion") and r.get("id")
         ]
         if fact_ids:
-            await asyncio.to_thread(log_fact_access, str(run_id), fact_ids, agent_id, ctx.tenant_id)
+            await asyncio.to_thread(
+                log_fact_access,
+                str(run_id),
+                fact_ids,
+                getattr(ctx, "agent_id", None),
+                ctx.tenant_id,
+            )
 
+    return _format_results(results, query_class)
+
+
+async def _recall_fallback(
+    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+) -> tuple[list[dict[str, Any]], str]:
+    """Direct search_facts path — returns raw rows plus a query-class label."""
+    from robothor.engine.feature_flags import narrow_memory_search_enabled
+    from robothor.memory.facts import search_facts
+    from robothor.memory.router import classify_query
+
+    # R2: by default the tool fans out (entities + insights + episodes) on every
+    # call — expensive for a narrow lookup. When MEMORY_NARROW_SEARCH is on, a
+    # call defaults to facts-only and the caller opts into fan-out via args.
+    fan_out = not narrow_memory_search_enabled()
+    query = args.get("query", "")
+
+    results = await search_facts(
+        query,
+        limit=args.get("limit", 10),
+        tenant_id=ctx.tenant_id,
+        expand_entities=bool(args.get("expand_entities", fan_out)),
+        include_insights=bool(args.get("include_insights", fan_out)),
+        include_episodes=bool(args.get("include_episodes", fan_out)),
+        scope=scope,
+    )
+    # classify_query is a pure regex with no I/O, so the label is available on
+    # this path too — the output shape stays identical across the flag.
+    return results, classify_query(query)
+
+
+def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, Any]:
+    """One output shape for both read paths.
+
+    The routed and fallback paths used to emit different keys — the fallback
+    gave `confidence`/`similarity`, the routed one gave `score` and a
+    `query_class`, and neither gave `id`. That meant flipping RIP 15 changed
+    the tool's contract as a side effect of changing its retrieval, so a revert
+    would bundle a schema change into a behaviour change.
+
+    This emits the superset on every call. `id` is included because outcome
+    attribution already depends on it and because a caller cannot reason about
+    row identity — scoping, dedup, citation — without it.
+    """
     return {
+        "query_class": query_class,
         "results": [
             {
-                "fact": r.get("fact_text") or r.get("insight_text") or "",
+                "id": r.get("id"),
+                "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
                 "category": r.get("category", "")
                 if isinstance(r.get("category"), str)
                 else (r.get("categories") or [None])[0] or "",
+                "source": r.get("source") or "fact",
                 "confidence": r.get("confidence", 0),
-                "similarity": round(r.get("similarity", 0), 4),
-                "source": r.get("source", "fact"),
+                "similarity": round(r.get("similarity") or 0, 4),
+                "score": round(r.get("score") or r.get("rrf_score") or 0, 4),
             }
-            for r in results
-        ]
+            for r in rows
+        ],
     }
 
 
-async def _search_memory_routed(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+async def _recall_routed(
+    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+) -> tuple[list[dict[str, Any]], str]:
     """RIP 15 path — query-classed routing via robothor.memory.router."""
-    from robothor.memory.outcomes import log_fact_access
     from robothor.memory.router import recall
 
     out = await recall(
         args.get("query", ""),
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
+        scope=scope,
     )
-    results = out["results"]
-
-    # Outcome attribution: only fact-sourced rows feed the blame loop.
-    run_id = getattr(ctx, "run_id", None)
-    agent_id = getattr(ctx, "agent_id", None)
-    if run_id:
-        fact_ids = [r["id"] for r in results if r.get("source") == "fact" and r.get("id")]
-        if fact_ids:
-            await asyncio.to_thread(log_fact_access, str(run_id), fact_ids, agent_id, ctx.tenant_id)
-
-    return {
-        "query_class": out["query_class"],
-        "results": [
-            {
-                "fact": r.get("text", ""),
-                "category": r.get("category", ""),
-                "source": r.get("source", "fact"),
-                "score": round(r.get("score", 0) or 0, 4),
-            }
-            for r in results
-        ],
-    }
+    return out["results"], out["query_class"]
 
 
 @_handler("store_memory")
