@@ -93,114 +93,18 @@ def _expansion_queries(mock_cur):
     return [c for c in mock_cur.execute.call_args_list if "ANY(entities)" in c[0][0]]
 
 
-@patch("robothor.memory.entities.get_entity")
-@patch("robothor.memory.facts.get_connection")
-@patch("robothor.memory.facts.llm_client")
-def test_restricted_scope_adds_predicate_to_entity_expansion_query(
-    mock_llm, mock_get_conn, mock_get_entity
-):
-    """Finding 3 (Task 5 review, CRITICAL): the entity-graph expansion query
-    ran WITHOUT the scope predicate the two primary (vector/BM25) candidate
-    queries apply — a restricted caller's expand_entities=True search could
-    pull in another person's facts through the expansion fan-out, bypassing
-    the "own data + shared" rule entirely for that path."""
-    from robothor.memory.facts import search_facts
-
-    async def _fake_embed(*a, **kw):
-        return [0.1] * 384
-
-    mock_llm.get_embedding_async = _fake_embed
-
-    async def _fake_get_entity(*a, **kw):
-        return {"relations": [{"target": "Bob"}]}
-
-    mock_get_entity.side_effect = _fake_get_entity
-
-    mock_cur = _mock_cursor()
-    mock_cur.fetchall.return_value = [
-        {
-            "id": 1,
-            "fact_text": "Alice works at Acme",
-            "category": "work",
-            "entities": ["Alice"],
-            "confidence": 0.9,
-            "source_type": "note",
-            "metadata": {},
-            "created_at": None,
-            "importance_score": 0.9,
-            "access_count": 0,
-            "superseded_by": None,
-            "person_id": "person-2",
-            "age_seconds": 0,
-            "similarity": 0.9,
-            "bm25_score": 0.1,
-        }
-    ]
-    mock_get_conn.return_value = _mock_conn(mock_cur)
-
-    _run(
-        search_facts(
-            "Alice",
-            tenant_id="tenant-a",
-            scope=RESTRICTED,
-            expand_entities=True,
-            use_reranker=False,
-        )
-    )
-
-    expansion_calls = _expansion_queries(mock_cur)
-    assert len(expansion_calls) >= 1, "entity expansion query never ran — test setup is wrong"
-    for call in expansion_calls:
-        sql, params = call[0][0], call[0][1]
-        assert "person_id = %s OR person_id IS NULL" in sql
-        assert "person-1" in params
-
-
-@patch("robothor.memory.entities.get_entity")
-@patch("robothor.memory.facts.get_connection")
-@patch("robothor.memory.facts.llm_client")
-def test_scope_none_expansion_query_unaffected(mock_llm, mock_get_conn, mock_get_entity):
-    from robothor.memory.facts import search_facts
-
-    async def _fake_embed(*a, **kw):
-        return [0.1] * 384
-
-    mock_llm.get_embedding_async = _fake_embed
-
-    async def _fake_get_entity(*a, **kw):
-        return {"relations": [{"target": "Bob"}]}
-
-    mock_get_entity.side_effect = _fake_get_entity
-
-    mock_cur = _mock_cursor()
-    mock_cur.fetchall.return_value = [
-        {
-            "id": 1,
-            "fact_text": "Alice works at Acme",
-            "category": "work",
-            "entities": ["Alice"],
-            "confidence": 0.9,
-            "source_type": "note",
-            "metadata": {},
-            "created_at": None,
-            "importance_score": 0.9,
-            "access_count": 0,
-            "superseded_by": None,
-            "person_id": "person-2",
-            "age_seconds": 0,
-            "similarity": 0.9,
-            "bm25_score": 0.1,
-        }
-    ]
-    mock_get_conn.return_value = _mock_conn(mock_cur)
-
-    _run(search_facts("Alice", tenant_id="tenant-a", expand_entities=True, use_reranker=False))
-
-    expansion_calls = _expansion_queries(mock_cur)
-    assert len(expansion_calls) >= 1, "entity expansion query never ran — test setup is wrong"
-    for call in expansion_calls:
-        sql = call[0][0]
-        assert "person_id = %s OR person_id IS NULL" not in sql
+# The two entity-expansion scoping tests that lived here were deleted.
+# They patched get_entity to return {"relations": [{"target": "Bob"}]} — a shape
+# production never emits (entities.get_entity builds relations with
+# `SELECT r.*, e.name AS target_name`) — and then asserted, when the expansion
+# query did not run, that "test setup is wrong". The expansion had in fact
+# never run in production for exactly that key mismatch, so the tests
+# certified the bug as correct behaviour for as long as it existed.
+#
+# Real coverage now lives in tests/integration/test_memory_entity_expansion.py,
+# which seeds real entities and relations and asserts a restricted caller does
+# not reach another person's row through the graph — with an unrestricted
+# negative control so it cannot pass vacuously.
 
 
 @patch("robothor.memory.facts.get_connection")

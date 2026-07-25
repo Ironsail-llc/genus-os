@@ -188,3 +188,95 @@ async def test_expansion_is_off_by_default(graph_fixture, mock_get_connection, _
     )
 
     assert "entity_expansion" not in {r.get("source") for r in results}
+
+
+@pytest.mark.asyncio
+async def test_expansion_respects_person_scope(db_cursor, test_prefix, mock_get_connection, _no_ollama):
+    """A restricted caller must not reach another person's row *through the graph*.
+
+    The expansion query carries the same scope predicate as the main candidate
+    queries, but that code had never executed, so the predicate was untested by
+    construction. Two mock-based tests in robothor/memory/tests/ claimed to
+    cover this by patching get_entity to return {"relations": [{"target": ...}]}
+    — a shape production never emits — and were deleted in favour of this.
+
+    Seeds the related fact as Bob's. Alice must see the graph work for her own
+    rows and still not receive Bob's.
+    """
+    import uuid
+
+    from robothor.engine.tools.handlers.memory import _search_memory
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.identity.context import IdentityContext
+    from robothor.memory.facts import search_facts
+    from robothor.identity.scope import DataScope
+
+    tenant = f"{test_prefix}-scoped"
+    db_cursor.execute(
+        "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+        (tenant, tenant),
+    )
+    people = {}
+    for who in ("alice", "bob"):
+        pid = str(uuid.uuid4())
+        db_cursor.execute(
+            "INSERT INTO crm_people (id, first_name, last_name, tenant_id) VALUES (%s,%s,%s,%s)",
+            (pid, test_prefix, who, tenant),
+        )
+        people[who] = pid
+
+    hub, spoke = f"{test_prefix}_Hub2", f"{test_prefix}_Spoke2"
+    ids = {}
+    for name in (hub, spoke):
+        db_cursor.execute(
+            "INSERT INTO memory_entities (name, entity_type, tenant_id) "
+            "VALUES (%s,'organization',%s) RETURNING id",
+            (name, tenant),
+        )
+        ids[name] = db_cursor.fetchone()["id"]
+    db_cursor.execute(
+        "INSERT INTO memory_relations (source_entity_id,target_entity_id,relation_type,tenant_id) "
+        "VALUES (%s,%s,'partners_with',%s)",
+        (ids[hub], ids[spoke], tenant),
+    )
+
+    db_cursor.execute(
+        "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active, "
+        "importance_score, embedding) VALUES (%s,'project',%s,%s,TRUE,0.6,%s::vector) RETURNING id",
+        (f"{hub} signed the quarterly logistics agreement", [hub], tenant, str(_CONSTANT_VECTOR)),
+    )
+    seed_id = db_cursor.fetchone()["id"]
+
+    # Reachable only via the relation, and owned by Bob.
+    db_cursor.execute(
+        "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active, "
+        "importance_score, person_id) VALUES (%s,'project',%s,%s,TRUE,0.9,%s) RETURNING id",
+        (f"{spoke} operates the northern depot", [spoke], tenant, people["bob"]),
+    )
+    bob_related = db_cursor.fetchone()["id"]
+
+    query = f"{hub} quarterly logistics agreement"
+
+    # Negative control: unrestricted, the graph reaches Bob's row.
+    unrestricted = await search_facts(
+        query, limit=10, tenant_id=tenant, expand_entities=True, use_reranker=False
+    )
+    assert bob_related in {r.get("id") for r in unrestricted}, (
+        "expansion did not reach the related fact even unrestricted — the "
+        "scoped assertion below would pass vacuously"
+    )
+
+    # Restricted Alice must not receive it.
+    scoped = await search_facts(
+        query,
+        limit=10,
+        tenant_id=tenant,
+        expand_entities=True,
+        use_reranker=False,
+        scope=DataScope(tenant_id=tenant, person_id=people["alice"], restricted=True),
+    )
+    got = {r.get("id") for r in scoped}
+    assert bob_related not in got, (
+        "entity expansion leaked another person's row past the scope predicate"
+    )
+    assert seed_id in got, "the caller's own reachable row must still be returned"
