@@ -32,6 +32,67 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 EVAL_TENANT = "memory-eval"
+
+
+class EvalPreconditionError(RuntimeError):
+    """The eval cannot run — as distinct from running and failing cases.
+
+    Raised before any seeding so a misconfigured run refuses loudly instead of
+    writing fixture facts somewhere it shouldn't, or reporting a shape that
+    reads like a result.
+    """
+
+
+def exit_code_for(report: dict[str, Any] | None, blocked: str | None) -> int:
+    """Map an eval outcome to a process exit code.
+
+    0 = every case passed, 2 = the suite ran and some case failed,
+    3 = the suite could not run at all.
+
+    Separating 3 from 2 is the point. Historically both collapsed to "non-zero",
+    so a harness that could not execute — which is what row-level security had
+    been doing to this eval for weeks — was indistinguishable from ordinary
+    failures, and an empty or absent report read as success.
+    """
+    if blocked:
+        return 3
+    if not report:
+        return 3
+    total = int(report.get("total") or 0)
+    if total <= 0:
+        # 0/0 is vacuous, not a pass. Grading an empty suite green is how a
+        # gate ends up certifying nothing.
+        return 3
+    return 0 if int(report.get("passed") or 0) == total else 2
+
+
+def preflight(tenant_id: str) -> str | None:
+    """Return a human-readable blocker if the eval cannot run, else None.
+
+    The blocker this exists for: row-level security (migration 081) applies a
+    ``WITH CHECK`` on every tenant-scoped table, so seeding as ``memory-eval``
+    from a process whose ``app.tenant_id`` is the production tenant raises
+    InsufficientPrivilege partway through. Detecting it up front turns a
+    confusing mid-run crash into an actionable message.
+    """
+    from robothor.db.connection import get_connection
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT current_setting('app.tenant_id', true)")
+            row = cur.fetchone()
+            bound = (row[0] if row else None) or ""
+    except Exception as e:  # pragma: no cover - connection failures are their own blocker
+        return f"cannot reach the database: {e}"
+
+    if bound and bound != tenant_id:
+        return (
+            f"row-level security is bound to tenant {bound!r} but the suite seeds "
+            f"as {tenant_id!r}; seeding would be rejected by the WITH CHECK policy. "
+            f"Run this process with ROBOTHOR_TENANT_ID={tenant_id}."
+        )
+    return None
 # recall/persona/noise/resolution → gold must appear in top-k (noise adds a
 # distractor cloud; resolution seeds a detection→resolution arc). temporal →
 # latest must rank first. verbatim → exact string must survive.
@@ -354,6 +415,18 @@ async def run_suite(
     cleanup: bool = True,
 ) -> dict[str, Any]:
     """Run a whole suite end-to-end and return an aggregated report dict."""
+    # Refuse the production tenant before touching disk or the database. The
+    # older guard lived in _cleanup_tenant, which meant a mistyped --tenant
+    # would happily seed fixture facts into the operator's real memory and
+    # then merely decline to delete them.
+    from robothor.constants import DEFAULT_TENANT
+
+    if not tenant_id or tenant_id == DEFAULT_TENANT:
+        raise EvalPreconditionError(
+            f"refusing to seed eval fixtures into {tenant_id or DEFAULT_TENANT!r} "
+            f"(the production tenant); pass an isolated tenant such as {EVAL_TENANT!r}"
+        )
+
     meta, cases = load_suite(suite_path)
     _ensure_tenant(tenant_id)
 
