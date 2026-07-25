@@ -158,6 +158,9 @@ async def ingest_conversation_session(
                 "run_id": run_id,
                 "message_count": len(history),
             },
+            # Without this the watermarks were tenant-correct while the facts
+            # they tracked were written to DEFAULT_TENANT.
+            tenant_id=tenant_id,
         )
 
         if incremental:

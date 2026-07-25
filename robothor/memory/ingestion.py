@@ -42,6 +42,7 @@ async def ingest_content(
     source_channel: str,
     content_type: str,
     metadata: dict[str, Any] | None = None,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Ingest content from any channel, extracting and storing facts.
 
@@ -50,6 +51,11 @@ async def ingest_content(
         source_channel: Channel the content came from (discord, email, etc.).
         content_type: Type of content (conversation, email, decision, etc.).
         metadata: Optional channel-specific metadata.
+        tenant_id: Tenant the content belongs to. Empty falls through to
+            DEFAULT_TENANT, preserving behaviour for callers that never passed
+            one. Every downstream store already accepted a tenant; this was the
+            only place the value was dropped, so content from any tenant was
+            written to the default one.
 
     Returns:
         Dict with ingestion results including facts processed.
@@ -78,6 +84,7 @@ async def ingest_content(
                 fact=fact,
                 source_content=content,
                 source_type=content_type,
+                tenant_id=tenant_id,
             )
             if result.get("new_id"):
                 stored_ids.append(result["new_id"])
@@ -88,7 +95,7 @@ async def ingest_content(
                 logger.info("Skipped fact (dedup): %s", fact["fact_text"][:80])
         except Exception as e:
             logger.warning("Conflict resolution failed (%s), storing directly", e)
-            fact_id = await store_fact(fact, content, content_type, metadata)
+            fact_id = await store_fact(fact, content, content_type, metadata, tenant_id=tenant_id)
             stored_ids.append(fact_id)
             _set_source_channel(fact_id, source_channel, metadata)
 
@@ -96,7 +103,7 @@ async def ingest_content(
     entity_results: dict[str, Any] = {"entities_stored": 0, "relations_stored": 0}
     if stored_ids:
         try:
-            entity_results = await extract_entities_batch(stored_ids)
+            entity_results = await extract_entities_batch(stored_ids, tenant_id=tenant_id)
             logger.info(
                 "Entity extraction: %d entities, %d relations",
                 entity_results.get("entities_stored", 0),
@@ -112,7 +119,11 @@ async def ingest_content(
     vault_stored = 0
     if _vault_populate_enabled():
         try:
-            vault_stored = len(await populate_vault_from_content(content, source=source_channel))
+            vault_stored = len(
+                await populate_vault_from_content(
+                    content, source=source_channel, tenant_id=tenant_id
+                )
+            )
         except Exception as e:
             logger.warning("Vault auto-populate failed: %s", e)
 
