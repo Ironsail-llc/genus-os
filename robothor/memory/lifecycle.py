@@ -1198,14 +1198,18 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["breadcrumbs"],
     )
 
-    # Step 12: Outcome access log GC — trim attribution history past 30 days.
+    # Step 12: Outcome access log GC — trim raw attribution rows past the
+    # configured retention window (MEMORY_ACCESS_LOG_RETENTION_DAYS). Passing
+    # `days=None` lets the function read the knob; hardcoding a literal here is
+    # what made the window unchangeable and destroyed the decay formula's only
+    # input. Lifetime counts survive in fact_access_rollup.
     t10 = time.monotonic()
     access_log_pruned = 0
     try:
         from robothor.memory.outcomes import cleanup_old_access_logs
 
         for tid in tenant_ids:
-            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, 30, tid)
+            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, None, tid)
     except Exception as e:
         logger.warning("Access log cleanup failed: %s", e)
     step_timings["access_log_cleanup"] = time.monotonic() - t10

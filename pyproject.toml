@@ -189,6 +189,10 @@ packages = ["robothor"]
 "crm/migrations/078_memory_facts_content_hash_unique.sql" = "robothor/migrations/crm/078_memory_facts_content_hash_unique.sql"
 "crm/migrations/079_guardrail_event_modes.sql" = "robothor/migrations/crm/079_guardrail_event_modes.sql"
 "crm/migrations/080_judge_reviewer_type.sql" = "robothor/migrations/crm/080_judge_reviewer_type.sql"
+# NOTE: 081-089 are absent from this list — a pre-existing packaging gap that
+# means wheel-based deploys ship without them. Tracked separately; do not
+# extend it. 092 is listed so the access-log roll-up ships with the wheel.
+"crm/migrations/092_memory_access_rollup.sql" = "robothor/migrations/crm/092_memory_access_rollup.sql"
 
 [tool.coverage.run]
 source = ["robothor"]

@@ -15,6 +15,7 @@ either stale, incorrect, or irrelevant. This module:
 from __future__ import annotations
 
 import logging
+import os
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
@@ -25,6 +26,12 @@ logger = logging.getLogger(__name__)
 # destroy a fact outright.
 _PER_FAILURE_PENALTY = 0.1
 _MAX_PENALTY = 0.4
+
+# How long raw per-run access rows are kept before being folded into
+# fact_access_rollup. Historically hardcoded to 30 days at the call site, which
+# meant the decay formula's only input was being destroyed faster than anything
+# consumed it.
+_DEFAULT_RETENTION_DAYS = 30
 
 # After this many failures we also drop confidence so retrieval deprioritizes.
 _CONFIDENCE_DROP_THRESHOLD = 3
@@ -116,24 +123,96 @@ def bump_failure_for_run(
     return {"facts_touched": touched, "facts_confidence_dropped": dropped}
 
 
-def cleanup_old_access_logs(days: int = 30, tenant_id: str | None = None) -> int:
-    """Trim the access log — not needed for attribution beyond the decay window.
+def access_log_retention_days() -> int:
+    """Days of raw access log to keep, from MEMORY_ACCESS_LOG_RETENTION_DAYS.
 
-    ``tenant_id`` bounds the sweep. Nightly maintenance passes it to stay
-    inside one tenant's audit data. ``None`` sweeps globally.
+    Falls back to the historical 30 on anything unparseable, and refuses
+    non-positive values: a 0-day window would delete the entire log on the next
+    nightly pass, so a bad config must fail safe rather than fail destructive.
     """
+    raw = os.environ.get("MEMORY_ACCESS_LOG_RETENTION_DAYS", "").strip()
+    if not raw:
+        return _DEFAULT_RETENTION_DAYS
+    try:
+        days = int(raw)
+    except ValueError:
+        logger.warning(
+            "MEMORY_ACCESS_LOG_RETENTION_DAYS=%r is not an integer; using %d",
+            raw,
+            _DEFAULT_RETENTION_DAYS,
+        )
+        return _DEFAULT_RETENTION_DAYS
+    if days <= 0:
+        logger.warning(
+            "MEMORY_ACCESS_LOG_RETENTION_DAYS=%d is not positive; using %d",
+            days,
+            _DEFAULT_RETENTION_DAYS,
+        )
+        return _DEFAULT_RETENTION_DAYS
+    return days
+
+
+# Roll the doomed rows into the lifetime aggregate and delete them in one
+# statement. Postgres runs a data-modifying CTE exactly once and to completion,
+# so `doomed` is materialised before `agg` and the final count read it — there
+# is no window where rows are deleted but unaccounted for, and no way for a
+# crash between two statements to lose the counts.
+#
+# ON CONFLICT accumulates. Overwriting here would look correct on the first
+# night and silently discard every prior night's history on the second.
+_ROLLUP_AND_DELETE = """
+WITH doomed AS (
+    DELETE FROM fact_access_log
+    WHERE accessed_at < NOW() - make_interval(days => %(days)s)
+      AND (%(tenant)s::text IS NULL OR tenant_id = %(tenant)s)
+    RETURNING fact_id, tenant_id, accessed_at
+), agg AS (
+    SELECT fact_id,
+           tenant_id,
+           count(*)          AS n,
+           min(accessed_at)  AS first_at,
+           max(accessed_at)  AS last_at
+    FROM doomed
+    GROUP BY fact_id, tenant_id
+), rolled AS (
+    INSERT INTO fact_access_rollup AS r
+        (fact_id, tenant_id, access_count, first_accessed_at, last_accessed_at, updated_at)
+    SELECT fact_id, tenant_id, n, first_at, last_at, NOW() FROM agg
+    ON CONFLICT (fact_id, tenant_id) DO UPDATE
+    SET access_count      = r.access_count + EXCLUDED.access_count,
+        first_accessed_at = LEAST(r.first_accessed_at, EXCLUDED.first_accessed_at),
+        last_accessed_at  = GREATEST(r.last_accessed_at, EXCLUDED.last_accessed_at),
+        updated_at        = NOW()
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM doomed) AS deleted,
+       (SELECT count(*) FROM rolled) AS facts_rolled
+"""
+
+
+def cleanup_old_access_logs(days: int | None = None, tenant_id: str | None = None) -> int:
+    """Trim the raw access log, preserving lifetime counts in the roll-up.
+
+    ``days`` defaults to :func:`access_log_retention_days`. ``tenant_id`` bounds
+    the sweep; ``None`` sweeps globally.
+
+    Returns the number of raw rows removed. The counts themselves are not lost —
+    they are folded into ``fact_access_rollup`` in the same statement.
+    """
+    window = access_log_retention_days() if days is None else days
     with get_connection() as conn:
         cur = conn.cursor()
-        if tenant_id is None:
-            cur.execute(
-                "DELETE FROM fact_access_log WHERE accessed_at < NOW() - make_interval(days := %s)",
-                (days,),
+        cur.execute(_ROLLUP_AND_DELETE, {"days": window, "tenant": tenant_id})
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        deleted, facts_rolled = int(row[0]), int(row[1])
+        if deleted:
+            logger.info(
+                "access log GC: %d rows removed, %d facts rolled up (window=%dd, tenant=%s)",
+                deleted,
+                facts_rolled,
+                window,
+                tenant_id or "*",
             )
-        else:
-            cur.execute(
-                "DELETE FROM fact_access_log "
-                "WHERE tenant_id = %s "
-                "AND accessed_at < NOW() - make_interval(days := %s)",
-                (tenant_id, days),
-            )
-        return int(cur.rowcount)
+        return deleted
