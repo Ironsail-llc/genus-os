@@ -162,11 +162,59 @@ async def _recall_routed(
 
 @_handler("store_memory")
 async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    return await store_memory_content(
-        args.get("content", ""),
-        args.get("content_type", "conversation"),
+    from robothor.memory.write_jobs import async_write_enabled, enqueue_write, process_write_job
+
+    content = args.get("content", "")
+    content_type = args.get("content_type", "conversation")
+
+    if not async_write_enabled():
+        return await store_memory_content(content, content_type, tenant_id=ctx.tenant_id)
+
+    # Record the promise, then hand the work off. The row is written first on
+    # purpose: a crash during extraction must still leave evidence that a write
+    # was owed, because the caller has already been told it succeeded.
+    job_id = await enqueue_write(
+        content,
+        content_type=content_type,
         tenant_id=ctx.tenant_id,
+        agent_id=getattr(ctx, "agent_id", None),
+        run_id=getattr(ctx, "run_id", None),
     )
+
+    from robothor.engine.task_registry import get_task_registry
+
+    get_task_registry().spawn(process_write_job(job_id), name=f"memory-write:{job_id}")
+
+    # facts_stored is deliberately absent rather than guessed. It cannot be
+    # known synchronously, and reporting a number here would guarantee the model
+    # narrates a fabricated count.
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "content_chars": len(content),
+        "note": (
+            "Facts are extracted asynchronously and are typically searchable "
+            "within a minute. Read-after-write is not immediate; use "
+            "memory_write_status with this job_id if confirmation matters."
+        ),
+    }
+
+
+@_handler("memory_write_status")
+async def _memory_write_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Check a deferred memory write.
+
+    Kept out of the default tool set on purpose — adding it everywhere would
+    inflate every agent's schema for a case most runs never need. Agents that
+    genuinely require write confirmation opt in via their manifest.
+    """
+    from robothor.memory.write_jobs import job_status
+
+    job_id = args.get("job_id")
+    if job_id is None:
+        return {"error": "job_id is required"}
+    status = await job_status(int(job_id))
+    return status or {"error": f"no such memory write job: {job_id}"}
 
 
 # Budget for extraction when a caller is waiting. The tool wall is 120s

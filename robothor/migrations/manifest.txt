@@ -96,3 +96,4 @@ crm/087_role_permission_guardrails.sql
 crm/088_member_role_read_only.sql
 crm/089_face_identities.sql
 crm/092_memory_access_rollup.sql
+crm/093_memory_write_jobs.sql
