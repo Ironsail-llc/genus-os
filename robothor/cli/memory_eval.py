@@ -41,6 +41,11 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
 
     tenant = args.tenant or EVAL_TENANT
 
+    # NB: robothor.cli's main() already calls load_instance_env(), which reads
+    # /etc/robothor/robothor.env AND the engine's systemd drop-in and fills in
+    # anything the caller did not set. So this process already carries the
+    # production flag posture; do not re-implement that here.
+
     blocked = preflight(tenant)
     if blocked:
         print(f"memory-eval cannot run: {blocked}")

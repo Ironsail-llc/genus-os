@@ -43,21 +43,25 @@ dominated by the cross-encoder reranker scoring every candidate.
 
 Read these before treating 12/12 as a gate.
 
-**1. It does not measure the production configuration.** The run inherits the
-invoking shell's environment, not the engine's systemd drop-in. Measured at
-capture time:
+**1. Flag posture is correct — an earlier note here claiming otherwise was
+wrong.** A previous revision of this file asserted the eval measured
+`MEMORY_TEMPORAL_COHERENCE` / `RERANK_WIDE` / `EPISODE_MERGE` all off while the
+engine ran them on. That was a bad inference, drawn from evaluating
+`facts._temporal_coherence_enabled()` in a bare Python shell — which is not the
+entry point the eval uses.
 
-| Flag | Eval run | Live engine |
-|---|---|---|
-| `MEMORY_TEMPORAL_COHERENCE` | **False** (code default) | **1** |
-| `MEMORY_RERANK_WIDE` | **False** (code default) | **1** |
-| `MEMORY_EPISODE_MERGE` | **False** (code default) | **1** |
-| `MEMORY_RERANK_ENABLED` | True (unset → on) | True |
+`robothor.cli`'s `main()` calls `load_instance_env()`
+(`robothor/engine/instance_env.py`), which reads both
+`/etc/robothor/robothor.env` **and** the engine's systemd drop-in and fills in
+anything the caller did not set, with explicit values still winning. Verified:
+all three flags resolve to `1` inside a CLI invocation, matching the daemon. So
+`robothor memory-eval` measures the production configuration, and the caveat
+that used to sit here did not apply.
 
-Four of the twelve cases are temporal — precisely the stratum
-`MEMORY_TEMPORAL_COHERENCE` governs. The suite currently passes those cases
-*without* the flag production depends on. Any scheduled runner must carry the
-engine's flag posture, or the gate will certify a configuration nobody runs.
+The module exists precisely because the opposite failure was found once before:
+a CLI run outside systemd read every rollout-gated guardrail back as its
+default while the daemon was enforcing. Reuse it rather than re-reading the
+drop-in.
 
 **2. N is far too small for a gate.** Twelve cases, several strata at n=1
 (`persona`, `noise`). At these sizes one flipped case moves the headline by 8
