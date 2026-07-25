@@ -162,7 +162,13 @@ jobs:
           psql "$ROBOTHOR_TEST_DB_DSN" -tAc \
             "SELECT 1 FROM information_schema.tables WHERE table_name IN ('crm_task_history','crm_agent_notifications') HAVING count(*)=2" \
             | grep -q 1
-      - run: pytest tests/integration/ -m integration -v
+      # Collect the whole tree, not just tests/integration/. The unit lane runs
+      # `-m "not integration"` and this lane used to run only one directory, so
+      # every integration-marked test living elsewhere was excluded by marker
+      # from one and by path from the other — 234 tests across 26 files that
+      # had never executed in CI, including tests/test_tenant_rls.py, the file
+      # that certifies tenant isolation actually isolates.
+      - run: pytest tests/ robothor/ -m integration -v
 
   frontend:
     runs-on: ubuntu-latest
