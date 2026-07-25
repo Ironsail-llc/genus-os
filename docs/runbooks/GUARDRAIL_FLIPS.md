@@ -34,6 +34,31 @@ The daily guardrail-watch report runs it, so unversioned live edits surface with
    `exec_allowlist_strict`) and confirm a `blocked` event lands in
    `agent_guardrail_events`.
 
+## ⚠️ The drop-in is not the only source
+
+`/etc/robothor/robothor.env` is loaded via `EnvironmentFile=` and systemd
+applies it *after* the drop-in's `Environment=` directives, so any variable set
+in both files is governed by the env file — and `check_dropin_drift.sh` will
+still report OK, because it only diffs the drop-in against its mirror.
+
+This bit on 2026-07-25: the RIP 15 revert was applied to the drop-in, the
+mirror matched, drift-check printed OK, and the running process kept the old
+value because `robothor.env:45` also set it. Five RIP flags were duplicated
+that way; four happened to agree, which is why it had never been noticed.
+
+`check_dropin_drift.sh` now fails with a `SHADOWED` verdict listing any
+variable present in both files. The env file holds instance data (secrets,
+tenant ids) so it cannot be mirrored into the repo — keep each flag in exactly
+one place, and prefer the versioned drop-in.
+
+**Before trusting a flip, confirm the running process actually changed:**
+
+```sh
+PID=$(systemctl show robothor-engine -p MainPID --value)
+tr '\0' '\n' < /proc/$PID/environ | grep YOUR_FLAG
+```
+
+
 ## Rollback (< 2 minutes)
 
 ```bash
