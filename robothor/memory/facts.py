@@ -945,7 +945,21 @@ async def search_facts(
                 entity = await get_entity(entity_name, tenant_id=_tenant)
                 if entity and entity.get("relations"):
                     for rel in entity["relations"][:3]:
-                        related_name = rel.get("target") or rel.get("source", "")
+                        # get_entity builds relations with `SELECT r.*, e.name
+                        # AS target_name` (outgoing) / `AS source_name`
+                        # (incoming) — memory_relations itself has no `target`
+                        # or `source` column. Reading the bare keys meant
+                        # related_name was always empty and this entire
+                        # expansion branch was unreachable, silently, because
+                        # the block is best-effort. Bare keys are kept last as
+                        # a fallback in case a caller hands us a flatter shape.
+                        related_name = (
+                            rel.get("target_name")
+                            or rel.get("source_name")
+                            or rel.get("target")
+                            or rel.get("source")
+                            or ""
+                        )
                         if related_name:
                             with get_connection() as conn:
                                 cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -972,7 +986,10 @@ async def search_facts(
                                     candidates.append(r)
                                     expansion_ids.add(r["id"])
         except Exception:
-            pass  # Entity expansion is best-effort
+            # Best-effort by design — a graph miss must not fail the search.
+            # But it stays *logged*: a bare `pass` here is what let a key-name
+            # mismatch disable expansion entirely without a single symptom.
+            logger.debug("entity expansion failed (best-effort)", exc_info=True)
 
     # Optional reranker pass
     if use_reranker and candidates:
