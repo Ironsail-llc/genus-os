@@ -194,6 +194,7 @@ packages = ["robothor"]
 # extend it. 092 is listed so the access-log roll-up ships with the wheel.
 "crm/migrations/092_memory_access_rollup.sql" = "robothor/migrations/crm/092_memory_access_rollup.sql"
 "crm/migrations/093_memory_write_jobs.sql" = "robothor/migrations/crm/093_memory_write_jobs.sql"
+"crm/migrations/094_memory_decay_shadow.sql" = "robothor/migrations/crm/094_memory_decay_shadow.sql"
 
 [tool.coverage.run]
 source = ["robothor"]

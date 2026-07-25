@@ -1105,7 +1105,16 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     try:
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT id FROM crm_tenants WHERE is_active = TRUE")
+            # The column is `active`, not `is_active`. The typo raised, the
+            # surrounding except swallowed it, and tenant_ids silently collapsed
+            # to [DEFAULT_TENANT] — so steps 8-13 of nightly maintenance ran for
+            # exactly one tenant. Visible in the data: robothor-primary's access
+            # log was GC'd on schedule while delphi's went back 51 days.
+            #
+            # Only safe to fix now that migration 092's roll-up is deployed:
+            # before it, correcting this would have started hard-deleting the
+            # other tenants' access history on the very first nightly pass.
+            cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE")
             tenant_ids = [r["id"] for r in cur.fetchall()]
     except Exception as e:
         logger.warning("Could not enumerate tenants — falling back to DEFAULT_TENANT: %s", e)

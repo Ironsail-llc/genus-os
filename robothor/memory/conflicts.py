@@ -152,7 +152,15 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
 
     Repeated mentions of the same event (the dominant churn source) should raise
     the fact's salience, not inflate the table with reworded copies. Nudges
-    importance up (capped at 1.0), counts an access, and refreshes updated_at.
+    importance up (capped at 1.0), counts a *reinforcement*, and refreshes
+    updated_at.
+
+    This used to increment access_count, which was wrong twice over. The event
+    is re-observation, not retrieval, so it belongs on reinforcement_count —
+    which had no writer at all, leaving one of compute_decay_score's five inputs
+    permanently zero across every row. And because access_count is weighted in
+    the retrieval blend (facts._blend_rank), counting it here also inflated a
+    fact's search ranking every time something merely mentioned it again.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -160,7 +168,7 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
             """
             UPDATE memory_facts
             SET importance_score = LEAST(COALESCE(importance_score, 0.5) + 0.05, 1.0),
-                access_count = COALESCE(access_count, 0) + 1,
+                reinforcement_count = COALESCE(reinforcement_count, 0) + 1,
                 updated_at = NOW()
             WHERE id = %s AND tenant_id = %s
             """,
