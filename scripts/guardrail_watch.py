@@ -192,6 +192,70 @@ def check_dropin_drift() -> None:
     print(result.stdout.rstrip())
 
 
+def scoping_is_vacuous(non_privileged: int, linked_facts: int) -> bool:
+    """True when a scoping guarantee is being advertised but cannot bind.
+
+    Pure so the alarm condition itself is testable. A check that has only ever
+    been observed staying silent is indistinguishable from one that cannot
+    fire — which is the failure mode this whole sweep exists to catch.
+    """
+    return non_privileged > 0 and linked_facts == 0
+
+
+def check_memory_scoping_is_not_vacuous() -> None:
+    """Page if a non-owner role exists while memory scoping has nothing to filter on.
+
+    ROBOTHOR_DATA_SCOPING=enforce restricts memory reads to rows where
+    person_id matches the caller or is NULL. Nothing writes
+    memory_facts.person_id — 0 of the last 5,521 facts carried one when this
+    check was written — so the predicate admits essentially the whole corpus.
+
+    That is harmless while every tenant_users row is owner/admin/service, since
+    scope_for treats those as unrestricted. It stops being harmless the instant
+    someone runs `robothor user add` with a lesser role: that user gets a memory
+    read that looks scoped and is not, with no flag flip to notice.
+
+    This converts that silent transition into a daily page. See
+    docs/runbooks/IDENTITY_ROLLOUT.md.
+    """
+    from robothor.db.connection import get_connection
+
+    privileged = ("owner", "admin", "service")
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT count(*) FROM tenant_users WHERE COALESCE(role, '') NOT IN %s",
+                (privileged,),
+            )
+            row = cur.fetchone()
+            non_privileged = int(row[0]) if row else 0
+
+            cur.execute(
+                "SELECT count(*), count(person_id) FROM memory_facts "
+                "WHERE created_at > now() - interval '7 days'"
+            )
+            row = cur.fetchone()
+            recent, linked = (int(row[0]), int(row[1])) if row else (0, 0)
+        except Exception as e:  # table shape differs per instance — never fail the sweep
+            print(f"\n=== memory scoping check ===\n  (skipped: {e})")
+            return
+
+    print("\n=== memory scoping check ===")
+    print(f"  non-privileged tenant_users: {non_privileged}")
+    print(f"  facts last 7d: {recent}, carrying person_id: {linked}")
+
+    if scoping_is_vacuous(non_privileged, linked):
+        msg = (
+            f"MEMORY SCOPING IS VACUOUS: {non_privileged} non-privileged user(s) exist, "
+            f"but 0 of the last {recent} facts carry a person_id. Those users get "
+            f"unscoped memory reads that look scoped. See "
+            f"docs/runbooks/IDENTITY_ROLLOUT.md before granting further access."
+        )
+        print(f"  <-- {msg}")
+        send_telegram(msg)
+
+
 def main() -> int:
     from robothor.db.connection import get_connection
 
@@ -237,6 +301,7 @@ def main() -> int:
     check_soak_deadlines()
     check_stale_goals()
     check_dropin_drift()
+    check_memory_scoping_is_not_vacuous()
     return 0
 
 
