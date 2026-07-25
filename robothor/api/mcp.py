@@ -966,17 +966,18 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         }
 
     if name == "store_memory":
-        from robothor.memory.facts import extract_facts, store_fact
+        # Delegates to the single shared implementation. This used to be its own
+        # copy of the extract-and-store logic, and it had drifted: it passed no
+        # tenant, so every write through the MCP surface landed in
+        # DEFAULT_TENANT, and it never got the batch/timeout fixes applied to
+        # the engine handler.
+        from robothor.engine.tools.handlers.memory import store_memory_content
 
-        content = arguments.get("content", "")
-        content_type = arguments.get("content_type", "conversation")
-        facts = await extract_facts(content)
-        if facts:
-            stored_ids = [await store_fact(f, content, content_type) for f in facts]
-            return {"id": stored_ids[0], "facts_stored": len(stored_ids)}
-        fact = {"fact_text": content, "category": "personal", "entities": [], "confidence": 0.5}
-        fact_id = await store_fact(fact, content, content_type)
-        return {"id": fact_id, "facts_stored": 1}
+        return await store_memory_content(
+            arguments.get("content", ""),
+            arguments.get("content_type", "conversation"),
+            tenant_id=arguments.get("tenant_id", ""),
+        )
 
     if name == "get_stats":
         from robothor.memory.facts import get_memory_stats

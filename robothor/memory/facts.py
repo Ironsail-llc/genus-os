@@ -214,27 +214,38 @@ def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
     return filtered
 
 
-async def extract_facts(content: str, max_retries: int = 3) -> list[dict[str, Any]]:
+async def extract_facts(
+    content: str, max_retries: int = 3, *, timeout: float = 180.0
+) -> list[dict[str, Any]]:
     """Extract facts from content using the local LLM.
 
     Retries on empty results because thinking models sometimes exhaust
     their token budget on reasoning before producing content.
 
-    Hard-capped at 180s total to prevent Ollama hangs from blocking agent runs.
-    This budget accommodates realistic conversation chunks (~3KB) on qwen3:32b
-    with structured JSON output.
+    ``timeout`` defaults to 180s, which suits off-request-path callers
+    (ingestion, the eval) where nothing is waiting on the result. The request
+    path must pass something smaller than its own wall: ``store_memory`` runs
+    inside a 120s tool timeout, so the previous unconditional 180s meant the
+    inner budget exceeded the outer one and a slow extraction was guaranteed to
+    be killed before it could return — 15 of 121 calls over 30 days sat at
+    exactly 120,003 ms.
+
+    Measured with the model warm, extraction is ~23s and embedding ~0.12s, so
+    this budget governs essentially the whole call; the remaining gap to the
+    63.5s production p50 is cold model loading.
 
     Args:
         content: Unstructured text content.
         max_retries: Number of attempts before giving up.
+        timeout: Hard cap in seconds for all attempts combined.
 
     Returns:
         List of extracted fact dictionaries, or empty list on failure.
     """
     try:
-        return await asyncio.wait_for(_extract_facts_inner(content, max_retries), timeout=180.0)
+        return await asyncio.wait_for(_extract_facts_inner(content, max_retries), timeout=timeout)
     except TimeoutError:
-        logger.warning("extract_facts hard timeout (180s) — returning empty")
+        logger.warning("extract_facts hard timeout (%.0fs) — returning empty", timeout)
         return []
 
 

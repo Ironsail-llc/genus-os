@@ -162,19 +162,62 @@ async def _recall_routed(
 
 @_handler("store_memory")
 async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    from robothor.memory.facts import extract_facts, store_fact
+    return await store_memory_content(
+        args.get("content", ""),
+        args.get("content_type", "conversation"),
+        tenant_id=ctx.tenant_id,
+    )
 
-    content = args.get("content", "")
-    content_type = args.get("content_type", "conversation")
-    facts = await extract_facts(content)
-    if facts:
-        stored_ids = [
-            await store_fact(f, content, content_type, tenant_id=ctx.tenant_id) for f in facts
+
+# Budget for extraction when a caller is waiting. The tool wall is 120s
+# (runner.py:2471); leaving headroom means a slow extraction returns a result
+# instead of being killed at the wall, which is what 15 of 121 calls did.
+REQUEST_PATH_EXTRACT_TIMEOUT = 70.0
+
+
+async def store_memory_content(
+    content: str,
+    content_type: str = "conversation",
+    *,
+    tenant_id: str = "",
+    extract_timeout: float = REQUEST_PATH_EXTRACT_TIMEOUT,
+) -> dict[str, Any]:
+    """Extract facts from content and store them. One implementation, two callers.
+
+    The engine handler and robothor/api/mcp.py both had their own copy of this
+    logic. They had already diverged — the MCP copy passed no tenant, so every
+    write through it landed in DEFAULT_TENANT without dedup — and any fix
+    applied to one silently missed the other.
+
+    Uses store_facts_batch rather than a per-fact loop. Note this is *not* the
+    latency win it looks like: measured warm, extraction is ~23s and embedding
+    ~0.12s per fact, so batching saves fractions of a second. It is here because
+    it makes the write atomic — the old loop committed each fact on its own
+    connection, so a mid-loop failure left a partial write behind while the
+    caller was told the call had failed.
+    """
+    from robothor.memory.facts import extract_facts, store_facts_batch
+
+    facts = await extract_facts(content, timeout=extract_timeout)
+    if not facts:
+        # No facts, or extraction timed out. Storing the raw content keeps the
+        # information rather than dropping it; the metadata tag lets dechurn and
+        # any later reprocessing find these rows.
+        facts = [
+            {
+                "fact_text": content,
+                "category": "personal",
+                "entities": [],
+                "confidence": 0.5,
+                "metadata": {"extraction": "fallback_raw"},
+            }
         ]
-        return {"id": stored_ids[0], "facts_stored": len(stored_ids)}
-    fact = {"fact_text": content, "category": "personal", "entities": [], "confidence": 0.5}
-    fact_id = await store_fact(fact, content, content_type, tenant_id=ctx.tenant_id)
-    return {"id": fact_id, "facts_stored": 1}
+
+    stored_ids = await store_facts_batch(facts, content, content_type, tenant_id=tenant_id)
+    return {
+        "id": stored_ids[0] if stored_ids else None,
+        "facts_stored": len(stored_ids),
+    }
 
 
 @_handler("record_resolution")
