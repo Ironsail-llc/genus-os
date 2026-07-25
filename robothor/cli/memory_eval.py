@@ -17,6 +17,8 @@ from robothor.memory.eval import (
     exit_code_for,
     format_report,
     preflight,
+    record_benchmark_row,
+    report_to_benchmark_row,
     run_suite,
 )
 
@@ -58,4 +60,22 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
         return exit_code_for(None, str(e))
 
     print(format_report(report, as_json=args.json_output))
+
+    if getattr(args, "record", False):
+        row = report_to_benchmark_row(
+            report,
+            suite_path=str(suite_path),
+            triggered_by=getattr(args, "triggered_by", "manual"),
+        )
+        if record_benchmark_row(row):
+            print(
+                f"recorded: benchmark_results agent_id=memory "
+                f"pass_rate={row['pass_rate']} ({row['passed']}/{row['total_cases']})"
+            )
+        else:
+            # Deliberately not fatal: a reporting failure must not turn a
+            # passing eval into a failing process. Persistent absence is caught
+            # by the fleet's staleness check, not by this exit code.
+            print("warning: could not record the result to benchmark_results")
+
     return exit_code_for(report, None)

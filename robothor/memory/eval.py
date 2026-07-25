@@ -66,6 +66,119 @@ def exit_code_for(report: dict[str, Any] | None, blocked: str | None) -> int:
     return 0 if int(report.get("passed") or 0) == total else 2
 
 
+def report_to_benchmark_row(
+    report: dict[str, Any],
+    *,
+    suite_path: str = "docs/benchmarks/memory/suite.yaml",
+    triggered_by: str = "manual",
+    experiment_id: str | None = None,
+) -> dict[str, Any]:
+    """Map an eval report onto a ``benchmark_results`` row.
+
+    Pure, so the shape reaching the table is pinned by tests rather than
+    discovered later from a dashboard that looks wrong.
+
+    ``category_scores`` carries per-stratum pass rates because the existing
+    visibility surfaces already read that column — a temporal regression then
+    shows up where people are already looking, instead of needing a new surface.
+
+    The suite is deliberately not converted to the fleet's ``tasks:`` form.
+    That form runs an agent and pattern-matches its prose; this one seeds a
+    known fact and checks whether retrieval returns it. Converting would trade
+    deterministic ground truth for an LLM's wording.
+    """
+    total = int(report.get("total") or 0)
+    passed = int(report.get("passed") or 0)
+    by_kind = report.get("by_kind") or {}
+
+    category_scores = {
+        kind: (agg.get("passed", 0) / agg["total"] if agg.get("total") else 0.0)
+        for kind, agg in by_kind.items()
+    }
+
+    failures = [
+        {
+            "case_id": c.get("case_id"),
+            "category": c.get("kind"),
+            "score": c.get("score"),
+            "output_preview": (c.get("detail") or "")[:200],
+        }
+        for c in (report.get("cases") or [])
+        if not c.get("passed")
+    ]
+
+    return {
+        "agent_id": "memory",
+        "suite_id": report.get("suite_id") or "memory-recall-v1",
+        "suite_path": suite_path,
+        "total_cases": total,
+        "passed": passed,
+        "failed": max(0, total - passed),
+        # 0/0 must not serialise as a perfect score. A gate that grades an empty
+        # suite green certifies nothing, which is the failure this eval exists
+        # to stop being.
+        "pass_rate": round(passed / total, 4) if total else 0.0,
+        "category_scores": category_scores,
+        "failures": failures,
+        "triggered_by": triggered_by,
+        "experiment_id": experiment_id,
+        # Local Ollama has no per-call price. 0.0 keeps the column meaningful;
+        # omitting it would read as missing data.
+        "cost_usd": 0.0,
+    }
+
+
+def record_benchmark_row(row: dict[str, Any]) -> bool:
+    """Insert a benchmark_results row. Returns False on failure, never raises.
+
+    Best-effort in the same spirit as the fleet runner's write-through: a
+    reporting failure must not turn a passing eval into a failing process. The
+    fleet's staleness check is what notices a persistently missing row.
+
+    Note benchmark_results carries a tenant_id defaulting to the primary tenant
+    and sits inside migration 081's RLS loop, so this insert must run on a
+    connection scoped to that tenant — not the eval's memory-eval scope.
+    """
+    import json
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import get_connection
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (DEFAULT_TENANT,))
+            cur.execute(
+                """
+                INSERT INTO benchmark_results
+                  (agent_id, suite_id, suite_path, total_cases, passed, failed,
+                   pass_rate, category_scores, failures, triggered_by,
+                   experiment_id, cost_usd, tenant_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s)
+                """,
+                (
+                    row["agent_id"],
+                    row["suite_id"],
+                    row["suite_path"],
+                    row["total_cases"],
+                    row["passed"],
+                    row["failed"],
+                    row["pass_rate"],
+                    json.dumps(row["category_scores"]),
+                    json.dumps(row["failures"], default=str),
+                    row["triggered_by"],
+                    row["experiment_id"],
+                    row["cost_usd"],
+                    DEFAULT_TENANT,
+                ),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("could not record benchmark_results row: %s", e)
+        return False
+
+
 def preflight(tenant_id: str) -> str | None:
     """Return a human-readable blocker if the eval cannot run, else None.
 

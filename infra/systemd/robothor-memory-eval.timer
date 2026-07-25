@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly memory retrieval benchmark
+Documentation=file:///home/philip/robothor/docs/benchmarks/memory/BASELINE.md
+
+[Timer]
+# 03:45 sits after the 03:30 intelligence pipeline and before the 04:00 fleet
+# benchmark run, so the fleet's staleness check sees the same night's row.
+OnCalendar=*-*-* 03:45:00 America/New_York
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
