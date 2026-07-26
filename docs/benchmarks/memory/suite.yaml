@@ -1,4 +1,8 @@
 id: memory-recall-v1
+# Run by robothor-memory-eval.timer, not by spawning an agent: there is no
+# memory agent, and grading one's prose would not measure the retrieval path.
+# The fleet asserts this suite stays fresh instead of running it.
+runner: native
 description: >
   Memory retrieval quality benchmark for the Genus OS memory system.
   Seeds known fixture facts into an isolated tenant, runs the real hybrid
