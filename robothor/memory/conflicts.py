@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import partial
 from typing import Any
 
@@ -31,6 +32,37 @@ logger = logging.getLogger(__name__)
 # (e.g. the agent's own briefing re-ingested), not a new one — reinforce it
 # rather than fork a near-duplicate row.
 _REINFORCE_THRESHOLD = 0.92
+
+# Numbers, including decimals and thousands separators. Currency symbols and
+# units are deliberately excluded — "$100" and "100 dollars" carry the same
+# quantity and the digits are what matters.
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def numbers_differ(a: str, b: str) -> bool:
+    """True when two texts disagree on the numbers they contain.
+
+    The reinforce shortcut assumes high lexical similarity means "same fact,
+    said again". A number change is the exact opposite: "$100 -> $150" scores
+    0.9882 cosine — far above the threshold — while completely reversing the
+    fact's meaning. Treating that as a re-report discards the update AND bumps
+    the importance of the stale value, so the wrong number gets retrieved more
+    often. Prices, ports, versions, dates, times and quantities all live here.
+
+    Compared as sorted multisets so word order cannot manufacture a difference,
+    and normalized so "$1,200" and "$1200" are the same amount.
+    """
+    def _nums(text: str) -> list[str]:
+        out = []
+        for raw in _NUMBER.findall(text or ""):
+            cleaned = raw.replace(",", "")
+            # Trim a trailing ".0" so 2 and 2.0 compare equal.
+            if "." in cleaned:
+                cleaned = cleaned.rstrip("0").rstrip(".")
+            out.append(cleaned or "0")
+        return sorted(out)
+
+    return _nums(a) != _nums(b)
 
 # JSON schema for conflict classification structured output.
 CLASSIFICATION_SCHEMA = {
@@ -232,6 +264,13 @@ async def resolve_and_store(
         _write_dedup_enabled()
         and float(best_match.get("similarity") or 0) >= _REINFORCE_THRESHOLD
         and (best_match.get("category") or "") == (fact.get("category") or "")
+        # A number change is not a re-report, it IS the update. "$100 -> $150"
+        # scores 0.9882 cosine, sails over the threshold, and reverses the
+        # fact's meaning. Without this guard the update was discarded and the
+        # STALE value had its importance bumped, so the wrong number surfaced
+        # more often over time. Falls through to the LLM classifier, which
+        # correctly returns "update" and supersedes.
+        and not numbers_differ(fact["fact_text"], best_match.get("fact_text") or "")
     ):
         _reinforce_fact(best_match["id"], tenant_id=tenant_id)
         # Recorded too: an error rate needs the cases where nothing was
