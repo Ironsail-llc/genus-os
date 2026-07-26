@@ -16,6 +16,14 @@ def _auth_env(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "test-signing-key-at-least-32-bytes-long-xyz")
     monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "dashboard-shared-secret")
     monkeypatch.delenv("GENUS_AUTH_ENFORCE", raising=False)
+    # Pin the issuer allow-list to the one these tests use. Left to the ambient
+    # environment, six of them fail on any machine that exports the real
+    # GENUS_OIDC_ISSUERS — which the operator's shell does — while passing in
+    # CI's clean env. A suite that is red on the developer's box and green in CI
+    # trains people to ignore red, and it hid nothing: the code was correct the
+    # whole time. Pinning also removes the dependence on is_production(), which
+    # is what decides the unset case.
+    monkeypatch.setenv("GENUS_OIDC_ISSUERS", "https://idp")
     from robothor.auth import tokens
 
     tokens.reset_signing_key_cache()

@@ -168,7 +168,16 @@ jobs:
       # from one and by path from the other — 234 tests across 26 files that
       # had never executed in CI, including tests/test_tenant_rls.py, the file
       # that certifies tenant isolation actually isolates.
+      #
+      # `crm/` is listed explicitly because the first pass at this fix said
+      # "the whole tree" and then named two directories, which left the five
+      # integration tests under crm/bridge/tests/ still running nowhere: the
+      # unit lane deselects them by marker (ci.yml above) and this lane missed
+      # them by path. They pass — they had simply never been executed.
+      # crm/bridge/tests needs its own invocation: its conftest registers a
+      # plugin that collides when collected alongside the rest of the tree.
       - run: pytest tests/ robothor/ -m integration -v
+      - run: pytest crm/ -m integration -v
 
   frontend:
     runs-on: ubuntu-latest
