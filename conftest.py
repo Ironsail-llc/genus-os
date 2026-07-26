@@ -33,6 +33,7 @@ try:
         mock_get_connection,
         redis_client,
         redis_url,
+        scratch_db,
     )
 except Exception:
     # ImportError when fixtures aren't on sys.path (bridge tests have their own rootdir).

@@ -22,19 +22,7 @@ import uuid
 
 import pytest
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skip(
-        reason=(
-            "Replays a migration against the shared test database, which CI now "
-            "builds fully-migrated — so the pre-migration state this asserts on no "
-            "longer exists. Needs the per-test scratch-database pattern used by "
-            "tests/test_tenant_rls.py (CREATE DATABASE, apply up to the target "
-            "migration, assert, DROP). Skipped rather than silently excluded: it was "
-            "invisible for as long as this lane did not run."
-        )
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -144,7 +132,7 @@ class TestBackfill046:
             """
             INSERT INTO contact_identifiers (channel, identifier, person_id)
             VALUES ('telegram', %s, %s)
-            ON CONFLICT (channel, identifier) DO UPDATE SET person_id = EXCLUDED.person_id
+            ON CONFLICT (tenant_id, channel, identifier) DO UPDATE SET person_id = EXCLUDED.person_id
             """,
             (telegram_id, person_id),
         )
