@@ -56,9 +56,14 @@ MAX_TOKEN_JACCARD = 0.5
 # swing, which is noise wearing a regression's clothes.
 MIN_PER_STRATUM = 25
 
-# Kinds that assert an *absence* (nothing relevant should return), so they have
-# no gold and nothing to leak.
-_NO_GOLD_KINDS = frozenset({"noise"})
+# NOTHING is exempt from the gold rules. This briefly held {"noise"}, on the
+# assumption that a noise case asserts an absence and therefore needs no gold.
+# It does not: eval.score_case routes "noise" through _RECALL_KINDS, so a noise
+# case is a recall case whose seed contains DISTRACTORS — the gold must still be
+# found among them. The exemption let 25 generated gold-less noise cases through
+# a gate whose entire purpose is catching cases that can never score. Caught by
+# running the expanded suite instead of trusting that it validated.
+_NO_GOLD_KINDS: frozenset[str] = frozenset()
 
 _WORD = re.compile(r"[a-z0-9]+")
 

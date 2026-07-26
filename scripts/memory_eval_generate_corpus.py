@@ -54,11 +54,12 @@ GENERATOR_MODEL = os.environ.get(
 # corpus. The generator is told to stay inside it.
 CAST = "Alice, Bob, Carol, Dave, FakeVendorCo, Helios, Meridian, Northwind"
 
-# Batches of 30 came back EMPTY: the generator is a reasoning model and the
-# thinking budget crowds out the answer entirely. 8 is reliable. Small batches
-# also give temperature more chances to diverge, which the duplicate-query
-# check wants anyway.
-BATCH_MAX = 8
+# Measured, not guessed: batches of 30 and of 8 both came back EMPTY (the
+# generator is a reasoning model and the thinking budget crowds out the answer);
+# 4 with an 8k cap returned 4/4 valid cases on the first try. Small batches also
+# give temperature more chances to diverge, which the duplicate-query check
+# wants anyway.
+BATCH_MAX = 4
 
 STRATA: dict[str, str] = {
     "recall": (
@@ -84,9 +85,10 @@ STRATA: dict[str, str] = {
         "session with different phrasing than it was stated in."
     ),
     "noise": (
-        "A question with NO answer in memory at all — general world knowledge or "
-        "an unrelated subject. No gold. Seed 1-2 irrelevant facts. This case "
-        "passes only if retrieval returns nothing relevant."
+        "A question whose answer IS in memory but is buried among unrelated "
+        "distractor facts. gold is the one relevant fact; seed it alongside 3-5 "
+        "facts about entirely different subjects. This tests whether retrieval "
+        "finds the signal, not whether it returns nothing."
     ),
 }
 
@@ -112,7 +114,7 @@ Return a JSON array of exactly {n} objects, each:
   "seed": [{{"fact_text": "...", "category": "...", "entities": ["..."]}}]}}
 
 Seed 2-4 facts per case; distractors make it a real test. For "verbatim" add
-"gold_exact". For "noise" omit gold entirely.
+"gold_exact". EVERY case needs a gold that appears verbatim in its own seed.
 Return ONLY the JSON array."""
 
 
@@ -138,7 +140,7 @@ async def _generate(kind: str, n: int, attempt: int) -> list[dict[str, Any]]:
         # are rejected downstream anyway.
         temperature=0.9,
         timeout=300,
-        max_tokens=16000,
+        max_tokens=8000,
     )
     text = resp.choices[0].message.content or ""
     text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()

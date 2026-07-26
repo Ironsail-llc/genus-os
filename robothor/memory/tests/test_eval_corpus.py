@@ -108,10 +108,14 @@ class TestValidateCase:
         errs = validate_case(self._case(kind="vibes"))
         assert any(e.reason == "unknown_kind" for e in errs)
 
-    def test_noise_cases_are_exempt_from_gold_rules(self):
-        # A noise case asserts nothing is returned, so it has no gold to leak.
+    def test_noise_cases_are_NOT_exempt_from_gold_rules(self):
+        # This asserted the opposite until the expanded suite was actually run.
+        # eval.score_case routes "noise" through _RECALL_KINDS, so a noise case
+        # is a recall case whose seed holds distractors — the gold must still be
+        # findable. The exemption let 25 generated gold-less noise cases through
+        # the very gate meant to catch cases that can never score.
         c = {"id": "n1", "kind": "noise", "query": "what is the capital of France", "seed": []}
-        assert validate_case(c) == []
+        assert any(e.reason == "missing_gold" for e in validate_case(c))
 
     def test_rejection_names_the_case(self):
         errs = validate_case(self._case(id="c-42", query="Alice manages the Helios project"))
@@ -140,8 +144,12 @@ class TestValidateSuite:
 
     def test_clean_suite_passes(self):
         cases = [
-            {"id": "a", "kind": "noise", "query": "what is the capital of France", "seed": []},
-            {"id": "b", "kind": "noise", "query": "how tall is Everest", "seed": []},
+            {"id": "a", "kind": "recall", "query": "which country runs the northern grid",
+             "gold": "Iceland operates the northern power grid",
+             "seed": [{"fact_text": "Iceland operates the northern power grid"}]},
+            {"id": "b", "kind": "recall", "query": "how tall is that mountain in Nepal",
+             "gold": "Everest rises 8,849 metres above sea level",
+             "seed": [{"fact_text": "Everest rises 8,849 metres above sea level"}]},
         ]
         assert validate_suite(cases) == []
 

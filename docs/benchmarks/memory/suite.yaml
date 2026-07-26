@@ -1,234 +1,2734 @@
 id: memory-recall-v1
-# Run by robothor-memory-eval.timer, not by spawning an agent: there is no
-# memory agent, and grading one's prose would not measure the retrieval path.
-# The fleet asserts this suite stays fresh instead of running it.
 runner: native
-description: >
-  Memory retrieval quality benchmark for the Genus OS memory system.
-  Seeds known fixture facts into an isolated tenant, runs the real hybrid
-  retrieval path, and scores recall, temporal/supersession correctness,
-  verbatim exactness, and multi-session persona consistency. All fixtures
-  are de-personalized (Alice / Bob / FakeVendorCo) per the platform rule.
+description: 'Memory retrieval quality benchmark for the Genus OS memory system. Seeds known fixture facts
+  into an isolated tenant, runs the real hybrid retrieval path, and scores recall, temporal/supersession
+  correctness, verbatim exactness, and multi-session persona consistency. All fixtures are de-personalized
+  (Alice / Bob / FakeVendorCo) per the platform rule.
+
+  '
 k: 5
-
 cases:
-  # --- recall@k: can we surface the right fact for a paraphrased query? ---
-  - id: recall-project-owner
-    kind: recall
-    query: "Who is responsible for the Helios project?"
-    gold: "Alice manages the Helios project"
-    seed:
-      - fact_text: "Alice manages the Helios project at FakeVendorCo."
-        category: project
-        entities: [Alice, Helios, FakeVendorCo]
-      - fact_text: "Bob prefers async standups over live meetings."
-        category: preference
-        entities: [Bob]
-      - fact_text: "The Helios project ships in Q3."
-        category: project
-        entities: [Helios]
-
-  - id: recall-contact-role
-    kind: recall
-    query: "What does Bob do at FakeVendorCo?"
-    gold: "Bob is the security lead"
-    seed:
-      - fact_text: "Bob is the security lead at FakeVendorCo."
-        category: contact
-        entities: [Bob, FakeVendorCo]
-      - fact_text: "Carol joined FakeVendorCo as a designer."
-        category: contact
-        entities: [Carol, FakeVendorCo]
-
-  # --- temporal: latest decision must win over the superseded one ---
-  - id: temporal-storage-decision
-    kind: temporal
-    query: "What storage engine did Alice decide to use for Helios?"
-    gold: "switch Helios storage to SQLite"
-    seed:
-      - fact_text: "Alice decided to use Postgres for Helios storage."
-        category: decision
-        entities: [Alice, Helios, Postgres]
-      - fact_text: "Alice later decided to switch Helios storage to SQLite."
-        category: decision
-        entities: [Alice, Helios, SQLite]
-
-  # multi-step chain: the newest of three same-topic decisions must win
-  - id: temporal-decision-chain
-    kind: temporal
-    query: "What deployment target did Bob settle on for the Helios API?"
-    gold: "deploy the Helios API on Fly.io"
-    seed:
-      - fact_text: "Bob decided to deploy the Helios API on Heroku."
-        category: decision
-        entities: [Bob, Helios, Heroku]
-      - fact_text: "Bob then decided to deploy the Helios API on Render."
-        category: decision
-        entities: [Bob, Helios, Render]
-      - fact_text: "Bob finally decided to deploy the Helios API on Fly.io."
-        category: decision
-        entities: [Bob, Helios, Fly.io]
-
-  # reaffirmation: returning to an earlier choice — the latest decision wins
-  - id: temporal-reaffirm
-    kind: temporal
-    query: "Which CI provider is Helios using now?"
-    gold: "move Helios CI back to GitHub Actions"
-    seed:
-      - fact_text: "Alice decided to run Helios CI on GitHub Actions."
-        category: decision
-        entities: [Alice, Helios, GitHub Actions]
-      - fact_text: "Alice decided to move Helios CI to CircleCI."
-        category: decision
-        entities: [Alice, Helios, CircleCI]
-      - fact_text: "Alice decided to move Helios CI back to GitHub Actions."
-        category: decision
-        entities: [Alice, Helios, GitHub Actions]
-
-  # --- verbatim: exact strings must survive retrieval (Vault target) ---
-  - id: verbatim-support-line
-    kind: verbatim
-    query: "FakeVendorCo support phone number"
-    gold_exact: "555-0142 ext 7"
-    seed:
-      - fact_text: "FakeVendorCo support line is 555-0142 ext 7."
-        category: contact
-        entities: [FakeVendorCo]
-
-  - id: verbatim-account-id
-    kind: verbatim
-    query: "Helios billing account identifier"
-    gold_exact: "ACCT-HEL-00917"
-    seed:
-      - fact_text: "The Helios billing account id is ACCT-HEL-00917."
-        category: technical
-        entities: [Helios]
-
-  # --- persona: stable preference recalled across sessions ---
-  - id: persona-meeting-pref
-    kind: persona
-    query: "How does Bob like to run standups?"
-    gold: "async standups"
-    seed:
-      - fact_text: "Bob prefers async standups over live meetings."
-        category: preference
-        entities: [Bob]
-      - fact_text: "Bob reiterated he wants standups kept async."
-        category: preference
-        entities: [Bob]
-
-  # --- noise floor: a FRESH high-importance fact must survive a DIVERSE
-  #     distractor cloud that is lexically STRONGER to the query. This is the
-  #     operator's real failure (generic facts returned instead of the answer).
-  #     Per-seed importance/age_hours break the harness's co-creation symmetry.
-  - id: noise-fresh-buried
-    kind: noise
-    query: "Is the FakeVendorCo VPN security incident resolved?"
-    gold: "reviewed and closed as a false alarm"
-    k: 5
-    seed:
-      # gold — fresh + high importance, deliberately weaker query overlap
-      - fact_text: "Alice reviewed and closed as a false alarm the odd weeknight sign-in to FakeVendorCo."
-        category: event
-        entities: [FakeVendorCo, Alice]
-        importance: 0.9
-        age_hours: 1
-      # distractors — stale, low importance, HIGH lexical overlap with the query
-      - fact_text: "A suspicious VPN login to FakeVendorCo was detected from an unknown device."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.35
-        age_hours: 72
-      - fact_text: "FakeVendorCo security raised a VPN access alert that needs review."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.35
-        age_hours: 80
-      - fact_text: "The FakeVendorCo VPN security incident remains an open item pending triage."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.4
-        age_hours: 96
-      - fact_text: "Unusual VPN traffic on the FakeVendorCo network was logged for the security team."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.3
-        age_hours: 110
-      - fact_text: "FakeVendorCo rotated VPN credentials after the access incident."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.4
-        age_hours: 120
-      - fact_text: "The FakeVendorCo security incident response runbook covers VPN compromise."
-        category: technical
-        entities: [FakeVendorCo]
-        importance: 0.3
-        age_hours: 200
-      - fact_text: "A VPN security advisory was circulated to the FakeVendorCo engineering team."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.3
-        age_hours: 150
-      - fact_text: "FakeVendorCo's VPN gateway logs are retained for ninety days for security review."
-        category: technical
-        entities: [FakeVendorCo]
-        importance: 0.3
-        age_hours: 300
-
-  # --- resolution after detection: a detection event is later RESOLVED; a query
-  #     for the OUTCOME must return the resolution, not the open detection.
-  - id: resolution-after-detection
-    kind: resolution
-    query: "What was the outcome of the unrecognized FakeVendorCo login alert?"
-    gold: "Bob confirmed the FakeVendorCo login was legitimate"
-    k: 5
-    seed:
-      - fact_text: "An unrecognized login to FakeVendorCo was detected and flagged for review."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.6
-        age_hours: 48
-      - fact_text: "Bob confirmed the FakeVendorCo login was legitimate and closed the alert."
-        category: decision
-        entities: [Bob, FakeVendorCo]
-        importance: 0.9
-        age_hours: 1
-      - fact_text: "FakeVendorCo uses Okta for single sign-on."
-        category: technical
-        entities: [FakeVendorCo, Okta]
-        importance: 0.4
-        age_hours: 240
-      - fact_text: "The FakeVendorCo login alert was escalated to the on-call engineer overnight."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.4
-        age_hours: 40
-
-  # --- resolution capture via the EXTRACTION path: a raw confirmation turn must
-  #     become a discrete fact recording the outcome (exercises WS-4 capture).
-  - id: resolution-capture-ingest
-    kind: resolution
-    seed_mode: ingest
-    query: "Did Bob resolve the FakeVendorCo login alert?"
-    gold: "legitimate"
-    k: 5
-    seed:
-      - source_content: "Bob: Yes — that unrecognized FakeVendorCo login alert from last night was me. It is legitimate, please mark it resolved and close it."
-
-  # --- event-category temporal: latest EVENT must win (R1 only acts on
-  #     decisions, so this must be carried by recency, not supersession).
-  - id: temporal-event-latest
-    kind: temporal
-    query: "What is the current status of the FakeVendorCo data migration?"
-    gold: "migration completed successfully"
-    seed:
-      - fact_text: "The FakeVendorCo data migration started and is in progress."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.6
-        age_hours: 72
-      - fact_text: "The FakeVendorCo data migration completed successfully."
-        category: event
-        entities: [FakeVendorCo]
-        importance: 0.6
-        age_hours: 1
+- id: recall-project-owner
+  kind: recall
+  query: Who is responsible for the Helios project?
+  gold: Alice manages the Helios project
+  seed:
+  - fact_text: Alice manages the Helios project at FakeVendorCo.
+    category: project
+    entities:
+    - Alice
+    - Helios
+    - FakeVendorCo
+  - fact_text: Bob prefers async standups over live meetings.
+    category: preference
+    entities:
+    - Bob
+  - fact_text: The Helios project ships in Q3.
+    category: project
+    entities:
+    - Helios
+- id: recall-contact-role
+  kind: recall
+  query: What does Bob do at FakeVendorCo?
+  gold: Bob is the security lead
+  seed:
+  - fact_text: Bob is the security lead at FakeVendorCo.
+    category: contact
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Carol joined FakeVendorCo as a designer.
+    category: contact
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: temporal-storage-decision
+  kind: temporal
+  query: What storage engine did Alice decide to use for Helios?
+  gold: switch Helios storage to SQLite
+  seed:
+  - fact_text: Alice decided to use Postgres for Helios storage.
+    category: decision
+    entities:
+    - Alice
+    - Helios
+    - Postgres
+  - fact_text: Alice later decided to switch Helios storage to SQLite.
+    category: decision
+    entities:
+    - Alice
+    - Helios
+    - SQLite
+- id: temporal-decision-chain
+  kind: temporal
+  query: What deployment target did Bob settle on for the Helios API?
+  gold: deploy the Helios API on Fly.io
+  seed:
+  - fact_text: Bob decided to deploy the Helios API on Heroku.
+    category: decision
+    entities:
+    - Bob
+    - Helios
+    - Heroku
+  - fact_text: Bob then decided to deploy the Helios API on Render.
+    category: decision
+    entities:
+    - Bob
+    - Helios
+    - Render
+  - fact_text: Bob finally decided to deploy the Helios API on Fly.io.
+    category: decision
+    entities:
+    - Bob
+    - Helios
+    - Fly.io
+- id: temporal-reaffirm
+  kind: temporal
+  query: Which CI provider is Helios using now?
+  gold: move Helios CI back to GitHub Actions
+  seed:
+  - fact_text: Alice decided to run Helios CI on GitHub Actions.
+    category: decision
+    entities:
+    - Alice
+    - Helios
+    - GitHub Actions
+  - fact_text: Alice decided to move Helios CI to CircleCI.
+    category: decision
+    entities:
+    - Alice
+    - Helios
+    - CircleCI
+  - fact_text: Alice decided to move Helios CI back to GitHub Actions.
+    category: decision
+    entities:
+    - Alice
+    - Helios
+    - GitHub Actions
+- id: verbatim-support-line
+  kind: verbatim
+  query: FakeVendorCo support phone number
+  gold_exact: 555-0142 ext 7
+  seed:
+  - fact_text: FakeVendorCo support line is 555-0142 ext 7.
+    category: contact
+    entities:
+    - FakeVendorCo
+- id: verbatim-account-id
+  kind: verbatim
+  query: Helios billing account identifier
+  gold_exact: ACCT-HEL-00917
+  seed:
+  - fact_text: The Helios billing account id is ACCT-HEL-00917.
+    category: technical
+    entities:
+    - Helios
+- id: persona-meeting-pref
+  kind: persona
+  query: How does Bob like to run standups?
+  gold: async standups
+  seed:
+  - fact_text: Bob prefers async standups over live meetings.
+    category: preference
+    entities:
+    - Bob
+  - fact_text: Bob reiterated he wants standups kept async.
+    category: preference
+    entities:
+    - Bob
+- id: noise-fresh-buried
+  kind: noise
+  query: Is the FakeVendorCo VPN security incident resolved?
+  gold: reviewed and closed as a false alarm
+  k: 5
+  seed:
+  - fact_text: Alice reviewed and closed as a false alarm the odd weeknight sign-in to FakeVendorCo.
+    category: event
+    entities:
+    - FakeVendorCo
+    - Alice
+    importance: 0.9
+    age_hours: 1
+  - fact_text: A suspicious VPN login to FakeVendorCo was detected from an unknown device.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.35
+    age_hours: 72
+  - fact_text: FakeVendorCo security raised a VPN access alert that needs review.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.35
+    age_hours: 80
+  - fact_text: The FakeVendorCo VPN security incident remains an open item pending triage.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.4
+    age_hours: 96
+  - fact_text: Unusual VPN traffic on the FakeVendorCo network was logged for the security team.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.3
+    age_hours: 110
+  - fact_text: FakeVendorCo rotated VPN credentials after the access incident.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.4
+    age_hours: 120
+  - fact_text: The FakeVendorCo security incident response runbook covers VPN compromise.
+    category: technical
+    entities:
+    - FakeVendorCo
+    importance: 0.3
+    age_hours: 200
+  - fact_text: A VPN security advisory was circulated to the FakeVendorCo engineering team.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.3
+    age_hours: 150
+  - fact_text: FakeVendorCo's VPN gateway logs are retained for ninety days for security review.
+    category: technical
+    entities:
+    - FakeVendorCo
+    importance: 0.3
+    age_hours: 300
+- id: resolution-after-detection
+  kind: resolution
+  query: What was the outcome of the unrecognized FakeVendorCo login alert?
+  gold: Bob confirmed the FakeVendorCo login was legitimate
+  k: 5
+  seed:
+  - fact_text: An unrecognized login to FakeVendorCo was detected and flagged for review.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.6
+    age_hours: 48
+  - fact_text: Bob confirmed the FakeVendorCo login was legitimate and closed the alert.
+    category: decision
+    entities:
+    - Bob
+    - FakeVendorCo
+    importance: 0.9
+    age_hours: 1
+  - fact_text: FakeVendorCo uses Okta for single sign-on.
+    category: technical
+    entities:
+    - FakeVendorCo
+    - Okta
+    importance: 0.4
+    age_hours: 240
+  - fact_text: The FakeVendorCo login alert was escalated to the on-call engineer overnight.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.4
+    age_hours: 40
+- id: resolution-capture-ingest
+  kind: resolution
+  seed_mode: ingest
+  query: Did Bob resolve the FakeVendorCo login alert?
+  gold: legitimate
+  k: 5
+  seed:
+  - source_content: 'Bob: Yes — that unrecognized FakeVendorCo login alert from last night was me. It
+      is legitimate, please mark it resolved and close it.'
+- id: temporal-event-latest
+  kind: temporal
+  query: What is the current status of the FakeVendorCo data migration?
+  gold: migration completed successfully
+  seed:
+  - fact_text: The FakeVendorCo data migration started and is in progress.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.6
+    age_hours: 72
+  - fact_text: The FakeVendorCo data migration completed successfully.
+    category: event
+    entities:
+    - FakeVendorCo
+    importance: 0.6
+    age_hours: 1
+- id: recall-helios-overseer
+  kind: recall
+  query: Who is responsible for overseeing Helios?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is the lead developer at FakeVendorCo.
+    category: development
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Carol handles client relations for Northwind.
+    category: client relations
+    entities:
+    - Carol
+    - Northwind
+- id: recall-fakevendorco-dev
+  kind: recall
+  query: Who leads the development efforts at FakeVendorCo?
+  gold: Bob is the lead developer at FakeVendorCo.
+  seed:
+  - fact_text: Bob is the lead developer at FakeVendorCo.
+    category: development
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Dave is responsible for the Meridian database migration.
+    category: database migration
+    entities:
+    - Dave
+    - Meridian
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+- id: recall-northwind-client
+  kind: recall
+  query: Who is responsible for managing Northwind's client relationships?
+  gold: Carol handles client relations for Northwind.
+  seed:
+  - fact_text: Carol handles client relations for Northwind.
+    category: client relations
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Bob is the lead developer at FakeVendorCo.
+    category: development
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Dave is responsible for the Meridian database migration.
+    category: database migration
+    entities:
+    - Dave
+    - Meridian
+- id: recall-meridian-migration
+  kind: recall
+  query: Who oversees the data migration process at Meridian?
+  gold: Dave is responsible for the Meridian database migration.
+  seed:
+  - fact_text: Dave is responsible for the Meridian database migration.
+    category: database migration
+    entities:
+    - Dave
+    - Meridian
+  - fact_text: Carol handles client relations for Northwind.
+    category: client relations
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+- id: recall-alice-helios-manager
+  kind: recall
+  query: Who should be approached regarding Helios management?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is the lead developer for Meridian.
+    category: Software Development
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol handles Northwind's client communications.
+    category: Client Relations
+    entities:
+    - Carol
+    - Northwind
+- id: recall-bob-meridian-developer
+  kind: recall
+  query: Who takes charge of coding tasks for the Meridian initiative?
+  gold: Bob is the lead developer for Meridian.
+  seed:
+  - fact_text: Bob is the lead developer for Meridian.
+    category: Software Development
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave coordinates with FakeVendorCo for supplies.
+    category: Supply Chain
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: recall-carol-northwind-comms
+  kind: recall
+  query: Who serves as the liaison for Northwind's customer interactions?
+  gold: Carol handles Northwind's client communications.
+  seed:
+  - fact_text: Carol handles Northwind's client communications.
+    category: Client Relations
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is the lead developer for Meridian.
+    category: Software Development
+    entities:
+    - Bob
+    - Meridian
+- id: recall-dave-fakevendorco-supplies
+  kind: recall
+  query: Who manages the partnership with FakeVendorCo to procure resources?
+  gold: Dave coordinates with FakeVendorCo for supplies.
+  seed:
+  - fact_text: Dave coordinates with FakeVendorCo for supplies.
+    category: Supply Chain
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Carol handles Northwind's client communications.
+    category: Client Relations
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+- id: recall-alice-meridian-dev
+  kind: recall
+  query: Who oversees the development work for the Meridian project?
+  gold: Alice is the lead developer on the Meridian initiative.
+  seed:
+  - fact_text: Alice is the lead developer on the Meridian initiative.
+    category: project role
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Bob is the project manager for Northwind.
+    category: project management
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol coordinates with FakeVendorCo on supplies.
+    category: vendor relations
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Dave ensures compliance for Helios.
+    category: compliance
+    entities:
+    - Dave
+    - Helios
+- id: recall-bob-northwind-contract
+  kind: recall
+  query: Who managed to close the Northwind agreement?
+  gold: Bob secured the contract with Northwind.
+  seed:
+  - fact_text: Bob secured the contract with Northwind.
+    category: business achievement
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Alice leads the Helios team.
+    category: team leadership
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Carol handles FakeVendorCo negotiations.
+    category: negotiation
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Dave monitors Meridian performance.
+    category: monitoring
+    entities:
+    - Dave
+    - Meridian
+- id: recall-carol-fakevendorco-contact
+  kind: recall
+  query: Who should vendors reach out to regarding FakeVendorCo matters?
+  gold: Carol is the point of contact for FakeVendorCo.
+  seed:
+  - fact_text: Carol is the point of contact for FakeVendorCo.
+    category: communication
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Alice manages Helios resources.
+    category: resource management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob oversees Northwind sales.
+    category: sales
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Dave handles Meridian logistics.
+    category: logistics
+    entities:
+    - Dave
+    - Meridian
+- id: recall-dave-helios-security
+  kind: recall
+  query: Which person established the protective systems for Helios?
+  gold: Dave implemented the security protocol for Helios.
+  seed:
+  - fact_text: Dave implemented the security protocol for Helios.
+    category: security
+    entities:
+    - Dave
+    - Helios
+  - fact_text: Alice coordinates Meridian events.
+    category: event coordination
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Bob secures Northwind funding.
+    category: funding
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol manages FakeVendorCo inventory.
+    category: inventory
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: recall-helios-management
+  kind: recall
+  query: Who should be contacted for any issues arising from Helios?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: project_management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob coordinates the Northwind rollout.
+    category: operations
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol is responsible for FakeVendorCo oversight.
+    category: vendor_management
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: recall-fakevendorco-liaison
+  kind: recall
+  query: Who handles communication with FakeVendorCo on our behalf?
+  gold: Bob is the primary vendor liaison for FakeVendorCo.
+  seed:
+  - fact_text: Bob is the primary vendor liaison for FakeVendorCo.
+    category: vendor_relations
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Alice oversees the Helios deployment phase.
+    category: project_management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave manages the Meridian security protocols.
+    category: security
+    entities:
+    - Dave
+    - Meridian
+- id: recall-meridian-integration
+  kind: recall
+  query: Which individual supervises the Meridian setup process?
+  gold: Carol oversees the Meridian system integration.
+  seed:
+  - fact_text: Carol oversees the Meridian system integration.
+    category: technical_integration
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Bob leads the Northwind team training.
+    category: hr
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Alice coordinates the Helios vendor selection.
+    category: procurement
+    entities:
+    - Alice
+    - Helios
+- id: recall-northwind-expansion
+  kind: recall
+  query: Who is heading the growth initiatives for Northwind?
+  gold: Dave leads the Northwind team expansion.
+  seed:
+  - fact_text: Dave leads the Northwind team expansion.
+    category: team_growth
+    entities:
+    - Dave
+    - Northwind
+  - fact_text: Carol handles the Meridian data migration.
+    category: data_management
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Bob is the liaison for FakeVendorCo support.
+    category: vendor_support
+    entities:
+    - Bob
+    - FakeVendorCo
+- id: recall-helios-escalation
+  kind: recall
+  query: Who should I escalate a Helios blocker to?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles Meridian tasks.
+    category: task handling
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol oversees Northwind operations.
+    category: operations
+    entities:
+    - Carol
+    - Northwind
+- id: recall-meridian-contact
+  kind: recall
+  query: Who should I contact regarding Meridian?
+  gold: Bob is responsible for the Meridian initiative.
+  seed:
+  - fact_text: Bob is responsible for the Meridian initiative.
+    category: responsibility
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Alice leads Helios development.
+    category: development
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave coordinates FakeVendorCo shipments.
+    category: logistics
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: recall-northwind-driver
+  kind: recall
+  query: Who is driving the Northwind initiative?
+  gold: Carol leads the Northwind migration.
+  seed:
+  - fact_text: Carol leads the Northwind migration.
+    category: leadership
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Bob manages Meridian phases.
+    category: management
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Alice supports Helios testing.
+    category: support
+    entities:
+    - Alice
+    - Helios
+- id: recall-fakevendorco-comms
+  kind: recall
+  query: Who handles FakeVendorCo communications?
+  gold: Dave coordinates with FakeVendorCo on supplies.
+  seed:
+  - fact_text: Dave coordinates with FakeVendorCo on supplies.
+    category: vendor coordination
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Carol oversees Northwind integration.
+    category: integration
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Bob reviews Meridian budgets.
+    category: finance
+    entities:
+    - Bob
+    - Meridian
+- id: recall-helios-contact
+  kind: recall
+  query: Who should I contact for issues with Helios?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is responsible for the Northwind system.
+    category: System Administration
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol handles all queries to FakeVendorCo.
+    category: Vendor Relations
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: recall-northwind-overseer
+  kind: recall
+  query: Which person oversees the Northwind operations?
+  gold: Bob is responsible for the Northwind system.
+  seed:
+  - fact_text: Bob is responsible for the Northwind system.
+    category: System Administration
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol handles all queries to FakeVendorCo.
+    category: Vendor Relations
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Dave coordinates with Meridian on security updates.
+    category: Security Coordination
+    entities:
+    - Dave
+    - Meridian
+- id: recall-fakevendorco-comm
+  kind: recall
+  query: Who manages communications with FakeVendorCo?
+  gold: Carol handles all queries to FakeVendorCo.
+  seed:
+  - fact_text: Carol handles all queries to FakeVendorCo.
+    category: Vendor Relations
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave coordinates with Meridian on security updates.
+    category: Security Coordination
+    entities:
+    - Dave
+    - Meridian
+- id: recall-dave-meridian-security
+  kind: recall
+  query: What is the role of Dave regarding Meridian security?
+  gold: Dave coordinates with Meridian on security updates.
+  seed:
+  - fact_text: Dave coordinates with Meridian on security updates.
+    category: Security Coordination
+    entities:
+    - Dave
+    - Meridian
+  - fact_text: Alice manages the Helios project.
+    category: Project Management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is responsible for the Northwind system.
+    category: System Administration
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol handles all queries to FakeVendorCo.
+    category: Vendor Relations
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: recall-helios-lead
+  kind: recall
+  query: Who is the primary contact for Helios department matters?
+  gold: Alice heads the Helios division within the company.
+  seed:
+  - fact_text: Alice heads the Helios division within the company.
+    category: management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob manages the Northwind account.
+    category: account management
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol designs the Meridian interface.
+    category: design
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave is associated with FakeVendorCo.
+    category: affiliation
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: temporal-helios-lead
+  kind: temporal
+  query: Who handles decisions for the Helios project?
+  gold: Bob is now the lead for Helios.
+  seed:
+  - fact_text: Alice was the lead on the Helios project.
+    category: ownership
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is now the lead for Helios.
+    category: ownership
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol provides updates on Helios progress.
+    category: communication
+    entities:
+    - Carol
+    - Helios
+- id: temporal-northwind-meeting-time
+  kind: temporal
+  query: What time should I attend the Northwind discussion?
+  gold: The Northwind meeting is now at 3 PM.
+  seed:
+  - fact_text: The Northwind meeting was scheduled for 2 PM.
+    category: event_time
+    entities:
+    - Northwind
+    - meeting
+  - fact_text: The Northwind meeting is now at 3 PM.
+    category: event_time
+    entities:
+    - Northwind
+    - meeting
+  - fact_text: Dave is responsible for Northwind logistics.
+    category: task_assignment
+    entities:
+    - Dave
+    - Northwind
+- id: temporal-fakevendorco-price
+  kind: temporal
+  query: What is the hourly rate for FakeVendorCo assistance?
+  gold: FakeVendorCo charges $150 per hour for support.
+  seed:
+  - fact_text: FakeVendorCo used to bill $120 per hour.
+    category: pricing
+    entities:
+    - FakeVendorCo
+  - fact_text: FakeVendorCo charges $150 per hour for support.
+    category: pricing
+    entities:
+    - FakeVendorCo
+  - fact_text: FakeVendorCo offers 24/7 availability for clients.
+    category: service
+    entities:
+    - FakeVendorCo
+- id: temporal-meridian-status
+  kind: temporal
+  query: What is the outcome of the Meridian initiative?
+  gold: The Meridian project has been completed successfully.
+  seed:
+  - fact_text: The Meridian project was in development phase.
+    category: project_status
+    entities:
+    - Meridian
+  - fact_text: The Meridian project has been completed successfully.
+    category: project_status
+    entities:
+    - Meridian
+  - fact_text: Alice is documenting lessons from Meridian.
+    category: documentation
+    entities:
+    - Alice
+    - Meridian
+- id: temporal-helios-mgmt
+  kind: temporal
+  query: Who do I contact for Helios project issues?
+  gold: Bob is managing the Helios project.
+  seed:
+  - fact_text: Alice was managing the Helios project.
+    category: management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is managing the Helios project.
+    category: management
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol is working on the Meridian project.
+    category: project
+    entities:
+    - Carol
+    - Meridian
+- id: temporal-northwind-lead
+  kind: temporal
+  query: Who should I escalate Northwind issues to?
+  gold: Dave is leading the Northwind team.
+  seed:
+  - fact_text: Carol was leading the Northwind team.
+    category: leadership
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave is leading the Northwind team.
+    category: leadership
+    entities:
+    - Dave
+    - Northwind
+  - fact_text: Alice is managing the Helios project.
+    category: management
+    entities:
+    - Alice
+    - Helios
+- id: temporal-fakevendorco-supplier
+  kind: temporal
+  query: Which company is providing services to FakeVendorCo?
+  gold: Meridian is now the supplier for FakeVendorCo.
+  seed:
+  - fact_text: Helios was the supplier for FakeVendorCo.
+    category: supplier
+    entities:
+    - Helios
+    - FakeVendorCo
+  - fact_text: Meridian is now the supplier for FakeVendorCo.
+    category: supplier
+    entities:
+    - Meridian
+    - FakeVendorCo
+  - fact_text: Bob is managing the Helios project.
+    category: management
+    entities:
+    - Bob
+    - Helios
+- id: temporal-northwind-owner
+  kind: temporal
+  query: Who should I contact for Northwind ownership?
+  gold: Bob owns the Northwind asset.
+  seed:
+  - fact_text: Alice owned the Northwind asset.
+    category: ownership
+    entities:
+    - Alice
+    - Northwind
+  - fact_text: Bob owns the Northwind asset.
+    category: ownership
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol is working on the Meridian project.
+    category: project
+    entities:
+    - Carol
+    - Meridian
+- id: temporal-helios-manager
+  kind: temporal
+  query: Who is the point of contact for Helios?
+  gold: Bob manages the Helios project.
+  seed:
+  - fact_text: Alice managed the Helios project.
+    category: project-management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob manages the Helios project.
+    category: project-management
+    entities:
+    - Bob
+    - Helios
+  - fact_text: The Helios project is behind schedule.
+    category: project-status
+    entities:
+    - Helios
+- id: temporal-meridian-owner
+  kind: temporal
+  query: Who is the person responsible for Meridian?
+  gold: Dave owns the Meridian project.
+  seed:
+  - fact_text: Carol owns the Meridian project.
+    category: ownership
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave owns the Meridian project.
+    category: ownership
+    entities:
+    - Dave
+    - Meridian
+  - fact_text: The Meridian project is on schedule.
+    category: project-status
+    entities:
+    - Meridian
+  - fact_text: Northwind is a partner for Meridian.
+    category: partnership
+    entities:
+    - Northwind
+    - Meridian
+- id: temporal-northwind-contact
+  kind: temporal
+  query: Who should I reach out to for Northwind matters?
+  gold: Carol is the contact for Northwind.
+  seed:
+  - fact_text: Alice is the contact for Northwind.
+    category: partnership
+    entities:
+    - Alice
+    - Northwind
+  - fact_text: Carol is the contact for Northwind.
+    category: partnership
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Northwind offers cloud services.
+    category: service
+    entities:
+    - Northwind
+  - fact_text: The Northwind project is ongoing.
+    category: project-status
+    entities:
+    - Northwind
+- id: temporal-meridian-cost
+  kind: temporal
+  query: What amount should I set aside for Meridian?
+  gold: The Meridian project costs $1500.
+  seed:
+  - fact_text: The Meridian project costs $1000.
+    category: cost
+    entities:
+    - Meridian
+  - fact_text: The Meridian project costs $1500.
+    category: cost
+    entities:
+    - Meridian
+  - fact_text: Northwind has a new pricing model.
+    category: pricing
+    entities:
+    - Northwind
+- id: temporal-dave-fakevendor
+  kind: temporal
+  query: For FakeVendorCo, who should I contact regarding management issues?
+  gold: Dave is a manager for FakeVendorCo.
+  seed:
+  - fact_text: Dave is a consultant for FakeVendorCo.
+    category: role
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Dave is a manager for FakeVendorCo.
+    category: role
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice is the lead for Helios.
+    category: lead
+    entities:
+    - Alice
+    - Helios
+- id: temporal-northwind-phase
+  kind: temporal
+  query: What is the next milestone for Northwind?
+  gold: Northwind is in development phase.
+  seed:
+  - fact_text: Northwind is in planning phase.
+    category: status
+    entities:
+    - Northwind
+  - fact_text: Northwind is in development phase.
+    category: status
+    entities:
+    - Northwind
+  - fact_text: Bob is managing the Meridian project.
+    category: management
+    entities:
+    - Bob
+    - Meridian
+- id: temporal-price-change
+  kind: temporal
+  query: How much does Meridian cost?
+  gold: FakeVendorCo charges $150 for Meridian access.
+  seed:
+  - fact_text: FakeVendorCo charges $100 for Meridian access.
+    category: pricing
+    entities:
+    - FakeVendorCo
+    - Meridian
+  - fact_text: FakeVendorCo charges $150 for Meridian access.
+    category: pricing
+    entities:
+    - FakeVendorCo
+    - Meridian
+- id: temporal-project-status
+  kind: temporal
+  query: What is the stage of Northwind?
+  gold: Northwind is in development.
+  seed:
+  - fact_text: Northwind is in planning phase.
+    category: project status
+    entities:
+    - Northwind
+  - fact_text: Northwind is in development.
+    category: project status
+    entities:
+    - Northwind
+- id: temporal-ownership-change
+  kind: temporal
+  query: Who is responsible for Meridian?
+  gold: Dave owns the Meridian service.
+  seed:
+  - fact_text: Carol owns the Meridian service.
+    category: ownership
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave owns the Meridian service.
+    category: ownership
+    entities:
+    - Dave
+    - Meridian
+- id: temporal-helios-owner
+  kind: temporal
+  query: Who should I escalate Helios issues to?
+  gold: Alice manages the Helios project
+  seed:
+  - fact_text: Bob managed the Helios project
+    category: ownership
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Alice manages the Helios project
+    category: ownership
+    entities:
+    - Alice
+    - Helios
+    gold_exact: true
+  - fact_text: Helios project is on track
+    category: status
+    entities:
+    - Helios
+- id: temporal-northwind-price
+  kind: temporal
+  query: What is the price of Northwind product?
+  gold: Northwind product costs $150
+  seed:
+  - fact_text: Northwind product costs $100
+    category: price
+    entities:
+    - Northwind
+  - fact_text: Northwind product costs $150
+    category: price
+    entities:
+    - Northwind
+    gold_exact: true
+  - fact_text: Northwind product is popular
+    category: status
+    entities:
+    - Northwind
+- id: temporal-fakevendorco-delivery
+  kind: temporal
+  query: On which day will FakeVendorCo deliver?
+  gold: FakeVendorCo delivery is scheduled for Wednesday
+  seed:
+  - fact_text: FakeVendorCo delivery is scheduled for Monday
+    category: time
+    entities:
+    - FakeVendorCo
+  - fact_text: FakeVendorCo delivery is scheduled for Wednesday
+    category: time
+    entities:
+    - FakeVendorCo
+    gold_exact: true
+  - fact_text: FakeVendorCo delivery is for 5 items
+    category: quantity
+    entities:
+    - FakeVendorCo
+- id: temporal-meridian-ownership
+  kind: temporal
+  query: Which company now controls Meridian?
+  gold: Meridian is now owned by Northwind
+  seed:
+  - fact_text: Meridian was previously owned by FakeVendorCo
+    category: ownership
+    entities:
+    - Meridian
+    - FakeVendorCo
+  - fact_text: Meridian is now owned by Northwind
+    category: ownership
+    entities:
+    - Meridian
+    - Northwind
+    gold_exact: true
+  - fact_text: Carol works for FakeVendorCo
+    category: employment
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: temporal-northwind-status
+  kind: temporal
+  query: Is the Northwind project done?
+  gold: Northwind project is now completed
+  seed:
+  - fact_text: Northwind project was in progress
+    category: status
+    entities:
+    - Northwind
+  - fact_text: Northwind project is now completed
+    category: status
+    entities:
+    - Northwind
+    gold_exact: true
+  - fact_text: Alice is working on Helios project
+    category: project management
+    entities:
+    - Alice
+    - Helios
+- id: verbatim-helios-version
+  kind: verbatim
+  query: What is the current build number for Alice's main undertaking?
+  gold: Alice manages the Helios project, which has version 2.3.1.
+  gold_exact: 2.3.1
+  seed:
+  - fact_text: Alice manages the Helios project, which has version 2.3.1.
+    category: project_management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob is responsible for the Meridian deployment, running on port 8080.
+    category: infrastructure
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol coordinates with FakeVendorCo for software updates.
+    category: vendor_relations
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: verbatim-meridian-ip
+  kind: verbatim
+  query: What is the numerical identifier for the Meridian host's location?
+  gold: The Meridian server is located at IP address 192.168.1.100.
+  gold_exact: 192.168.1.100
+  seed:
+  - fact_text: The Meridian server is located at IP address 192.168.1.100.
+    category: infrastructure
+    entities:
+    - Meridian
+  - fact_text: Alice oversees the Helios project with version 2.3.1.
+    category: project_management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave handles Northwind service configurations.
+    category: system_admin
+    entities:
+    - Dave
+    - Northwind
+- id: verbatim-northwind-port
+  kind: verbatim
+  query: Which numerical endpoint is used for the Northwind service's connections?
+  gold: Bob configured the Northwind service to run on port 8443.
+  gold_exact: '8443'
+  seed:
+  - fact_text: Bob configured the Northwind service to run on port 8443.
+    category: infrastructure
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol is in charge of Meridian server maintenance.
+    category: operations
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: FakeVendorCo provides the latest software licenses.
+    category: vendor_relations
+    entities:
+    - FakeVendorCo
+- id: verbatim-fakevendorco-id
+  kind: verbatim
+  query: Which reference number should be used for the FakeVendorCo agreement?
+  gold: Dave is the contact for the FakeVendorCo contract, ID VND-2023-456.
+  gold_exact: VND-2023-456
+  seed:
+  - fact_text: Dave is the contact for the FakeVendorCo contract, ID VND-2023-456.
+    category: contract_management
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice is leading the Helios project initiative.
+    category: project_management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: The Northwind service is under Bob's supervision.
+    category: operations
+    entities:
+    - Bob
+    - Northwind
+- id: verbatim-fakevendorco-address
+  kind: verbatim
+  query: What is the full mailing address for FakeVendorCo's main office?
+  gold: 123 Innovation Blvd
+  gold_exact: 123 Innovation Blvd
+  seed:
+  - fact_text: FakeVendorCo's headquarters is at 123 Innovation Blvd
+    category: logistics
+    entities:
+    - FakeVendorCo
+  - fact_text: Bob fixed the Meridian outage
+    category: technical
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol's email is carol@helios.com
+    category: contact
+    entities:
+    - Carol
+    - Helios
+- id: verbatim-meridian-access-code
+  kind: verbatim
+  query: Which specific digit combination grants access to Meridian's repository?
+  gold: '9876'
+  gold_exact: '9876'
+  seed:
+  - fact_text: The access code for Meridian's vault is 9876
+    category: security
+    entities:
+    - Meridian
+  - fact_text: Helios project is delayed
+    category: management
+    entities:
+    - Helios
+  - fact_text: FakeVendorCo's contract expires soon
+    category: legal
+    entities:
+    - FakeVendorCo
+- id: verbatim-helios-oversight
+  kind: verbatim
+  query: Who has been responsible for Helios from the start of the year?
+  gold: Alice oversees the Helios initiative since Q1.
+  gold_exact: Alice oversees the Helios initiative since Q1.
+  seed:
+  - fact_text: Alice oversees the Helios initiative since Q1.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles the Northwind deployment.
+    category: project management
+    entities:
+    - Bob
+    - Northwind
+- id: verbatim-meridian-login
+  kind: verbatim
+  query: What credentials does Carol use to enter Meridian?
+  gold: Carol's login for Meridian is passW0rd!XYZ.
+  gold_exact: Carol's login for Meridian is passW0rd!XYZ.
+  seed:
+  - fact_text: Carol's login for Meridian is passW0rd!XYZ.
+    category: access credentials
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave needs access to Helios.
+    category: access request
+    entities:
+    - Dave
+    - Helios
+- id: verbatim-northwind-version
+  kind: verbatim
+  query: Which release is currently running in the Northwind environment?
+  gold: Northwind's latest version is 4.0.2, released last Friday.
+  gold_exact: Northwind's latest version is 4.0.2, released last Friday.
+  seed:
+  - fact_text: Northwind's latest version is 4.0.2, released last Friday.
+    category: software version
+    entities:
+    - Northwind
+  - fact_text: Helios project uses version 2.1.0.
+    category: software version
+    entities:
+    - Helios
+- id: verbatim-fakevendor-port
+  kind: verbatim
+  query: What is the designated port for contacting FakeVendorCo assistance?
+  gold: FakeVendorCo's support port is 8443.
+  gold_exact: FakeVendorCo's support port is 8443.
+  seed:
+  - fact_text: FakeVendorCo's support port is 8443.
+    category: network configuration
+    entities:
+    - FakeVendorCo
+  - fact_text: Northwind uses port 9000 for internal API.
+    category: network configuration
+    entities:
+    - Northwind
+- id: verbatim-meridian-port
+  kind: verbatim
+  query: Which port should I open for API access?
+  gold: The Meridian API runs on port 8080.
+  gold_exact: '8080'
+  seed:
+  - fact_text: The Meridian API runs on port 8080.
+    category: networking
+    entities:
+    - Meridian
+  - fact_text: Bob configured the Helios firewall.
+    category: security
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Northwind uses FakeVendorCo for cloud services.
+    category: vendor
+    entities:
+    - Northwind
+    - FakeVendorCo
+- id: verbatim-helios-project-id
+  kind: verbatim
+  query: What identifier should I use to reference this project in tickets?
+  gold: The project ID for Helios is HV-2023.
+  gold_exact: HV-2023
+  seed:
+  - fact_text: The project ID for Helios is HV-2023.
+    category: project management
+    entities:
+    - Helios
+  - fact_text: Carol signed the contract with FakeVendorCo.
+    category: contracts
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: The deadline for Meridian is end of Q4.
+    category: scheduling
+    entities:
+    - Meridian
+- id: verbatim-northwind-database-version
+  kind: verbatim
+  query: Which database release should we target for the upgrade?
+  gold: The Northwind database version is 4.2.0.
+  gold_exact: 4.2.0
+  seed:
+  - fact_text: The Northwind database version is 4.2.0.
+    category: databases
+    entities:
+    - Northwind
+  - fact_text: Dave updated the Helios server last week.
+    category: updates
+    entities:
+    - Dave
+    - Helios
+  - fact_text: FakeVendorCo provides support for Meridian systems.
+    category: support
+    entities:
+    - FakeVendorCo
+    - Meridian
+  - fact_text: Alice is leading the Northwind integration project.
+    category: projects
+    entities:
+    - Alice
+    - Northwind
+- id: verbatim-version-helios
+  kind: verbatim
+  query: To which release number should I upgrade Northwind's Helios integration?
+  gold: Northwind uses version 3.2.1 of the Helios framework.
+  gold_exact: 3.2.1
+  seed:
+  - fact_text: Northwind uses version 3.2.1 of the Helios framework.
+    category: software deployment
+    entities:
+    - Northwind
+    - Helios
+  - fact_text: Alice manages the Helios project at Northwind.
+    category: project management
+    entities:
+    - Alice
+    - Northwind
+    - Helios
+  - fact_text: Bob reported a bug in version 2.0.0 of Helios.
+    category: bug report
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol is responsible for Northwind's API documentation.
+    category: documentation
+    entities:
+    - Carol
+    - Northwind
+- id: verbatim-id-alice
+  kind: verbatim
+  query: What identifier should I use to look up Alice in the HR system?
+  gold: Alice's employee ID is EMP78945.
+  gold_exact: EMP78945
+  seed:
+  - fact_text: Alice's employee ID is EMP78945.
+    category: employee record
+    entities:
+    - Alice
+  - fact_text: Bob has access to the Meridian server.
+    category: access control
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol submitted a request to FakeVendorCo.
+    category: procurement
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Dave maintains the Northwind database.
+    category: database administration
+    entities:
+    - Dave
+    - Northwind
+- id: verbatim-port-meridian
+  kind: verbatim
+  query: What network endpoint should I use to reach the Meridian backend?
+  gold: The Meridian API runs on port 8443.
+  gold_exact: '8443'
+  seed:
+  - fact_text: The Meridian API runs on port 8443.
+    category: network configuration
+    entities:
+    - Meridian
+  - fact_text: Alice configured the Helios server on port 3000.
+    category: server setup
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles FakeVendorCo integration.
+    category: vendor management
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Northwind's firewall blocks port 80.
+    category: security policy
+    entities:
+    - Northwind
+- id: verbatim-address-bob
+  kind: verbatim
+  query: Where should I send physical correspondence to Bob?
+  gold: Bob's contact address is 42 Oak Street, Helios City.
+  gold_exact: 42 Oak Street, Helios City
+  seed:
+  - fact_text: Bob's contact address is 42 Oak Street, Helios City.
+    category: contact information
+    entities:
+    - Bob
+    - Helios City
+  - fact_text: Alice works from the Meridian office.
+    category: work location
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Carol's email is carol@northwind.com.
+    category: contact details
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave is located at 10 Pine Avenue, FakeVendorCo.
+    category: address record
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: verbatim-northwind-address
+  kind: verbatim
+  query: Where is the headquarters of Northwind located in terms of street and city?
+  gold: Northwind's physical address is 456 Oak Avenue, Dreamtown.
+  gold_exact: 456 Oak Avenue, Dreamtown
+  seed:
+  - fact_text: Northwind's physical address is 456 Oak Avenue, Dreamtown.
+    category: address
+    entities:
+    - Northwind
+  - fact_text: Alice's employee ID is A12345.
+    category: ID
+    entities:
+    - Alice
+  - fact_text: Helios system version is 1.0.0.
+    category: version
+    entities:
+    - Helios
+  - fact_text: Carol's phone extension is 2345.
+    category: contact
+    entities:
+    - Carol
+- id: verbatim-meridian-version
+  kind: verbatim
+  query: What iteration number does the Meridian application currently run?
+  gold: The version of Meridian software installed is 3.5.2.
+  gold_exact: 3.5.2
+  seed:
+  - fact_text: The version of Meridian software installed is 3.5.2.
+    category: version
+    entities:
+    - Meridian
+  - fact_text: Dave's access key for Northwind is KEY789.
+    category: key
+    entities:
+    - Dave
+    - Northwind
+  - fact_text: Helios port number is 8080.
+    category: port
+    entities:
+    - Helios
+  - fact_text: Alice manages Bob's schedule.
+    category: management
+    entities:
+    - Alice
+    - Bob
+- id: verbatim-bob-clearance
+  kind: verbatim
+  query: For accessing classified areas, what is Bob's authorization passphrase?
+  gold: Bob's security clearance code is SEC-5678.
+  gold_exact: SEC-5678
+  seed:
+  - fact_text: Bob's security clearance code is SEC-5678.
+    category: code
+    entities:
+    - Bob
+  - fact_text: Carol's email for Meridian is carol@meridian.example.com.
+    category: email
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: The Northwind project deadline is Friday.
+    category: deadline
+    entities:
+    - Northwind
+  - fact_text: Helios team lead is Alice.
+    category: role
+    entities:
+    - Helios
+    - Alice
+- id: verbatim-api-version-northwind
+  kind: verbatim
+  query: Which specific API release does Northwind rely on?
+  gold: version 1.2.0
+  seed:
+  - fact_text: The Meridian API version 1.2.0 is used by the Northwind team.
+    category: API version
+    entities:
+    - Meridian
+    - Northwind
+  - fact_text: Alice manages the Helios project for FakeVendorCo.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+    - FakeVendorCo
+  - fact_text: Dave's employee code is DAV-5678 for system access.
+    category: employee ID
+    entities:
+    - Dave
+- id: verbatim-bob-login-code
+  kind: verbatim
+  query: What identifier is required for Bob to access Meridian?
+  gold: BM-7890
+  seed:
+  - fact_text: Bob's login code for the Meridian system is BM-7890.
+    category: access code
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol's project code for Northwind is CN-4567.
+    category: project code
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: The Helios server uses port 3000 for development.
+    category: network port
+    entities:
+    - Helios
+- id: verbatim-helios-port
+  kind: verbatim
+  query: On which port should the live Helios environment be configured?
+  gold: '3000'
+  seed:
+  - fact_text: The Helios project deployment port is 3000 for production.
+    category: network port
+    entities:
+    - Helios
+  - fact_text: Northwind's API endpoint uses port 8080 for public access.
+    category: network port
+    entities:
+    - Northwind
+  - fact_text: FakeVendorCo's support port is 9090 for internal tickets.
+    category: network port
+    entities:
+    - FakeVendorCo
+- id: verbatim-carol-northwind-id
+  kind: verbatim
+  query: What code is assigned to Carol's Northwind initiative?
+  gold: PRJ-2024-001
+  seed:
+  - fact_text: Carol's project identifier for Northwind is PRJ-2024-001.
+    category: project identifier
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave's version for Helios upgrade is 3.0.0.
+    category: version
+    entities:
+    - Dave
+    - Helios
+  - fact_text: The Meridian API uses address 10.0.0.5 for testing.
+    category: IP address
+    entities:
+    - Meridian
+- id: verbatim-helios-ip
+  kind: verbatim
+  query: Where should I send data packets for the Helios application?
+  gold: Helios's main server is at IP address 192.168.1.100.
+  gold_exact: 192.168.1.100
+  seed:
+  - fact_text: Helios's main server is at IP address 192.168.1.100.
+    category: networking
+    entities:
+    - Helios
+  - fact_text: Meridian uses port 443 for secure connections.
+    category: networking
+    entities:
+    - Meridian
+  - fact_text: Northwind's database is hosted on Dave's machine.
+    category: infrastructure
+    entities:
+    - Northwind
+    - Dave
+- id: resolution-meridian-billing
+  kind: resolution
+  query: Who is the point of contact for Meridian's invoices?
+  gold: Bob handles billing for Meridian.
+  seed:
+  - fact_text: Bob handles billing for Meridian.
+    category: finance
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol is responsible for Northwind's security.
+    category: security
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave runs FakeVendorCo's operations.
+    category: operations
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: resolution-northwind-security
+  kind: resolution
+  query: Who should I contact about a Northwind security issue?
+  gold: Carol is responsible for Northwind's security.
+  seed:
+  - fact_text: Carol is responsible for Northwind's security.
+    category: security
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles billing for Meridian.
+    category: finance
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Dave runs FakeVendorCo's operations.
+    category: operations
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: resolution-fakevendorco-operations
+  kind: resolution
+  query: Who is in charge of FakeVendorCo's daily activities?
+  gold: Dave runs FakeVendorCo's operations.
+  seed:
+  - fact_text: Dave runs FakeVendorCo's operations.
+    category: operations
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles billing for Meridian.
+    category: finance
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol is responsible for Northwind's security.
+    category: security
+    entities:
+    - Carol
+    - Northwind
+- id: resolution-carol-fakevendorco
+  kind: resolution
+  query: Who should I contact regarding FakeVendorCo matters?
+  gold: Carol leads the FakeVendorCo partnership.
+  seed:
+  - fact_text: Carol leads the FakeVendorCo partnership.
+    category: partnership
+    entities:
+    - Carol
+    - FakeVendorCo
+  - fact_text: Bob is the manager of the Northwind project.
+    category: management
+    entities:
+    - Bob
+    - Northwind
+- id: resolution-alice-meridian
+  kind: resolution
+  query: Who is the go-to for Meridian updates?
+  gold: Alice coordinates the Meridian project.
+  seed:
+  - fact_text: Alice coordinates the Meridian project.
+    category: coordination
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Bob leads the Northwind team.
+    category: leadership
+    entities:
+    - Bob
+    - Northwind
+- id: resolution-bob-northwind
+  kind: resolution
+  query: Who handles Northwind-related issues?
+  gold: Bob is in charge of Northwind operations.
+  seed:
+  - fact_text: Bob is in charge of Northwind operations.
+    category: operations
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol is the liaison for FakeVendorCo.
+    category: liaison
+    entities:
+    - Carol
+    - FakeVendorCo
+- id: resolution-northwind-contact
+  kind: resolution
+  query: Who should I contact about the Northwind contract?
+  gold: Carol handles the Northwind account.
+  seed:
+  - fact_text: Carol handles the Northwind account.
+    category: role
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave works on the Helios project.
+    category: project
+    entities:
+    - Dave
+    - Helios
+  - fact_text: Bob is assigned to Meridian.
+    category: role
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: FakeVendorCo supplies Northwind.
+    category: company
+    entities:
+    - FakeVendorCo
+    - Northwind
+- id: resolution-helios-notify
+  kind: resolution
+  query: Who should I notify for Helios issues?
+  gold: Bob is responsible for the Helios deployment.
+  seed:
+  - fact_text: Bob is responsible for the Helios deployment.
+    category: role
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Alice manages the Meridian project.
+    category: project
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Carol is in charge of Northwind.
+    category: role
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave oversees FakeVendorCo.
+    category: company
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: resolution-meridian-charge
+  kind: resolution
+  query: Who is in charge of the Meridian efforts?
+  gold: Alice leads the Meridian initiative.
+  seed:
+  - fact_text: Alice leads the Meridian initiative.
+    category: role
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Bob handles the Helios system.
+    category: system
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol is responsible for Northwind sales.
+    category: role
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave manages FakeVendorCo contracts.
+    category: company
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: resolution-fakevendorco-poc
+  kind: resolution
+  query: Who is the point of contact for FakeVendorCo?
+  gold: Dave manages the FakeVendorCo relationship.
+  seed:
+  - fact_text: Dave manages the FakeVendorCo relationship.
+    category: role
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice is the lead for Helios.
+    category: project
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles the Meridian account.
+    category: role
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol oversees Northwind operations.
+    category: role
+    entities:
+    - Carol
+    - Northwind
+- id: resolution-helios-contact
+  kind: resolution
+  query: For Helios issues, who is the escalation contact?
+  gold: Alice manages the Helios project.
+  seed:
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles billing for Northwind.
+    category: billing
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol is the lead at Meridian.
+    category: leadership
+    entities:
+    - Carol
+    - Meridian
+- id: resolution-northwind-billing
+  kind: resolution
+  query: Who handles the invoicing for Northwind?
+  gold: Bob is in charge of billing at Northwind.
+  seed:
+  - fact_text: Bob is in charge of billing at Northwind.
+    category: billing
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: project management
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave collaborates with FakeVendorCo.
+    category: vendor collaboration
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: resolution-meridian-leader
+  kind: resolution
+  query: For Meridian team coordination, who should I speak to?
+  gold: Carol leads the team at Meridian.
+  seed:
+  - fact_text: Carol leads the team at Meridian.
+    category: team leadership
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: FakeVendorCo supplies components to Helios.
+    category: supply chain
+    entities:
+    - FakeVendorCo
+    - Helios
+  - fact_text: Northwind has a partnership with Meridian.
+    category: partnership
+    entities:
+    - Northwind
+    - Meridian
+- id: resolution-vendor-coordinator
+  kind: resolution
+  query: For FakeVendorCo inquiries, whom should I reach out to?
+  gold: Dave is the contact for FakeVendorCo.
+  seed:
+  - fact_text: Dave is the contact for FakeVendorCo.
+    category: vendor management
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice coordinates with Meridian.
+    category: coordination
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Northwind's billing is handled by Bob.
+    category: billing
+    entities:
+    - Northwind
+    - Bob
+- id: resolution-alice-fakevendorco
+  kind: resolution
+  query: Who should I reach out to regarding FakeVendorCo?
+  gold: Alice is the main contact for FakeVendorCo.
+  seed:
+  - fact_text: Alice is the main contact for FakeVendorCo.
+    category: contact
+    entities:
+    - Alice
+    - FakeVendorCo
+  - fact_text: Bob handles the Helios project.
+    category: project
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol is involved with the Northwind team.
+    category: team
+    entities:
+    - Carol
+    - Northwind
+- id: resolution-bob-helios
+  kind: resolution
+  query: Who is responsible for the Helios technical work?
+  gold: Bob leads the technical team for the Helios project.
+  seed:
+  - fact_text: Bob leads the technical team for the Helios project.
+    category: technical
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Alice manages the Meridian initiative.
+    category: project
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Dave is the coordinator for Northwind.
+    category: coordination
+    entities:
+    - Dave
+    - Northwind
+- id: resolution-carol-northwind
+  kind: resolution
+  query: Who manages the financial aspects of Northwind?
+  gold: Carol is the financial lead for the Northwind account.
+  seed:
+  - fact_text: Carol is the financial lead for the Northwind account.
+    category: finance
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice is involved with the Meridian project.
+    category: project
+    entities:
+    - Alice
+    - Meridian
+  - fact_text: Bob handles Helios development.
+    category: development
+    entities:
+    - Bob
+    - Helios
+- id: resolution-dave-meridian
+  kind: resolution
+  query: Who should be consulted for Meridian-related issues?
+  gold: Dave coordinates the Meridian team activities.
+  seed:
+  - fact_text: Dave coordinates the Meridian team activities.
+    category: coordination
+    entities:
+    - Dave
+    - Meridian
+  - fact_text: Alice is the contact for FakeVendorCo.
+    category: contact
+    entities:
+    - Alice
+    - FakeVendorCo
+  - fact_text: Carol manages the Northwind project.
+    category: management
+    entities:
+    - Carol
+    - Northwind
+- id: resolution-billing-contact
+  kind: resolution
+  query: Who should I escalate billing concerns to?
+  gold: Bob is in charge of billing operations.
+  seed:
+  - fact_text: Bob is in charge of billing operations.
+    category: billing
+    entities:
+    - Bob
+  - fact_text: Carol handles customer support queries.
+    category: support
+    entities:
+    - Carol
+  - fact_text: Dave leads the Northwind integration project.
+    category: integration
+    entities:
+    - Dave
+- id: resolution-support-lead
+  kind: resolution
+  query: Who is the go-to person for customer support?
+  gold: Carol handles customer support queries.
+  seed:
+  - fact_text: Carol handles customer support queries.
+    category: support
+    entities:
+    - Carol
+  - fact_text: Dave leads the Northwind integration project.
+    category: integration
+    entities:
+    - Dave
+  - fact_text: Bob is in charge of billing operations.
+    category: billing
+    entities:
+    - Bob
+- id: resolution-northwind-integration
+  kind: resolution
+  query: Who should I consult for Northwind integration issues?
+  gold: Dave leads the Northwind integration project.
+  seed:
+  - fact_text: Dave leads the Northwind integration project.
+    category: integration
+    entities:
+    - Dave
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: project
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Carol handles customer support queries.
+    category: support
+    entities:
+    - Carol
+- id: resolution-vendor-northwind
+  kind: resolution
+  query: Who delivers the tools for Northwind?
+  gold: FakeVendorCo provides software to the Northwind team.
+  seed:
+  - fact_text: FakeVendorCo provides software to the Northwind team.
+    category: responsibility
+    entities:
+    - FakeVendorCo
+    - Northwind
+  - fact_text: Carol is the lead for the Meridian initiative.
+    category: role
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave is the contact for Helios support.
+    category: role
+    entities:
+    - Dave
+    - Helios
+- id: resolution-backup-bob
+  kind: resolution
+  query: Who handles Meridian when Bob is out?
+  gold: Alice is the backup for Bob on the Meridian project.
+  seed:
+  - fact_text: Alice is the backup for Bob on the Meridian project.
+    category: role
+    entities:
+    - Alice
+    - Bob
+    - Meridian
+  - fact_text: FakeVendorCo provides software to the Northwind team.
+    category: responsibility
+    entities:
+    - FakeVendorCo
+    - Northwind
+  - fact_text: Dave is the contact for Helios support.
+    category: role
+    entities:
+    - Dave
+    - Helios
+- id: resolution-deputy-helios
+  kind: resolution
+  query: Who assists Alice with Helios?
+  gold: Bob is the deputy manager for the Helios project.
+  seed:
+  - fact_text: Bob is the deputy manager for the Helios project.
+    category: role
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol is the lead for the Meridian initiative.
+    category: role
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: FakeVendorCo provides software to the Northwind team.
+    category: responsibility
+    entities:
+    - FakeVendorCo
+    - Northwind
+- id: resolution-northwind-coordinator
+  kind: resolution
+  query: Who is the go-to person for Northwind affairs?
+  gold: Carol coordinates the Northwind initiative.
+  seed:
+  - fact_text: Carol coordinates the Northwind initiative.
+    category: role
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice manages the Helios project.
+    category: role
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob handles the Meridian deployment.
+    category: role
+    entities:
+    - Bob
+    - Meridian
+- id: persona-alice-meeting-pref
+  kind: persona
+  query: When is the most suitable time to schedule a call with Alice?
+  gold: Alice always prefers meetings before 10am
+  seed:
+  - fact_text: Alice always prefers meetings before 10am
+    category: persona
+    entities:
+    - Alice
+  - fact_text: Bob typically works from home on Fridays
+    category: persona
+    entities:
+    - Bob
+  - fact_text: Carol prefers to communicate via email rather than phone
+    category: persona
+    entities:
+    - Carol
+  - fact_text: Dave always reviews budget reports on Friday afternoons
+    category: persona
+    entities:
+    - Dave
+- id: persona-bob-afternoon-routine
+  kind: persona
+  query: What is Bob's usual rule about afternoon caffeine intake?
+  gold: Bob never drinks coffee after 3pm
+  seed:
+  - fact_text: Bob never drinks coffee after 3pm
+    category: persona
+    entities:
+    - Bob
+  - fact_text: Alice always prefers meetings before 10am
+    category: persona
+    entities:
+    - Alice
+  - fact_text: Meridian requires weekly status updates from all vendors
+    category: persona
+    entities:
+    - Meridian
+- id: persona-carol-comm-style
+  kind: persona
+  query: How does Carol like to receive updates from her team?
+  gold: Carol prefers to communicate via email rather than phone
+  seed:
+  - fact_text: Carol prefers to communicate via email rather than phone
+    category: persona
+    entities:
+    - Carol
+  - fact_text: Dave always reviews budget reports on Friday afternoons
+    category: persona
+    entities:
+    - Dave
+  - fact_text: Helios project milestones are tracked in Meridian by Alice
+    category: persona
+    entities:
+    - Helios
+    - Meridian
+    - Alice
+- id: persona-dave-review-habit
+  kind: persona
+  query: When should I send Dave the quarterly financial summaries?
+  gold: Dave always reviews budget reports on Friday afternoons
+  seed:
+  - fact_text: Dave always reviews budget reports on Friday afternoons
+    category: persona
+    entities:
+    - Dave
+  - fact_text: Bob never drinks coffee after 3pm
+    category: persona
+    entities:
+    - Bob
+  - fact_text: Alice always prefers meetings before 10am
+    category: persona
+    entities:
+    - Alice
+  - fact_text: Carol prefers to communicate via email rather than phone
+    category: persona
+    entities:
+    - Carol
+- id: persona-alice-morning
+  kind: persona
+  query: When is the optimal time to engage Alice for Helios tasks?
+  gold: Alice prefers to work on Helios projects in the morning.
+  seed:
+  - fact_text: Alice prefers to work on Helios projects in the morning.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+    gold_exact: true
+  - fact_text: Bob always uses Meridian for client updates.
+    category: habit
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol is known for her meticulous attention to Northwind details.
+    category: habit
+    entities:
+    - Carol
+    - Northwind
+- id: persona-bob-deadline
+  kind: persona
+  query: Which deadline should I keep in mind for Bob's submissions?
+  gold: Bob always submits his reports through Meridian by Friday.
+  seed:
+  - fact_text: Bob always submits his reports through Meridian by Friday.
+    category: habit
+    entities:
+    - Bob
+    - Meridian
+    gold_exact: true
+  - fact_text: Alice prefers to use Helios for project tracking.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave often works with FakeVendorCo on Northwind integrations.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+    - Northwind
+- id: persona-carol-collaboration
+  kind: persona
+  query: Who should I pair Carol with for Northwind projects?
+  gold: Carol prefers to handle Northwind tasks in collaboration with Dave.
+  seed:
+  - fact_text: Carol prefers to handle Northwind tasks in collaboration with Dave.
+    category: preference
+    entities:
+    - Carol
+    - Dave
+    - Northwind
+    gold_exact: true
+  - fact_text: Helios is managed by Alice.
+    category: fact
+    entities:
+    - Helios
+    - Alice
+  - fact_text: Meridian is used for reporting by Bob.
+    category: habit
+    entities:
+    - Meridian
+    - Bob
+- id: persona-dave-vendor
+  kind: persona
+  query: What vendor should I recommend to Dave for integration work?
+  gold: Dave consistently uses FakeVendorCo for external integrations.
+  seed:
+  - fact_text: Dave consistently uses FakeVendorCo for external integrations.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+    gold_exact: true
+  - fact_text: Alice is the lead on Helios projects.
+    category: fact
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Carol and Bob often discuss Meridian strategies.
+    category: habit
+    entities:
+    - Carol
+    - Bob
+    - Meridian
+- id: persona-alice-helios
+  kind: persona
+  query: What resource does Alice turn to when she needs to analyze data?
+  gold: Alice prefers to use the Helios system for data analysis.
+  seed:
+  - fact_text: Alice prefers to use the Helios system for data analysis.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob consistently reviews the Meridian dashboard before meetings.
+    category: habit
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Carol favors the Northwind platform for collaborative projects.
+    category: preference
+    entities:
+    - Carol
+    - Northwind
+- id: persona-bob-meridian
+  kind: persona
+  query: What does Bob typically examine before he attends meetings?
+  gold: Bob consistently reviews the Meridian dashboard before meetings.
+  seed:
+  - fact_text: Bob consistently reviews the Meridian dashboard before meetings.
+    category: habit
+    entities:
+    - Bob
+    - Meridian
+  - fact_text: Alice prefers to use the Helios system for data analysis.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Dave always consults the FakeVendorCo documentation when troubleshooting.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: persona-carol-northwind
+  kind: persona
+  query: Which platform does Carol choose for team-oriented work?
+  gold: Carol favors the Northwind platform for collaborative projects.
+  seed:
+  - fact_text: Carol favors the Northwind platform for collaborative projects.
+    category: preference
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Alice prefers to use the Helios system for data analysis.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob consistently reviews the Meridian dashboard before meetings.
+    category: habit
+    entities:
+    - Bob
+    - Meridian
+- id: persona-dave-fakevendorco
+  kind: persona
+  query: What does Dave refer to for fixing issues?
+  gold: Dave always consults the FakeVendorCo documentation when troubleshooting.
+  seed:
+  - fact_text: Dave always consults the FakeVendorCo documentation when troubleshooting.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice prefers to use the Helios system for data analysis.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Carol favors the Northwind platform for collaborative projects.
+    category: preference
+    entities:
+    - Carol
+    - Northwind
+- id: persona-alice-reporting
+  kind: persona
+  query: Which data source does Alice typically choose for her reports?
+  gold: Alice prefers to use the Northwind database for reports.
+  seed:
+  - fact_text: Alice prefers to use the Northwind database for reports.
+    category: preference
+    entities:
+    - Alice
+    - Northwind
+  - fact_text: Bob is meticulous about reviewing Helios project deliverables.
+    category: habit
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Carol enjoys collaborating with the Meridian team.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+- id: persona-bob-reviewing
+  kind: persona
+  query: How does Bob ensure quality in his work?
+  gold: Bob is meticulous about reviewing Helios project deliverables.
+  seed:
+  - fact_text: Bob is meticulous about reviewing Helios project deliverables.
+    category: habit
+    entities:
+    - Bob
+    - Helios
+  - fact_text: Alice prefers to use the Northwind database for reports.
+    category: preference
+    entities:
+    - Alice
+    - Northwind
+  - fact_text: Dave has a habit of not using FakeVendorCo for projects.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+- id: persona-dave-avoidance
+  kind: persona
+  query: Why does Dave avoid certain vendors for his work?
+  gold: Dave has a habit of not using FakeVendorCo for projects.
+  seed:
+  - fact_text: Dave has a habit of not using FakeVendorCo for projects.
+    category: habit
+    entities:
+    - Dave
+    - FakeVendorCo
+  - fact_text: Alice prefers to use the Northwind database for reports.
+    category: preference
+    entities:
+    - Alice
+    - Northwind
+  - fact_text: Carol consistently chooses the Meridian team for group tasks.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+- id: persona-bob-quality-check
+  kind: persona
+  query: How does Bob ensure his submissions are error-free?
+  gold: Bob always checks his work twice before submitting.
+  seed:
+  - fact_text: Bob always checks his work twice before submitting.
+    category: habit
+    entities:
+    - Bob
+    gold_exact: true
+  - fact_text: Carol prefers to use the Northwind system for her projects.
+    category: preference
+    entities:
+    - Carol
+    - Northwind
+  - fact_text: Dave has a habit of starting meetings with a brief recap.
+    category: habit
+    entities:
+    - Dave
+- id: persona-carol-break-habit
+  kind: persona
+  query: What is Carol's approach to maintaining productivity throughout the day?
+  gold: Carol has a habit of taking short breaks every hour.
+  seed:
+  - fact_text: Carol has a habit of taking short breaks every hour.
+    category: habit
+    entities:
+    - Carol
+    gold_exact: true
+  - fact_text: Bob prefers to work on complex tasks in the morning.
+    category: preference
+    entities:
+    - Bob
+  - fact_text: Alice always starts her day with a cup of coffee and reviews her emails.
+    category: habit
+    entities:
+    - Alice
+- id: persona-dave-meridian-use
+  kind: persona
+  query: What tool does Dave prefer for managing his project timelines?
+  gold: Dave consistently uses the Meridian system for project tracking.
+  seed:
+  - fact_text: Dave consistently uses the Meridian system for project tracking.
+    category: preference
+    entities:
+    - Dave
+    - Meridian
+    gold_exact: true
+  - fact_text: Bob prefers to work on complex tasks in the morning.
+    category: preference
+    entities:
+    - Bob
+  - fact_text: Alice always starts her day with a cup of coffee and reviews her emails.
+    category: habit
+    entities:
+    - Alice
+- id: persona-alice-meeting-preference
+  kind: persona
+  query: What is Alice's preferred timing for collaborative sessions?
+  gold: Alice prefers morning meetings over afternoon ones.
+  seed:
+  - fact_text: Alice prefers morning meetings over afternoon ones.
+    category: preference
+    entities:
+    - Alice
+    gold_exact: true
+  - fact_text: Bob has a habit of taking a walk every afternoon.
+    category: habit
+    entities:
+    - Bob
+  - fact_text: Dave consistently uses the Meridian system for project tracking.
+    category: preference
+    entities:
+    - Dave
+    - Meridian
+- id: persona-alice-helios-afternoon
+  kind: persona
+  query: What time of day does Alice typically handle Helios tasks?
+  gold: Alice prefers to work on the Helios project in the afternoons.
+  seed:
+  - fact_text: Alice prefers to work on the Helios project in the afternoons.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+    gold_exact: true
+  - fact_text: Bob often collaborates with Alice on Helios tasks.
+    category: habit
+    entities:
+    - Bob
+    - Alice
+    - Helios
+  - fact_text: Carol prefers using Meridian for all her projects.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave checks Northwind updates every morning.
+    category: habit
+    entities:
+    - Dave
+    - Northwind
+- id: persona-bob-email-morning
+  kind: persona
+  query: What routine does Bob follow before starting his day?
+  gold: Bob always checks email before his morning meetings.
+  seed:
+  - fact_text: Bob always checks email before his morning meetings.
+    category: habit
+    entities:
+    - Bob
+    gold_exact: true
+  - fact_text: Carol prefers using Meridian for project management.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave has a habit of updating Northwind daily.
+    category: habit
+    entities:
+    - Dave
+    - Northwind
+- id: persona-carol-meridian-preference
+  kind: persona
+  query: What tool does Carol consistently rely on for her work?
+  gold: Carol likes to use Meridian for all her projects.
+  seed:
+  - fact_text: Carol likes to use Meridian for all her projects.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+    gold_exact: true
+  - fact_text: Bob always checks email before his morning meetings.
+    category: habit
+    entities:
+    - Bob
+  - fact_text: Alice prefers to work on the Helios project in the afternoons.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Northwind updates are checked by Dave daily.
+    category: habit
+    entities:
+    - Dave
+    - Northwind
+- id: persona-dave-northwind-morning
+  kind: persona
+  query: When does Dave typically review the Northwind system?
+  gold: Dave checks Northwind updates every morning.
+  seed:
+  - fact_text: Dave checks Northwind updates every morning.
+    category: habit
+    entities:
+    - Dave
+    - Northwind
+    gold_exact: true
+  - fact_text: FakeVendorCo is not trusted by Bob for vendor selection.
+    category: preference
+    entities:
+    - Bob
+    - FakeVendorCo
+  - fact_text: Helios is Alice's favorite project to work on.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+- id: persona-bob-vendor
+  kind: persona
+  query: Which vendor does Bob favor when setting up client interactions?
+  gold: Bob consistently chooses Northwind for his client meetings.
+  seed:
+  - fact_text: Bob consistently chooses Northwind for his client meetings.
+    category: preference
+    entities:
+    - Bob
+    - Northwind
+  - fact_text: Carol prefers Meridian for her report generation.
+    category: preference
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Dave uses Helios for project tracking.
+    category: habit
+    entities:
+    - Dave
+    - Helios
+- id: persona-carol-meridian
+  kind: persona
+  query: When does Carol typically check Meridian-related paperwork?
+  gold: Carol has a habit of reviewing Meridian documents before lunch.
+  seed:
+  - fact_text: Carol has a habit of reviewing Meridian documents before lunch.
+    category: habit
+    entities:
+    - Carol
+    - Meridian
+  - fact_text: Alice prefers to start her day with Helios project reviews.
+    category: preference
+    entities:
+    - Alice
+    - Helios
+  - fact_text: Bob often schedules meetings with Northwind in the afternoon.
+    category: habit
+    entities:
+    - Bob
+    - Northwind
