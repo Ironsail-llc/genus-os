@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import partial
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -20,6 +21,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory.bitemporal import record_conflict_decision, supersede_with_validity
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -177,18 +179,18 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
 
 
 def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
-    """Mark an old fact as superseded by a new one."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE memory_facts
-            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-            WHERE id = %s
-              AND tenant_id = %s
-            """,
-            (new_id, old_id, tenant_id or DEFAULT_TENANT),
-        )
+    """Mark an old fact as superseded by a new one.
+
+    Delegates to the bi-temporal writer so every supersession path bounds the
+    old fact in world-time. There are two callers — here and
+    ``resolution.py`` — and a second writer that set ``is_active = FALSE``
+    without setting ``valid_to`` would leave facts hidden from the normal read
+    path AND invisible to the point-in-time one, which is worse than either
+    behaviour alone.
+    """
+    supersede_with_validity(
+        old_id, new_id, tenant_id=tenant_id, classification="resolution"
+    )
 
 
 async def resolve_and_store(
@@ -232,6 +234,19 @@ async def resolve_and_store(
         and (best_match.get("category") or "") == (fact.get("category") or "")
     ):
         _reinforce_fact(best_match["id"], tenant_id=tenant_id)
+        # Recorded too: an error rate needs the cases where nothing was
+        # superseded as much as the ones where something was.
+        record_conflict_decision(
+            tenant_id=tenant_id or DEFAULT_TENANT,
+            classification="reinforced",
+            action="reinforced",
+            new_fact_id=None,
+            existing_fact_id=best_match["id"],
+            reasoning="similarity >= reinforce threshold, same category",
+            similarity=float(best_match.get("similarity") or 0),
+            new_fact_text=fact["fact_text"],
+            existing_fact_text=best_match["fact_text"],
+        )
         return {
             "action": "reinforced",
             "existing_id": best_match["id"],
@@ -243,21 +258,43 @@ async def resolve_and_store(
         best_match["fact_text"],
     )
 
-    if classification["classification"] == "duplicate":
+    kind = classification["classification"]
+    _record = partial(
+        record_conflict_decision,
+        tenant_id=tenant_id or DEFAULT_TENANT,
+        classification=kind,
+        existing_fact_id=best_match["id"],
+        reasoning=classification["reasoning"],
+        similarity=float(best_match.get("similarity") or 0) or None,
+        new_fact_text=fact["fact_text"],
+        existing_fact_text=best_match["fact_text"],
+    )
+
+    if kind == "duplicate":
+        _record(action="skipped", new_fact_id=None)
         return {
             "action": "skipped",
             "existing_id": best_match["id"],
             "reasoning": classification["reasoning"],
         }
 
-    if classification["classification"] in ("contradiction", "update"):
+    if kind in ("contradiction", "update"):
         new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
-        _supersede_fact(best_match["id"], new_id, tenant_id=tenant_id)
+        # An UPDATE and a CONTRADICTION are both bounded in world-time, but they
+        # are now recorded distinctly. They mean different things — for an update
+        # the old fact was genuinely true until now; for a contradiction one of
+        # the two was always wrong and the bound is a guess about which. Acting
+        # on that difference needs an error rate, and until this table existed
+        # there was none: the classification deactivated rows and vanished.
+        supersede_with_validity(
+            best_match["id"], new_id, tenant_id=tenant_id, classification=kind
+        )
+        _record(action="superseded", new_fact_id=new_id)
         return {
             "action": "superseded",
             "new_id": new_id,
             "old_id": best_match["id"],
-            "classification": classification["classification"],
+            "classification": kind,
             "reasoning": classification["reasoning"],
         }
 

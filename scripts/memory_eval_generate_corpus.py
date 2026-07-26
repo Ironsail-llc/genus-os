@@ -54,6 +54,12 @@ GENERATOR_MODEL = os.environ.get(
 # corpus. The generator is told to stay inside it.
 CAST = "Alice, Bob, Carol, Dave, FakeVendorCo, Helios, Meridian, Northwind"
 
+# Batches of 30 came back EMPTY: the generator is a reasoning model and the
+# thinking budget crowds out the answer entirely. 8 is reliable. Small batches
+# also give temperature more chances to diverge, which the duplicate-query
+# check wants anyway.
+BATCH_MAX = 8
+
 STRATA: dict[str, str] = {
     "recall": (
         "A paraphrased question whose answer is one seeded fact. The query must "
@@ -132,7 +138,7 @@ async def _generate(kind: str, n: int, attempt: int) -> list[dict[str, Any]]:
         # are rejected downstream anyway.
         temperature=0.9,
         timeout=300,
-        max_tokens=8000,
+        max_tokens=16000,
     )
     text = resp.choices[0].message.content or ""
     text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -156,7 +162,7 @@ async def build(per_stratum: int, max_attempts: int) -> tuple[list[dict], Counte
             if need <= 0:
                 break
             try:
-                batch = await _generate(kind, min(need + 5, 30), attempt)
+                batch = await _generate(kind, min(need + 2, BATCH_MAX), attempt)
             except Exception as exc:
                 log.warning("%s attempt %d failed: %s", kind, attempt, exc)
                 continue
@@ -190,7 +196,7 @@ async def build(per_stratum: int, max_attempts: int) -> tuple[list[dict], Counte
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--per-stratum", type=int, default=25)
-    ap.add_argument("--max-attempts", type=int, default=4)
+    ap.add_argument("--max-attempts", type=int, default=12)
     ap.add_argument("--out", default="")
     ap.add_argument("--apply", action="store_true", help="append into the tracked suite")
     args = ap.parse_args()
