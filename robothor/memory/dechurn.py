@@ -76,15 +76,38 @@ def _load_active_facts(cur: Any, tenant: str) -> list[dict[str, Any]]:
     return [dict(r) for r in cur2.fetchall()]
 
 
+# A mis-tuned jaccard must not be able to deactivate the store in one night.
+# Above this, the run refuses entirely rather than doing part of the damage.
+DEFAULT_MAX_DEACTIVATIONS = 200
+
+
 def dechurn(
-    tenant_id: str = "", *, dry_run: bool = True, jaccard: float = _DEFAULT_JACCARD
+    tenant_id: str,
+    *,
+    dry_run: bool = True,
+    jaccard: float = _DEFAULT_JACCARD,
+    max_deactivations: int = DEFAULT_MAX_DEACTIVATIONS,
 ) -> dict[str, Any]:
     """Collapse active near-duplicate facts. Dry-run by default.
 
-    Returns a report; when ``dry_run`` is False, deactivates the loser ids and
-    includes them in ``deactivated_ids`` (the restore manifest).
+    ``tenant_id`` is required. It used to default to DEFAULT_TENANT, so a
+    careless ``dechurn(dry_run=False)`` from a shell hit the operator's live
+    store.
+
+    Observe (``dry_run=True``) is not silent: it writes a
+    ``dechurn_would_deactivate`` audit row per candidate. A soak whose evidence
+    is "no events" cannot distinguish a working control from an inert one —
+    infra/flags.yaml already records one flag whose zero-event evidence turned
+    out to be vacuous for exactly that reason.
+
+    Returns a report; when ``dry_run`` is False, deactivates the loser ids,
+    records a per-row manifest in memory_facts_audit, and includes the ids in
+    ``deactivated_ids``.
     """
-    tenant = tenant_id or DEFAULT_TENANT
+    if not tenant_id:
+        raise ValueError("dechurn requires an explicit tenant_id")
+
+    tenant = tenant_id
     with get_connection() as conn:
         cur = conn.cursor()
         facts = _load_active_facts(cur, tenant)
@@ -95,8 +118,25 @@ def dechurn(
             "near_dup_losers": len(losers),
             "jaccard": jaccard,
             "dry_run": dry_run,
+            "max_deactivations": max_deactivations,
         }
-        if not dry_run and losers:
+
+        if len(losers) > max_deactivations:
+            report["refused"] = (
+                f"{len(losers)} candidates exceeds max_deactivations={max_deactivations}; "
+                f"refusing rather than deactivating a subset"
+            )
+            logger.error("dechurn REFUSED for %s: %s", tenant, report["refused"])
+            return report
+
+        if not losers:
+            return report
+
+        texts = {f["id"]: f.get("fact_text", "") for f in facts}
+        reason = "dechurn_would_deactivate" if dry_run else "dechurn_deactivated"
+        _record_manifest(cur, tenant, losers, texts, reason, jaccard)
+
+        if not dry_run:
             cur.execute(
                 "UPDATE memory_facts SET is_active = FALSE, updated_at = NOW() "
                 "WHERE id = ANY(%s) AND tenant_id = %s",
@@ -105,4 +145,40 @@ def dechurn(
             report["deactivated"] = cur.rowcount
             report["deactivated_ids"] = losers  # restore manifest
             logger.info("dechurn: deactivated %d active near-duplicate facts", cur.rowcount)
+        else:
+            report["would_deactivate_ids"] = losers
+            logger.info(
+                "dechurn observe: %d candidates recorded for %s", len(losers), tenant
+            )
+        conn.commit()
     return report
+
+
+def _record_manifest(
+    cur: Any,
+    tenant: str,
+    ids: list[int],
+    texts: dict[int, str],
+    reason: str,
+    jaccard: float,
+) -> None:
+    """Write one audit row per candidate so a flip is reviewable and reversible.
+
+    Without this the soft delete is reversible in principle and irreversible in
+    practice — there is no record of which ids a given run touched.
+    """
+    import json
+
+    for fid in ids:
+        cur.execute(
+            "INSERT INTO memory_facts_audit "
+            "(fact_id, tenant_id, fact_text, reason, snapshot) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb)",
+            (
+                fid,
+                tenant,
+                (texts.get(fid) or "")[:2000],
+                reason,
+                json.dumps({"jaccard": jaccard, "source": "dechurn"}),
+            ),
+        )
