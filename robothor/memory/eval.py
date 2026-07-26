@@ -44,10 +44,15 @@ class EvalPreconditionError(RuntimeError):
     """
 
 
-# Measured baseline on the 267-case corpus: 253/267 = 0.9476, concentrated in
-# temporal (10 misses) and verbatim (4). The floor sits below that with room for
-# run-to-run movement — the reranker is a model, individual cases flip, and a
-# floor set flush against a single observation pages on noise.
+# Measured baseline on the 267-case corpus: 267/267. It was 253/267 until the
+# 14 misses were traced to corpus defects rather than retrieval — temporal cases
+# seeded the stale and current facts at the same instant (removing recency as a
+# discriminator), and four verbatim cases carried no gold_exact, which is the
+# only field score_verbatim reads.
+#
+# The floor stays well below 1.0 deliberately. The reranker is a model and
+# individual cases flip between runs; a floor set flush against the observed
+# best pages on noise, and a gate that pages on noise gets muted.
 #
 # NOT set to 1.0: demanding perfection from a 267-case generated corpus means
 # the nightly unit fails every night, and a gate that always pages gets muted.

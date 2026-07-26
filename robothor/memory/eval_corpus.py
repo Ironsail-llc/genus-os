@@ -137,6 +137,18 @@ def validate_case(case: dict[str, Any]) -> list[CaseRejection]:
         out.append(CaseRejection(cid, "missing_gold", "no gold or gold_exact"))
         return out
 
+    # `verbatim` is scored by score_verbatim, which reads gold_exact
+    # SPECIFICALLY and returns False when it is absent. A verbatim case carrying
+    # only `gold` therefore scores 0 forever regardless of how well retrieval
+    # does — measured: four such cases had the correct fact ranked FIRST and
+    # still failed. Third variant of the unreachable-gold bug (after gold-less
+    # noise cases and empty seeds); the pattern is always "the scorer needs a
+    # field the validator did not require".
+    if kind == "verbatim" and not str(case.get("gold_exact") or "").strip():
+        out.append(
+            CaseRejection(cid, "missing_gold_exact", "verbatim cases are scored on gold_exact")
+        )
+
     if shares_ngram(query, gold):
         out.append(
             CaseRejection(cid, "ngram_leak", f"query shares a {NGRAM_N}-gram with its gold")

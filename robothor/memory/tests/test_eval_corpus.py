@@ -104,6 +104,22 @@ class TestValidateCase:
         errs = validate_case(self._case(seed=[{"fact_text": "unrelated", "category": "x"}]))
         assert any(e.reason == "gold_not_seeded" for e in errs)
 
+    def test_verbatim_without_gold_exact_is_rejected(self):
+        # Third variant of the unreachable-gold bug. score_verbatim reads
+        # gold_exact SPECIFICALLY and returns False when it is missing, so a
+        # verbatim case carrying only `gold` scores 0 forever no matter how
+        # perfectly retrieval performs — measured: all four such cases had the
+        # right fact ranked FIRST. The generator had simply used the wrong field.
+        errs = validate_case(self._case(kind="verbatim", gold="BM-7890", gold_exact=None,
+                                        seed=[{"fact_text": "Bob's code is BM-7890"}]))
+        assert any(e.reason == "missing_gold_exact" for e in errs)
+
+    def test_verbatim_with_gold_exact_passes(self):
+        assert validate_case(
+            self._case(kind="verbatim", gold="BM-7890", gold_exact="BM-7890",
+                       seed=[{"fact_text": "Bob's code is BM-7890"}])
+        ) == []
+
     def test_unknown_kind_is_rejected(self):
         errs = validate_case(self._case(kind="vibes"))
         assert any(e.reason == "unknown_kind" for e in errs)

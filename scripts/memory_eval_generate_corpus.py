@@ -114,7 +114,9 @@ Return a JSON array of exactly {n} objects, each:
   "seed": [{{"fact_text": "...", "category": "...", "entities": ["..."]}}]}}
 
 Seed 2-4 facts per case; distractors make it a real test. For "verbatim" add
-"gold_exact". EVERY case needs a gold that appears verbatim in its own seed.
+"gold_exact" AND set it to the exact string itself (e.g. "BM-7890", not a
+sentence) — verbatim cases are scored on gold_exact alone and a case without it
+can never pass. EVERY case needs a gold that appears verbatim in its own seed.
 Return ONLY the JSON array."""
 
 

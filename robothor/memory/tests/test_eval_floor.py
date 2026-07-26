@@ -21,10 +21,12 @@ def _report(passed: int, total: int) -> dict:
 
 
 class TestFloorConfig:
-    def test_default_is_below_the_measured_baseline(self, monkeypatch):
-        # 253/267 = 0.9476 measured. A floor at or above it pages on day one.
+    def test_default_leaves_headroom_below_the_measured_baseline(self, monkeypatch):
+        # Baseline is now 267/267. The floor must sit well under it: the
+        # reranker is a model, cases flip between runs, and a floor set flush
+        # against the observed best pages on noise.
         monkeypatch.delenv("MEMORY_EVAL_MIN_PASS_RATE", raising=False)
-        assert DEFAULT_MIN_PASS_RATE < 0.9476
+        assert DEFAULT_MIN_PASS_RATE <= 0.95
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("MEMORY_EVAL_MIN_PASS_RATE", "0.80")
@@ -47,8 +49,9 @@ class TestExitCode:
         monkeypatch.delenv("MEMORY_EVAL_MIN_PASS_RATE", raising=False)
         assert exit_code_for(_report(267, 267), None) == 0
 
-    def test_measured_baseline_passes(self, monkeypatch):
-        # The actual 2026-07-26 nightly result must not page.
+    def test_a_few_flipped_cases_do_not_page(self, monkeypatch):
+        # 253/267 was the pre-repair result; it must still not page, because
+        # normal run-to-run movement has to be absorbed by the floor.
         monkeypatch.delenv("MEMORY_EVAL_MIN_PASS_RATE", raising=False)
         assert exit_code_for(_report(253, 267), None) == 0
 

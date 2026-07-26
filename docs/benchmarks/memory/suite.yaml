@@ -53,6 +53,7 @@ cases:
     - Alice
     - Helios
     - Postgres
+    age_hours: 336.0
   - fact_text: Alice later decided to switch Helios storage to SQLite.
     category: decision
     entities:
@@ -70,12 +71,14 @@ cases:
     - Bob
     - Helios
     - Heroku
+    age_hours: 504.0
   - fact_text: Bob then decided to deploy the Helios API on Render.
     category: decision
     entities:
     - Bob
     - Helios
     - Render
+    age_hours: 336.0
   - fact_text: Bob finally decided to deploy the Helios API on Fly.io.
     category: decision
     entities:
@@ -93,12 +96,14 @@ cases:
     - Alice
     - Helios
     - GitHub Actions
+    age_hours: 504.0
   - fact_text: Alice decided to move Helios CI to CircleCI.
     category: decision
     entities:
     - Alice
     - Helios
     - CircleCI
+    age_hours: 336.0
   - fact_text: Alice decided to move Helios CI back to GitHub Actions.
     category: decision
     entities:
@@ -236,8 +241,8 @@ cases:
   gold: legitimate
   k: 5
   seed:
-  - source_content: "Bob: Yes \u2014 that unrecognized FakeVendorCo login alert from last night was me.\
-      \ It is legitimate, please mark it resolved and close it."
+  - source_content: 'Bob: Yes — that unrecognized FakeVendorCo login alert from last night was me. It
+      is legitimate, please mark it resolved and close it.'
 - id: temporal-event-latest
   kind: temporal
   query: What is the current status of the FakeVendorCo data migration?
@@ -248,13 +253,12 @@ cases:
     entities:
     - FakeVendorCo
     importance: 0.6
-    age_hours: 72
+    age_hours: 336.0
   - fact_text: The FakeVendorCo data migration completed successfully.
     category: event
     entities:
     - FakeVendorCo
     importance: 0.6
-    age_hours: 1
 - id: recall-helios-overseer
   kind: recall
   query: Who is responsible for overseeing Helios?
@@ -795,6 +799,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 504.0
   - fact_text: Bob is now the lead for Helios.
     category: ownership
     entities:
@@ -805,6 +810,7 @@ cases:
     entities:
     - Carol
     - Helios
+    age_hours: 168.0
 - id: temporal-northwind-meeting-time
   kind: temporal
   query: What time should I attend the Northwind discussion?
@@ -815,6 +821,7 @@ cases:
     entities:
     - Northwind
     - meeting
+    age_hours: 504.0
   - fact_text: The Northwind meeting is now at 3 PM.
     category: event_time
     entities:
@@ -825,6 +832,7 @@ cases:
     entities:
     - Dave
     - Northwind
+    age_hours: 168.0
 - id: temporal-fakevendorco-price
   kind: temporal
   query: What is the hourly rate for FakeVendorCo assistance?
@@ -834,6 +842,7 @@ cases:
     category: pricing
     entities:
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: FakeVendorCo charges $150 per hour for support.
     category: pricing
     entities:
@@ -842,6 +851,7 @@ cases:
     category: service
     entities:
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-meridian-status
   kind: temporal
   query: What is the outcome of the Meridian initiative?
@@ -851,6 +861,7 @@ cases:
     category: project_status
     entities:
     - Meridian
+    age_hours: 504.0
   - fact_text: The Meridian project has been completed successfully.
     category: project_status
     entities:
@@ -860,6 +871,7 @@ cases:
     entities:
     - Alice
     - Meridian
+    age_hours: 168.0
 - id: temporal-helios-mgmt
   kind: temporal
   query: Who do I contact for Helios project issues?
@@ -870,6 +882,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 504.0
   - fact_text: Bob is managing the Helios project.
     category: management
     entities:
@@ -880,6 +893,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 168.0
 - id: temporal-northwind-lead
   kind: temporal
   query: Who should I escalate Northwind issues to?
@@ -890,6 +904,7 @@ cases:
     entities:
     - Carol
     - Northwind
+    age_hours: 504.0
   - fact_text: Dave is leading the Northwind team.
     category: leadership
     entities:
@@ -900,6 +915,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 168.0
 - id: temporal-fakevendorco-supplier
   kind: temporal
   query: Which company is providing services to FakeVendorCo?
@@ -910,6 +926,7 @@ cases:
     entities:
     - Helios
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Meridian is now the supplier for FakeVendorCo.
     category: supplier
     entities:
@@ -920,6 +937,7 @@ cases:
     entities:
     - Bob
     - Helios
+    age_hours: 168.0
 - id: temporal-northwind-owner
   kind: temporal
   query: Who should I contact for Northwind ownership?
@@ -930,6 +948,7 @@ cases:
     entities:
     - Alice
     - Northwind
+    age_hours: 504.0
   - fact_text: Bob owns the Northwind asset.
     category: ownership
     entities:
@@ -940,6 +959,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 168.0
 - id: temporal-helios-manager
   kind: temporal
   query: Who is the point of contact for Helios?
@@ -950,6 +970,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 504.0
   - fact_text: Bob manages the Helios project.
     category: project-management
     entities:
@@ -959,6 +980,7 @@ cases:
     category: project-status
     entities:
     - Helios
+    age_hours: 168.0
 - id: temporal-meridian-owner
   kind: temporal
   query: Who is the person responsible for Meridian?
@@ -969,6 +991,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 672.0
   - fact_text: Dave owns the Meridian project.
     category: ownership
     entities:
@@ -978,11 +1001,13 @@ cases:
     category: project-status
     entities:
     - Meridian
+    age_hours: 336.0
   - fact_text: Northwind is a partner for Meridian.
     category: partnership
     entities:
     - Northwind
     - Meridian
+    age_hours: 168.0
 - id: temporal-northwind-contact
   kind: temporal
   query: Who should I reach out to for Northwind matters?
@@ -993,6 +1018,7 @@ cases:
     entities:
     - Alice
     - Northwind
+    age_hours: 672.0
   - fact_text: Carol is the contact for Northwind.
     category: partnership
     entities:
@@ -1002,10 +1028,12 @@ cases:
     category: service
     entities:
     - Northwind
+    age_hours: 336.0
   - fact_text: The Northwind project is ongoing.
     category: project-status
     entities:
     - Northwind
+    age_hours: 168.0
 - id: temporal-meridian-cost
   kind: temporal
   query: What amount should I set aside for Meridian?
@@ -1015,6 +1043,7 @@ cases:
     category: cost
     entities:
     - Meridian
+    age_hours: 504.0
   - fact_text: The Meridian project costs $1500.
     category: cost
     entities:
@@ -1023,6 +1052,7 @@ cases:
     category: pricing
     entities:
     - Northwind
+    age_hours: 168.0
 - id: temporal-dave-fakevendor
   kind: temporal
   query: For FakeVendorCo, who should I contact regarding management issues?
@@ -1033,6 +1063,7 @@ cases:
     entities:
     - Dave
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Dave is a manager for FakeVendorCo.
     category: role
     entities:
@@ -1043,6 +1074,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 168.0
 - id: temporal-northwind-phase
   kind: temporal
   query: What is the next milestone for Northwind?
@@ -1052,6 +1084,7 @@ cases:
     category: status
     entities:
     - Northwind
+    age_hours: 504.0
   - fact_text: Northwind is in development phase.
     category: status
     entities:
@@ -1061,6 +1094,7 @@ cases:
     entities:
     - Bob
     - Meridian
+    age_hours: 168.0
 - id: temporal-price-change
   kind: temporal
   query: How much does Meridian cost?
@@ -1071,6 +1105,7 @@ cases:
     entities:
     - FakeVendorCo
     - Meridian
+    age_hours: 336.0
   - fact_text: FakeVendorCo charges $150 for Meridian access.
     category: pricing
     entities:
@@ -1085,6 +1120,7 @@ cases:
     category: project status
     entities:
     - Northwind
+    age_hours: 336.0
   - fact_text: Northwind is in development.
     category: project status
     entities:
@@ -1099,6 +1135,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 336.0
   - fact_text: Dave owns the Meridian service.
     category: ownership
     entities:
@@ -1114,6 +1151,7 @@ cases:
     entities:
     - Bob
     - Helios
+    age_hours: 504.0
   - fact_text: Alice manages the Helios project
     category: ownership
     entities:
@@ -1124,6 +1162,7 @@ cases:
     category: status
     entities:
     - Helios
+    age_hours: 168.0
 - id: temporal-northwind-price
   kind: temporal
   query: What is the price of Northwind product?
@@ -1133,6 +1172,7 @@ cases:
     category: price
     entities:
     - Northwind
+    age_hours: 504.0
   - fact_text: Northwind product costs $150
     category: price
     entities:
@@ -1142,6 +1182,7 @@ cases:
     category: status
     entities:
     - Northwind
+    age_hours: 168.0
 - id: temporal-fakevendorco-delivery
   kind: temporal
   query: On which day will FakeVendorCo deliver?
@@ -1151,6 +1192,7 @@ cases:
     category: time
     entities:
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: FakeVendorCo delivery is scheduled for Wednesday
     category: time
     entities:
@@ -1160,6 +1202,7 @@ cases:
     category: quantity
     entities:
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-meridian-ownership
   kind: temporal
   query: Which company now controls Meridian?
@@ -1170,6 +1213,7 @@ cases:
     entities:
     - Meridian
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Meridian is now owned by Northwind
     category: ownership
     entities:
@@ -1181,6 +1225,7 @@ cases:
     entities:
     - Carol
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-northwind-status
   kind: temporal
   query: Is the Northwind project done?
@@ -1190,6 +1235,7 @@ cases:
     category: status
     entities:
     - Northwind
+    age_hours: 504.0
   - fact_text: Northwind project is now completed
     category: status
     entities:
@@ -1200,6 +1246,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 168.0
 - id: verbatim-helios-version
   kind: verbatim
   query: What is the current build number for Alice's main undertaking?
@@ -1636,6 +1683,7 @@ cases:
     category: employee ID
     entities:
     - Dave
+  gold_exact: version 1.2.0
 - id: verbatim-bob-login-code
   kind: verbatim
   query: What identifier is required for Bob to access Meridian?
@@ -1655,6 +1703,7 @@ cases:
     category: network port
     entities:
     - Helios
+  gold_exact: BM-7890
 - id: verbatim-helios-port
   kind: verbatim
   query: On which port should the live Helios environment be configured?
@@ -1672,6 +1721,7 @@ cases:
     category: network port
     entities:
     - FakeVendorCo
+  gold_exact: '3000'
 - id: verbatim-carol-northwind-id
   kind: verbatim
   query: What code is assigned to Carol's Northwind initiative?
@@ -1691,6 +1741,7 @@ cases:
     category: IP address
     entities:
     - Meridian
+  gold_exact: PRJ-2024-001
 - id: verbatim-helios-ip
   kind: verbatim
   query: Where should I send data packets for the Helios application?
@@ -3251,6 +3302,7 @@ cases:
     entities:
     - Bob
     - Meridian
+    age_hours: 504.0
   - fact_text: Bob now owns the Meridian project since 2024.
     category: project_assignment
     entities:
@@ -3261,6 +3313,7 @@ cases:
     entities:
     - Carol
     - Northwind
+    age_hours: 168.0
 - id: temporal-carol-northwind
   kind: temporal
   query: Who is in charge of Northwind?
@@ -3271,6 +3324,7 @@ cases:
     entities:
     - Carol
     - Northwind
+    age_hours: 504.0
   - fact_text: Carol now coordinates the Northwind project since 2024.
     category: project_assignment
     entities:
@@ -3281,6 +3335,7 @@ cases:
     entities:
     - Dave
     - Helios
+    age_hours: 168.0
 - id: temporal-dave-fakevendorco
   kind: temporal
   query: Who is responsible for FakeVendorCo?
@@ -3291,6 +3346,7 @@ cases:
     entities:
     - Dave
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Dave now handles the FakeVendorCo account since 2024.
     category: account_management
     entities:
@@ -3301,6 +3357,7 @@ cases:
     entities:
     - Helios
     - Alice
+    age_hours: 168.0
 - id: temporal-meridian-price
   kind: temporal
   query: What is the latest price for Meridian?
@@ -3310,6 +3367,7 @@ cases:
     category: pricing
     entities:
     - Meridian
+    age_hours: 504.0
   - fact_text: Meridian product costs $150.
     category: pricing
     entities:
@@ -3318,6 +3376,7 @@ cases:
     category: sales
     entities:
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-fakevendorco-schedule
   kind: temporal
   query: What is the revised timing for FakeVendorCo?
@@ -3327,6 +3386,7 @@ cases:
     category: scheduling
     entities:
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: FakeVendorCo meeting was rescheduled to Tuesday.
     category: scheduling
     entities:
@@ -3336,6 +3396,7 @@ cases:
     entities:
     - Carol
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-bob-northwind
   kind: temporal
   query: Who should I contact for Northwind decisions?
@@ -3346,6 +3407,7 @@ cases:
     entities:
     - Bob
     - Northwind
+    age_hours: 336.0
   - fact_text: Bob is the CEO of Northwind since 2023.
     category: temporal
     entities:
@@ -3362,6 +3424,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 336.0
   - fact_text: Carol owns the Meridian system as of 2024.
     category: temporal
     entities:
@@ -3379,6 +3442,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 672.0
   - fact_text: Bob now owns the Helios project.
     category: ownership
     entities:
@@ -3389,11 +3453,13 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 336.0
   - fact_text: Dave is the lead for the Northwind initiative.
     category: ownership
     entities:
     - Dave
     - Northwind
+    age_hours: 168.0
 - id: temporal-meridian-pricing
   kind: temporal
   query: How much does the Meridian deal cost now?
@@ -3404,6 +3470,7 @@ cases:
     category: pricing
     entities:
     - Meridian
+    age_hours: 672.0
   - fact_text: The Meridian contract is now priced at $5000.
     category: pricing
     entities:
@@ -3412,10 +3479,12 @@ cases:
     category: pricing
     entities:
     - FakeVendorCo
+    age_hours: 336.0
   - fact_text: Helios project budget is $6000.
     category: pricing
     entities:
     - Helios
+    age_hours: 168.0
 - id: temporal-fakevendorco-contract
   kind: temporal
   query: Is the FakeVendorCo agreement still active?
@@ -3426,6 +3495,7 @@ cases:
     category: contract status
     entities:
     - FakeVendorCo
+    age_hours: 672.0
   - fact_text: FakeVendorCo contract has been renewed.
     category: contract status
     entities:
@@ -3434,10 +3504,12 @@ cases:
     category: contract status
     entities:
     - Helios
+    age_hours: 336.0
   - fact_text: Northwind contract is pending.
     category: contract status
     entities:
     - Northwind
+    age_hours: 168.0
 - id: temporal-fakevendorco-status
   kind: temporal
   query: What is the latest status of the FakeVendorCo agreement?
@@ -3448,6 +3520,7 @@ cases:
     entities:
     - FakeVendorCo
     - contract
+    age_hours: 672.0
   - fact_text: The FakeVendorCo contract was renewed for 2024.
     category: contract
     entities:
@@ -3459,11 +3532,13 @@ cases:
     entities:
     - Carol
     - FakeVendorCo
+    age_hours: 336.0
   - fact_text: Helios is the vendor for FakeVendorCo.
     category: vendor
     entities:
     - Helios
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-dave-lead
   kind: temporal
   query: Who is leading the FakeVendorCo initiative now?
@@ -3481,11 +3556,13 @@ cases:
     - Dave
     - FakeVendorCo
     gold_exact: false
+    age_hours: 336.0
   - fact_text: FakeVendorCo has multiple ongoing projects.
     category: general
     entities:
     - FakeVendorCo
     gold_exact: false
+    age_hours: 168.0
 - id: temporal-helios-leadership
   kind: temporal
   query: Who should I contact about Helios project decisions?
@@ -3497,6 +3574,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 504.0
   - fact_text: Bob now leads the Helios project since April 2024
     category: leadership
     entities:
@@ -3506,6 +3584,7 @@ cases:
     category: budget
     entities:
     - Helios
+    age_hours: 168.0
 - id: temporal-northwind-account
   kind: temporal
   query: Who holds the rights to the Northwind contract?
@@ -3518,6 +3597,7 @@ cases:
     - Carol
     - Northwind
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Dave acquired the Northwind account from FakeVendorCo
     category: ownership
     entities:
@@ -3528,6 +3608,7 @@ cases:
     category: finance
     entities:
     - Northwind
+    age_hours: 168.0
 - id: temporal-meridian-license
   kind: temporal
   query: What is the annual cost for Meridian software access?
@@ -3538,6 +3619,7 @@ cases:
     category: pricing
     entities:
     - Meridian
+    age_hours: 504.0
   - fact_text: Meridian's license fee dropped to $3000 annually under new ownership
     category: pricing
     entities:
@@ -3547,6 +3629,7 @@ cases:
     entities:
     - Helios
     - Meridian
+    age_hours: 168.0
 - id: temporal-fakevendorco-rep
   kind: temporal
   query: Who should I reach out to at FakeVendorCo for urgent matters?
@@ -3558,6 +3641,7 @@ cases:
     entities:
     - Bob
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Alice replaced Bob as the primary representative at FakeVendorCo
     category: representation
     entities:
@@ -3568,6 +3652,7 @@ cases:
     category: finance
     entities:
     - FakeVendorCo
+    age_hours: 168.0
 - id: temporal-helios-management
   kind: temporal
   query: Who should I speak to about Helios issues?
@@ -3578,6 +3663,7 @@ cases:
     entities:
     - Alice
     - Helios
+    age_hours: 504.0
   - fact_text: Bob manages the Helios project.
     category: project management
     entities:
@@ -3589,6 +3675,7 @@ cases:
     entities:
     - Carol
     - Meridian
+    age_hours: 168.0
 - id: temporal-northwind-pricing
   kind: temporal
   query: What is the going rate for Northwind?
@@ -3598,6 +3685,7 @@ cases:
     category: pricing
     entities:
     - Northwind
+    age_hours: 504.0
   - fact_text: Northwind product costs $120.
     category: pricing
     entities:
@@ -3608,6 +3696,7 @@ cases:
     entities:
     - FakeVendorCo
     - Helios
+    age_hours: 168.0
 - id: temporal-dave-role
   kind: temporal
   query: Who is responsible for regional oversight at FakeVendorCo?
@@ -3618,6 +3707,7 @@ cases:
     entities:
     - Dave
     - FakeVendorCo
+    age_hours: 504.0
   - fact_text: Dave is now the regional manager at FakeVendorCo.
     category: role
     entities:
@@ -3629,6 +3719,7 @@ cases:
     entities:
     - Bob
     - Helios
+    age_hours: 168.0
 - id: verbatim-helios-id
   kind: verbatim
   query: What is the unique code for the Helios initiative?

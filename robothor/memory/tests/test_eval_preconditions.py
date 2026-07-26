@@ -30,8 +30,14 @@ class TestExitCodeSeparation:
     def test_all_passed_is_zero(self):
         assert exit_code_for({"passed": 12, "total": 12}, blocked=None) == 0
 
-    def test_some_failed_is_two(self):
-        assert exit_code_for({"passed": 11, "total": 12}, blocked=None) == 2
+    def test_below_the_floor_is_two(self):
+        # This asserted 11/12 -> 2 back when the gate demanded perfection. The
+        # suite is now 267 generated cases with a measured 0.9476 baseline, so
+        # "any failure fails the run" meant the nightly unit paged every single
+        # night — and a gate that always pages gets muted. The contract is now a
+        # floor (DEFAULT_MIN_PASS_RATE), and 11/12 = 0.917 clears it.
+        assert exit_code_for({"passed": 11, "total": 12}, blocked=None) == 0
+        assert exit_code_for({"passed": 8, "total": 12}, blocked=None) == 2
 
     def test_blocked_is_three_even_when_report_looks_perfect(self):
         """A blocker outranks the report. A stale perfect report must not mask it."""
