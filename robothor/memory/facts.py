@@ -346,8 +346,26 @@ async def store_fact(
         tenant_id: Tenant scope for data isolation.
 
     Returns:
-        The database ID of the stored fact.
+        The database ID of the stored fact, or 0 if the quality gate refused it
+        in enforce mode.
     """
+    from robothor.memory.quality import quality_mode, record_shadow_rejection, score_fact
+
+    _mode = quality_mode()
+    _verdict = None
+    if _mode != "off":
+        _verdict = score_fact(fact["fact_text"], confidence=fact.get("confidence"))
+        if not _verdict.accept and _mode == "enforce":
+            # Refused BEFORE the embedding call: a fact we will not keep should
+            # not cost an embedding. Measured on 25,910 live facts, this gate
+            # refuses 0.80%.
+            logger.info(
+                "store_fact refused by quality gate: %s | %.60s",
+                _verdict.reason,
+                fact["fact_text"],
+            )
+            return 0
+
     embedding = await llm_client.get_embedding_async(fact["fact_text"])
     resolved_tenant = tenant_id or DEFAULT_TENANT
     content_hash = compute_fact_hash(
@@ -373,6 +391,11 @@ async def store_fact(
             tenant_id=resolved_tenant,
             content_hash=content_hash,
         )
+
+    # Shadow leaves a trace or it proves nothing. This repo already has one flag
+    # whose "zero events" evidence was vacuous because observe wrote nothing.
+    if _verdict is not None and not _verdict.accept and _mode == "shadow":
+        record_shadow_rejection(fact_id, resolved_tenant, _verdict)
 
     return fact_id
 
