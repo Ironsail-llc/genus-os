@@ -375,6 +375,28 @@ class CronScheduler:
         except Exception as e:  # never let this stop the scheduler booting
             logger.warning("could not register memory write-job sweeper: %s", e)
 
+        # Read-only markdown projection for the operator's vault. Flag-gated
+        # and off by default: it is on trial with fixed 7-day kill criteria
+        # (robothor.memory.projection), so it must not start writing files into
+        # someone's vault just because the engine restarted.
+        try:
+            from robothor.memory.projection import project, projection_enabled
+
+            if projection_enabled():
+                self.scheduler.add_job(
+                    lambda: project(),
+                    trigger="cron",
+                    hour=4,
+                    minute=15,
+                    id="memory:vault-projection",
+                    name="memory:vault-projection",
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=3600,
+                )
+        except Exception as e:
+            logger.warning("could not register memory vault projection: %s", e)
+
         wf_loaded = 0
         if self.workflow_engine:
             for wf, wf_trigger in self.workflow_engine.get_workflows_for_cron():
