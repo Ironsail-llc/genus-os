@@ -82,9 +82,41 @@ class TestFlag:
         assert projection_enabled() is False
 
 
+@pytest.fixture
+def a_projectable_fact():
+    """Seed one fact worth projecting.
+
+    The projection reads whatever the database holds, so asserting
+    ``written > 0`` against ambient data passes on the operator's box and fails
+    on an empty test database. Seed the precondition instead of assuming it.
+    """
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO memory_facts "
+            "(fact_text, category, tenant_id, is_active, importance_score, entities) "
+            "VALUES (%s, 'project', %s, TRUE, 0.99, %s) RETURNING id",
+            (
+                "Alice manages the Helios project at FakeVendorCo for the year.",
+                DEFAULT_TENANT,
+                ["Alice", "Helios"],
+            ),
+        )
+        fid = cur.fetchone()[0]
+        conn.commit()
+    yield fid
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM memory_facts WHERE id = %s", (fid,))
+        conn.commit()
+
+
 @pytest.mark.integration
 class TestProjectWritesRealFiles:
-    def test_writes_notes_and_a_readme(self, tmp_path, monkeypatch):
+    def test_writes_notes_and_a_readme(self, tmp_path, monkeypatch, a_projectable_fact):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
         result = project(limit=5)
         out = tmp_path / "brain" / "memory" / "vault"
@@ -93,7 +125,7 @@ class TestProjectWritesRealFiles:
         assert len(list(out.glob("*.md"))) == result["written"] + 1
 
     def test_rerun_removes_its_own_stale_notes_but_not_the_operators(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, a_projectable_fact
     ):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
         out = tmp_path / "brain" / "memory" / "vault"
@@ -116,7 +148,7 @@ class TestProjectWritesRealFiles:
         assert result["dry_run"] is True
         assert not (tmp_path / "brain" / "memory" / "vault").exists()
 
-    def test_usage_report_says_unread_when_it_is(self, tmp_path, monkeypatch):
+    def test_usage_report_says_unread_when_it_is(self, tmp_path, monkeypatch, a_projectable_fact):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
         project(limit=3)
         rep = projection_usage_report()
