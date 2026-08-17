@@ -62,7 +62,26 @@ def flag_store_db(db_conn, monkeypatch):
                 )
                 return [{"to_value": r[0], "actor": r[1]} for r in cur.fetchall()]
 
-    return _Harness()
+    yield _Harness()
+
+    # set_flag() writes through its own committed path, so the rollback this
+    # fixture otherwise relies on does not reclaim it. A leaked
+    # `updated_by='operator:philip'` row is treated by store._read_db as an
+    # authoritative operator override — not a migration seed — so it silently
+    # changes what resolve() returns for every later test in the session, and
+    # test_feature_flags_modes starts asserting 'enforce' == 'observe'.
+    #
+    # CI never noticed because its unit lane has no postgres service: the store
+    # cannot reach a database, falls through to env, and the tests pass. That
+    # makes the outcome depend on the machine the suite runs on, which the
+    # repo's own conftest calls "not a suite; a coincidence".
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM feature_flag_audit WHERE actor LIKE 'operator:%%'")
+        cur.execute("DELETE FROM feature_flags WHERE updated_by LIKE 'operator:%%'")
+    db_conn.commit()
+    from robothor.flags import store as _s
+
+    _s.invalidate()
 
 
 def test_only_governed_flags_are_writable():

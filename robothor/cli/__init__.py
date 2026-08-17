@@ -287,6 +287,16 @@ def main(argv: list[str] | None = None) -> int:
     memeval_parser.add_argument(
         "--json", dest="json_output", action="store_true", help="Output JSON"
     )
+    memeval_parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Write the result to benchmark_results so the fleet grader can see it",
+    )
+    memeval_parser.add_argument(
+        "--triggered-by",
+        default="manual",
+        help="Provenance recorded alongside the result (e.g. cron)",
+    )
 
     # status
     subparsers.add_parser("status", help="Show system status")

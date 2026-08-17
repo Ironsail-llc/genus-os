@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -98,12 +99,31 @@ def test_discovers_complete_manifest_with_unique_immutable_ids() -> None:
     migrations = migrate._discover()
     ids = [migration.migration_id for migration in migrations]
 
-    assert len(migrations) == 92
+    # Checked against the manifest itself, not a hardcoded count. The magic
+    # number only caught "someone added a migration" — not a defect — and it
+    # went stale on 093, 094, 095 and 096 in a row.
+    #
+    # A missing file raises MigrationDiscoveryError inside `_discover`, so this
+    # is not what guards against that (verified by adding a bogus entry: it
+    # raises, it does not skip). What it does pin is that discovery neither
+    # drops nor invents entries relative to the registry — a dedup or filter bug
+    # in `_manifest_paths` would show up here and nowhere else.
+    manifest_ids = [
+        Path(line.strip()).stem
+        for line in migrate._MIGRATION_MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    # Compared as sets, not sequences: `_discover` sorts deterministically while
+    # the manifest lists two same-version files (034_*) in the opposite order,
+    # and that ordering is arbitrary for equal versions.
+    assert set(ids) == set(manifest_ids), "discovery does not match the canonical manifest"
+    assert len(ids) == len(manifest_ids)
     assert len(ids) == len(set(ids))
     assert ids[0] == "001_init"
     assert "001_crm_tables" in ids
     assert "071_memory_vault" in ids
     assert "071_user_accounts" in ids
+    assert "092_memory_access_rollup" in ids
     # This ignored, installation-specific SQL exists in some workspaces but is
     # intentionally absent from the product manifest.
     assert "063_delphi_pmf_experiments" not in ids

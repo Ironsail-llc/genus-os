@@ -92,6 +92,12 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
         # so the temporal re-sort ranks a fresh episode instead of sinking it.
         "created_at": r.get("created_at") or r.get("end_time") or r.get("start_time"),
         "score": r.get("rrf_score") or r.get("similarity") or 0.0,
+        # Carried deliberately. rows_dropped_by_scope counts rows whose
+        # person_id is neither None nor the caller's; dropping the field here
+        # made every row read as org-general, so observe mode reported
+        # dropped=0 for a restricted caller — a clean signal from a control
+        # that was doing nothing. Stripped again before the tool returns.
+        "person_id": r.get("person_id"),
     }
 
 
@@ -101,10 +107,16 @@ async def recall(
     tenant_id: str = "",
     limit: int = 10,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
+    scope: Any = None,
 ) -> dict[str, Any]:
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
     Returns ``{"query_class": str, "results": [ {id, source, text, score, ...} ]}``.
+
+    ``scope`` is the caller's :class:`~robothor.identity.scope.DataScope`, or
+    None for unrestricted. It must be threaded to every store that can return
+    person-linked rows; a store that cannot express person scoping is excluded
+    for restricted callers rather than returned unfiltered.
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
     cls = classify_query(query)
@@ -120,11 +132,17 @@ async def recall(
         expand_entities=(cls == "who_is"),
         include_insights=(cls == "default"),
         include_episodes=(cls == "temporal"),
+        scope=scope,
     )
     ranked_lists.append([_normalize_fact(r) for r in fact_rows])
 
     # --- exact lookup → Knowledge Vault captions (no values) ---
-    if cls == "exact_lookup":
+    # Fails closed for restricted callers. The vault holds credential and PII
+    # captions and search_vault has no person scoping, so returning it
+    # unfiltered would be a strictly wider exposure than the path this router
+    # replaced — that path never queried the vault at all. The leg also
+    # measured no recall benefit, so closing it costs nothing.
+    if cls == "exact_lookup" and not (scope is not None and getattr(scope, "restricted", False)):
         try:
             from robothor.memory.vault import search_vault
 

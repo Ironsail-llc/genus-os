@@ -72,6 +72,15 @@ class TestLogAndBump:
         # Create two test facts with unique markers so cleanup is safe.
         with get_connection() as conn:
             cur = conn.cursor()
+            # memory_facts.tenant_id is a FK to crm_tenants, so the tenant has
+            # to exist. This test hardcoded 'test' with no setup and therefore
+            # could never pass on a database that did not already happen to
+            # have that row — which is every fresh one. It survived because the
+            # integration marker excluded it from both CI lanes.
+            cur.execute(
+                "INSERT INTO crm_tenants (id, display_name) VALUES ('test', 'test') "
+                "ON CONFLICT (id) DO NOTHING"
+            )
             cur.execute(
                 """
                 INSERT INTO memory_facts
@@ -86,8 +95,11 @@ class TestLogAndBump:
 
         test_run_id = "__test_outcome_run__"
         try:
-            outcomes.log_fact_access(test_run_id, fact_ids)
-            result = outcomes.bump_failure_for_run(test_run_id)
+            # Facts are seeded under tenant 'test'; both calls default to
+            # DEFAULT_TENANT, so without an explicit tenant they scan a
+            # different tenant's rows and silently touch nothing.
+            outcomes.log_fact_access(test_run_id, fact_ids, tenant_id="test")
+            result = outcomes.bump_failure_for_run(test_run_id, tenant_id="test")
             assert result["facts_touched"] == 2
 
             with get_connection() as conn:

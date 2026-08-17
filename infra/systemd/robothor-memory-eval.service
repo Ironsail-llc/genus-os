@@ -1,0 +1,30 @@
+[Unit]
+Description=Robothor memory retrieval benchmark (memory-recall-v1)
+Documentation=file:///home/philip/robothor/docs/benchmarks/memory/BASELINE.md
+After=network-online.target postgresql.service
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=philip
+WorkingDirectory=/home/philip/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+# The suite seeds fixtures under its own tenant. Without this the process
+# carries the production tenant and migration 081's WITH CHECK policy rejects
+# every seed write — which is why this eval sat unrunnable for weeks.
+#
+# NOT an Environment= line: EnvironmentFile= above wins over Environment=
+# regardless of the order they appear, so robothor.env's
+# ROBOTHOR_TENANT_ID=robothor-primary would silently override it. That is the
+# same shadowing that made a drop-in flag flip inert (see
+# docs/runbooks/GUARDRAIL_FLIPS.md). Setting it on the command line is
+# immune to systemd's merge order.
+# ~65s/case against local Ollama, dominated by the cross-encoder reranker.
+# Generous ceiling so a slow model load is not mistaken for a hang.
+TimeoutStartSec=3600
+ExecStart=/usr/bin/env ROBOTHOR_TENANT_ID=memory-eval \
+    /home/philip/robothor/venv/bin/python -m robothor.cli memory-eval \
+    --suite docs/benchmarks/memory/suite.yaml --record --triggered-by cron
+
+[Install]
+WantedBy=multi-user.target

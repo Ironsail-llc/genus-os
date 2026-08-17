@@ -3,8 +3,8 @@
 Three guarantees: (1) verdict() returns a valid Status for EVERY governed
 flag without ever raising — whether its evidence table exists in this
 database or not, because table presence is deploy-specific (``agent_reviews``
-comes from an external infra migration; ``memory_facts_audit`` is absent from
-a drifted local robothor_test) and a detector that crashes on a missing table
+comes from an external infra migration; a simulated absent table stands in for one that
+is genuinely missing) and a detector that crashes on a missing table
 is itself a hollow control; (2) a genuinely-inert control (human_approval:
 enforce, zero events ever) comes back INERT, tested against the live table,
 not a mock; (3) a flag whose evidence table is genuinely absent here comes
@@ -42,8 +42,7 @@ def test_every_governed_flag_has_an_evidence_source():
 
 def test_verdict_never_raises_for_any_governed_flag(db_cursor, monkeypatch):
     """Table presence is deploy-specific — some DBs have agent_reviews (an
-    external infra migration), some don't; robothor_test never had
-    memory_facts_audit. verdict() must classify every flag without raising,
+    external infra migration), some don't; verdict() must classify every flag without raising,
     regardless of which evidence tables happen to exist here."""
     _use_test_db(db_cursor, monkeypatch)
     allowed_statuses = {"ENFORCING", "INERT", "BLIND", "UNPROVEN", "UNKNOWN"}
@@ -62,19 +61,25 @@ def test_enforce_with_zero_evidence_is_inert(db_cursor, monkeypatch):
 
 
 def test_missing_evidence_table_is_unknown_not_a_crash(db_cursor, monkeypatch):
-    # RIP-7's evidence table (memory_facts_audit) is not present in
-    # robothor_test — a real drift, not a contrived one. verdict() must
-    # neither raise nor report anything green; it must say, loudly, that
-    # this control cannot be assessed here.
+    # verdict() must neither raise nor report anything green when the table
+    # backing a control's evidence is absent — it must say, loudly, that the
+    # control cannot be assessed.
+    #
+    # This used to assert that memory_facts_audit was genuinely missing from
+    # robothor_test, treating a drifted database as the premise. That made the
+    # test pass only on a stale DB and fail on a correctly-migrated one, which
+    # is backwards. The absence is now simulated by pointing the lookup at a
+    # table that will never exist, so the test asserts behaviour rather than
+    # schema drift.
     _use_test_db(db_cursor, monkeypatch)
-    db_cursor.execute("SELECT to_regclass('public.memory_facts_audit')")
-    assert db_cursor.fetchone()["to_regclass"] is None, (
-        "memory_facts_audit unexpectedly exists in robothor_test — "
-        "this test's premise (a genuinely absent table) no longer holds"
+    monkeypatch.setitem(
+        evidence.EVIDENCE_SOURCES,
+        "ROBOTHOR_RIP_7_MODE",
+        evidence.EvidenceSource("__absent_evidence_table__", "TRUE"),
     )
     v = evidence.verdict("ROBOTHOR_RIP_7_MODE", "enforce")
     assert v.status == "UNKNOWN"
-    assert "memory_facts_audit" in v.message
+    assert "__absent_evidence_table__" in v.message
     assert v.last_fired is None
     assert v.count_7d == 0
 

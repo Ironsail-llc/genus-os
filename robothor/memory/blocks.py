@@ -59,9 +59,11 @@ def read_block(block_name: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, An
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
+                # pruned_at filter: a soft-deleted block must leave the
+                # always-loaded tier, otherwise the prune reclaimed nothing.
                 "UPDATE agent_memory_blocks "
                 "SET read_count = read_count + 1, last_read_at = NOW() "
-                "WHERE tenant_id = %s AND block_name = %s "
+                "WHERE tenant_id = %s AND block_name = %s AND pruned_at IS NULL "
                 "RETURNING content, last_written_at",
                 (tenant_id, block_name),
             )
@@ -86,8 +88,46 @@ def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) 
     if not block_name:
         return {"error": "block_name is required"}
 
+    from robothor.memory.block_budget import budget_mode, check_budget
+
+    mode = budget_mode()
+    verdict = None
     with get_connection() as conn:
         with conn.cursor() as cur:
+            if mode != "off":
+                # Memory blocks are the always-loaded tier — every character
+                # here is paid on every turn. max_chars existed as a column and
+                # was read by nothing, which is how a 57k-char block happened.
+                cur.execute(
+                    "SELECT max_chars FROM agent_memory_blocks "
+                    "WHERE tenant_id = %s AND block_name = %s",
+                    (tenant_id, block_name),
+                )
+                row = cur.fetchone()
+                verdict = check_budget(content, max_chars=row[0] if row else None)
+                if verdict.over and mode == "enforce":
+                    # Rejected, never truncated: truncation drops the END of a
+                    # block, which is where the most recent context lives, and
+                    # does it silently. A refused write is visible and the
+                    # caller can summarise instead.
+                    logger.warning("write_block %r refused: %s", block_name, verdict.reason)
+                    return {
+                        "error": (
+                            f"block {block_name!r} exceeds its context budget: "
+                            f"{verdict.reason}. Summarise or split it — content "
+                            f"was NOT truncated or written."
+                        ),
+                        "block_name": block_name,
+                        "over_budget": True,
+                        "overflow_chars": verdict.overflow_chars,
+                    }
+                if verdict.over:
+                    logger.warning(
+                        "write_block %r over budget (observe): %s",
+                        block_name,
+                        verdict.reason,
+                    )
+
             cur.execute(
                 "INSERT INTO agent_memory_blocks "
                 "(tenant_id, block_name, content, last_written_at, write_count) "
@@ -98,7 +138,13 @@ def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) 
                 "RETURNING id",
                 (tenant_id, block_name, content),
             )
-            return {"success": True, "block_name": block_name}
+            result: dict[str, Any] = {"success": True, "block_name": block_name}
+            # Observe must produce evidence, not silence: a soak whose finding
+            # is "no events" cannot tell a working control from an inert one.
+            if verdict is not None and verdict.over:
+                result["over_budget"] = True
+                result["overflow_chars"] = verdict.overflow_chars
+            return result
 
 
 def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
@@ -111,7 +157,10 @@ def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT block_name, length(content) AS size, last_written_at "
-                "FROM agent_memory_blocks WHERE tenant_id = %s ORDER BY block_name",
+                "FROM agent_memory_blocks WHERE tenant_id = %s "
+                # 1,525 soft-deleted blocks would otherwise still be enumerated
+                # here, and the 4.09M characters they hold would still be paid.
+                "AND pruned_at IS NULL ORDER BY block_name",
                 (tenant_id,),
             )
             return {

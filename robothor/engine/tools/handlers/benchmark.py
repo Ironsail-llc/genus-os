@@ -199,6 +199,96 @@ def _save_block(key: str, data: dict[str, Any]) -> None:
     write_block(key, json.dumps(data, indent=2, default=str))
 
 
+# A suite whose `runner:` is `native` is executed by its own scheduled unit
+# (the memory eval's systemd timer), not by spawning an agent — there is no
+# agent to spawn, and grading one's prose would not measure the retrieval path.
+# The fleet's job for those is to assert the unit is still alive.
+NATIVE_SUITE_RUNNER = "native"
+
+# 26h, not 24h: a nightly unit that slips an hour must not page. A gate that
+# pages on noise gets muted, which is the same as having no gate.
+NATIVE_SUITE_MAX_AGE_HOURS = 26
+
+
+def suite_runner(suite_path: Path) -> str:
+    """Read a suite's ``runner:`` key. Anything but ``native`` means ``agent``.
+
+    Fails safe in both directions: an unreadable or unparseable suite, and a
+    typo like ``nativ``, both come back as ``agent`` — a mistake here must never
+    silently exempt a suite from being run.
+    """
+    try:
+        raw = yaml.safe_load(Path(suite_path).read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return "agent"
+    if not isinstance(raw, dict):
+        return "agent"
+    return NATIVE_SUITE_RUNNER if raw.get("runner") == NATIVE_SUITE_RUNNER else "agent"
+
+
+def native_freshness_verdict(
+    agent_id: str,
+    latest_run_at: datetime | None,
+    *,
+    now: datetime | None = None,
+    max_age_hours: float = NATIVE_SUITE_MAX_AGE_HOURS,
+) -> dict[str, Any]:
+    """Pure: is this native suite's most recent result still fresh?
+
+    ``latest_run_at`` of None means the suite has never written a row — the
+    failure mode that matters most, because it is what "the timer was never
+    enabled" looks like, and it is indistinguishable from a healthy silence
+    unless something asserts on it.
+    """
+    now = now or datetime.now(UTC)
+    if latest_run_at is None:
+        return {
+            "agent_id": agent_id,
+            "runner": NATIVE_SUITE_RUNNER,
+            "stale": True,
+            "age_hours": None,
+            "error": f"{agent_id}: benchmark suite has never run",
+        }
+    # psycopg hands back naive datetimes for some column types; a TypeError
+    # here would be caught by the fleet's except and read as "suite fine".
+    if latest_run_at.tzinfo is None:
+        latest_run_at = latest_run_at.replace(tzinfo=UTC)
+    age = (now - latest_run_at).total_seconds() / 3600.0
+    # Clock skew must not manufacture a page.
+    stale = age > max_age_hours
+    return {
+        "agent_id": agent_id,
+        "runner": NATIVE_SUITE_RUNNER,
+        "stale": stale,
+        "age_hours": round(age, 2),
+        "error": (
+            f"{agent_id}: last benchmark result is {age:.1f}h old "
+            f"(max {max_age_hours}h) — the scheduled runner is not writing"
+            if stale
+            else None
+        ),
+    }
+
+
+def _latest_benchmark_run_at(agent_id: str) -> datetime | None:
+    """Most recent benchmark_results.run_at for an agent, across tenants.
+
+    Unscoped on purpose: the eval writes under its own eval tenant, so a
+    tenant-scoped read from the fleet's context would find nothing and report a
+    healthy gate as dead.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT max(run_at) FROM benchmark_results WHERE agent_id = %s",
+            (agent_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 def _resolve_path(path: str, workspace: str) -> Path:
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
@@ -880,6 +970,7 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
 
     agents: list[str] = []
     skipped_no_manifest: list[str] = []
+    native_suites: list[str] = []
     for child in sorted(bench_root.iterdir()):
         if not child.is_dir():
             continue
@@ -889,6 +980,13 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
         if agent_id in skip:
             continue
         if only and agent_id not in only:
+            continue
+        # `runner: native` suites have no agent to spawn — their own scheduled
+        # unit runs them. Check they are still alive instead of skipping them
+        # for a missing manifest, which is how the memory eval ended up with
+        # zero consumers.
+        if suite_runner(child / "suite.yaml") == NATIVE_SUITE_RUNNER:
+            native_suites.append(agent_id)
             continue
         # Skip suites for agents that no longer have a live manifest (Phase 0f).
         # A suite for a retired agent can never load its config, so it scores
@@ -926,12 +1024,40 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
             logger.warning("benchmark_run_fleet: %s failed: %s", agent_id, exc)
             summary.append({"agent_id": agent_id, "error": str(exc)})
 
+    # Staleness is what turns a nightly number into a gate. Run it last so a
+    # DB hiccup here cannot lose the agent results already collected.
+    native_verdicts: list[dict[str, Any]] = []
+    for agent_id in native_suites:
+        try:
+            native_verdicts.append(
+                native_freshness_verdict(agent_id, _latest_benchmark_run_at(agent_id))
+            )
+        except Exception as exc:
+            logger.warning("benchmark_run_fleet: freshness check for %s failed: %s", agent_id, exc)
+            native_verdicts.append(
+                {
+                    "agent_id": agent_id,
+                    "runner": NATIVE_SUITE_RUNNER,
+                    "stale": True,
+                    "age_hours": None,
+                    "error": f"{agent_id}: freshness check failed: {exc}",
+                }
+            )
+
+    stale = [v for v in native_verdicts if v["stale"]]
+    for v in stale:
+        logger.error("benchmark_run_fleet: %s", v["error"])
+
     return {
-        "success": True,
+        # A stale native suite fails the fleet. The whole point is that a dead
+        # memory-eval timer turns something red somewhere.
+        "success": not stale,
         "tag": tag,
         "triggered_by": triggered_by,
         "agents_attempted": len(agents),
         "skipped_no_manifest": skipped_no_manifest,
+        "native_suites": native_verdicts,
+        "stale_suites": [v["agent_id"] for v in stale],
         "results": summary,
     }
 

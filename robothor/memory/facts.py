@@ -214,27 +214,38 @@ def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
     return filtered
 
 
-async def extract_facts(content: str, max_retries: int = 3) -> list[dict[str, Any]]:
+async def extract_facts(
+    content: str, max_retries: int = 3, *, timeout: float = 180.0
+) -> list[dict[str, Any]]:
     """Extract facts from content using the local LLM.
 
     Retries on empty results because thinking models sometimes exhaust
     their token budget on reasoning before producing content.
 
-    Hard-capped at 180s total to prevent Ollama hangs from blocking agent runs.
-    This budget accommodates realistic conversation chunks (~3KB) on qwen3:32b
-    with structured JSON output.
+    ``timeout`` defaults to 180s, which suits off-request-path callers
+    (ingestion, the eval) where nothing is waiting on the result. The request
+    path must pass something smaller than its own wall: ``store_memory`` runs
+    inside a 120s tool timeout, so the previous unconditional 180s meant the
+    inner budget exceeded the outer one and a slow extraction was guaranteed to
+    be killed before it could return — 15 of 121 calls over 30 days sat at
+    exactly 120,003 ms.
+
+    Measured with the model warm, extraction is ~23s and embedding ~0.12s, so
+    this budget governs essentially the whole call; the remaining gap to the
+    63.5s production p50 is cold model loading.
 
     Args:
         content: Unstructured text content.
         max_retries: Number of attempts before giving up.
+        timeout: Hard cap in seconds for all attempts combined.
 
     Returns:
         List of extracted fact dictionaries, or empty list on failure.
     """
     try:
-        return await asyncio.wait_for(_extract_facts_inner(content, max_retries), timeout=180.0)
+        return await asyncio.wait_for(_extract_facts_inner(content, max_retries), timeout=timeout)
     except TimeoutError:
-        logger.warning("extract_facts hard timeout (180s) — returning empty")
+        logger.warning("extract_facts hard timeout (%.0fs) — returning empty", timeout)
         return []
 
 
@@ -335,8 +346,26 @@ async def store_fact(
         tenant_id: Tenant scope for data isolation.
 
     Returns:
-        The database ID of the stored fact.
+        The database ID of the stored fact, or 0 if the quality gate refused it
+        in enforce mode.
     """
+    from robothor.memory.quality import quality_mode, record_shadow_rejection, score_fact
+
+    _mode = quality_mode()
+    _verdict = None
+    if _mode != "off":
+        _verdict = score_fact(fact["fact_text"], confidence=fact.get("confidence"))
+        if not _verdict.accept and _mode == "enforce":
+            # Refused BEFORE the embedding call: a fact we will not keep should
+            # not cost an embedding. Measured on 25,910 live facts, this gate
+            # refuses 0.80%.
+            logger.info(
+                "store_fact refused by quality gate: %s | %.60s",
+                _verdict.reason,
+                fact["fact_text"],
+            )
+            return 0
+
     embedding = await llm_client.get_embedding_async(fact["fact_text"])
     resolved_tenant = tenant_id or DEFAULT_TENANT
     content_hash = compute_fact_hash(
@@ -362,6 +391,11 @@ async def store_fact(
             tenant_id=resolved_tenant,
             content_hash=content_hash,
         )
+
+    # Shadow leaves a trace or it proves nothing. This repo already has one flag
+    # whose "zero events" evidence was vacuous because observe wrote nothing.
+    if _verdict is not None and not _verdict.accept and _mode == "shadow":
+        record_shadow_rejection(fact_id, resolved_tenant, _verdict)
 
     return fact_id
 
@@ -945,7 +979,21 @@ async def search_facts(
                 entity = await get_entity(entity_name, tenant_id=_tenant)
                 if entity and entity.get("relations"):
                     for rel in entity["relations"][:3]:
-                        related_name = rel.get("target") or rel.get("source", "")
+                        # get_entity builds relations with `SELECT r.*, e.name
+                        # AS target_name` (outgoing) / `AS source_name`
+                        # (incoming) — memory_relations itself has no `target`
+                        # or `source` column. Reading the bare keys meant
+                        # related_name was always empty and this entire
+                        # expansion branch was unreachable, silently, because
+                        # the block is best-effort. Bare keys are kept last as
+                        # a fallback in case a caller hands us a flatter shape.
+                        related_name = (
+                            rel.get("target_name")
+                            or rel.get("source_name")
+                            or rel.get("target")
+                            or rel.get("source")
+                            or ""
+                        )
                         if related_name:
                             with get_connection() as conn:
                                 cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -972,7 +1020,10 @@ async def search_facts(
                                     candidates.append(r)
                                     expansion_ids.add(r["id"])
         except Exception:
-            pass  # Entity expansion is best-effort
+            # Best-effort by design — a graph miss must not fail the search.
+            # But it stays *logged*: a bare `pass` here is what let a key-name
+            # mismatch disable expansion entirely without a single symptom.
+            logger.debug("entity expansion failed (best-effort)", exc_info=True)
 
     # Optional reranker pass
     if use_reranker and candidates:

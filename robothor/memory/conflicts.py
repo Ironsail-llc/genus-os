@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from functools import partial
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -20,6 +22,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory.bitemporal import record_conflict_decision, supersede_with_validity
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -29,6 +32,39 @@ logger = logging.getLogger(__name__)
 # (e.g. the agent's own briefing re-ingested), not a new one — reinforce it
 # rather than fork a near-duplicate row.
 _REINFORCE_THRESHOLD = 0.92
+
+# Numbers, including decimals and thousands separators. Currency symbols and
+# units are deliberately excluded — "$100" and "100 dollars" carry the same
+# quantity and the digits are what matters.
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def numbers_differ(a: str, b: str) -> bool:
+    """True when two texts disagree on the numbers they contain.
+
+    The reinforce shortcut assumes high lexical similarity means "same fact,
+    said again". A number change is the exact opposite: "$100 -> $150" scores
+    0.9882 cosine — far above the threshold — while completely reversing the
+    fact's meaning. Treating that as a re-report discards the update AND bumps
+    the importance of the stale value, so the wrong number gets retrieved more
+    often. Prices, ports, versions, dates, times and quantities all live here.
+
+    Compared as sorted multisets so word order cannot manufacture a difference,
+    and normalized so "$1,200" and "$1200" are the same amount.
+    """
+
+    def _nums(text: str) -> list[str]:
+        out = []
+        for raw in _NUMBER.findall(text or ""):
+            cleaned = raw.replace(",", "")
+            # Trim a trailing ".0" so 2 and 2.0 compare equal.
+            if "." in cleaned:
+                cleaned = cleaned.rstrip("0").rstrip(".")
+            out.append(cleaned or "0")
+        return sorted(out)
+
+    return _nums(a) != _nums(b)
+
 
 # JSON schema for conflict classification structured output.
 CLASSIFICATION_SCHEMA = {
@@ -152,7 +188,15 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
 
     Repeated mentions of the same event (the dominant churn source) should raise
     the fact's salience, not inflate the table with reworded copies. Nudges
-    importance up (capped at 1.0), counts an access, and refreshes updated_at.
+    importance up (capped at 1.0), counts a *reinforcement*, and refreshes
+    updated_at.
+
+    This used to increment access_count, which was wrong twice over. The event
+    is re-observation, not retrieval, so it belongs on reinforcement_count —
+    which had no writer at all, leaving one of compute_decay_score's five inputs
+    permanently zero across every row. And because access_count is weighted in
+    the retrieval blend (facts._blend_rank), counting it here also inflated a
+    fact's search ranking every time something merely mentioned it again.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -160,7 +204,7 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
             """
             UPDATE memory_facts
             SET importance_score = LEAST(COALESCE(importance_score, 0.5) + 0.05, 1.0),
-                access_count = COALESCE(access_count, 0) + 1,
+                reinforcement_count = COALESCE(reinforcement_count, 0) + 1,
                 updated_at = NOW()
             WHERE id = %s AND tenant_id = %s
             """,
@@ -169,18 +213,16 @@ def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
 
 
 def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
-    """Mark an old fact as superseded by a new one."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE memory_facts
-            SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-            WHERE id = %s
-              AND tenant_id = %s
-            """,
-            (new_id, old_id, tenant_id or DEFAULT_TENANT),
-        )
+    """Mark an old fact as superseded by a new one.
+
+    Delegates to the bi-temporal writer so every supersession path bounds the
+    old fact in world-time. There are two callers — here and
+    ``resolution.py`` — and a second writer that set ``is_active = FALSE``
+    without setting ``valid_to`` would leave facts hidden from the normal read
+    path AND invisible to the point-in-time one, which is worse than either
+    behaviour alone.
+    """
+    supersede_with_validity(old_id, new_id, tenant_id=tenant_id, classification="resolution")
 
 
 async def resolve_and_store(
@@ -222,8 +264,28 @@ async def resolve_and_store(
         _write_dedup_enabled()
         and float(best_match.get("similarity") or 0) >= _REINFORCE_THRESHOLD
         and (best_match.get("category") or "") == (fact.get("category") or "")
+        # A number change is not a re-report, it IS the update. "$100 -> $150"
+        # scores 0.9882 cosine, sails over the threshold, and reverses the
+        # fact's meaning. Without this guard the update was discarded and the
+        # STALE value had its importance bumped, so the wrong number surfaced
+        # more often over time. Falls through to the LLM classifier, which
+        # correctly returns "update" and supersedes.
+        and not numbers_differ(fact["fact_text"], best_match.get("fact_text") or "")
     ):
         _reinforce_fact(best_match["id"], tenant_id=tenant_id)
+        # Recorded too: an error rate needs the cases where nothing was
+        # superseded as much as the ones where something was.
+        record_conflict_decision(
+            tenant_id=tenant_id or DEFAULT_TENANT,
+            classification="reinforced",
+            action="reinforced",
+            new_fact_id=None,
+            existing_fact_id=best_match["id"],
+            reasoning="similarity >= reinforce threshold, same category",
+            similarity=float(best_match.get("similarity") or 0),
+            new_fact_text=fact["fact_text"],
+            existing_fact_text=best_match["fact_text"],
+        )
         return {
             "action": "reinforced",
             "existing_id": best_match["id"],
@@ -235,21 +297,41 @@ async def resolve_and_store(
         best_match["fact_text"],
     )
 
-    if classification["classification"] == "duplicate":
+    kind = classification["classification"]
+    _record = partial(
+        record_conflict_decision,
+        tenant_id=tenant_id or DEFAULT_TENANT,
+        classification=kind,
+        existing_fact_id=best_match["id"],
+        reasoning=classification["reasoning"],
+        similarity=float(best_match.get("similarity") or 0) or None,
+        new_fact_text=fact["fact_text"],
+        existing_fact_text=best_match["fact_text"],
+    )
+
+    if kind == "duplicate":
+        _record(action="skipped", new_fact_id=None)
         return {
             "action": "skipped",
             "existing_id": best_match["id"],
             "reasoning": classification["reasoning"],
         }
 
-    if classification["classification"] in ("contradiction", "update"):
+    if kind in ("contradiction", "update"):
         new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
-        _supersede_fact(best_match["id"], new_id, tenant_id=tenant_id)
+        # An UPDATE and a CONTRADICTION are both bounded in world-time, but they
+        # are now recorded distinctly. They mean different things — for an update
+        # the old fact was genuinely true until now; for a contradiction one of
+        # the two was always wrong and the bound is a guess about which. Acting
+        # on that difference needs an error rate, and until this table existed
+        # there was none: the classification deactivated rows and vanished.
+        supersede_with_validity(best_match["id"], new_id, tenant_id=tenant_id, classification=kind)
+        _record(action="superseded", new_fact_id=new_id)
         return {
             "action": "superseded",
             "new_id": new_id,
             "old_id": best_match["id"],
-            "classification": classification["classification"],
+            "classification": kind,
             "reasoning": classification["reasoning"],
         }
 

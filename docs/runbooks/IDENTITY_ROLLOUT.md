@@ -27,6 +27,45 @@ the real deny-all outcome for that path (`telegram.py::_resolve_user`,
 | `ROBOTHOR_TELEGRAM_ROLE_GATES` | Owner-only Telegram surfaces (`/restart`, `/agents`, `/steer`, `perm:`/`dp:`/`runctl:` callbacks) check `chat_id == default_chat_id` only — a non-owner posting from the operator's own chat_id passes. Unregistered senders in the primary chat are fabricated as `role=owner` with no DB row. Unregistered group senders are fabricated as `role=user`. | Both the legacy chat_id check and the new per-sender role check run; the OLD chat_id check still gates, but every divergence (and every owner fabrication) is logged loudly so the operator can audit what enforce would decide. | Role check only — chat_id is irrelevant to authorization. Owner fabrication requires an actual `tenant_users` row (no more free ride from `default_chat_id`) unless `ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK=1` (fresh-install escape hatch — see below). Unregistered group senders fabricate as `role=guest` (zero tool grants — `role_permissions` is fail-closed). |
 | `ROBOTHOR_DATA_SCOPING` | Every data-read tool (and the warmup prompt-assembly path — see the "warmup scoping" fix below) queries unrestricted, identical to pre-flag behavior. | Queries still unrestricted, but every restricted caller's read logs how many rows the "own data + shared" rule *would* have dropped (`robothor.identity.scope.log_would_drop`). | Non-privileged identities (role not in `{owner, admin, service}`) only see rows where `person_id = their own person_id` or `person_id IS NULL` (org-general). Applies to CRM DAL reads, `memory.facts.search_facts`, and warmup's memory-block/entity-context prompt assembly. |
 
+### ⚠️ Memory scoping is currently vacuous — do not grant a non-owner role
+
+`ROBOTHOR_DATA_SCOPING=enforce` is live, and the enforce column above describes
+what the predicate *would* do. Against `memory_facts` it presently does almost
+nothing, because **nothing writes `memory_facts.person_id`.**
+
+Measured 2026-07-25 on the live store:
+
+| | count |
+|---|---|
+| facts created in the last 7 days | 5,521 |
+| …carrying a `person_id` | **0** |
+| facts all-time | 146,976 |
+| …carrying a `person_id` | 285 |
+| most recent fact with a `person_id` | **2026-04-19** |
+
+`store_fact` has no `person_id` parameter and no code path sets the column, so
+the enforce predicate `(person_id = <caller> OR person_id IS NULL)` admits
+99.8% of the corpus. The filter runs; it just has nothing to filter on.
+
+This is quiet today only because `tenant_users` holds two rows and both are
+`owner`, and `scope_for` treats owner/admin/service as unrestricted. **The
+moment `robothor user add` creates one `member`/`user`/`viewer`/`guest` row,
+that user gets a memory read that looks scoped and is not.** No flag flip is
+required to arm it.
+
+Before granting any non-owner role:
+
+1. Land a `person_id` writer on the fact-store path. This is a real design
+   question, not plumbing — a fact *about* Bob recorded *by* Alice has no
+   obvious owner — so it needs deciding, not defaulting.
+2. Backfill or accept that pre-existing facts are org-general by definition.
+3. Confirm observe mode reports a **non-zero** would-drop for a restricted
+   caller. A zero is the failure signal here, not the success one.
+
+The mechanism itself is now correct on both read paths and covered by
+`tests/integration/test_memory_scope_enforcement.py`, which fires a real
+violation rather than asserting on mocks. What is missing is the data.
+
 ### Load-bearing rollout order
 
 **`ROBOTHOR_TELEGRAM_ROLE_GATES` must reach `enforce` before

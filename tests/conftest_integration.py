@@ -10,6 +10,7 @@ Configure via environment variables:
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import psycopg2
@@ -182,3 +183,70 @@ def mock_get_connection(db_conn):
 
     _current_holder["conn"] = None
     _current_holder["wrapper"] = None
+
+
+@pytest.fixture
+def scratch_db():
+    """Factory for a throwaway database migrated to a chosen point in the chain.
+
+    Migration tests need the schema at a *specific point* — 088 asserts on the
+    wide-open member row that 071 seeds and 088 then tightens. Run against the
+    shared test database, which CI now builds fully migrated, that precondition
+    no longer exists, so those tests were skipped and stopped protecting
+    anything.
+
+    Applies the canonical manifest in order, stopping after the named
+    migration, so prerequisites come along automatically instead of each test
+    hand-listing them.
+
+        db, dsn = scratch_db(through="087_role_permission_guardrails")
+        scratch_db(through="088_member_role_read_only")   # advance the same DB
+    """
+    import getpass
+    import uuid
+
+    from robothor.db.migrate import _discover, _strip_outer_transaction
+
+    admin = os.environ.get("ROBOTHOR_TEST_ADMIN_DSN", f"dbname=postgres user={getpass.getuser()}")
+    name = f"scratch_{uuid.uuid4().hex[:8]}"
+
+    root = psycopg2.connect(admin)
+    root.autocommit = True
+    with root.cursor() as cur:
+        cur.execute(f"CREATE DATABASE {name}")
+    root.close()
+
+    # Derive the scratch DSN from the admin DSN (swap dbname) so TCP
+    # credentials from CI carry over; the old f-string assumed peer auth.
+    parts = dict(psycopg2.extensions.parse_dsn(admin))
+    parts["dbname"] = name
+    dsn = " ".join(f"{k}={v}" for k, v in parts.items())
+    db = psycopg2.connect(dsn)
+    db.autocommit = True
+    with db.cursor() as cur:
+        for ext in ("vector", "pgcrypto", '"uuid-ossp"'):
+            # not every scratch test needs every extension
+            with contextlib.suppress(Exception):
+                cur.execute(f"CREATE EXTENSION IF NOT EXISTS {ext}")
+
+    applied: set[str] = set()
+
+    def _apply(through: str):
+        with db.cursor() as cur:
+            for m in _discover():
+                if m.migration_id in applied:
+                    continue
+                cur.execute(_strip_outer_transaction(m.path.read_text()))
+                applied.add(m.migration_id)
+                if m.migration_id == through:
+                    break
+        return db, dsn
+
+    yield _apply
+
+    db.close()
+    root = psycopg2.connect(admin)
+    root.autocommit = True
+    with root.cursor() as cur:
+        cur.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+    root.close()

@@ -381,6 +381,40 @@ async def run_autodream(mode: str = "idle") -> dict[str, Any]:
             insights = await discover_cross_domain_insights(hours_back=72)
             results["insights_discovered"] = len(insights)
 
+        # Near-duplicate collapse. Runs here rather than on its own timer so it
+        # inherits autoDream's Redis lock, cooldown and quiet hours — a second
+        # writer to memory_facts outside that lock could interleave with
+        # consolidation. Sync function, so off the loop thread.
+        #
+        # Ladder: off (absent) -> observe (writes candidate audit rows, changes
+        # nothing) -> enforce. Observe is deliberately not silent; a soak whose
+        # evidence is "no events" cannot tell a working control from an inert
+        # one.
+        try:
+            dechurn_mode = os.environ.get("MEMORY_DECHURN_MODE", "off").strip().lower()
+            if dechurn_mode in ("observe", "enforce"):
+                # dechurn requires an explicit tenant by design, so resolve it
+                # here rather than letting it default. `mode` is the autoDream
+                # pass mode, so the ladder value needs its own name.
+                from robothor.constants import DEFAULT_TENANT
+                from robothor.memory.dechurn import dechurn
+
+                rep = await asyncio.to_thread(
+                    dechurn,
+                    os.environ.get("ROBOTHOR_TENANT_ID") or DEFAULT_TENANT,
+                    dry_run=(dechurn_mode != "enforce"),
+                )
+                results["dechurn"] = {
+                    "mode": dechurn_mode,
+                    "candidates": rep.get("near_dup_losers", 0),
+                    "deactivated": rep.get("deactivated", 0),
+                    "refused": rep.get("refused"),
+                }
+                if rep.get("refused"):
+                    logger.error("autoDream dechurn refused: %s", rep["refused"])
+        except Exception as e:  # noqa: BLE001 — hygiene must not fail the pass
+            logger.warning("autoDream dechurn failed: %s", e)
+
         # Step 4: Refresh the live working_context snapshot (replaces stale
         # content with today's open tasks + recent high-signal facts + intents).
         try:

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from robothor.tui.widgets import MessageDisplay, StatusBar, ToolCard, WelcomeBanner
+import pytest
+
+pytest.importorskip(
+    "textual", reason="tui extra not installed — CI lanes without it must still collect"
+)
+
+from robothor.tui.widgets import MessageDisplay, StatusBar, ToolCard, WelcomeBanner  # noqa: E402
 
 
 class TestToolCard:

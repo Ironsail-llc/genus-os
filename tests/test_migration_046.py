@@ -132,7 +132,7 @@ class TestBackfill046:
             """
             INSERT INTO contact_identifiers (channel, identifier, person_id)
             VALUES ('telegram', %s, %s)
-            ON CONFLICT (channel, identifier) DO UPDATE SET person_id = EXCLUDED.person_id
+            ON CONFLICT (tenant_id, channel, identifier) DO UPDATE SET person_id = EXCLUDED.person_id
             """,
             (telegram_id, person_id),
         )

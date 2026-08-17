@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from psycopg2.extras import RealDictCursor
 
 pytestmark = pytest.mark.integration
 
@@ -38,7 +39,7 @@ def _member_rows(db_cursor):
     return {r["tool_pattern"]: r["access"] for r in db_cursor.fetchall()}
 
 
-def test_088_after_071_and_087_tightens_member_to_read_only(db_cursor, db_conn):
+def test_088_after_071_and_087_tightens_member_to_read_only(scratch_db):
     """The realistic production ordering: 037 -> 071 -> 087 -> 088.
 
     Before 088: member is wide open ('*' = allow, inherited from 071, since
@@ -46,14 +47,13 @@ def test_088_after_071_and_087_tightens_member_to_read_only(db_cursor, db_conn):
     member's '*' row is 'deny' and the read-only allow rows are present —
     matching 'viewer's shape from 037.
     """
-    db_cursor.execute(MIGRATION_037.read_text())
-    db_cursor.execute(MIGRATION_071.read_text())
-    db_cursor.execute(MIGRATION_087.read_text())
+    db, _ = scratch_db(through="087_role_permission_guardrails")
+    db_cursor = db.cursor(cursor_factory=RealDictCursor)
 
     before = _member_rows(db_cursor)
     assert before.get("*") == "allow", "precondition: 071's member wide-open row must exist"
 
-    db_cursor.execute(MIGRATION_088.read_text())
+    scratch_db(through="088_member_role_read_only")
 
     after = _member_rows(db_cursor)
     assert after["*"] == "deny"
@@ -62,11 +62,9 @@ def test_088_after_071_and_087_tightens_member_to_read_only(db_cursor, db_conn):
     assert after["list_*"] == "allow"
 
 
-def test_088_does_not_touch_user_admin_owner_rows(db_cursor, db_conn):
-    db_cursor.execute(MIGRATION_037.read_text())
-    db_cursor.execute(MIGRATION_071.read_text())
-    db_cursor.execute(MIGRATION_087.read_text())
-    db_cursor.execute(MIGRATION_088.read_text())
+def test_088_does_not_touch_user_admin_owner_rows(scratch_db):
+    db, _ = scratch_db(through="088_member_role_read_only")
+    db_cursor = db.cursor(cursor_factory=RealDictCursor)
 
     for role in ("user", "admin", "owner"):
         db_cursor.execute(
@@ -108,9 +106,7 @@ def test_088_is_idempotent(db_cursor, db_conn):
     assert after["*"] == "deny"
 
 
-def test_088_without_071_or_087_is_a_safe_noop_on_update_but_seeds_readonly_rows(
-    db_cursor, db_conn
-):
+def test_088_without_071_or_087_is_a_safe_noop_on_update_but_seeds_readonly_rows(scratch_db):
     """An environment where 071/087 never ran (no member rows at all): the
     UPDATE matches zero rows (nothing to tighten), and the defensive INSERT
     still seeds the read-only allow rows so 088 is self-sufficient.
@@ -121,11 +117,13 @@ def test_088_without_071_or_087_is_a_safe_noop_on_update_but_seeds_readonly_rows
     071's row from real, previously-applied history, and this test must
     hold regardless of what state the underlying database happens to be in.
     """
-    db_cursor.execute(MIGRATION_037.read_text())
+    db, _ = scratch_db(through="037_access_control")
+    db_cursor = db.cursor(cursor_factory=RealDictCursor)
+    # 088 must be self-sufficient, so apply it directly rather than walking the
+    # manifest — the point of this case is that 071/087 never ran.
     db_cursor.execute(
         "DELETE FROM role_permissions WHERE tenant_id = '__default__' AND role = 'member'"
     )
-
     db_cursor.execute(MIGRATION_088.read_text())
 
     after = _member_rows(db_cursor)

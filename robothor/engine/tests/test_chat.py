@@ -96,6 +96,14 @@ class TestChatSend:
         assert res.status_code == 400
 
     @pytest.mark.asyncio
+    # The suite-wide budget is 30s (pytest.ini) and this test awaits TWO
+    # concurrent SSE bodies. Each stream can spend up to SSE_KEEPALIVE_INTERVAL
+    # (15s) waiting on its queue, so 2x15 lands exactly on the global limit and
+    # the test becomes a coin-flip decided by how loaded the event loop is: it
+    # passes alone in 0.4s, passes in a 48s full run, and errors in a 77s one.
+    # Raised rather than deleted because the assertions are still worth making,
+    # and rather than "fixed" by loosening the global budget for 5,303 tests.
+    @pytest.mark.timeout(90)
     async def test_concurrent_requests_both_succeed(self, client, mock_runner):
         """Two concurrent requests to same session both return 200."""
         call_count = 0

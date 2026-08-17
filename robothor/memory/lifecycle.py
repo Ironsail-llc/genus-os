@@ -1105,7 +1105,16 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     try:
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT id FROM crm_tenants WHERE is_active = TRUE")
+            # The column is `active`, not `is_active`. The typo raised, the
+            # surrounding except swallowed it, and tenant_ids silently collapsed
+            # to [DEFAULT_TENANT] — so steps 8-13 of nightly maintenance ran for
+            # exactly one tenant. Visible in the data: robothor-primary's access
+            # log was GC'd on schedule while delphi's went back 51 days.
+            #
+            # Only safe to fix now that migration 092's roll-up is deployed:
+            # before it, correcting this would have started hard-deleting the
+            # other tenants' access history on the very first nightly pass.
+            cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE")
             tenant_ids = [r["id"] for r in cur.fetchall()]
     except Exception as e:
         logger.warning("Could not enumerate tenants — falling back to DEFAULT_TENANT: %s", e)
@@ -1198,14 +1207,18 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["breadcrumbs"],
     )
 
-    # Step 12: Outcome access log GC — trim attribution history past 30 days.
+    # Step 12: Outcome access log GC — trim raw attribution rows past the
+    # configured retention window (MEMORY_ACCESS_LOG_RETENTION_DAYS). Passing
+    # `days=None` lets the function read the knob; hardcoding a literal here is
+    # what made the window unchangeable and destroyed the decay formula's only
+    # input. Lifetime counts survive in fact_access_rollup.
     t10 = time.monotonic()
     access_log_pruned = 0
     try:
         from robothor.memory.outcomes import cleanup_old_access_logs
 
         for tid in tenant_ids:
-            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, 30, tid)
+            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, None, tid)
     except Exception as e:
         logger.warning("Access log cleanup failed: %s", e)
     step_timings["access_log_cleanup"] = time.monotonic() - t10
