@@ -52,6 +52,7 @@ def numbers_differ(a: str, b: str) -> bool:
     Compared as sorted multisets so word order cannot manufacture a difference,
     and normalized so "$1,200" and "$1200" are the same amount.
     """
+
     def _nums(text: str) -> list[str]:
         out = []
         for raw in _NUMBER.findall(text or ""):
@@ -63,6 +64,7 @@ def numbers_differ(a: str, b: str) -> bool:
         return sorted(out)
 
     return _nums(a) != _nums(b)
+
 
 # JSON schema for conflict classification structured output.
 CLASSIFICATION_SCHEMA = {
@@ -220,9 +222,7 @@ def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     path AND invisible to the point-in-time one, which is worse than either
     behaviour alone.
     """
-    supersede_with_validity(
-        old_id, new_id, tenant_id=tenant_id, classification="resolution"
-    )
+    supersede_with_validity(old_id, new_id, tenant_id=tenant_id, classification="resolution")
 
 
 async def resolve_and_store(
@@ -325,9 +325,7 @@ async def resolve_and_store(
         # the two was always wrong and the bound is a guess about which. Acting
         # on that difference needs an error rate, and until this table existed
         # there was none: the classification deactivated rows and vanished.
-        supersede_with_validity(
-            best_match["id"], new_id, tenant_id=tenant_id, classification=kind
-        )
+        supersede_with_validity(best_match["id"], new_id, tenant_id=tenant_id, classification=kind)
         _record(action="superseded", new_fact_id=new_id)
         return {
             "action": "superseded",

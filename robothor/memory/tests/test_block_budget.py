@@ -17,11 +17,12 @@ without telling anyone, and the end is where recent context lives.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from robothor.memory.block_budget import (
     DEFAULT_MAX_CHARS,
-    BudgetVerdict,
     check_budget,
     estimate_tokens,
     tier_token_report,
@@ -59,7 +60,7 @@ class TestCheckBudget:
         assert check_budget("", max_chars=10).over is False
 
     def test_verdict_is_immutable(self):
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             check_budget("x", max_chars=10).over = True
 
 

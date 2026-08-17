@@ -110,9 +110,7 @@ def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) 
                     # block, which is where the most recent context lives, and
                     # does it silently. A refused write is visible and the
                     # caller can summarise instead.
-                    logger.warning(
-                        "write_block %r refused: %s", block_name, verdict.reason
-                    )
+                    logger.warning("write_block %r refused: %s", block_name, verdict.reason)
                     return {
                         "error": (
                             f"block {block_name!r} exceeds its context budget: "

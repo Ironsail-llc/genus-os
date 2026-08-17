@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
@@ -37,9 +39,7 @@ TEMPORAL_CLASSIFICATIONS = frozenset({"update"})
 # Every classification the conflict resolver can emit, including the two that
 # do not supersede. Recorded so the denominator exists: an error rate needs the
 # cases where nothing happened as much as the ones where something did.
-KNOWN_CLASSIFICATIONS = frozenset(
-    {"new", "duplicate", "update", "contradiction", "reinforced"}
-)
+KNOWN_CLASSIFICATIONS = frozenset({"new", "duplicate", "update", "contradiction", "reinforced"})
 
 
 def bitemporal_enabled() -> bool:
@@ -66,8 +66,7 @@ def point_in_time_predicate(as_of: datetime | None) -> tuple[str, list[Any]]:
     if as_of is None:
         return "", []
     return (
-        "((valid_from IS NULL OR valid_from <= %s) "
-        "AND (valid_to IS NULL OR valid_to > %s))",
+        "((valid_from IS NULL OR valid_from <= %s) AND (valid_to IS NULL OR valid_to > %s))",
         [as_of, as_of],
     )
 

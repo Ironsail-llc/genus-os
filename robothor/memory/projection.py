@@ -59,7 +59,10 @@ def projection_dir() -> Path:
 
 def projection_enabled() -> bool:
     return os.environ.get("MEMORY_PROJECTION", "").strip().lower() in (
-        "1", "true", "on", "yes",
+        "1",
+        "true",
+        "on",
+        "yes",
     )
 
 

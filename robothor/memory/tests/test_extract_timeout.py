@@ -75,9 +75,7 @@ def test_request_path_budget_is_under_the_tool_wall():
     otherwise the fix is cosmetic: the tool would still be killed before
     extraction could return.
     """
-    src = inspect.getsource(
-        __import__("robothor.engine.tools.handlers.memory", fromlist=["x"])
-    )
+    src = inspect.getsource(__import__("robothor.engine.tools.handlers.memory", fromlist=["x"]))
     assert "extract_facts(" in src
     assert "timeout=" in src.split("extract_facts(")[1][:200], (
         "store_memory calls extract_facts without a timeout, so it inherits the "

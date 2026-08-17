@@ -243,6 +243,8 @@ def preflight(tenant_id: str) -> str | None:
             f"Run this process with ROBOTHOR_TENANT_ID={tenant_id}."
         )
     return None
+
+
 # recall/persona/noise/resolution → gold must appear in top-k (noise adds a
 # distractor cloud; resolution seeds a detection→resolution arc). temporal →
 # latest must rank first. verbatim → exact string must survive.

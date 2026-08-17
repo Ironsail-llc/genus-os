@@ -12,8 +12,8 @@ import pytest
 
 from robothor.memory.projection import (
     GENERATED_MARKER,
-    projection_enabled,
     project,
+    projection_enabled,
     projection_usage_report,
     render_note,
     slugify,

@@ -109,11 +109,7 @@ class CaseRejection:
 
 
 def _seed_texts(case: dict[str, Any]) -> list[str]:
-    return [
-        (s or {}).get("fact_text", "")
-        for s in (case.get("seed") or [])
-        if isinstance(s, dict)
-    ]
+    return [(s or {}).get("fact_text", "") for s in (case.get("seed") or []) if isinstance(s, dict)]
 
 
 def validate_case(case: dict[str, Any]) -> list[CaseRejection]:
@@ -150,9 +146,7 @@ def validate_case(case: dict[str, Any]) -> list[CaseRejection]:
         )
 
     if shares_ngram(query, gold):
-        out.append(
-            CaseRejection(cid, "ngram_leak", f"query shares a {NGRAM_N}-gram with its gold")
-        )
+        out.append(CaseRejection(cid, "ngram_leak", f"query shares a {NGRAM_N}-gram with its gold"))
 
     jac = token_jaccard(query, gold)
     if jac > MAX_TOKEN_JACCARD:

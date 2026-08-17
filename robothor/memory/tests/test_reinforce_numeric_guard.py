@@ -82,7 +82,9 @@ class TestReinforceShortcutRespectsNumbers:
         marker = "ZzQuidditchCorp"
         old = {
             "fact_text": f"{marker} charges $100 for Meridian access.",
-            "category": "pricing", "entities": [marker, "Meridian"], "confidence": 0.9,
+            "category": "pricing",
+            "entities": [marker, "Meridian"],
+            "confidence": 0.9,
         }
         new = {**old, "fact_text": f"{marker} charges $150 for Meridian access."}
         try:

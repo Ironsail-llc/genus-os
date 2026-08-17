@@ -13,12 +13,9 @@ the corpus grows 12x.
 
 from __future__ import annotations
 
-import pytest
-
 from robothor.memory.eval_corpus import (
     MAX_TOKEN_JACCARD,
     NGRAM_N,
-    CaseRejection,
     shares_ngram,
     stratum_coverage,
     token_jaccard,
@@ -40,9 +37,7 @@ class TestSharedNgram:
     def test_case_and_punctuation_do_not_hide_a_leak(self):
         # "Alice manages the Helios" with different casing/punctuation is still
         # a verbatim leak; a naive check would pass it.
-        assert shares_ngram(
-            "Alice, manages the Helios!", "alice manages the helios project"
-        )
+        assert shares_ngram("Alice, manages the Helios!", "alice manages the helios project")
 
     def test_n_is_four(self):
         assert NGRAM_N == 4
@@ -110,21 +105,34 @@ class TestValidateCase:
         # verbatim case carrying only `gold` scores 0 forever no matter how
         # perfectly retrieval performs — measured: all four such cases had the
         # right fact ranked FIRST. The generator had simply used the wrong field.
-        errs = validate_case(self._case(kind="verbatim", gold="BM-7890", gold_exact=None,
-                                        seed=[{"fact_text": "Bob's code is BM-7890"}]))
+        errs = validate_case(
+            self._case(
+                kind="verbatim",
+                gold="BM-7890",
+                gold_exact=None,
+                seed=[{"fact_text": "Bob's code is BM-7890"}],
+            )
+        )
         assert any(e.reason == "missing_gold_exact" for e in errs)
 
     def test_verbatim_with_gold_exact_passes(self):
-        assert validate_case(
-            self._case(kind="verbatim", gold="BM-7890", gold_exact="BM-7890",
-                       seed=[{"fact_text": "Bob's code is BM-7890"}])
-        ) == []
+        assert (
+            validate_case(
+                self._case(
+                    kind="verbatim",
+                    gold="BM-7890",
+                    gold_exact="BM-7890",
+                    seed=[{"fact_text": "Bob's code is BM-7890"}],
+                )
+            )
+            == []
+        )
 
     def test_unknown_kind_is_rejected(self):
         errs = validate_case(self._case(kind="vibes"))
         assert any(e.reason == "unknown_kind" for e in errs)
 
-    def test_noise_cases_are_NOT_exempt_from_gold_rules(self):
+    def test_noise_cases_are_not_exempt_from_gold_rules(self):
         # This asserted the opposite until the expanded suite was actually run.
         # eval.score_case routes "noise" through _RECALL_KINDS, so a noise case
         # is a recall case whose seed holds distractors — the gold must still be
@@ -160,12 +168,20 @@ class TestValidateSuite:
 
     def test_clean_suite_passes(self):
         cases = [
-            {"id": "a", "kind": "recall", "query": "which country runs the northern grid",
-             "gold": "Iceland operates the northern power grid",
-             "seed": [{"fact_text": "Iceland operates the northern power grid"}]},
-            {"id": "b", "kind": "recall", "query": "how tall is that mountain in Nepal",
-             "gold": "Everest rises 8,849 metres above sea level",
-             "seed": [{"fact_text": "Everest rises 8,849 metres above sea level"}]},
+            {
+                "id": "a",
+                "kind": "recall",
+                "query": "which country runs the northern grid",
+                "gold": "Iceland operates the northern power grid",
+                "seed": [{"fact_text": "Iceland operates the northern power grid"}],
+            },
+            {
+                "id": "b",
+                "kind": "recall",
+                "query": "how tall is that mountain in Nepal",
+                "gold": "Everest rises 8,849 metres above sea level",
+                "seed": [{"fact_text": "Everest rises 8,849 metres above sea level"}],
+            },
         ]
         assert validate_suite(cases) == []
 
@@ -191,7 +207,16 @@ class TestShippedSuiteIsClean:
         from robothor.memory.eval_corpus import suite_path
 
         cases = yaml.safe_load(suite_path().read_text())["cases"]
-        errs = [e for e in validate_suite(cases) if e.reason in
-                ("duplicate_id", "duplicate_query", "unknown_kind", "missing_gold",
-                 "gold_not_seeded")]
+        errs = [
+            e
+            for e in validate_suite(cases)
+            if e.reason
+            in (
+                "duplicate_id",
+                "duplicate_query",
+                "unknown_kind",
+                "missing_gold",
+                "gold_not_seeded",
+            )
+        ]
         assert errs == [], f"shipped suite is malformed: {errs}"

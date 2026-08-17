@@ -85,10 +85,16 @@ class TestFailureDetailIsAccurate:
     def _case(self, kind, **over):
         from robothor.memory.eval import EvalCase
 
-        base = dict(
-            id="c", kind=kind, query="q", gold="the new price is $150",
-            gold_exact="150", k=5, seed=[], seed_mode="direct",
-        )
+        base = {
+            "id": "c",
+            "kind": kind,
+            "query": "q",
+            "gold": "the new price is $150",
+            "gold_exact": "150",
+            "k": 5,
+            "seed": [],
+            "seed_mode": "direct",
+        }
         base.update(over)
         return EvalCase(**base)
 

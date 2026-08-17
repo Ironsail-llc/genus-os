@@ -16,8 +16,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -40,7 +38,9 @@ def _covered(source_path: str, include: dict[str, str]) -> bool:
     if source_path in include:
         return True
     return any(
-        source_path.startswith(f"{key.rstrip('/')}/") for key in include if "." not in Path(key).name
+        source_path.startswith(f"{key.rstrip('/')}/")
+        for key in include
+        if "." not in Path(key).name
     )
 
 
@@ -82,9 +82,7 @@ class TestEveryMigrationShips:
         # that is the very condition it exists to catch.
         entries = {e.partition("/")[2] for e in _manifest_entries()}
         on_disk = {p.name for p in (REPO / "crm" / "migrations").glob("[0-9]*.sql")}
-        unregistered = sorted(
-            name for name in on_disk - entries if "delphi" not in name.lower()
-        )
+        unregistered = sorted(name for name in on_disk - entries if "delphi" not in name.lower())
         assert unregistered == [], (
             f"platform migrations exist on disk but are not in the manifest, so "
             f"they will never run: {unregistered}"

@@ -77,7 +77,9 @@ async def enqueue_write(
     return job_id
 
 
-def _finish(job_id: int, status: str, *, fact_ids: list[int] | None = None, error: str = "") -> None:
+def _finish(
+    job_id: int, status: str, *, fact_ids: list[int] | None = None, error: str = ""
+) -> None:
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(

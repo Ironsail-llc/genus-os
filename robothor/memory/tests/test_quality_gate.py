@@ -7,6 +7,8 @@ occupies the top-k, and the top-k is the product.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from robothor.memory.quality import (
@@ -72,7 +74,7 @@ class TestScoreFact:
         assert len(v.reasons) >= 2
 
     def test_verdict_is_immutable(self):
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             score_fact("A" * 40).accept = False
 
 
@@ -114,8 +116,7 @@ class TestAgainstLiveData:
         rejected = [r for r in rows if not score_fact(r[0], confidence=r[1]).accept]
         rate = len(rejected) / len(rows)
         assert rate < 0.10, (
-            f"gate would reject {rate:.1%} of live facts — the rules are too "
-            f"aggressive to enforce"
+            f"gate would reject {rate:.1%} of live facts — the rules are too aggressive to enforce"
         )
 
 
@@ -139,7 +140,6 @@ class TestGateIsActuallyWired:
     async def test_off_stores_it(self, monkeypatch):
         # Negative control: without this the test above only proves the write
         # path is broken, not that the gate did the refusing.
-        from robothor.constants import DEFAULT_TENANT
         from robothor.db.connection import get_connection
         from robothor.memory.facts import store_fact
 

@@ -79,7 +79,7 @@ class TestFreshnessVerdict:
         # psycopg can hand back a naive datetime depending on the column type;
         # a TypeError here would be swallowed by the fleet's except and read as
         # "suite fine".
-        v = native_freshness_verdict("m", datetime(2026, 7, 25, 2, 0), now=NOW)
+        v = native_freshness_verdict("m", datetime(2026, 7, 25, 2, 0), now=NOW)  # noqa: DTZ001 — naive on purpose
         assert v["stale"] is False
 
     def test_future_timestamp_is_not_stale(self):

@@ -128,9 +128,6 @@ def promotion_verdict(report: dict[str, Any], stratum_alpha: float = 0.20) -> tu
     for name, s in report.get("per_stratum", {}).items():
         if s["regressed"] > s["improved"] and s["p"] < stratum_alpha:
             return False, (
-                f"stratum {name!r} regressed "
-                f"({s['improved']}↑/{s['regressed']}↓, p={s['p']:.3f})"
+                f"stratum {name!r} regressed ({s['improved']}↑/{s['regressed']}↓, p={s['p']:.3f})"
             )
-    return True, (
-        f"delta {report['delta']:+.3f}, p={report['p']:.3f}, no stratum regression"
-    )
+    return True, (f"delta {report['delta']:+.3f}, p={report['p']:.3f}, no stratum regression")

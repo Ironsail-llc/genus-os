@@ -393,12 +393,11 @@ async def run_autodream(mode: str = "idle") -> dict[str, Any]:
         try:
             dechurn_mode = os.environ.get("MEMORY_DECHURN_MODE", "off").strip().lower()
             if dechurn_mode in ("observe", "enforce"):
-                from robothor.memory.dechurn import dechurn
-
                 # dechurn requires an explicit tenant by design, so resolve it
                 # here rather than letting it default. `mode` is the autoDream
                 # pass mode, so the ladder value needs its own name.
                 from robothor.constants import DEFAULT_TENANT
+                from robothor.memory.dechurn import dechurn
 
                 rep = await asyncio.to_thread(
                     dechurn,

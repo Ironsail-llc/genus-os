@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.memory.facts import _norm_tokens
 
@@ -147,9 +146,7 @@ def dechurn(
             logger.info("dechurn: deactivated %d active near-duplicate facts", cur.rowcount)
         else:
             report["would_deactivate_ids"] = losers
-            logger.info(
-                "dechurn observe: %d candidates recorded for %s", len(losers), tenant
-            )
+            logger.info("dechurn observe: %d candidates recorded for %s", len(losers), tenant)
         conn.commit()
     return report
 

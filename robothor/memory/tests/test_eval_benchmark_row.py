@@ -66,10 +66,20 @@ class TestRowShape:
             passed=1,
             total=2,
             cases=[
-                {"case_id": "temporal-x", "kind": "temporal", "passed": False, "score": 0.0,
-                 "detail": "gold not in top-5; a wrong fact outranked it"},
-                {"case_id": "recall-y", "kind": "recall", "passed": True, "score": 1.0,
-                 "detail": ""},
+                {
+                    "case_id": "temporal-x",
+                    "kind": "temporal",
+                    "passed": False,
+                    "score": 0.0,
+                    "detail": "gold not in top-5; a wrong fact outranked it",
+                },
+                {
+                    "case_id": "recall-y",
+                    "kind": "recall",
+                    "passed": True,
+                    "score": 1.0,
+                    "detail": "",
+                },
             ],
         )
         row = report_to_benchmark_row(rep)
