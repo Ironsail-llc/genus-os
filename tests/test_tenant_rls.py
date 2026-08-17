@@ -46,7 +46,10 @@ def rls_db():
         cur.execute(f"CREATE DATABASE {name}")
     conn.close()
 
-    dsn = f"dbname={name} user={getpass.getuser()}"
+    # Derive from the admin DSN (swap dbname) so CI TCP credentials apply.
+    parts = dict(psycopg2.extensions.parse_dsn(admin))
+    parts["dbname"] = name
+    dsn = " ".join(f"{k}={v}" for k, v in parts.items())
     db = psycopg2.connect(dsn)
     db.autocommit = True
     with db.cursor() as cur:

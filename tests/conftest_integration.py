@@ -10,6 +10,7 @@ Configure via environment variables:
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import psycopg2
@@ -206,9 +207,7 @@ def scratch_db():
 
     from robothor.db.migrate import _discover, _strip_outer_transaction
 
-    admin = os.environ.get(
-        "ROBOTHOR_TEST_ADMIN_DSN", f"dbname=postgres user={getpass.getuser()}"
-    )
+    admin = os.environ.get("ROBOTHOR_TEST_ADMIN_DSN", f"dbname=postgres user={getpass.getuser()}")
     name = f"scratch_{uuid.uuid4().hex[:8]}"
 
     root = psycopg2.connect(admin)
@@ -217,15 +216,18 @@ def scratch_db():
         cur.execute(f"CREATE DATABASE {name}")
     root.close()
 
-    dsn = f"dbname={name} user={getpass.getuser()}"
+    # Derive the scratch DSN from the admin DSN (swap dbname) so TCP
+    # credentials from CI carry over; the old f-string assumed peer auth.
+    parts = dict(psycopg2.extensions.parse_dsn(admin))
+    parts["dbname"] = name
+    dsn = " ".join(f"{k}={v}" for k, v in parts.items())
     db = psycopg2.connect(dsn)
     db.autocommit = True
     with db.cursor() as cur:
         for ext in ("vector", "pgcrypto", '"uuid-ossp"'):
-            try:
+            # not every scratch test needs every extension
+            with contextlib.suppress(Exception):
                 cur.execute(f"CREATE EXTENSION IF NOT EXISTS {ext}")
-            except Exception:
-                pass  # not every scratch test needs every extension
 
     applied: set[str] = set()
 

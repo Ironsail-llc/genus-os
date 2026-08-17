@@ -147,6 +147,8 @@ jobs:
     env:
       PGPASSWORD: robothor
       ROBOTHOR_TEST_DB_DSN: "dbname=robothor_test user=robothor password=robothor host=localhost port=5432"
+      # Admin DSN for fixtures that create scratch databases (scratch_db, rls_db).
+      ROBOTHOR_TEST_ADMIN_DSN: "dbname=postgres user=robothor password=robothor host=localhost port=5432"
       ROBOTHOR_DB_HOST: 127.0.0.1
       ROBOTHOR_DB_PORT: "5432"
       ROBOTHOR_DB_NAME: robothor_test
