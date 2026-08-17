@@ -9,6 +9,7 @@
 Define agents in YAML. Wire them into governed pipelines with audit trails and guardrails.
 Federate across sites, teams, and subsidiaries with cryptographic trust and scoped permissions.
 <br><br>
+<b>Everything is a plugin</b> — skills, tools, channels, and connectors snap into a deterministic core.<br>
 Enterprise security. Enterprise scalability. Enterprise governance.<br>
 Your infrastructure. Your data. Your rules.
 </p>
@@ -45,6 +46,14 @@ Twelve implemented guardrail policies cover destructive writes, external HTTP,
 branch protection, rate limits, sensitive output, command/path restrictions,
 desktop safety, approvals, and selected domain rules; three baseline policies
 apply by default and higher-risk policies must be assigned deliberately.
+
+**Everything Is a Plugin** — The core is a small deterministic engine; everything
+else attaches to it declaratively. Skills are versioned manifest-plus-instruction
+bundles agents load on demand; tools register into a catalog gated by per-agent
+allow/deny lists; messaging channels, external SaaS APIs (via the generic
+REST-to-MCP connector bridge), and MCP servers plug in without touching the
+engine. Swap a model provider, add a channel, or drop in a new capability by
+adding a manifest — not by forking the platform.
 
 **Enterprise Federation** — Connect Genus OS instances across sites, subsidiaries, and partners into a peer-to-peer mesh. Ed25519 signed invite tokens establish cryptographic trust. Each connection has scoped exports/imports — no implicit access, no transitive trust. Three-channel sync (critical/bulk/media) with Hybrid Logical Clocks for causal ordering across distributed instances. NATS JetStream transport with leaf-node topology handles unreliable networks gracefully. Every instance runs autonomously; federation adds connectivity, not dependency.
 
