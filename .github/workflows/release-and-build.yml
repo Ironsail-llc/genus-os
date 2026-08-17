@@ -110,6 +110,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
       - name: Verify product version metadata
+        env:
+          # Operator hatch for release-chain recovery: when release N's image
+          # build fails after its tag is cut, production lawfully lags and
+          # release N+1 must be allowed through to repair the chain. Set the
+          # repository VARIABLE GENUS_ALLOW_DEPLOYMENT_LAG=true for the
+          # recovery release, then unset it — the default keeps the
+          # no-lag invariant enforced.
+          GENUS_ALLOW_DEPLOYMENT_LAG: ${{ vars.GENUS_ALLOW_DEPLOYMENT_LAG || 'false' }}
         run: node scripts/check-version-consistency.js
       # npm audit gate: named-allowlist policy, not a blanket exception. A
       # high/critical advisory must either be absent or have its GHSA id
