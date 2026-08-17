@@ -77,7 +77,7 @@ consent, retention, and jurisdictional requirements.
 
 1. **Clone and install:**
    ```bash
-   git clone https://github.com/genusos/genusos.git
+   git clone https://github.com/Ironsail-llc/genus-os.git
    cd genus-os
    python3 -m venv venv && source venv/bin/activate
    pip install -e ".[all]"
@@ -101,7 +101,7 @@ cp docs/AGENT_BUILDER.md .claude/AGENT_BUILDER.md
 ## Quick Start
 
 ```bash
-git clone https://github.com/genusos/genusos.git
+git clone https://github.com/Ironsail-llc/genus-os.git
 cd genus-os
 pip install -e ".[all]"
 robothor init       # Interactive setup: DB, Redis, Ollama, migrations
@@ -539,7 +539,7 @@ robothor federation invite --relationship child --ttl 48
 # → prints a one-time signed token
 
 # On the new instance:
-git clone https://github.com/genusos/genusos.git
+git clone https://github.com/Ironsail-llc/genus-os.git
 cd genus-os && pip install -e ".[all]"
 robothor init
 robothor federation init
