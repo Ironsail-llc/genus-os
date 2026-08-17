@@ -1,3 +1,9 @@
+## [1.28.2](https://github.com/Ironsail-llc/genus-os/compare/v1.28.1...v1.28.2) (2026-08-17)
+
+### Bug Fixes
+
+* **memory:** run the decay pass in budgeted chunks off the event loop ([#239](https://github.com/Ironsail-llc/genus-os/issues/239)) ([c3c411e](https://github.com/Ironsail-llc/genus-os/commit/c3c411ec355193136bf8ea675e037aa3219b3b85))
+
 ## [1.28.1](https://github.com/Ironsail-llc/genus-os/compare/v1.28.0...v1.28.1) (2026-08-17)
 
 ### Bug Fixes
