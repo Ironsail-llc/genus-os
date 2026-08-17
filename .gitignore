@@ -219,6 +219,13 @@ brain/scratch/
 # Editor backup files
 *.bak
 *.bak[0-9]
+*.bak.[0-9]*
+
+# Host config snapshots (contain live credentials — must never be staged)
+/.config-backup-*/
+
+# Script run logs
+/scripts/*.log
 
 # Helm chart dependency archives — fetched by 'helm dependency update'
 helm/*/charts/*.tgz
