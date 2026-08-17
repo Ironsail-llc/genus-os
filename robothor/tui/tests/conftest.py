@@ -6,8 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from robothor import __version__
-from robothor.tui.client import EngineClient
+pytest.importorskip(
+    "textual", reason="tui extra not installed — CI lanes without it must still collect"
+)
+
+from robothor import __version__  # noqa: E402
+from robothor.tui.client import EngineClient  # noqa: E402
 
 
 @pytest.fixture

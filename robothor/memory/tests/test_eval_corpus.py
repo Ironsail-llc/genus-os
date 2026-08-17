@@ -201,11 +201,18 @@ class TestStratumCoverage:
 class TestShippedSuiteIsClean:
     """The gate applied to the corpus actually in the repo."""
 
-    def test_shipped_suite_has_no_structural_errors(self):
+    def test_shipped_suite_has_no_structural_errors(self, monkeypatch):
+        from pathlib import Path
+
         import yaml
 
         from robothor.memory.eval_corpus import suite_path
 
+        # suite_path() is workspace-relative for runtime overlays; this test
+        # certifies the corpus SHIPPED IN THE REPO, so pin the workspace to
+        # the repo root (CI runners have no ~/robothor).
+        repo_root = Path(__file__).resolve().parents[3]
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(repo_root))
         cases = yaml.safe_load(suite_path().read_text())["cases"]
         errs = [
             e

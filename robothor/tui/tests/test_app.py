@@ -7,8 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from robothor.tui.app import RobothorApp
-from robothor.tui.widgets import MessageDisplay, WelcomeBanner
+pytest.importorskip(
+    "textual", reason="tui extra not installed — CI lanes without it must still collect"
+)
+
+from robothor.tui.app import RobothorApp  # noqa: E402
+from robothor.tui.widgets import MessageDisplay, WelcomeBanner  # noqa: E402
 
 
 class TestAppInit:
