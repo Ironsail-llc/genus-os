@@ -58,11 +58,22 @@ async def _send_telegram(level: str, title: str, body: str) -> bool:
         if send_fn is None:
             logger.warning("Telegram sender not initialized, can't deliver alert")
             return False
+
+        # send_fn is TelegramBot.send_message(self, chat_id, text, **_ignored) \u2014
+        # alerts.py has no chat-id source of its own, so pull it from
+        # EngineConfig (populated from ROBOTHOR_TELEGRAM_CHAT_ID / TELEGRAM_CHAT_ID).
+        from robothor.engine.config import EngineConfig
+
+        chat_id = EngineConfig.from_env().default_chat_id
+        if not chat_id:
+            logger.warning("No default_chat_id configured, can't deliver alert")
+            return False
+
         icon = {"info": "\u2139\ufe0f", "warning": "\u26a0\ufe0f", "critical": "\U0001f6a8"}.get(
             level, "\u2753"
         )
         message = f"{icon} <b>{html.escape(title)}</b>\n{html.escape(body)}"
-        await send_fn(message)
+        await send_fn(chat_id, message)
         return True
     except Exception as e:
         logger.warning("Alert delivery to Telegram failed: %s", e)
