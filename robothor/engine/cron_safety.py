@@ -39,7 +39,14 @@ _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bexec\s*\(\s*['\"]curl\s+", re.IGNORECASE),
     re.compile(r"\brm\s+-rf\s+/", re.IGNORECASE),
     # Cron-bootstrapping (recursive scheduling)
-    re.compile(r"\bcron(job)?\s*\(", re.IGNORECASE),
+    # Narrowed from cron(job)? to avoid false positives on
+    # documentation references in agent instruction files.
+    # Now requires a string argument to match actual scheduling
+    # calls (e.g. cron("10 * * * *")) not prose mentions.
+    # cronjob( is always suspicious — no documentation uses this form
+    re.compile(r"\bcronjob\s*\(", re.IGNORECASE),
+    # cron('schedule') — actual scheduling with string argument
+    re.compile(r"\bcron\s*\(\s*['\"]", re.IGNORECASE),
 )
 
 
