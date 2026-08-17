@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -627,6 +628,158 @@ instruction_file: ""
         job = scheduler.scheduler.get_job("worker")
         assert job is not None
         assert job.misfire_grace_time is None
+
+
+class TestCronCatchUp:
+    """Startup catch-up: fire a cron occurrence missed while the daemon was down.
+
+    APScheduler's in-memory jobstore has no memory of occurrences missed
+    between process restarts — misfire_grace_time only covers misses within
+    a single process's uptime. On start(), the scheduler compares each cron
+    agent's persisted last_run_at against the most recent scheduled
+    occurrence and spawns a catch-up run when one was missed.
+    """
+
+    def _write_manifest(self, tmp_path, *, catch_up="coalesce", stale_after_minutes=120):
+        manifest_dir = tmp_path / "docs" / "agents"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "catchup-agent.yaml").write_text(
+            f"""id: catchup-agent
+name: Catchup Agent
+model:
+  primary: openrouter/test/model
+schedule:
+  cron: "0 * * * *"
+  timezone: UTC
+  catch_up: {catch_up}
+  stale_after_minutes: {stale_after_minutes}
+delivery:
+  mode: none
+tools_allowed: [exec]
+instruction_file: ""
+"""
+        )
+        return manifest_dir
+
+    async def _run_start_and_capture_spawns(self, tmp_path, *, manifest_dir, schedule_row, now):
+        """Drive scheduler.start() up to the poll loop; return catch-up spawn names."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(manifest_dir=manifest_dir, workspace=tmp_path)
+        runner = MagicMock()
+        scheduler = CronScheduler(config, runner)
+
+        spawned: list[str] = []
+
+        def _capture_spawn(coro, *, name=None):
+            spawned.append(name)
+            coro.close()  # never actually run it — avoid an unawaited-coroutine warning
+            return MagicMock()
+
+        mock_registry = MagicMock()
+        mock_registry.spawn.side_effect = _capture_spawn
+
+        with (
+            patch("robothor.engine.scheduler.get_schedule", return_value=schedule_row),
+            patch("robothor.engine.scheduler.get_task_registry", return_value=mock_registry),
+            patch("robothor.engine.scheduler._catchup_now", return_value=now),
+            patch.object(scheduler.scheduler, "start"),
+        ):
+            import asyncio
+
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+                with pytest.raises(asyncio.CancelledError):
+                    await scheduler.start()
+
+        return spawned
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_missed_occurrence_within_window_spawns_once(self, tmp_path):
+        """coalesce (default): a miss is caught up regardless of age."""
+        manifest_dir = self._write_manifest(tmp_path, catch_up="coalesce")
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)  # prev occurrence: 10:00
+        schedule_row = {"last_run_at": datetime(2026, 8, 17, 8, 0, tzinfo=UTC)}  # missed 10:00
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=schedule_row, now=now
+        )
+
+        assert spawned.count("cron-catchup:catchup-agent") == 1
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_skip_if_stale_beyond_window_no_spawn(self, tmp_path):
+        """skip_if_stale: a miss older than stale_after_minutes is dropped."""
+        manifest_dir = self._write_manifest(
+            tmp_path, catch_up="skip_if_stale", stale_after_minutes=5
+        )
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)  # prev occurrence: 10:00, 15m ago
+        schedule_row = {"last_run_at": datetime(2026, 8, 17, 8, 0, tzinfo=UTC)}
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=schedule_row, now=now
+        )
+
+        assert spawned == []
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_skip_if_stale_within_window_spawns_once(self, tmp_path):
+        """skip_if_stale: a miss inside stale_after_minutes is still caught up."""
+        manifest_dir = self._write_manifest(
+            tmp_path, catch_up="skip_if_stale", stale_after_minutes=30
+        )
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)  # prev occurrence: 10:00, 15m ago
+        schedule_row = {"last_run_at": datetime(2026, 8, 17, 8, 0, tzinfo=UTC)}
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=schedule_row, now=now
+        )
+
+        assert spawned.count("cron-catchup:catchup-agent") == 1
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_no_miss_no_spawn(self, tmp_path):
+        """last_run_at already covers the most recent occurrence — nothing missed."""
+        manifest_dir = self._write_manifest(tmp_path, catch_up="coalesce")
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)  # prev occurrence: 10:00
+        schedule_row = {"last_run_at": datetime(2026, 8, 17, 10, 5, tzinfo=UTC)}  # after 10:00
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=schedule_row, now=now
+        )
+
+        assert spawned == []
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_no_baseline_no_spawn(self, tmp_path):
+        """last_run_at is None (never run) — no baseline, avoid a startup stampede."""
+        manifest_dir = self._write_manifest(tmp_path, catch_up="coalesce")
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)
+        schedule_row = {"last_run_at": None}
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=schedule_row, now=now
+        )
+
+        assert spawned == []
+
+    @pytest.mark.usefixtures("_mock_tracking")
+    @pytest.mark.asyncio
+    async def test_missing_schedule_row_no_spawn(self, tmp_path):
+        """No schedule row at all for this agent — nothing to catch up against."""
+        manifest_dir = self._write_manifest(tmp_path, catch_up="coalesce")
+        now = datetime(2026, 8, 17, 10, 15, tzinfo=UTC)
+
+        spawned = await self._run_start_and_capture_spawns(
+            tmp_path, manifest_dir=manifest_dir, schedule_row=None, now=now
+        )
+
+        assert spawned == []
 
 
 class TestPersistentSessionSaveGate:

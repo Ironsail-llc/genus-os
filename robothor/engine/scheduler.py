@@ -10,18 +10,25 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
 from robothor.engine.config import load_all_manifests, manifest_to_agent_config
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
-from robothor.engine.tracking import delete_stale_schedules, update_schedule_state, upsert_schedule
+from robothor.engine.tracking import (
+    delete_stale_schedules,
+    get_schedule,
+    update_schedule_state,
+    upsert_schedule,
+)
 
 # Circuit breaker: skip agent after this many consecutive errors
 CIRCUIT_BREAKER_THRESHOLD = 5
@@ -41,6 +48,13 @@ def _now_iso() -> str:
 def _is_heartbeat_trigger(trigger_detail: str | None) -> bool:
     """True when this run was triggered by a heartbeat cron."""
     return bool(trigger_detail and trigger_detail.startswith("heartbeat:"))
+
+
+def _catchup_now(timezone: str) -> datetime:
+    """Current time in an agent's cron timezone. Isolated as a patch point
+    for tests — everything else about catch-up math is deterministic given
+    `now`."""
+    return datetime.now(ZoneInfo(timezone))
 
 
 async def _maybe_emit_heartbeat_status_ping(
@@ -165,6 +179,7 @@ class CronScheduler:
         manifests = load_all_manifests(self.config.manifest_dir)
         loaded = 0
         active_schedule_ids: set[str] = set()
+        cron_agent_configs: list[AgentConfig] = []
 
         for manifest in manifests:
             agent_config = manifest_to_agent_config(manifest)
@@ -315,6 +330,7 @@ class CronScheduler:
                 coalesce=True,
                 misfire_grace_time=grace_time,
             )
+            cron_agent_configs.append(agent_config)
 
             # Upsert schedule state in database
             try:
@@ -425,6 +441,11 @@ class CronScheduler:
                     )
             logger.info("Loaded %d workflow cron jobs", wf_loaded)
 
+        # Catch up cron occurrences missed while the daemon was down. The
+        # in-memory jobstore has no record of these — misfire_grace_time only
+        # covers misses within a single process's uptime.
+        self._catch_up_missed_runs(cron_agent_configs)
+
         self.scheduler.start()
         logger.info("Cron scheduler started")
 
@@ -432,6 +453,58 @@ class CronScheduler:
         while True:
             await asyncio.sleep(60)
             await self._tick_user_cronjobs()
+
+    # ─── Startup catch-up ──────────────────────────────────────────────
+
+    def _catch_up_missed_runs(self, agent_configs: list[AgentConfig]) -> None:
+        """Fire, at most once each, any cron occurrence missed while the
+        daemon was down. Best-effort per agent — one bad schedule row or
+        cron expression must never stop the others from being checked."""
+        for agent_config in agent_configs:
+            try:
+                self._catch_up_one(agent_config)
+            except Exception as e:
+                logger.warning("Cron catch-up check failed for %s: %s", agent_config.id, e)
+
+    def _catch_up_one(self, agent_config: AgentConfig) -> None:
+        """Spawn exactly one catch-up run for `agent_config` if the most
+        recent scheduled occurrence happened after its last recorded run."""
+        schedule = get_schedule(agent_config.id)
+        if not schedule:
+            return  # no schedule row — nothing to catch up against
+
+        last_run_at = schedule.get("last_run_at")
+        if last_run_at is None:
+            return  # no baseline — avoid a stampede on first-ever start
+
+        if last_run_at.tzinfo is None:
+            last_run_at = last_run_at.replace(tzinfo=UTC)
+
+        now = _catchup_now(agent_config.timezone)
+
+        try:
+            prev_occurrence = croniter(agent_config.cron_expr, now).get_prev(datetime)
+        except Exception as e:
+            logger.warning("Cron catch-up: invalid cron expression for %s: %s", agent_config.id, e)
+            return
+
+        if prev_occurrence <= last_run_at:
+            return  # last run already covers the most recent occurrence
+
+        if agent_config.catch_up == "skip_if_stale":
+            stale_after = timedelta(minutes=agent_config.stale_after_minutes)
+            if now - prev_occurrence > stale_after:
+                return  # missed occurrence is older than the policy allows
+
+        logger.info(
+            "Cron catch-up: %s missed %s, running now",
+            agent_config.id,
+            prev_occurrence.isoformat(),
+        )
+        get_task_registry().spawn(
+            self._run_agent(agent_config.id),
+            name=f"cron-catchup:{agent_config.id}",
+        )
 
     # ─── Shared execution path ────────────────────────────────────────
 
