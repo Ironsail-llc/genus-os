@@ -1,3 +1,9 @@
+## [1.28.0](https://github.com/Ironsail-llc/genus-os/compare/v1.27.3...v1.28.0) (2026-08-17)
+
+### Features
+
+* **memory:** ship the tenancy, correctness and eval train ([#235](https://github.com/Ironsail-llc/genus-os/issues/235)) ([72dc65d](https://github.com/Ironsail-llc/genus-os/commit/72dc65d81b4899a80c064123c662d6fec9051eb4))
+
 ## [1.27.3](https://github.com/Ironsail-llc/genus-os/compare/v1.27.2...v1.27.3) (2026-08-17)
 
 ### Bug Fixes
