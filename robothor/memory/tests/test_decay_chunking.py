@@ -79,9 +79,7 @@ class TestChunkedCommits:
         with patch.object(lc, "get_connection", return_value=ctx):
             lc._run_decay_pass_sync(budget_s=600.0)
 
-        update_calls = [
-            c for c in cur.execute.call_args_list if "UPDATE memory_facts" in c.args[0]
-        ]
+        update_calls = [c for c in cur.execute.call_args_list if "UPDATE memory_facts" in c.args[0]]
         assert len(update_calls) == chunk_size + 1
 
 
