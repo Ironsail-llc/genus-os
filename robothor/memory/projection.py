@@ -89,7 +89,7 @@ def render_note(fact: dict[str, Any], *, generated_at: datetime | None = None) -
         f"confidence: {fact.get('confidence')}",
         f"importance: {fact.get('importance_score')}",
         f"source_type: {fact.get('source_type') or 'unknown'}",
-        f"fact_updated_at: {updated.isoformat() if hasattr(updated, 'isoformat') else updated}",
+        f"fact_updated_at: {updated.isoformat() if updated is not None and hasattr(updated, 'isoformat') else updated}",
         f"generated_at: {stamp}",
         f"generator: {GENERATED_MARKER}",
         "read_only: true",
@@ -110,7 +110,9 @@ def render_note(fact: dict[str, Any], *, generated_at: datetime | None = None) -
     return "\n".join(lines)
 
 
-def select_facts(limit: int = DEFAULT_MAX_NOTES, tenant_id: str | None = None) -> list[dict]:
+def select_facts(
+    limit: int = DEFAULT_MAX_NOTES, tenant_id: str | None = None
+) -> list[dict[str, Any]]:
     """Highest-value active facts: importance first, then recency."""
     from robothor.db.connection import get_connection
 

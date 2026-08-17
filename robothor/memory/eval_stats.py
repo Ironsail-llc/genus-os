@@ -37,7 +37,7 @@ def mcnemar_exact(b: int, c: int) -> float:
     # P(X <= min) + P(X >= max) under Binomial(n, 0.5); by symmetry that is
     # twice the smaller tail, clamped at 1.
     k = min(b, c)
-    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2**n)
+    tail = float(sum(math.comb(n, i) for i in range(k + 1))) / (1 << n)
     return min(1.0, 2.0 * tail)
 
 

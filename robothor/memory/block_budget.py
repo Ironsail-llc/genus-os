@@ -84,7 +84,7 @@ def check_budget(content: str, *, max_chars: int | None) -> BudgetVerdict:
     DEFAULT_MAX_CHARS — a misconfigured 0 must not reject every write, and a
     NULL must not permit an unbounded one.
     """
-    limit = max_chars if (max_chars or 0) > 0 else DEFAULT_MAX_CHARS
+    limit = max_chars if max_chars is not None and max_chars > 0 else DEFAULT_MAX_CHARS
     size = len(content or "")
     overflow = max(0, size - limit)
     return BudgetVerdict(
