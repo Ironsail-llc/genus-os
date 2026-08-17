@@ -841,6 +841,123 @@ def _release_lifecycle_lock() -> None:
         pass  # Lock will expire via TTL
 
 
+# Step 2 (decay) processes facts in chunks of this size, each inside its own
+# get_connection() transaction, so a run against the full ~29k-row corpus
+# never holds every row's lock for the whole pass and a mid-pass failure only
+# loses the in-flight chunk instead of the entire run.
+_DECAY_CHUNK_SIZE = 500
+
+# Wall-clock budget for Step 2 (decay). asyncio.to_thread already keeps this
+# work off the event loop (see _run_decay_step), but the budget still bounds
+# total row-lock time and lets a slow pass yield to Steps 3+ instead of
+# running unbounded — same style as Step 1's scoring_budget_s.
+_DECAY_BUDGET_S = 120.0
+
+
+def _decay_chunk(rows: list[dict[str, Any]]) -> tuple[int, int]:
+    """Score and UPDATE one chunk of facts inside a single transaction.
+
+    Returns (updated, skipped_null). Rows with a NULL last_accessed are
+    skipped rather than passed to compute_decay_score(), which requires a
+    datetime and is NOT touched here — see scripts/memory_decay_dryrun.py
+    for why the formula itself must stay a single source of truth.
+    """
+    updated = 0
+    skipped_null = 0
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for fact in rows:
+            if fact["last_accessed"] is None:
+                skipped_null += 1
+                continue
+            score = compute_decay_score(
+                last_accessed=fact["last_accessed"],
+                access_count=fact["access_count"],
+                reinforcement_count=fact["reinforcement_count"],
+                importance_score=fact["importance_score"],
+                outcome_failures=fact.get("outcome_failures", 0) or 0,
+            )
+            cur.execute(
+                "UPDATE memory_facts SET decay_score = %s WHERE id = %s",
+                (score, fact["id"]),
+            )
+            updated += 1
+    return updated, skipped_null
+
+
+def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S) -> dict[str, int]:
+    """Sync decay pass: fetch all candidates once, then UPDATE in budgeted,
+    chunked transactions. Runs inside asyncio.to_thread — see
+    _run_decay_step(). Fully synchronous psycopg2 by design; there is no
+    async driver in this repo (robothor/db/connection.py pool is sync).
+
+    Replaces the old single-transaction SELECT-all + UPDATE-per-row pass
+    that ran 200-330s on the production corpus directly on the asyncio event
+    loop, starving it long enough that systemd's watchdog (WatchdogSec=300,
+    pinged every 30s from daemon.py) SIGABRTs the engine. Chunking bounds
+    per-transaction lock time and survives a mid-pass failure; the budget
+    stops the pass cleanly instead of running unbounded.
+    """
+    t_start = time.monotonic()
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, last_accessed, access_count, reinforcement_count,
+                   importance_score, outcome_failures
+            FROM memory_facts
+            WHERE is_active = TRUE
+            """
+        )
+        all_facts = cur.fetchall()
+
+    updated = 0
+    skipped_null = 0
+    processed = 0
+    budget_exhausted = False
+
+    for start in range(0, len(all_facts), _DECAY_CHUNK_SIZE):
+        elapsed = time.monotonic() - t_start
+        if elapsed > budget_s:
+            budget_exhausted = True
+            break
+        chunk = all_facts[start : start + _DECAY_CHUNK_SIZE]
+        chunk_updated, chunk_skipped = _decay_chunk(chunk)
+        updated += chunk_updated
+        skipped_null += chunk_skipped
+        processed += len(chunk)
+
+    remaining = len(all_facts) - processed
+    if skipped_null:
+        logger.info("Step 2 (decay): %d skipped (NULL last_accessed)", skipped_null)
+    if budget_exhausted:
+        logger.warning(
+            "Step 2 (decay): budget exhausted (%.0fs): updated %d, %d remaining",
+            time.monotonic() - t_start,
+            updated,
+            remaining,
+        )
+
+    return {
+        "updated": updated,
+        "skipped_null": skipped_null,
+        "budget_exhausted": budget_exhausted,
+        "remaining": remaining,
+    }
+
+
+async def _run_decay_step() -> int:
+    """Step 2 entry point: dispatch the sync, chunked, budgeted decay pass to
+    a worker thread so it never blocks the event loop.
+
+    Split out from run_lifecycle_maintenance so the to_thread dispatch, the
+    budget stop, and NULL handling can be tested directly without mocking
+    the rest of the 13-step maintenance pass.
+    """
+    result = await asyncio.to_thread(_run_decay_pass_sync, _DECAY_BUDGET_S)
+    return result["updated"]
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
@@ -955,34 +1072,11 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     except Exception as e:
         logger.warning("Failed to unload generation model: %s", e)
 
-    # Step 2: Update decay scores
+    # Step 2: Update decay scores — chunked, budgeted, off the event loop.
+    # See _run_decay_pass_sync for why (was a 200-330s synchronous pass
+    # holding the loop and every row's lock for the whole run).
     t1 = time.monotonic()
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """
-            SELECT id, last_accessed, access_count, reinforcement_count,
-                   importance_score, outcome_failures
-            FROM memory_facts
-            WHERE is_active = TRUE
-            """
-        )
-        all_facts = cur.fetchall()
-        decay_updated = 0
-
-        for fact in all_facts:
-            score = compute_decay_score(
-                last_accessed=fact["last_accessed"],
-                access_count=fact["access_count"],
-                reinforcement_count=fact["reinforcement_count"],
-                importance_score=fact["importance_score"],
-                outcome_failures=fact.get("outcome_failures", 0) or 0,
-            )
-            cur.execute(
-                "UPDATE memory_facts SET decay_score = %s WHERE id = %s", (score, fact["id"])
-            )
-            decay_updated += 1
-
+    decay_updated = await _run_decay_step()
     step_timings["decay"] = time.monotonic() - t1
     logger.info("Step 2 (decay): %d updated (%.1fs)", decay_updated, step_timings["decay"])
 
