@@ -66,6 +66,12 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
+# The runtime is `node server.js` — npm is never invoked in this stage. The
+# bundled npm CLI vendors its own dependency tree (node-tar et al.) whose
+# CVEs Trivy rightly blocks on; remove the CLI instead of chasing upstream
+# bundle bumps.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 RUN addgroup -g 1001 -S nextjs && adduser -S -G nextjs -u 1001 nextjs
 
 COPY --from=builder --chown=nextjs:nextjs /app/public ./public
