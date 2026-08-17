@@ -46,7 +46,7 @@ dependencies = [
     "apscheduler~=3.10",
     "croniter~=6.0",
     "html2text~=2024.2",
-    "cryptography>=48.0.1",
+    "cryptography>=50.0.0",
     "structlog~=24.0",
     "prometheus-client~=0.21",
 ]
