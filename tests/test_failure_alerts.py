@@ -46,6 +46,19 @@ def curl_call_count(log: Path) -> int:
     return log.read_text().count("api.telegram.org")
 
 
+def stamp_files(tmp_path: Path) -> list[Path]:
+    """The cooldown stamp file(s) under this test's isolated state dir.
+
+    Deliberately does not assume a filename shape (sanitized unit name, hash
+    suffix, or otherwise) — tests should assert suppression behavior keyed
+    by unit name, not the stamp's on-disk naming scheme.
+    """
+    state_dir = tmp_path / "alert-cooldown"
+    if not state_dir.exists():
+        return []
+    return sorted(p for p in state_dir.iterdir() if p.is_file())
+
+
 def run_send(
     tmp_path: Path, unit: str, env_extra: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
@@ -195,9 +208,9 @@ class TestCooldownDedup:
         assert first.returncode == 0, first.stdout + first.stderr
         assert curl_call_count(log) == 1
 
-        stamp = tmp_path / "alert-cooldown" / "robothor-engine.service"
-        assert stamp.exists(), "a successful page must leave a cooldown stamp"
-        subprocess.run(["touch", "-d", "-120 seconds", str(stamp)], check=True)
+        stamps = stamp_files(tmp_path)
+        assert len(stamps) == 1, "a successful page must leave exactly one cooldown stamp"
+        subprocess.run(["touch", "-d", "-120 seconds", str(stamps[0])], check=True)
 
         second = run_send(tmp_path, "robothor-engine.service", env)
         assert second.returncode == 0, second.stdout + second.stderr
@@ -209,5 +222,25 @@ class TestCooldownDedup:
         result = run_send(tmp_path, "robothor-engine.service", env)
         assert result.returncode != 0
         assert curl_call_count(log) == 1
-        stamp = tmp_path / "alert-cooldown" / "robothor-engine.service"
-        assert not stamp.exists(), "a failed send must not suppress the retry"
+        assert stamp_files(tmp_path) == [], "a failed send must not suppress the retry"
+
+    def test_units_that_sanitize_identically_do_not_share_a_stamp(self, tmp_path: Path):
+        """systemd unit names legally contain ':' and '\\' unescaped in %i
+        values (man systemd.unit, systemd-escape) — characters the stamp-key
+        sanitizer collapses to '_'. "robothor-backup:primary.service" and
+        "robothor-backup_primary.service" sanitize to the same string, so a
+        sanitize-only key would let one unit's cooldown suppress the other's
+        real, distinct failure.
+        """
+        log = fake_curl(tmp_path)
+        env = dict(self.ENV)
+        first = run_send(tmp_path, "robothor-backup:primary.service", env)
+        assert first.returncode == 0, first.stdout + first.stderr
+
+        second = run_send(tmp_path, "robothor-backup_primary.service", env)
+        assert second.returncode == 0, second.stdout + second.stderr
+
+        assert curl_call_count(log) == 2, (
+            "two unit names that sanitize to the same key must not share a "
+            "cooldown — each is a distinct unit and must page independently"
+        )
