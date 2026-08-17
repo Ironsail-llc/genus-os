@@ -255,6 +255,29 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
         return None
 
 
+async def _maybe_run_alert_selftest() -> None:
+    """Optional live probe of the alert delivery path (env-gated).
+
+    ROBOTHOR_ALERT_SELFTEST=1 fires one info alert so the alert() ->
+    send_fn(chat_id, text) path can be verified end-to-end on a running
+    box — a code-free way to confirm the fixed sender arity actually
+    reaches the operator, without waiting for a real incident to trip it.
+    Best-effort: never raises into the caller.
+    """
+    if os.environ.get("ROBOTHOR_ALERT_SELFTEST") != "1":
+        return
+    try:
+        from robothor.engine.alerts import alert
+
+        await alert(
+            "info",
+            "Alert delivery self-test",
+            "Engine startup self-test — the alert() delivery path is live.",
+        )
+    except Exception as e:
+        logger.debug("Alert delivery self-test failed: %s", e)
+
+
 def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
     """Log the outcome of each finished top-level subsystem task.
 
@@ -556,6 +579,9 @@ async def main() -> None:
             )
     except Exception as e:
         logger.debug("Startup announcement failed: %s", e)
+
+    # Alert delivery self-test (env-gated, best-effort) — see docstring.
+    await _maybe_run_alert_selftest()
 
     # Wait for any task to complete (aiogram handles SIGTERM and stops polling,
     # which completes the telegram task — that's our shutdown trigger)
