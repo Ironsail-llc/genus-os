@@ -192,6 +192,42 @@ def check_dropin_drift() -> None:
     print(result.stdout.rstrip())
 
 
+# (live path, repo-relative mirror path) — kept in sync by
+# scripts/install-host-scripts.sh. A hand-copied script that drifts from its
+# repo source is exactly how a month-old permission fix in pg-basebackup.sh
+# stayed unapplied on the live box.
+HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
+    ("/usr/local/bin/robothor-pg-basebackup.sh", "scripts/pg-basebackup.sh"),
+    ("/usr/local/bin/robothor-wal-offsite.sh", "scripts/wal-offsite.sh"),
+    ("/usr/local/bin/robothor-wal-archive.sh", "scripts/wal-archive.sh"),
+]
+
+
+def check_host_script_drift(pairs: list[tuple[str, str]] | None = None) -> None:
+    """Compare the installed host ops scripts under /usr/local/bin against
+    their repo copies.
+
+    These are hand-copied with no installer and no drift check today —
+    scripts/install-host-scripts.sh is the fix for the copy step, this is the
+    guard that says loudly when it hasn't been re-run since the repo changed.
+    Reuses check_dropin_drift.sh, which already does exact-file comparison
+    with the right exit codes and diff output for two arbitrary paths.
+    """
+    script = Path(__file__).resolve().parent / "check_dropin_drift.sh"
+    if not script.exists():
+        return
+    print("\n=== host ops script drift check ===")
+    for live, mirror in pairs if pairs is not None else HOST_SCRIPT_DRIFT_PAIRS:
+        mirror_path = REPO_ROOT / mirror
+        result = subprocess.run(
+            ["bash", str(script), live, str(mirror_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        print(result.stdout.rstrip())
+
+
 def scoping_is_vacuous(non_privileged: int, linked_facts: int) -> bool:
     """True when a scoping guarantee is being advertised but cannot bind.
 
@@ -301,6 +337,7 @@ def main() -> int:
     check_soak_deadlines()
     check_stale_goals()
     check_dropin_drift()
+    check_host_script_drift()
     check_memory_scoping_is_not_vacuous()
     return 0
 

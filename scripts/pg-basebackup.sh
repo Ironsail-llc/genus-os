@@ -36,8 +36,13 @@ OUT="$DEST/base-$STAMP"
 # exists for. setgid on the parent so future runs inherit the group.
 OFFSITE_GROUP="${ROBOTHOR_BACKUP_GROUP:-}"
 if [[ -n "$OFFSITE_GROUP" ]]; then
-    chgrp "$OFFSITE_GROUP" "$DEST" 2>/dev/null || true
-    chmod 2775 "$DEST" 2>/dev/null || true
+    # Must not die on a perms failure (backup > offsite readability), but a
+    # silent failure here is exactly how today's incident happened — a base
+    # backup that never leaves the box, with nothing in the journal to say
+    # why. See scripts/install-host-scripts.sh for the group-membership
+    # check that should catch this before it ever gets here.
+    chgrp "$OFFSITE_GROUP" "$DEST" 2>/dev/null || log "WARN: chgrp $OFFSITE_GROUP $DEST failed — is postgres a member of $OFFSITE_GROUP?"
+    chmod 2775 "$DEST" 2>/dev/null || log "WARN: chmod 2775 $DEST failed — future runs will not inherit the offsite group"
 fi
 
 log "starting base backup -> $OUT"
