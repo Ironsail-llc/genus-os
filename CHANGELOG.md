@@ -1,3 +1,9 @@
+## [1.29.1](https://github.com/Ironsail-llc/genus-os/compare/v1.29.0...v1.29.1) (2026-08-17)
+
+### Bug Fixes
+
+* **ops:** prune WAL despite rclone failures, dedup pages, install scripts ([#241](https://github.com/Ironsail-llc/genus-os/issues/241)) ([c8c074c](https://github.com/Ironsail-llc/genus-os/commit/c8c074c9668008ba1bef2f1d5609462aa4da304f))
+
 ## [1.29.0](https://github.com/Ironsail-llc/genus-os/compare/v1.28.2...v1.29.0) (2026-08-17)
 
 ### Features
