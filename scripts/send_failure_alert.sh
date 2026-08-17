@@ -8,6 +8,29 @@ set -u
 
 UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
 
+# ── Cooldown: dedup repeated pages for the same unit ──────────────────────────
+# A unit crash-looping on a short timer (e.g. every 15 minutes) would otherwise
+# page the operator dozens of times a day for the same underlying failure —
+# exactly what happened during today's incident. Stamp files are keyed per
+# unit under a state dir that, by default, lives on tmpfs (matching where the
+# secrets live), so the cooldown naturally clears on reboot.
+STATE_DIR="${ROBOTHOR_ALERT_STATE_DIR:-/run/robothor/alert-cooldown}"
+STAMP_KEY="$(printf '%s' "$UNIT" | tr -c 'A-Za-z0-9._-' '_')"
+STAMP_FILE="${STATE_DIR}/${STAMP_KEY}"
+COOLDOWN="${ROBOTHOR_ALERT_COOLDOWN_SECONDS:-3600}"
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+if [[ -f "$STAMP_FILE" ]]; then
+    NOW=$(date +%s)
+    STAMP_TIME=$(stat -c %Y "$STAMP_FILE" 2>/dev/null || echo 0)
+    AGE=$(( NOW - STAMP_TIME ))
+    if (( AGE < COOLDOWN )); then
+        echo "send_failure_alert: suppressed duplicate page for ${UNIT} (${AGE}s < ${COOLDOWN}s)"
+        exit 0
+    fi
+fi
+
 # The credentials live ONLY in /run/robothor/secrets.env, and /run is tmpfs — so
 # on a cold boot the file does not exist until some service's ExecStartPre
 # decrypts it. That is exactly when services fail to start, which is exactly when
@@ -54,7 +77,16 @@ ${JOURNAL:-<journal unavailable>}
 
 Check: systemctl status ${UNIT}"
 
-curl -sS --max-time 15 \
+if curl -sS --max-time 15 \
     --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
     --data-urlencode "text=${TEXT}" \
-    "https://api.telegram.org/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null
+    "https://api.telegram.org/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null; then
+    # Touch the stamp only AFTER a successful send, so a failed send (e.g.
+    # Telegram is down) does not suppress the retry on the next failure.
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    touch "$STAMP_FILE" 2>/dev/null || true
+    exit 0
+fi
+
+echo "send_failure_alert: failed to send Telegram message" >&2
+exit 1
