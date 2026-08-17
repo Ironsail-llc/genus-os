@@ -36,7 +36,7 @@ def _reset_warn_dedup():
 
 def test_unresolved_tool_is_dropped_and_warned(sample_agent_config, caplog):
     reg = _registry()
-    real = sorted(reg._schemas)[0]  # a genuinely-registered tool
+    real = min(reg._schemas)  # a genuinely-registered tool
     cfg = dataclasses.replace(sample_agent_config, tools_allowed=[real, "totally_bogus_tool_xyz"])
     with caplog.at_level(logging.WARNING, logger="robothor.engine.tools.registry"):
         names = reg.get_tool_names(cfg)
@@ -58,7 +58,7 @@ def test_no_warning_when_all_tools_resolve(sample_agent_config, caplog):
 def test_warns_once_per_agent(sample_agent_config, caplog):
     """_get_filtered_names runs on every build/list call — don't spam the log."""
     reg = _registry()
-    real = sorted(reg._schemas)[0]
+    real = min(reg._schemas)
     cfg = dataclasses.replace(sample_agent_config, tools_allowed=[real, "bogus_xyz"])
     with caplog.at_level(logging.WARNING, logger="robothor.engine.tools.registry"):
         reg.get_tool_names(cfg)
@@ -73,7 +73,7 @@ def test_warns_once_across_reinstantiated_registries(sample_agent_config, caplog
     instances. Warn-once must hold across instances, not reset per build."""
     cfg = dataclasses.replace(
         sample_agent_config,
-        tools_allowed=[sorted(_registry()._schemas)[0], "bogus_across_reg"],
+        tools_allowed=[min(_registry()._schemas), "bogus_across_reg"],
     )
     with caplog.at_level(logging.WARNING, logger="robothor.engine.tools.registry"):
         _registry().get_tool_names(cfg)  # first instance warns

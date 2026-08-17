@@ -1,0 +1,20 @@
+[
+  {
+    "id": "GHSA-mh99-v99m-4gvg",
+    "package": "brace-expansion",
+    "reason": "bundled inside the npm CLI package (dep of @semantic-release/npm, unused by our release config); no published npm ships patched bundles as of 2026-08-17 — remove when one does",
+    "added": "2026-08-17"
+  },
+  {
+    "id": "GHSA-rgw5-rvv9-x895",
+    "package": "brace-expansion",
+    "reason": "bundled inside the npm CLI package (dep of @semantic-release/npm, unused by our release config); no published npm ships patched bundles as of 2026-08-17 — remove when one does",
+    "added": "2026-08-17"
+  },
+  {
+    "id": "GHSA-mwp4-54f8-5fhr",
+    "package": "ip-address",
+    "reason": "bundled inside the npm CLI package (dep of @semantic-release/npm, unused by our release config); no published npm ships patched bundles as of 2026-08-17 — remove when one does",
+    "added": "2026-08-17"
+  }
+]
