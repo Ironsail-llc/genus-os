@@ -2,9 +2,10 @@
 
 import asyncio
 import contextlib
+import logging
 import socket
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -224,3 +225,87 @@ class TestAutodreamLoopForceBackoff:
 
         mock_dream.assert_called_once()
         assert daemon._autodream_defer_started_at is None  # reset after a real run
+
+
+class TestOrphanedLoopCancelContainment:
+    """Regression for the Aug 5/9 daemon crashes.
+
+    An orphaned stall watchdog (started for a run, never stopped because the
+    injection-block path returns above its teardown) monitors whatever task
+    is `asyncio.current_task()` at that point — the daemon's own long-running
+    loop task on an inline cron fire — and cancels it ~150s later. Both
+    `_curiosity_density_loop` and `_curator_loop` had their periodic
+    `await asyncio.sleep(...)` sitting OUTSIDE the loop's
+    `except asyncio.CancelledError: return`, so a cancel landing there
+    propagated the CancelledError straight out of the coroutine, marking the
+    task itself as cancelled. These tests pin that the cancel is absorbed
+    internally — nothing should escape the `await` on the loop coroutine.
+    """
+
+    @pytest.mark.asyncio
+    async def test_curiosity_density_loop_absorbs_cancel_during_periodic_sleep(self):
+        from robothor.engine.daemon import _curiosity_density_loop
+
+        calls = 0
+
+        async def sleep_then_cancel(seconds):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return  # the one-shot post-boot sleep(300)
+            raise asyncio.CancelledError
+
+        with patch("robothor.engine.daemon.asyncio.sleep", side_effect=sleep_then_cancel):
+            # No contextlib.suppress here — that is the point of the test.
+            # If CancelledError escapes the coroutine, this await raises and
+            # the test fails with that exception.
+            await _curiosity_density_loop(MagicMock())
+
+        assert calls == 2, "expected the startup sleep plus exactly one periodic sleep"
+
+    @pytest.mark.asyncio
+    async def test_curator_loop_absorbs_cancel_during_periodic_sleep(self):
+        from robothor.engine.daemon import _curator_loop
+
+        calls = 0
+
+        async def sleep_then_cancel(seconds):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return  # the one-shot "stagger past boot" sleep(600)
+            raise asyncio.CancelledError
+
+        with patch("robothor.engine.daemon.asyncio.sleep", side_effect=sleep_then_cancel):
+            await _curator_loop(MagicMock())
+
+        assert calls == 2, "expected the startup sleep plus exactly one periodic sleep"
+
+
+class TestSupervisorCancelledTaskHandling:
+    """daemon.main()'s task-completion logging must survive a cancelled task.
+
+    Calling `task.exception()` on a task that ended cancelled raises
+    `CancelledError` — a BaseException that sails past `except Exception` in
+    main()'s top-level handler and takes the whole daemon down (exit 1).
+    This mirrors task_registry.py's `_on_done`, which already skips
+    `.exception()` for cancelled tasks.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancelled_task_is_logged_not_raised(self, caplog):
+        async def _never_ending():
+            await asyncio.sleep(999)
+
+        task = asyncio.create_task(_never_ending(), name="orphan-victim")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert task.cancelled() is True
+
+        with caplog.at_level(logging.INFO, logger="robothor.engine.daemon"):
+            daemon._log_task_results({task})  # must not raise
+
+        assert any("orphan-victim" in rec.message for rec in caplog.records), (
+            "the cancelled task should still be logged, just not via .exception()"
+        )

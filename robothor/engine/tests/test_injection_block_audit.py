@@ -97,6 +97,40 @@ class TestInjectionBlockAuditTrail:
             "a CLI-invoked blocked run never reaches a terminal status"
         )
 
+    def test_watchdog_is_stopped_before_the_injection_block_return(self):
+        """The stall watchdog started for this run must not survive the block.
+
+        watchdog.start(...) runs well before the try/finally (around
+        `watchdog.stop()` + `_active_watchdog_var.reset(...)`) that normally
+        tears it down. The injection-block path `return`s above that
+        try/finally entirely, so on an inline cron fire the watchdog keeps
+        monitoring whatever task happens to be `asyncio.current_task()` at
+        that moment — the daemon's own long-running loop task — and cancels
+        it ~150s later, taking the whole daemon down (Aug 5/9 crashes).
+        """
+        from robothor.engine import runner as runner_mod
+
+        body = Path(runner_mod.__file__).read_text()
+
+        block_start = body.index("except CronPromptInjectionBlockedError as _inj_exc:")
+        block_end = body.index("if _inj_finding:", block_start)
+        block = body[block_start:block_end]
+
+        return_pos = block.index("return self._finish_run(")
+        stop_pos = block.index("watchdog.stop()")
+        reset_pos = block.index("_active_watchdog_var.reset(")
+
+        assert stop_pos < return_pos, (
+            "watchdog.stop() must run before the injection-block early return — "
+            "otherwise the watchdog started at the top of execute() is orphaned "
+            "and cancels whatever task is current ~150s later"
+        )
+        assert reset_pos < return_pos, (
+            "_active_watchdog_var.reset(...) must also run before the "
+            "injection-block early return, or the contextvar leaks the stopped "
+            "watchdog into whatever runs next on this task"
+        )
+
     def test_session_fail_marks_run_failed_not_pending(self):
         """session.fail() must produce a terminal status for the blocked run."""
         from robothor.engine.session import AgentSession

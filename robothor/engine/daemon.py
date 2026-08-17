@@ -255,6 +255,51 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
         return None
 
 
+async def _maybe_run_alert_selftest() -> None:
+    """Optional live probe of the alert delivery path (env-gated).
+
+    ROBOTHOR_ALERT_SELFTEST=1 fires one info alert so the alert() ->
+    send_fn(chat_id, text) path can be verified end-to-end on a running
+    box — a code-free way to confirm the fixed sender arity actually
+    reaches the operator, without waiting for a real incident to trip it.
+    Best-effort: never raises into the caller.
+    """
+    if os.environ.get("ROBOTHOR_ALERT_SELFTEST") != "1":
+        return
+    try:
+        from robothor.engine.alerts import alert
+
+        await alert(
+            "info",
+            "Alert delivery self-test",
+            "Engine startup self-test — the alert() delivery path is live.",
+        )
+    except Exception as e:
+        logger.debug("Alert delivery self-test failed: %s", e)
+
+
+def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
+    """Log the outcome of each finished top-level subsystem task.
+
+    Mirrors task_registry.py's ``_on_done``: a task that ended cancelled
+    must be skipped BEFORE calling ``.exception()`` — on a cancelled task
+    that call raises ``CancelledError`` (a BaseException), which sails past
+    ``except Exception`` in ``run()``'s top-level handler and kills the
+    daemon outright. This is the containment layer for an orphaned stall
+    watchdog cancelling the wrong task (Aug 5/9 crashes); the sleep-inside-
+    try fixes on the curiosity/curator loops are the primary fix, this is
+    the backstop for any other task that ends up cancelled.
+    """
+    for task in done:
+        if task.cancelled():
+            logger.error("Task %s was cancelled externally", task.get_name())
+            continue
+        if task.exception():
+            logger.error("Task %s failed: %s", task.get_name(), task.exception())
+        else:
+            logger.info("Task %s completed", task.get_name())
+
+
 async def main() -> None:
     """Start all engine subsystems."""
     # Reject unsafe production authentication before touching the database,
@@ -535,16 +580,15 @@ async def main() -> None:
     except Exception as e:
         logger.debug("Startup announcement failed: %s", e)
 
+    # Alert delivery self-test (env-gated, best-effort) — see docstring.
+    await _maybe_run_alert_selftest()
+
     # Wait for any task to complete (aiogram handles SIGTERM and stops polling,
     # which completes the telegram task — that's our shutdown trigger)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
     # Log what finished
-    for task in done:
-        if task.exception():
-            logger.error("Task %s failed: %s", task.get_name(), task.exception())
-        else:
-            logger.info("Task %s completed", task.get_name())
+    _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
 
@@ -851,8 +895,12 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
     await asyncio.sleep(300)
 
     while True:
-        await asyncio.sleep(_CURIOSITY_CHECK_INTERVAL)
         try:
+            # Sleep inside the try — a cancel landing here (e.g. from an
+            # orphaned stall watchdog monitoring the wrong task) must be
+            # caught by except asyncio.CancelledError below, not propagate
+            # out of the coroutine and mark this task itself as cancelled.
+            await asyncio.sleep(_CURIOSITY_CHECK_INTERVAL)
             now = time.time()
             if now - _curiosity_last_spawn_ts < _CURIOSITY_COOLDOWN_SECONDS:
                 continue
@@ -905,8 +953,12 @@ async def _curator_loop(scheduler: Any) -> None:
     await asyncio.sleep(600)  # stagger past boot
 
     while True:
-        await asyncio.sleep(_CURATOR_CHECK_INTERVAL)
         try:
+            # Sleep inside the try — a cancel landing here (e.g. from an
+            # orphaned stall watchdog monitoring the wrong task) must be
+            # caught by except asyncio.CancelledError below, not propagate
+            # out of the coroutine and mark this task itself as cancelled.
+            await asyncio.sleep(_CURATOR_CHECK_INTERVAL)
             if not should_run_curator(load_curator_last_pass()):
                 continue
             if running_agents():

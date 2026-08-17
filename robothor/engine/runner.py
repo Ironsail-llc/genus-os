@@ -888,6 +888,16 @@ class AgentRunner:
                         _sanitize(_blocked_run.id),
                         _sanitize(_audit_exc),
                     )
+                # The watchdog started before setup (above) is normally torn
+                # down by the try/finally around the main run loop — but this
+                # return sits above that try entirely. Without an explicit
+                # stop here the watchdog is orphaned: it keeps monitoring
+                # whatever task is asyncio.current_task() at this point (the
+                # daemon's own loop task, on an inline cron fire) and cancels
+                # it ~150s later, taking the whole daemon down (Aug 5/9).
+                watchdog.stop()
+                with contextlib.suppress(Exception):
+                    _active_watchdog_var.reset(_wd_token)
                 return self._finish_run(
                     _blocked_run,
                     trace=None,
