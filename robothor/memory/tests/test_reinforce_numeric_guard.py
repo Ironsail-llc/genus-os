@@ -64,6 +64,7 @@ class TestNumbersDiffer:
 
 
 @pytest.mark.integration
+@pytest.mark.llm  # real LLM classification + live embeddings; on-box only, CI has no model runtime
 class TestReinforceShortcutRespectsNumbers:
     """The wiring. The pure helper is worthless if resolve_and_store ignores it."""
 

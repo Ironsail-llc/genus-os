@@ -176,8 +176,11 @@ jobs:
       # them by path. They pass — they had simply never been executed.
       # crm/bridge/tests needs its own invocation: its conftest registers a
       # plugin that collides when collected alongside the rest of the tree.
-      - run: pytest tests/ robothor/ -m integration -v
-      - run: pytest crm/ -m integration -v
+      # "not llm": llm-marked integration tests need a live local model
+      # runtime (Ollama) that CI does not have; they run on-box via the
+      # nightly eval/benchmark timers instead.
+      - run: pytest tests/ robothor/ -m "integration and not llm" -v
+      - run: pytest crm/ -m "integration and not llm" -v
 
   frontend:
     runs-on: ubuntu-latest

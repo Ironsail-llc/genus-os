@@ -126,6 +126,20 @@ class TestGateIsActuallyWired:
     Fires a real violation through the real write path in each mode.
     """
 
+    @pytest.fixture(autouse=True)
+    def _stub_embeddings(self, monkeypatch):
+        # The write path calls the embedder; this class certifies gate wiring,
+        # not embedding quality, and CI has no model runtime. Deterministic
+        # per-text vectors keep dedup semantics (same text -> same vector).
+        import hashlib
+        import random
+
+        async def _fake_embedding(text, *args, **kwargs):
+            rnd = random.Random(hashlib.sha256(str(text).encode()).digest())
+            return [rnd.uniform(-1.0, 1.0) for _ in range(1024)]
+
+        monkeypatch.setattr("robothor.llm.ollama.get_embedding_async", _fake_embedding)
+
     FACT = {"fact_text": "no", "category": "other", "entities": [], "confidence": 0.9}
 
     @pytest.mark.asyncio
