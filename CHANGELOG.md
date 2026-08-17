@@ -1,3 +1,9 @@
+## [1.27.2](https://github.com/Ironsail-llc/genus-os/compare/v1.27.1...v1.27.2) (2026-08-17)
+
+### Bug Fixes
+
+* **ci:** pin ruff, fix litellm drift, allowlist npm bundled-dep audit ([#232](https://github.com/Ironsail-llc/genus-os/issues/232)) ([0a778cb](https://github.com/Ironsail-llc/genus-os/commit/0a778cb532fd1bf870723d4d6080df8321aefba8))
+
 ## [1.27.1](https://github.com/Ironsail-llc/genus-os/compare/v1.27.0...v1.27.1) (2026-07-17)
 
 ### Bug Fixes
