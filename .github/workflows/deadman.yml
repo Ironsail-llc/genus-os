@@ -1,0 +1,106 @@
+# External dead-man probe for the self-hosted instance.
+#
+# WHY THIS EXISTS: every alerting mechanism the platform ships (systemd
+# OnFailure pager, engine Telegram alerts) runs ON the instance host — so a
+# dead host is a silent host by construction. This 2026-08-11→17 failure mode
+# cost one instance 5.6 days of unnoticed downtime. GitHub Actions is the one
+# piece of infrastructure guaranteed to be running when the box is not.
+#
+# HOW: probe the instance's public tunnel hostname. When the origin is alive
+# the app answers (any HTTP status < 500 counts — 401 is normal for an
+# authenticated endpoint). When the host is dead, Cloudflare answers with a
+# 52x/53x error or the request times out. Two probes 75s apart must BOTH fail
+# before paging (rides out transient blips), and re-alerts are capped at one
+# per hour via a cached timestamp so a long outage pages hourly, not every
+# ten minutes.
+#
+# Secrets: DEADMAN_TELEGRAM_BOT_TOKEN, DEADMAN_TELEGRAM_CHAT_ID.
+# The probe URL is a repository variable (DEADMAN_PROBE_URL) so forks/other
+# instances can point it at their own hostname; it defaults to this
+# instance's status host.
+name: Instance Dead-Man Probe
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: deadman-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROBE_URL: ${{ vars.DEADMAN_PROBE_URL || 'https://status.robothor.ai/' }}
+    steps:
+      - name: Restore last-alert state
+        id: state
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deadman-state
+          key: deadman-state-${{ github.run_id }}
+          restore-keys: |
+            deadman-state-
+
+      - name: Probe twice, page on double failure
+        id: probe
+        env:
+          BOT_TOKEN: ${{ secrets.DEADMAN_TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.DEADMAN_TELEGRAM_CHAT_ID }}
+        run: |
+          set -u
+          probe() {
+            # 000 = connect failure/timeout; 5xx incl. Cloudflare 52x/53x = origin dead.
+            curl -s -o /dev/null -w '%{http_code}' -m 25 "$PROBE_URL" || echo 000
+          }
+          c1=$(probe)
+          if [ "$c1" != "000" ] && [ "$c1" -lt 500 ]; then
+            echo "alive=true" >> "$GITHUB_OUTPUT"
+            echo "instance alive (HTTP $c1)"
+            exit 0
+          fi
+          echo "first probe failed (HTTP $c1); confirming in 75s"
+          sleep 75
+          c2=$(probe)
+          if [ "$c2" != "000" ] && [ "$c2" -lt 500 ]; then
+            echo "alive=true" >> "$GITHUB_OUTPUT"
+            echo "instance alive on second probe (HTTP $c2) — transient blip"
+            exit 0
+          fi
+          echo "alive=false" >> "$GITHUB_OUTPUT"
+          now=$(date +%s)
+          last=$(cat deadman-state/last-alert 2>/dev/null || echo 0)
+          age=$((now - last))
+          if [ "$age" -lt 3600 ]; then
+            echo "instance DEAD (HTTP $c1/$c2) but last page was ${age}s ago — suppressing re-alert"
+            exit 0
+          fi
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "::error::instance DEAD (HTTP $c1/$c2) and Telegram secrets are unset — cannot page"
+            exit 1
+          fi
+          text="🚨 DEAD-MAN: $PROBE_URL unreachable (HTTP $c1 then $c2, 75s apart). The instance host looks DOWN. On-box alerting is dead with it — check power/network first."
+          http=$(curl -s -o /tmp/tg-resp -w '%{http_code}' -m 20 \
+            --data-urlencode "chat_id=$CHAT_ID" \
+            --data-urlencode "text=$text" \
+            "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" || echo 000)
+          if [ "$http" = "200" ]; then
+            echo "paged operator (instance DEAD, HTTP $c1/$c2)"
+            mkdir -p deadman-state
+            echo "$now" > deadman-state/last-alert
+          else
+            echo "::error::instance DEAD and the Telegram page FAILED (HTTP $http): $(cat /tmp/tg-resp 2>/dev/null | head -c 200)"
+            exit 1
+          fi
+
+      - name: Save last-alert state
+        if: steps.probe.outputs.alive == 'false'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deadman-state
+          key: deadman-state-${{ github.run_id }}
