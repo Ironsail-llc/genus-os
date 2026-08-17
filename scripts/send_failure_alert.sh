@@ -15,13 +15,18 @@ UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
 # unit under a state dir that, by default, lives on tmpfs (matching where the
 # secrets live), so the cooldown naturally clears on reboot.
 STATE_DIR="${ROBOTHOR_ALERT_STATE_DIR:-/run/robothor/alert-cooldown}"
-# Sanitized for use as a filename. Two unit names differing only in a
-# disallowed character (e.g. a literal "/" some caller passed) would
-# collide on the same stamp file and share a cooldown — acceptable here
-# because real systemd unit names are drawn from `%n`/`%i` and don't
-# contain characters outside [A-Za-z0-9._-] in the first place.
-STAMP_KEY="$(printf '%s' "$UNIT" | tr -c 'A-Za-z0-9._-' '_')"
-STAMP_FILE="${STATE_DIR}/${STAMP_KEY}"
+# Sanitized for use as a filename. systemd unit names can legally contain
+# characters outside [A-Za-z0-9._-] unescaped in %i values (e.g. ':' and
+# '\' — see man systemd.unit, systemd-escape), which the sanitize step
+# below collapses to '_'. Two different units can sanitize to the same
+# string (e.g. "robothor-backup:primary.service" and
+# "robothor-backup_primary.service" both become
+# "robothor-backup_primary.service"), so a hash of the RAW name is appended
+# to disambiguate them — otherwise one unit's cooldown could suppress a
+# genuine page for an unrelated unit.
+SANITIZED="$(printf '%s' "$UNIT" | tr -c 'A-Za-z0-9._-' '_')"
+UNIT_HASH="$(printf '%s' "$UNIT" | sha256sum | cut -c1-8)"
+STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
 COOLDOWN="${ROBOTHOR_ALERT_COOLDOWN_SECONDS:-3600}"
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
