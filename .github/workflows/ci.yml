@@ -35,8 +35,16 @@ jobs:
           node-version: 22
           cache: "npm"
           cache-dependency-path: package-lock.json
+      # npm audit gate: named-allowlist policy, not a blanket exception. A
+      # high/critical advisory must either be absent or have its GHSA id
+      # explicitly tracked -- id, package, and a reviewed reason -- in
+      # .npm-audit-allowlist.json (see scripts/check_npm_audit.py). Any
+      # advisory NOT named in that tracked file still fails the gate,
+      # including new advisories in an already-allowlisted package.
       - name: Audit release-tooling lock
-        run: npm audit --package-lock-only --audit-level=high
+        run: |
+          npm audit --package-lock-only --audit-level=high --json > /tmp/npm-audit.json || true
+          python3 scripts/check_npm_audit.py /tmp/npm-audit.json
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -55,7 +63,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install ruff==0.15.2
       - run: ruff check robothor/
       - run: ruff format --check robothor/
 

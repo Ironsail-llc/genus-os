@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "1.27.1"
+version = "1.27.2"
 description = "Genus OS — An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
 readme = "README.md"
 license = "MIT"
@@ -94,7 +94,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
     "pytest-cov>=5.0",
-    "ruff>=0.8",
+    "ruff==0.15.2",
     "mypy>=1.13",
     "types-requests>=2.31",
     "types-PyYAML>=6.0",

@@ -182,7 +182,7 @@ class TestSupportsCacheControl:
         for a newly-released fleet model is handled by adding a curated
         ``supports_cache_control=True`` override to ``_MODEL_REGISTRY``
         (next test)."""
-        assert supports_cache_control("anthropic/claude-mythos-preview") is False
+        assert supports_cache_control("anthropic/claude-uncataloged-test-sentinel") is False
 
     def test_curated_override_covers_catalog_lag_for_new_anthropic_model(self):
         """The supported path for a new direct-Anthropic model litellm hasn't
