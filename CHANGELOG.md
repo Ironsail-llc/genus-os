@@ -1,3 +1,9 @@
+## [1.28.1](https://github.com/Ironsail-llc/genus-os/compare/v1.28.0...v1.28.1) (2026-08-17)
+
+### Bug Fixes
+
+* **engine:** deliver alerts and defuse the stall-watchdog leak ([#238](https://github.com/Ironsail-llc/genus-os/issues/238)) ([8700a2f](https://github.com/Ironsail-llc/genus-os/commit/8700a2fe0b5c61aafba58eb5eeef5b3f3f89351e))
+
 ## [1.28.0](https://github.com/Ironsail-llc/genus-os/compare/v1.27.3...v1.28.0) (2026-08-17)
 
 ### Features
