@@ -111,8 +111,16 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - name: Verify product version metadata
         run: node scripts/check-version-consistency.js
+      # npm audit gate: named-allowlist policy, not a blanket exception. A
+      # high/critical advisory must either be absent or have its GHSA id
+      # explicitly tracked -- id, package, and a reviewed reason -- in
+      # .npm-audit-allowlist.json (see scripts/check_npm_audit.py). Any
+      # advisory NOT named in that tracked file still fails the gate,
+      # including new advisories in an already-allowlisted package.
       - name: Audit release-tooling lock
-        run: npm audit --package-lock-only --audit-level=high
+        run: |
+          npm audit --package-lock-only --audit-level=high --json > /tmp/npm-audit.json || true
+          python3 scripts/check_npm_audit.py /tmp/npm-audit.json
       - name: Verify dashboard and browser flows
         working-directory: app
         run: |
