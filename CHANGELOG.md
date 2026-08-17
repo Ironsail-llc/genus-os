@@ -1,3 +1,13 @@
+## [1.27.3](https://github.com/Ironsail-llc/genus-os/compare/v1.27.2...v1.27.3) (2026-08-17)
+
+### Bug Fixes
+
+* **docker:** drop the bundled npm CLI from the app runtime image ([#236](https://github.com/Ironsail-llc/genus-os/issues/236)) ([42872d9](https://github.com/Ironsail-llc/genus-os/commit/42872d9acc8e045c26198892f366d35362d8fc4c))
+
+### Documentation
+
+* **README:** position the platform around plugin extensibility ([#234](https://github.com/Ironsail-llc/genus-os/issues/234)) ([907f92b](https://github.com/Ironsail-llc/genus-os/commit/907f92ba92fd5f69a53f1d59db01723dd3dca5fb))
+
 ## [1.27.2](https://github.com/Ironsail-llc/genus-os/compare/v1.27.1...v1.27.2) (2026-08-17)
 
 ### Bug Fixes
