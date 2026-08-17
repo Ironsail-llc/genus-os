@@ -36,13 +36,25 @@ OUT="$DEST/base-$STAMP"
 # exists for. setgid on the parent so future runs inherit the group.
 OFFSITE_GROUP="${ROBOTHOR_BACKUP_GROUP:-}"
 if [[ -n "$OFFSITE_GROUP" ]]; then
-    # Must not die on a perms failure (backup > offsite readability), but a
-    # silent failure here is exactly how today's incident happened — a base
-    # backup that never leaves the box, with nothing in the journal to say
-    # why. See scripts/install-host-scripts.sh for the group-membership
-    # check that should catch this before it ever gets here.
-    chgrp "$OFFSITE_GROUP" "$DEST" 2>/dev/null || log "WARN: chgrp $OFFSITE_GROUP $DEST failed — is postgres a member of $OFFSITE_GROUP?"
-    chmod 2775 "$DEST" 2>/dev/null || log "WARN: chmod 2775 $DEST failed — future runs will not inherit the offsite group"
+    # Must not die on a perms failure (backup > offsite readability).
+    chgrp "$OFFSITE_GROUP" "$DEST" 2>/dev/null || true
+    chmod 2775 "$DEST" 2>/dev/null || true
+
+    # chgrp/chmod exiting 0 is NOT evidence they worked. Linux silently
+    # CLEARS the setgid bit on a chmod issued by a caller who is not a
+    # member of the target group, and this is "not reported as an error"
+    # (man 2 chmod) — exactly today's incident: postgres ran this, the
+    # commands "succeeded", and the base backup directory quietly never got
+    # setgid, so backups never left the box. So verify the RESULT with
+    # stat instead of trusting the exit code.
+    ACTUAL_GROUP=$(stat -c '%G' "$DEST" 2>/dev/null || echo "?")
+    ACTUAL_PERMS=$(stat -c '%A' "$DEST" 2>/dev/null || echo "")
+    # Permission string is [type][owner rwx][group rwx][other rwx]; the
+    # setgid bit shows as 's' or 'S' at index 6 (the group-execute slot).
+    SETGID_CHAR="${ACTUAL_PERMS:6:1}"
+    if [[ "$ACTUAL_GROUP" != "$OFFSITE_GROUP" || ("$SETGID_CHAR" != "s" && "$SETGID_CHAR" != "S") ]]; then
+        log "WARN: $DEST is not confirmed group=$OFFSITE_GROUP+setgid after chgrp/chmod (got group=$ACTUAL_GROUP perms=$ACTUAL_PERMS) — the base backup may never leave the box for the offsite job. Is postgres a member of $OFFSITE_GROUP? Fix: sudo usermod -aG $OFFSITE_GROUP postgres"
+    fi
 fi
 
 log "starting base backup -> $OUT"

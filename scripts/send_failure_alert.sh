@@ -15,6 +15,11 @@ UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
 # unit under a state dir that, by default, lives on tmpfs (matching where the
 # secrets live), so the cooldown naturally clears on reboot.
 STATE_DIR="${ROBOTHOR_ALERT_STATE_DIR:-/run/robothor/alert-cooldown}"
+# Sanitized for use as a filename. Two unit names differing only in a
+# disallowed character (e.g. a literal "/" some caller passed) would
+# collide on the same stamp file and share a cooldown — acceptable here
+# because real systemd unit names are drawn from `%n`/`%i` and don't
+# contain characters outside [A-Za-z0-9._-] in the first place.
 STAMP_KEY="$(printf '%s' "$UNIT" | tr -c 'A-Za-z0-9._-' '_')"
 STAMP_FILE="${STATE_DIR}/${STAMP_KEY}"
 COOLDOWN="${ROBOTHOR_ALERT_COOLDOWN_SECONDS:-3600}"
