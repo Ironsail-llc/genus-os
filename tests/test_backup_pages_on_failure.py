@@ -27,6 +27,9 @@ systemd timer with the same OnFailure paging as its two siblings.
 
 from __future__ import annotations
 
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,3 +82,78 @@ class TestTheScriptStillGuardsTheMount:
         body = (REPO_ROOT / "scripts" / "backup-ssd.sh").read_text()
         assert "mountpoint -q" in body
         assert "exit 1" in body
+
+
+class TestWalOffsiteSurvivesAnOffsiteFailure:
+    """A failing rclone step must never hold the WAL prune and disk guard
+    hostage.
+
+    Today's incident (2026-08-17): the offsite rclone step failed for hours
+    while a 148GB WAL backlog sat unpruned behind it — because
+    `rclone ... || fail` exits the whole script before §3 (prune) and §4
+    (disk guard) ever run. The pager fired every 15 minutes for the rclone
+    failure while the actual disk-filling problem went uninstrumented.
+    """
+
+    SCRIPT = REPO_ROOT / "scripts" / "wal-offsite.sh"
+
+    @staticmethod
+    def _stub(path: Path, body: str) -> None:
+        path.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def test_prune_runs_and_exit_is_nonzero_even_when_rclone_fails(
+        self, tmp_path: Path
+    ) -> None:
+        archive_dir = tmp_path / "wal_archive"
+        archive_dir.mkdir()
+        basebackup_dir = tmp_path / "basebackup"
+        basebackup_dir.mkdir()
+
+        # A minimal, real-shaped backup_label: the script's awk pulls the WAL
+        # start position out of the "(file ...)" parenthetical on this line.
+        backup_label = basebackup_dir / "base-20260817-000000.backup_label"
+        backup_label.write_text(
+            "START WAL LOCATION: 0/2000028 (file 000000010000000000000002)\n"
+            "CHECKPOINT LOCATION: 0/2000060\n"
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        # psql: report a healthy archiver (no failures) so §1 never trips.
+        self._stub(bin_dir / "psql", 'echo "5|0|-"')
+        # rclone: always fails — this is the fault under test.
+        self._stub(bin_dir / "rclone", "exit 1")
+        # pg_archivecleanup: record that it ran, so we can prove §3 executed.
+        prune_log = tmp_path / "pg_archivecleanup-args.txt"
+        self._stub(
+            bin_dir / "pg_archivecleanup",
+            f'printf \'%s\\n\' "$@" >> "{prune_log}"',
+        )
+
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
+            "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
+            "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
+            "ROBOTHOR_DB_NAME": "robothor_memory",
+        }
+        result = subprocess.run(
+            ["bash", str(self.SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        assert prune_log.exists(), (
+            "pg_archivecleanup never ran — a failing rclone step held the WAL "
+            "prune hostage, exactly like the 2026-08-17 incident\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert result.returncode == 1, (
+            "the script must still exit non-zero so systemd's OnFailure hook "
+            f"pages the operator about the offsite failure\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )

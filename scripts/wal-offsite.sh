@@ -49,14 +49,29 @@ if [[ "$FAILED" -gt 0 && "$LAST_FAILED" != "-" ]]; then
 fi
 
 # ── 2. Push the archive offsite ──────────────────────────────────────────────
+# A failure here must NOT skip §3 (prune) or §4 (disk guard) below — those are
+# what keep pg_wal bounded, and a network/offsite outage is exactly when they
+# matter most. So capture the failure instead of exiting, and exit at the very
+# end (after §3/§4 have run) so systemd's OnFailure hook still pages.
+OFFSITE_FAILED=0
 if [[ -n "$REMOTE" ]]; then
-    command -v rclone >/dev/null 2>&1 || fail "rclone is not installed"
-    log "replicating WAL archive to $REMOTE/wal"
-    rclone copy "$ARCHIVE_DIR" "$REMOTE/wal" --transfers 8 --checkers 16 || fail "rclone copy of WAL archive failed"
+    if ! command -v rclone >/dev/null 2>&1; then
+        log "ERROR: rclone is not installed"
+        OFFSITE_FAILED=1
+    else
+        log "replicating WAL archive to $REMOTE/wal"
+        if ! rclone copy "$ARCHIVE_DIR" "$REMOTE/wal" --transfers 8 --checkers 16; then
+            log "ERROR: rclone copy of WAL archive failed"
+            OFFSITE_FAILED=1
+        fi
 
-    if [[ -d "$BASEBACKUP_DIR" ]]; then
-        log "replicating base backups to $REMOTE/basebackup"
-        rclone copy "$BASEBACKUP_DIR" "$REMOTE/basebackup" --transfers 4 || fail "rclone copy of base backups failed"
+        if [[ -d "$BASEBACKUP_DIR" ]]; then
+            log "replicating base backups to $REMOTE/basebackup"
+            if ! rclone copy "$BASEBACKUP_DIR" "$REMOTE/basebackup" --transfers 4; then
+                log "ERROR: rclone copy of base backups failed"
+                OFFSITE_FAILED=1
+            fi
+        fi
     fi
 else
     log "ROBOTHOR_OFFSITE_REMOTE unset — archiving locally only (RPO is not offsite)"
@@ -90,3 +105,9 @@ if [[ "$AVAIL_GB" -lt 10 ]]; then
 fi
 
 log "WAL offsite replication complete"
+
+# Now that the prune and disk guard have both run unconditionally, surface the
+# §2 failure (if any) so OnFailure still pages the operator about it.
+if [[ "$OFFSITE_FAILED" -eq 1 ]]; then
+    fail "offsite replication failed earlier (see ERROR lines above) — WAL was still pruned and disk-guarded, but connectivity/rclone needs fixing"
+fi
