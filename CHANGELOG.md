@@ -1,3 +1,9 @@
+## [1.29.0](https://github.com/Ironsail-llc/genus-os/compare/v1.28.2...v1.29.0) (2026-08-17)
+
+### Features
+
+* **engine:** catch up missed cron runs on scheduler start ([#240](https://github.com/Ironsail-llc/genus-os/issues/240)) ([9e9ae7e](https://github.com/Ironsail-llc/genus-os/commit/9e9ae7ef53930c5906b9885c26e64c9ec531c512))
+
 ## [1.28.2](https://github.com/Ironsail-llc/genus-os/compare/v1.28.1...v1.28.2) (2026-08-17)
 
 ### Bug Fixes
