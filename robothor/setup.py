@@ -489,6 +489,40 @@ def setup_vault_key(workspace: Path) -> Path:
     return init_master_key(workspace)
 
 
+# Scaffold files create_workspace() copies out of the template dir, as
+# {source name in templates/: destination relative to the workspace}. This is
+# the expected-files manifest — robothor/tests/test_template_resolution.py
+# checks every source name against the real templates/ listing, so a rename
+# in the scaffold fails the build instead of silently scaffolding less.
+BRAIN_SCAFFOLD_FILES = {
+    "SOUL.md": "SOUL.md",
+    "IDENTITY.md": "IDENTITY.md",
+    "AGENTS.md": "AGENTS.md",
+    "TOOLS.md": "TOOLS.md",
+    "HEARTBEAT.md": "HEARTBEAT.md",
+    "USER.md": "USER.md",
+    "BOOTSTRAP.md": "BOOTSTRAP.md",
+    "brain-CLAUDE.md": "CLAUDE.md",
+}
+DOCS_SCAFFOLD_FILES = ("agent-manifest.yaml", "agent-instructions.md")
+ROOT_SCAFFOLD_FILES = ("CLAUDE.md", "AGENT_BUILDER.md", "ONBOARDING.md")
+EXPECTED_SCAFFOLD_FILES: tuple[str, ...] = (
+    *BRAIN_SCAFFOLD_FILES,
+    *DOCS_SCAFFOLD_FILES,
+    *ROOT_SCAFFOLD_FILES,
+)
+
+
+def _copy_scaffold_file(template_dir: Path, src_name: str, dst: Path) -> None:
+    """Copy one scaffold file, warning (not silently skipping) when absent."""
+    src = template_dir / src_name
+    if not src.exists():
+        print(f"  Warning: scaffold template {src_name} missing from {template_dir} — skipped")
+        return
+    if not dst.exists():
+        dst.write_text(src.read_text())
+
+
 def create_workspace(path: Path) -> None:
     """Create workspace directory structure with brain/ scaffold from templates."""
     path.mkdir(parents=True, exist_ok=True)
@@ -507,37 +541,23 @@ def create_workspace(path: Path) -> None:
 
     # Copy template files into brain/ (never overwrite existing)
     template_dir = _find_template_dir()
-    if template_dir:
-        # Map of source template name → destination filename in brain/
-        brain_templates = {
-            "SOUL.md": "SOUL.md",
-            "IDENTITY.md": "IDENTITY.md",
-            "AGENTS.md": "AGENTS.md",
-            "TOOLS.md": "TOOLS.md",
-            "HEARTBEAT.md": "HEARTBEAT.md",
-            "USER.md": "USER.md",
-            "BOOTSTRAP.md": "BOOTSTRAP.md",
-            "brain-CLAUDE.md": "CLAUDE.md",
-        }
-        for src_name, dst_name in brain_templates.items():
-            src = template_dir / src_name
-            dst = brain / dst_name
-            if src.exists() and not dst.exists():
-                dst.write_text(src.read_text())
+    if template_dir is None:
+        print(
+            "  Warning: no scaffold templates found (checked ROBOTHOR_TEMPLATE_DIR, "
+            "repo-root templates/, and the bundled package data) — "
+            "workspace created without scaffold files"
+        )
+    else:
+        for src_name, dst_name in BRAIN_SCAFFOLD_FILES.items():
+            _copy_scaffold_file(template_dir, src_name, brain / dst_name)
 
         # Copy agent manifest template to docs/agents/
-        for name in ("agent-manifest.yaml", "agent-instructions.md"):
-            src = template_dir / name
-            dst = docs / "agents" / name
-            if src.exists() and not dst.exists():
-                dst.write_text(src.read_text())
+        for name in DOCS_SCAFFOLD_FILES:
+            _copy_scaffold_file(template_dir, name, docs / "agents" / name)
 
         # Copy CLAUDE.md files to workspace root
-        for fname in ("CLAUDE.md", "AGENT_BUILDER.md", "ONBOARDING.md"):
-            src = template_dir / fname
-            dst = path / fname
-            if src.exists() and not dst.exists():
-                dst.write_text(src.read_text())
+        for fname in ROOT_SCAFFOLD_FILES:
+            _copy_scaffold_file(template_dir, fname, path / fname)
 
         # Snapshot template hashes so `robothor upgrade` can detect changes
         from robothor.cli.upgrade import _save_state, _snapshot_template_hashes
@@ -552,17 +572,64 @@ def create_workspace(path: Path) -> None:
         _save_state(state_data)
 
 
-def _find_template_dir() -> Path | None:
-    """Locate the templates/ directory (bundled or in-repo)."""
-    # Bundled in wheel
-    bundled = Path(__file__).parent / "templates"
+def _find_template_dir(package_dir: Path | None = None) -> Path | None:
+    """Locate the init scaffold templates/ directory.
+
+    Resolution order:
+
+    1. ``ROBOTHOR_TEMPLATE_DIR`` — explicit operator override. When set it is
+       authoritative: a bad value returns ``None`` rather than silently
+       falling back to a different scaffold.
+    2. Repo-root ``templates/`` when running from a checkout. Detected by
+       walking the package directory's ancestors for a repo marker
+       (``pyproject.toml`` + ``templates/`` + the ``robothor`` package), not
+       by parent-count arithmetic.
+    3. The scaffold bundled into the wheel at
+       ``robothor/templates/bundled_scaffold`` (see the force-include in
+       pyproject.toml).
+
+    The bare code-package dir (``robothor/templates/`` itself) is never
+    returned — it contains Python modules, not the scaffold.
+    """
+    env_dir = os.environ.get("ROBOTHOR_TEMPLATE_DIR")
+    if env_dir:
+        env_path = Path(env_dir)
+        if env_path.is_dir():
+            return env_path
+        print(f"  Warning: ROBOTHOR_TEMPLATE_DIR={env_dir} is not a directory")
+        return None
+
+    if package_dir is None:
+        package_dir = Path(__file__).resolve().parent
+    else:
+        package_dir = package_dir.resolve()
+
+    # Checkout layout: the repo root is the ancestor that has the project
+    # marker files. Covers both `/repo/robothor/` and a venv nested inside
+    # the repo (`/repo/venv/.../site-packages/robothor/`).
+    for ancestor in package_dir.parents:
+        if (
+            (ancestor / "pyproject.toml").is_file()
+            and (ancestor / "templates").is_dir()
+            and (ancestor / "robothor" / "__init__.py").is_file()
+        ):
+            return ancestor / "templates"
+
+    # Wheel layout: the scaffold ships as package data.
+    bundled = package_dir / "templates" / "bundled_scaffold"
     if bundled.is_dir():
         return bundled
-    # Development: repo root
-    repo_root = Path(__file__).parent.parent
-    dev_path = repo_root / "templates"
-    if dev_path.is_dir():
-        return dev_path
+    if package_dir == Path(__file__).resolve().parent:
+        # Fall back to importlib.resources for exotic install layouts.
+        try:
+            from importlib import resources
+
+            resource_dir = Path(str(resources.files("robothor"))) / "templates"
+            bundled = resource_dir / "bundled_scaffold"
+            if bundled.is_dir():
+                return bundled
+        except Exception:  # pragma: no cover - defensive
+            pass
     return None
 
 

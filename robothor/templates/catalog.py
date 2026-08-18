@@ -20,8 +20,8 @@ def _find_catalog_dir() -> Path:
     dev_path = repo_root / "templates" / "agents"
     if dev_path.exists():
         return dev_path
-    # Bundled in wheel
-    bundled = Path(__file__).parent / "bundled_templates" / "agents"
+    # Bundled in wheel (force-included as robothor/templates/bundled_scaffold)
+    bundled = Path(__file__).parent / "bundled_scaffold" / "agents"
     if bundled.exists():
         return bundled
     return dev_path  # Return expected path even if missing
