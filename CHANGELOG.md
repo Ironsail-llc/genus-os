@@ -1,3 +1,9 @@
+## [1.30.1](https://github.com/Ironsail-llc/genus-os/compare/v1.30.0...v1.30.1) (2026-08-18)
+
+### Bug Fixes
+
+* **dist:** ship the init scaffold in the wheel via package data ([#245](https://github.com/Ironsail-llc/genus-os/issues/245)) ([0e32135](https://github.com/Ironsail-llc/genus-os/commit/0e321357b40430f701f9c238c73c7f487bd08378))
+
 ## [1.30.0](https://github.com/Ironsail-llc/genus-os/compare/v1.29.2...v1.30.0) (2026-08-18)
 
 ### Features
