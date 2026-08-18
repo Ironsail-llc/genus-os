@@ -192,6 +192,46 @@ jobs:
       - run: pytest tests/ robothor/ -m "integration and not llm" -v
       - run: pytest crm/ -m "integration and not llm" -v
 
+  wheel-smoke:
+    # Builds the Python distribution and installs it into a throwaway venv,
+    # the way an end user (or a later distribution PR) actually would. This
+    # is the first place in CI anything builds a wheel at all — later
+    # distribution-train PRs extend this job rather than re-deriving it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Install the wheel into a fresh venv
+        run: |
+          python -m venv /tmp/wheel-smoke-venv
+          /tmp/wheel-smoke-venv/bin/pip install dist/*.whl
+      - name: Smoke the installed console scripts and package import
+        run: |
+          /tmp/wheel-smoke-venv/bin/genusos version
+          /tmp/wheel-smoke-venv/bin/robothor --help
+          /tmp/wheel-smoke-venv/bin/python -c "import robothor"
+      # Regression tripwire: crm/migrations/*delphi*.sql are gitignored
+      # instance files (see .gitignore) that must never ship in the wheel.
+      # They're absent on CI's clean clone today, so this passes now -- it
+      # exists to catch a future local build or packaging-exclude change
+      # that accidentally pulls them back in.
+      - name: Verify no delphi instance files leaked into the wheel
+        run: |
+          if python -m zipfile -l dist/*.whl | grep -i delphi; then
+            echo "::error::delphi instance files leaked into the wheel"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
