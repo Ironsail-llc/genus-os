@@ -61,7 +61,9 @@ class TestStandardPresetResolvesMain:
         agents = real_catalog.get_preset_agents("standard")
         assert agents, "standard preset resolved to zero agents"
         missing = [a for a in agents if real_catalog.find_template(a) is None]
-        assert missing == [], f"standard preset references agents with no template bundle: {missing}"
+        assert missing == [], (
+            f"standard preset references agents with no template bundle: {missing}"
+        )
 
     def test_every_catalog_department_agent_has_a_real_template(self, real_catalog):
         """Guards against the exact drift this bundle fixes: a department
