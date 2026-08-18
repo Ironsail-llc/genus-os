@@ -7,51 +7,86 @@ browsing, filtering, and preset resolution.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _find_catalog_dir() -> Path:
-    """Find templates/agents/ directory."""
-    # In-repo development
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    dev_path = repo_root / "templates" / "agents"
-    if dev_path.exists():
-        return dev_path
-    # Bundled in wheel (force-included as robothor/templates/bundled_scaffold)
-    bundled = Path(__file__).parent / "bundled_scaffold" / "agents"
-    if bundled.exists():
-        return bundled
-    return dev_path  # Return expected path even if missing
+logger = logging.getLogger(__name__)
+
+
+def _find_catalog_dir(package_dir: Path | None = None) -> Path | None:
+    """Find the templates/agents/ catalog directory.
+
+    Delegates to ``robothor.setup._find_template_dir()`` — the same
+    checkout-vs-wheel resolution used for the rest of the init scaffold
+    (``ROBOTHOR_TEMPLATE_DIR`` override -> repo-root ``templates/`` in a
+    checkout -> the wheel-bundled ``bundled_scaffold``) — so catalog
+    resolution never drifts from scaffold resolution. Returns ``None``
+    when nothing resolves; callers must not silently substitute an empty
+    catalog without logging why.
+    """
+    from robothor.setup import _find_template_dir
+
+    template_dir = _find_template_dir(package_dir=package_dir)
+    if template_dir is None:
+        logger.warning(
+            "No scaffold templates resolved (checked ROBOTHOR_TEMPLATE_DIR, "
+            "repo-root templates/, and the bundled package data) — the agent "
+            "catalog is empty and `robothor agent install` has nothing to install"
+        )
+        return None
+
+    catalog_dir = template_dir / "agents"
+    if not catalog_dir.is_dir():
+        logger.warning(
+            "Scaffold resolved to %s but it has no agents/ directory — the "
+            "agent catalog is empty and `robothor agent install` has nothing "
+            "to install",
+            template_dir,
+        )
+        return None
+    return catalog_dir
 
 
 class Catalog:
     """Browse and query the agent template catalog."""
 
     def __init__(self, catalog_dir: Path | None = None):
-        self.catalog_dir = catalog_dir or _find_catalog_dir()
+        self.catalog_dir: Path | None = (
+            catalog_dir if catalog_dir is not None else _find_catalog_dir()
+        )
         self._catalog: dict[str, Any] | None = None
         self._defaults: dict[str, Any] | None = None
 
     @property
     def catalog(self) -> dict[str, Any]:
         if self._catalog is None:
-            path = self.catalog_dir / "_catalog.yaml"
-            if path.exists():
+            path = self.catalog_dir / "_catalog.yaml" if self.catalog_dir else None
+            if path is not None and path.exists():
                 self._catalog = yaml.safe_load(path.read_text()) or {}
             else:
+                logger.warning(
+                    "No _catalog.yaml found at %s — agent catalog is empty",
+                    self.catalog_dir,
+                )
                 self._catalog = {"departments": {}, "presets": {}}
         return self._catalog
 
     @property
     def defaults(self) -> dict[str, Any]:
         if self._defaults is None:
-            path = self.catalog_dir / "_defaults.yaml"
-            if path.exists():
+            path = self.catalog_dir / "_defaults.yaml" if self.catalog_dir else None
+            if path is not None and path.exists():
                 self._defaults = yaml.safe_load(path.read_text()) or {}
             else:
+                logger.warning(
+                    "No _defaults.yaml found at %s — agent installs get no global defaults",
+                    self.catalog_dir,
+                )
                 self._defaults = {}
         return self._defaults
 
@@ -120,6 +155,9 @@ class Catalog:
 
         Searches templates/agents/<dept>/<id>/ directories.
         """
+        if not self.catalog_dir or not self.catalog_dir.is_dir():
+            return None
+
         for dept_id, dept in self.departments.items():
             if agent_id in dept.get("agents", []):
                 path = self.catalog_dir / dept_id / agent_id
@@ -137,7 +175,9 @@ class Catalog:
 
     def list_available_templates(self) -> list[dict[str, Any]]:
         """List all available template bundles found on disk."""
-        templates = []
+        templates: list[dict[str, Any]] = []
+        if not self.catalog_dir or not self.catalog_dir.is_dir():
+            return templates
         for dept_dir in sorted(self.catalog_dir.iterdir()):
             if not dept_dir.is_dir() or dept_dir.name.startswith("_"):
                 continue

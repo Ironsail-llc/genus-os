@@ -251,6 +251,35 @@ jobs:
               assert (workspace / rel).is_file(), f"scaffold missing {rel}"
           print(f"scaffolded {len(scaffolded)} files from {template_dir}")
           EOF
+      - name: Verify the agent catalog resolves from the installed wheel
+        # `robothor agent install --preset standard` is the literal next
+        # step `robothor init` prints, and it's a no-op unless the catalog
+        # (departments + presets + on-disk template bundles) resolves from
+        # the wheel install, not just the scaffold files checked above.
+        working-directory: /tmp
+        run: |
+          output=$(/tmp/wheel-smoke-venv/bin/robothor agent catalog)
+          echo "$output"
+          echo "$output" | grep -q "^Presets:" || {
+            echo "::error::robothor agent catalog printed no Presets section"
+            exit 1
+          }
+          echo "$output" | grep -qE '^\s+standard\s' || {
+            echo "::error::the standard preset is missing from the installed wheel's catalog"
+            exit 1
+          }
+          echo "$output" | grep -q "^Templates on disk: " || {
+            echo "::error::no template bundles resolved on disk from the installed wheel"
+            exit 1
+          }
+          echo "$output" | grep -q "No template bundles found on disk." && {
+            echo "::error::catalog resolved but found zero template bundles"
+            exit 1
+          }
+          echo "$output" | grep -qE '^\s+main\s+dept=core' || {
+            echo "::error::the main agent template is missing from the installed wheel's catalog"
+            exit 1
+          }
       # Regression tripwire: crm/migrations/*delphi*.sql are gitignored
       # instance files (see .gitignore) that must never ship in the wheel.
       # They're absent on CI's clean clone today, so this passes now -- it
