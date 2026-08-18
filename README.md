@@ -114,7 +114,7 @@ git clone https://github.com/Ironsail-llc/genus-os.git
 cd genus-os
 pip install -e ".[all]"
 robothor init       # Interactive setup: DB, Redis, Ollama, migrations
-robothor serve      # Start orchestrator + engine
+robothor serve      # Start the orchestrator (engine runs separately: robothor engine start)
 ```
 
 Or with Docker for dependencies:
@@ -123,6 +123,8 @@ Or with Docker for dependencies:
 robothor init --docker   # PostgreSQL+pgvector, Redis, Ollama in containers
 robothor serve
 ```
+
+For a full Docker Compose stack instead, see [`examples/full-stack/`](examples/full-stack/).
 
 Engine and TUI commands:
 
@@ -693,7 +695,7 @@ robothor/
 | Command | Purpose |
 |---------|---------|
 | `robothor init` | Interactive setup wizard |
-| `robothor serve` | Start orchestrator + engine |
+| `robothor serve` | Start the orchestrator (engine runs separately) |
 | `robothor status` | System health overview |
 | `robothor migrate` | Run database migrations |
 | `robothor mcp` | Start MCP server (44 tools, stdio) |
