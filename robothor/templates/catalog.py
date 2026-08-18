@@ -16,6 +16,9 @@ import yaml
 def _find_catalog_dir() -> Path:
     """Find templates/agents/ directory."""
     # In-repo development
+    # NOTE: same __file__-derived root as the installer.py/validators.py bug fixed
+    # by #248, but benign here — the bundled-wheel fallback below still resolves
+    # correctly. Follow-up, not fixed in #248 to avoid scope creep.
     repo_root = Path(__file__).resolve().parent.parent.parent
     dev_path = repo_root / "templates" / "agents"
     if dev_path.exists():

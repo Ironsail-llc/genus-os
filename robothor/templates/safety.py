@@ -28,9 +28,27 @@ def default_workspace_root() -> Path:
     the engine never looks. Instead this follows the same
     ``ROBOTHOR_WORKSPACE`` convention used throughout the engine (see
     ``InstanceConfig._find_instance_dir``).
+
+    The env var is read lazily on purpose: ``Path.home()`` must not run at
+    all when ``ROBOTHOR_WORKSPACE`` is set (an eager default argument would
+    call it unconditionally, and it can raise in a HOME-less environment
+    such as a bare systemd unit or container). When there truly is no
+    fallback, raise a clear error naming the fix instead of letting an
+    opaque ``pwd`` lookup traceback surface.
     """
 
-    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE")
+    if workspace:
+        return Path(workspace)
+    try:
+        home = Path.home()
+    except RuntimeError as error:
+        raise RuntimeError(
+            "Could not determine a home directory to default the workspace "
+            "to. Set the ROBOTHOR_WORKSPACE environment variable to the "
+            "workspace path."
+        ) from error
+    return home / "robothor"
 
 
 def trusted_directory(root: str | Path, *, label: str = "directory") -> Path:

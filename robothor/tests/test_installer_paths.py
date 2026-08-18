@@ -22,16 +22,13 @@ These tests pin the fix:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 import robothor.templates.installer as installer_mod
 import robothor.templates.validators as validators_mod
 from robothor.templates.safety import default_workspace_root
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _fake_site_packages_module_file(tmp_path: Path, module_name: str) -> Path:
@@ -66,6 +63,35 @@ class TestDefaultWorkspaceRoot:
         monkeypatch.delenv("ROBOTHOR_WORKSPACE", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         assert default_workspace_root() == tmp_path / "home" / "robothor"
+
+    def test_workspace_env_set_never_touches_home_lookup(self, monkeypatch, tmp_path):
+        """The home fallback must be lazy: a set env var must short-circuit
+        before Path.home() is ever evaluated, not merely before its result is
+        used. An eager default argument (``os.environ.get(K, str(Path.home()...))``)
+        calls Path.home() unconditionally — this must not raise even when
+        Path.home() would."""
+        workspace = tmp_path / "custom-workspace"
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+
+        def _boom(cls):
+            raise RuntimeError("could not determine home directory")
+
+        monkeypatch.setattr(Path, "home", classmethod(_boom))
+
+        assert default_workspace_root() == workspace
+
+    def test_raises_clear_error_when_home_lookup_fails_without_workspace_env(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("ROBOTHOR_WORKSPACE", raising=False)
+
+        def _boom(cls):
+            raise RuntimeError("could not determine home directory")
+
+        monkeypatch.setattr(Path, "home", classmethod(_boom))
+
+        with pytest.raises(RuntimeError, match="ROBOTHOR_WORKSPACE"):
+            default_workspace_root()
 
 
 class TestInstallerFindRepoRoot:
