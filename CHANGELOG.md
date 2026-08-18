@@ -1,3 +1,10 @@
+## [1.30.2](https://github.com/Ironsail-llc/genus-os/compare/v1.30.1...v1.30.2) (2026-08-18)
+
+### Bug Fixes
+
+* **cli:** init next-steps match the install mode ([#246](https://github.com/Ironsail-llc/genus-os/issues/246)) ([0113234](https://github.com/Ironsail-llc/genus-os/commit/0113234ec3da709ce1a1471288b4d10df8794591))
+* **docker:** include the scaffold templates in the build context ([#250](https://github.com/Ironsail-llc/genus-os/issues/250)) ([0b47423](https://github.com/Ironsail-llc/genus-os/commit/0b47423340c2a44ee2420394479eaad481c22d30)), closes [#245](https://github.com/Ironsail-llc/genus-os/issues/245) [245/#246](https://github.com/245/genus-os/issues/246)
+
 ## [1.30.1](https://github.com/Ironsail-llc/genus-os/compare/v1.30.0...v1.30.1) (2026-08-18)
 
 ### Bug Fixes
