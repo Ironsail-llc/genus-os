@@ -375,6 +375,7 @@ class TestPrintNextSteps:
 
         assert "sudo systemctl" not in out
         assert "robothor serve" in out
+        assert "[api]" in out  # cmd_serve errors without uvicorn/fastapi
         assert "robothor engine start" in out
         assert "robothor status" in out
         assert "robothor tui" in out

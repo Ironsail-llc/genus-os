@@ -666,7 +666,10 @@ def _print_next_steps(install_mode: str) -> None:
             "sudo systemctl start robothor-engine (requires the repo's infra/systemd setup)"
         )
     else:
-        steps.append("robothor serve            # start the RAG orchestrator")
+        steps.append(
+            "robothor serve            # start the RAG orchestrator "
+            "(needs: pip install robothor[api])"
+        )
         steps.append("robothor engine start     # start the agent engine (in-process)")
         steps.append(
             "robothor status / robothor tui   # check status (tui needs: pip install robothor[tui])"
