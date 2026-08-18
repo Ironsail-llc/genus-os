@@ -1,0 +1,25 @@
+# Global defaults for agent template resolution.
+# These are the lowest-priority values — overridden by setup.yaml, instance
+# config, per-agent overrides, and CLI --set flags.
+#
+# 2026-03-09: Swapped to local Qwen 3.5 122B for cost savings & privacy.
+# Cloud models still available as fallbacks.
+
+model_primary: "ollama/qwen3.5:122b"
+model_quality: "ollama/qwen3.5:122b"
+model_fallbacks:
+  - "openrouter/anthropic/claude-sonnet-4.6"
+  - "openrouter/moonshotai/kimi-k2.5"
+  - "gemini/gemini-2.5-pro"
+ai_name: "Genus"
+owner_name: ""
+owner_email: ""
+ai_email: ""
+key_contacts: []
+timezone: "UTC"
+delivery_mode: "none"
+reports_to: "main"
+escalates_to: "main"
+bootstrap_files:
+  - "brain/AGENTS.md"
+  - "brain/TOOLS.md"

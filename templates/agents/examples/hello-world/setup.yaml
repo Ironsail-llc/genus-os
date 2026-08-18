@@ -1,0 +1,19 @@
+# Hello World — example agent template
+agent_id: hello-world
+version: "2026-03-17"
+instruction_file_path: brain/agents/hello-world.md
+
+variables:
+  model_primary:
+    type: string
+    default: "ollama_chat/qwen3.5:122b"
+    description: Primary LLM model
+  timezone:
+    type: string
+    default: "UTC"
+    description: Schedule timezone
+  cron_expr:
+    type: string
+    default: "0 12 * * *"
+    description: "Cron schedule (default: noon daily)"
+    prompt: "Cron schedule for hello world agent"

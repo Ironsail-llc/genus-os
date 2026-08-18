@@ -1,0 +1,9 @@
+{
+  "name": "Conversation Resolver",
+  "id": "conversation-resolver",
+  "version": "2026-03-09",
+  "format": "robothor-native/v1",
+  "department": "communications",
+  "description": "Auto-resolves stale conversations older than 7 days",
+  "tags": []
+}

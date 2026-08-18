@@ -1,0 +1,38 @@
+# Report Workflow Template
+# Usage: Copy and customize for new report-type workflows
+#
+# Pattern: deterministic data collection (tool steps) → agent analysis (agent step)
+# This keeps LLM costs low and failures debuggable.
+
+id: {WORKFLOW_ID}
+name: {WORKFLOW_NAME}
+description: {DESCRIPTION}
+version: "{VERSION}"
+
+triggers:
+  - type: cron
+    cron: "{CRON}"  # e.g. "0 9 * * 1" for weekly Monday 9am
+    timezone: UTC
+  - type: manual
+
+timeout_seconds: 1800
+
+steps:
+  # Step 1: Deterministic data collection (no LLM, fast, cheap)
+  - id: collect-data
+    type: tool
+    tool_name: exec
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/{COLLECTION_SCRIPT}"
+      timeout: 120
+    on_failure: abort
+
+  # Step 2: Agent analysis (LLM-powered, reads pre-collected data)
+  - id: analyze
+    type: agent
+    agent_id: {AGENT_ID}
+    message: >
+      Report run. Data has been pre-collected at {DATA_PATH}.
+      Read the data, analyze it, render the report, email stakeholders,
+      persist to memory blocks, and set your output as the Telegram summary.
+    on_failure: abort

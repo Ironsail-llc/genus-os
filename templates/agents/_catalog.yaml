@@ -1,0 +1,61 @@
+# Agent Template Catalog — departments, presets, and fleet organization.
+# Used by: robothor agent catalog, robothor agent setup, robothor agent install --preset
+
+departments:
+  core:
+    name: Core Interactive
+    description: Primary chat agent with heartbeat and self-configuration
+    agents: [main, concierge]
+  email:
+    name: Email Pipeline
+    description: Classify, analyze, and respond to emails
+    agents: [email-classifier, email-analyst, email-responder]
+  calendar:
+    name: Calendar Management
+    description: Calendar monitoring and conflict detection
+    agents: [calendar-monitor]
+  communications:
+    name: Communications
+    description: Conversation inbox, resolution, and chat
+    agents: [conversation-inbox, conversation-resolver, chat-responder]
+  crm:
+    name: CRM Operations
+    description: Contact hygiene and enrichment
+    agents: [crm-hygiene, crm-dedup, crm-enrichment]
+  security:
+    name: Security & Vision
+    description: Camera monitoring and person detection
+    agents: [vision-monitor]
+  briefings:
+    name: Daily Briefings
+    description: Morning briefing and evening wind-down
+    agents: [morning-briefing, evening-winddown]
+  operations:
+    name: Operations
+    description: Engine health, canary testing, and failure analysis
+    agents: [engine-report, canary, auto-researcher]
+  examples:
+    name: Examples
+    description: Learning templates for new agent builders
+    agents: [hello-world]
+
+presets:
+  minimal:
+    description: "Interactive chat + concierge + canary (3 agents)"
+    agents: [main, concierge, canary]
+  standard:
+    description: "Email pipeline + calendar + briefings (10 agents)"
+    agents:
+      - main
+      - concierge
+      - email-classifier
+      - email-analyst
+      - email-responder
+      - calendar-monitor
+      - morning-briefing
+      - evening-winddown
+      - canary
+      - engine-report
+  full:
+    description: "All agents including CRM, comms, security, and ops"
+    agents: all

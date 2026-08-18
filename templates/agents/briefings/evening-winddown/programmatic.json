@@ -1,0 +1,9 @@
+{
+  "name": "Evening Wind-Down",
+  "id": "evening-winddown",
+  "version": "2026-03-09",
+  "format": "robothor-native/v1",
+  "department": "briefings",
+  "description": "Daily evening summary with tomorrow preview and open items",
+  "tags": []
+}

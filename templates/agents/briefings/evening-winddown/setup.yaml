@@ -1,0 +1,29 @@
+# Evening Wind-Down — template setup
+agent_id: evening-winddown
+version: "2026-03-09"
+instruction_file_path: brain/agents/evening-winddown.md
+
+variables:
+  model_primary:
+    type: string
+    default: "openrouter/xiaomi/mimo-v2-pro"
+    description: Primary LLM model
+  model_fallbacks:
+    type: list
+    default:
+      - "openrouter/anthropic/claude-sonnet-4.6"
+      - "gemini/gemini-2.5-pro"
+    description: Fallback model chain
+  timezone:
+    type: string
+    default: "UTC"
+    description: Schedule timezone
+  cron_expr:
+    type: string
+    default: "0 21 * * *"
+    description: "Cron schedule (daily at 9:00 PM)"
+    prompt: "Cron schedule for evening wind-down briefing"
+  delivery_mode:
+    type: string
+    default: "announce"
+    description: Delivery mode (announce to Telegram)

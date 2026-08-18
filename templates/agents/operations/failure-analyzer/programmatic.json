@@ -1,0 +1,9 @@
+{
+  "name": "Failure Analyzer",
+  "id": "failure-analyzer",
+  "version": "2026-03-05",
+  "format": "robothor-native/v1",
+  "department": "operations",
+  "description": "Detects agent failures, classifies root causes, creates improvement tasks for overnight PR agent",
+  "tags": ["self-improve", "escalation", "needs-owner"]
+}

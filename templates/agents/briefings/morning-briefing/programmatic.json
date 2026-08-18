@@ -1,0 +1,9 @@
+{
+  "name": "Morning Briefing",
+  "id": "morning-briefing",
+  "version": "2026-03-03",
+  "format": "robothor-native/v1",
+  "department": "briefings",
+  "description": "Daily morning briefing with weather, news, calendar, and CRM activity",
+  "tags": []
+}

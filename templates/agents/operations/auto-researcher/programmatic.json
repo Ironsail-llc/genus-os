@@ -1,0 +1,9 @@
+{
+  "name": "Auto Researcher",
+  "id": "auto-researcher",
+  "version": "2026-03-31",
+  "format": "robothor-native/v1",
+  "department": "operations",
+  "description": "Iterative optimization agent using the autoresearch pattern -- define a metric, iterate on changes, measure, keep or revert, accumulate learnings",
+  "tags": ["autoresearch", "optimization", "self-improving"]
+}

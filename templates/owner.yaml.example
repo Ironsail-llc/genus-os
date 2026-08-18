@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Operator identity for this Genus OS instance.
+#
+# Copy this file to: <ROBOTHOR_WORKSPACE>/.robothor/owner.yaml
+# The .robothor/ directory is gitignored; the content is per-instance.
+#
+# Read by robothor.owner_config.load_owner_config() at daemon startup.
+# Used to:
+#   - Link the operator's row in crm_people to tenant_users.person_id
+#   - Resolve bare first-name mentions (e.g. "Alice") to the operator
+#     even when other CRM contacts share the name
+#   - Auto-attend the operator on outgoing calendar invites
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Which tenant this operator owns. Usually leave as "default" for
+# single-tenant instances; multi-tenant deployments set the tenant ID.
+tenant_id: default
+
+# Required identity fields.
+first_name: Alice
+last_name: Example
+email: alice@example.com
+
+# Any other emails this operator uses (personal, legacy, aliases).
+# Helps the CRM reconcile multiple inbound channels to one person.
+additional_emails:
+  - alice+alias@example.com
+
+# Optional — E.164 format. Used by the voice bridge for outbound calls.
+phone: null
+
+# Nicknames the operator answers to. Lowercase. The resolver will prefer
+# the operator's CRM row when a bare first-name mention matches any
+# nickname here (in addition to the canonical first/last name).
+nicknames:
+  - ali
+
+# The person_id field is populated by bootstrap_owner_person_links() on
+# first boot after this file is created. You do not need to set it.
+# person_id: auto-managed

@@ -1,0 +1,9 @@
+{
+  "name": "Hello World",
+  "id": "hello-world",
+  "version": "2026-03-17",
+  "format": "robothor-native/v1",
+  "department": "examples",
+  "description": "Minimal example agent — reads a file, writes status, done",
+  "tags": []
+}

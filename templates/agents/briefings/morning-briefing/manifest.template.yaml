@@ -1,0 +1,73 @@
+id: morning-briefing
+name: Morning Briefing
+description: Daily morning briefing with weather, news, calendar, and CRM activity
+version: "{{ version }}"
+department: briefings
+
+reports_to: null
+creates_tasks_for: []
+receives_tasks_from: []
+escalates_to: null
+
+model:
+  primary: {{ model_primary }}
+  fallbacks:
+    - "openrouter/moonshotai/kimi-k2.5"
+    - "gemini/gemini-2.5-pro"
+  payload_alias: sonnet
+
+schedule:
+  cron: "{{ cron_expr }}"
+  timezone: {{ timezone }}
+  timeout_seconds: 480
+  max_iterations: 10
+  session_target: isolated
+
+delivery:
+  mode: {{ delivery_mode }}
+  channel: {{ delivery_channel }}
+  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
+
+tools_allowed: []
+tools_denied:
+  - create_message
+  - make_call
+  - transmit_prescription
+bridge_endpoints:
+  - "GET /health"
+  - "GET /api/conversations"
+streams:
+  read: [email, calendar, health]
+  write: []
+
+sla:
+  urgent: 30m
+  high: 2h
+  normal: 8h
+  low: 24h
+
+task_protocol: false
+review_workflow: false
+notification_inbox: false
+status_file: null
+shared_working_state: false
+
+warmup:
+  memory_blocks:
+    - user_profile
+    - shared_working_state
+  context_files:
+    - brain/memory/garmin-health.md
+    - brain/memory/cron-health-status.md
+    - brain/memory/email-classifier-status.md
+
+instruction_file: brain/agents/morning-briefing.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+tags_produced: []
+tags_consumed: []
+
+v2:
+  error_feedback: true

@@ -1,0 +1,9 @@
+{
+  "name": "Calendar Monitor",
+  "id": "calendar-monitor",
+  "version": "2026-03-09",
+  "format": "robothor-native/v1",
+  "department": "calendar",
+  "description": "Detects calendar conflicts, cancellations, and changes",
+  "tags": ["calendar", "conflict", "cancellation", "scheduling-booked"]
+}
