@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "genusos"
 version = "1.29.1"
-description = "Genus OS — An AI brain with persistent memory, semantic search, knowledge graph, vision, and self-healing infrastructure."
+description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -108,7 +108,7 @@ genusos = "robothor.cli:main"
 robothor = "robothor.cli:main"
 
 [project.urls]
-Homepage = "https://genusos.dev"
+Homepage = "https://github.com/Ironsail-llc/genus-os"
 Repository = "https://github.com/Ironsail-llc/genus-os"
 Issues = "https://github.com/Ironsail-llc/genus-os/issues"
 
