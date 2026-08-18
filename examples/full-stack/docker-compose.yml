@@ -78,7 +78,7 @@ services:
     working_dir: /app
     command: >
       bash -c "
-        pip install --quiet robothor[api] &&
+        pip install --quiet \"genusos[api] @ https://github.com/Ironsail-llc/genus-os/archive/refs/heads/main.tar.gz\" &&
         robothor serve --host 0.0.0.0
       "
     ports:
