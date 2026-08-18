@@ -1,0 +1,27 @@
+# Daily guardrail soak report — would-block ("observed") counts per
+# guardrail, run error/timeout rate, and flag-soak-deadline nags, so an
+# observe→enforce promotion is data-driven (scripts/guardrail_watch.py).
+#
+# 2026-08-16: this unit had no repo mirror at all, and the live copy carried
+# neither After=postgresql.service nor OnFailure=robothor-alert@%n.service —
+# every backup unit carries both. The timer's Persistent=true fired at boot
+# before postgres was up; guardrail_watch.py's main() ran its DB-dependent
+# section first, so the raised connection error skipped the drift checks
+# (drop-in + host-script drift) too — checks that need no database at all.
+# The drift watchdog was undetectably down. main() now runs the DB-free
+# checks first and reports them even when the DB section fails.
+#
+# Paths mirror the live unit as installed today (drop-in-mirror convention);
+# a generic renderer for instance-specific paths is tracked separately.
+[Unit]
+Description=Robothor guardrail soak report
+After=postgresql.service
+Wants=postgresql.service
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=philip
+WorkingDirectory=/home/philip/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+ExecStart=/home/philip/robothor/venv/bin/python /home/philip/robothor/scripts/guardrail_watch.py
