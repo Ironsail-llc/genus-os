@@ -14,10 +14,12 @@ import { RunsView } from "@/components/views/runs-view";
 import { WorkflowsView } from "@/components/views/workflows-view";
 import { HealthView } from "@/components/views/health-view";
 import { CanvasView } from "@/components/views/canvas-view";
+import { ThemeToggle } from "@/components/business/theme-toggle";
+import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
 import { useScreenSize } from "@/hooks/use-mobile";
-import Image from "next/image";
+import { Zap } from "lucide-react";
 
 const viewTitles: Record<ViewId, string> = {
   dashboard: "Dashboard",
@@ -30,6 +32,19 @@ const viewTitles: Record<ViewId, string> = {
   workflows: "Workflows",
   health: "Health",
   canvas: "Canvas",
+};
+
+const viewGroups: Record<ViewId, string> = {
+  dashboard: "Workspace",
+  tasks: "Workspace",
+  agents: "Workspace",
+  marketplace: "Workspace",
+  controls: "Operator",
+  fleet: "Operator",
+  runs: "Operator",
+  workflows: "Operator",
+  health: "Operator",
+  canvas: "AI",
 };
 
 function HeaderClock() {
@@ -78,6 +93,7 @@ export function AppShell() {
 
   return (
     <div className="flex flex-col md:flex-row h-full w-full" data-testid="app-shell">
+      <CommandPalette onNavigate={(v) => setActiveView(v as MobileViewId)} />
       {/* Desktop sidebar — hidden on mobile */}
       {!isMobile && (
         <Sidebar
@@ -95,30 +111,45 @@ export function AppShell() {
         <div className={`flex-1 min-w-0 min-h-0 flex flex-col relative ${isMobile ? "pb-14" : ""}`}>
           {/* Header bar */}
           <header
-            className="h-10 shrink-0 flex items-center px-4 border-b border-border bg-background/80 backdrop-blur-sm"
+            className="h-12 shrink-0 flex items-center gap-3 px-4 border-b border-border bg-background/80 backdrop-blur-sm"
             data-testid="header-bar"
           >
-            <div className="flex items-center gap-2">
-              <Image
-                src="/robothor-bolt.svg"
-                alt=""
-                width={14}
-                height={14}
-                className="opacity-70"
-              />
-              <span className="text-sm font-semibold tracking-tight">Genus OS</span>
+            {/* Brand appears here only on mobile — desktop carries it in the sidebar */}
+            {isMobile && (
+              <span
+                aria-hidden
+                className="flex size-5 items-center justify-center rounded-md bg-gradient-to-br from-primary to-brand-2 text-white"
+              >
+                <Zap className="size-3" fill="currentColor" strokeWidth={0} />
+              </span>
+            )}
+
+            <div className="flex items-baseline gap-1.5 min-w-0">
+              {!isMobile && (
+                <span className="text-xs text-muted-foreground/70">{viewGroups[sidebarView]} /</span>
+              )}
+              <span className="text-sm font-semibold tracking-tight truncate" data-testid="header-title">
+                {viewTitles[sidebarView]}
+              </span>
             </div>
 
-            <span className="mx-auto text-xs font-medium text-muted-foreground" data-testid="header-title">
-              {viewTitles[sidebarView]}
-            </span>
-
-            <div className="flex items-center gap-3">
-              <div
-                className={`w-1.5 h-1.5 rounded-full ${allHealthy ? "bg-emerald-400" : "bg-amber-400"}`}
-                data-testid="system-status-dot"
-              />
+            <div className="ml-auto flex items-center gap-3">
+              {!isMobile && (
+                <kbd className="rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">
+                  ⌘K
+                </kbd>
+              )}
+              <span
+                className={`inline-flex items-center gap-1.5 text-xs font-medium ${allHealthy ? "text-success" : "text-warning"}`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${allHealthy ? "bg-success" : "bg-warning"}`}
+                  data-testid="system-status-dot"
+                />
+                {!isMobile && (allHealthy ? "Nominal" : `${unhealthyCount} unhealthy`)}
+              </span>
               <HeaderClock />
+              <ThemeToggle />
             </div>
           </header>
 

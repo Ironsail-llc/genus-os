@@ -17,12 +17,12 @@ describe("HealthView", () => {
     } as Response);
     render(<HealthView visible />);
     const units = await screen.findByTestId("health-units");
-    expect(units.className).toMatch(/amber/i);          // a failed unit is amber
+    expect(units.className).toMatch(/warning/i);        // a failed unit warns
     const backups = screen.getByTestId("health-backups");
-    expect(backups.className).toMatch(/amber/i);        // stale backup is amber
-    expect(backups.className).not.toMatch(/emerald|green/i);
+    expect(backups.className).toMatch(/warning/i);      // stale backup warns
+    expect(backups.className).not.toMatch(/success|emerald|green/i);
     const wal = screen.getByTestId("health-wal");
-    expect(wal.className).toMatch(/emerald/i);          // ok is green
+    expect(wal.className).toMatch(/success/i);          // ok is affirmative
   });
 
   it("does not fetch when hidden", () => {

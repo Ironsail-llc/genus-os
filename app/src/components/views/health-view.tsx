@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PageHeader } from "@/components/business/page-header";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -16,11 +17,11 @@ type Health = {
   generated_at?: string;
 };
 
-// emerald only for a genuinely-good status; everything else (warn/unknown/failed) amber.
+// success only for a genuinely-good status; everything else (warn/unknown/failed) warning.
 function toneFor(good: boolean): string {
   return good
-    ? "border-emerald-500/50 bg-emerald-500/5"
-    : "border-amber-500/50 bg-amber-500/5";
+    ? "border-success/35 bg-success/5"
+    : "border-warning/40 bg-warning/5";
 }
 
 export function HealthView({ visible = true }: { visible?: boolean }) {
@@ -66,41 +67,41 @@ export function HealthView({ visible = true }: { visible?: boolean }) {
   return (
     <div data-testid="health-view" className="flex-col gap-3 p-4"
       style={{ display: visible ? "flex" : "none" }}>
-      <h2 className="text-lg font-semibold text-zinc-100">Health</h2>
-      {error && <p className="text-amber-400 text-sm">{error}</p>}
+      <PageHeader title="Health" />
+      {error && <p className="text-sm text-destructive">{error}</p>}
       {health && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div data-testid="health-wal" className={`rounded-md border p-3 ${toneFor(walGood)}`}>
-            <div className="font-medium text-zinc-100">WAL archiving</div>
-            <div className="text-xs text-zinc-400">
+          <div data-testid="health-wal" className={`rounded-lg border p-3 ${toneFor(walGood)}`}>
+            <div className="text-sm font-semibold text-foreground">WAL archiving</div>
+            <div className="mt-1 font-mono text-xs text-muted-foreground">
               archived {wal?.archived_count ?? "—"}, failed {wal?.failed_count ?? "—"},
               last {wal?.last_archived_time ?? "never"}
             </div>
           </div>
 
-          <div data-testid="health-backups" className={`rounded-md border p-3 ${toneFor(backupsGood)}`}>
-            <div className="font-medium text-zinc-100">Backups</div>
+          <div data-testid="health-backups" className={`rounded-lg border p-3 ${toneFor(backupsGood)}`}>
+            <div className="text-sm font-semibold text-foreground">Backups</div>
             {backupsArr.length === 0 && (
-              <div className="text-xs text-amber-300">probe unknown</div>
+              <div className="mt-1 text-xs text-warning">probe unknown</div>
             )}
             {backupsArr.map((b) => (
-              <div key={b.unit} className="text-xs text-zinc-400">
+              <div key={b.unit} className="mt-1 font-mono text-xs text-muted-foreground">
                 {b.unit}: {b.age_hours == null ? "never" : `${b.age_hours.toFixed(1)}h ago`} ({b.status})
               </div>
             ))}
           </div>
 
-          <div data-testid="health-units" className={`rounded-md border p-3 ${toneFor(unitsGood)}`}>
-            <div className="font-medium text-zinc-100">Failed units</div>
-            <div className="text-xs text-zinc-400">
+          <div data-testid="health-units" className={`rounded-lg border p-3 ${toneFor(unitsGood)}`}>
+            <div className="text-sm font-semibold text-foreground">Failed units</div>
+            <div className="mt-1 font-mono text-xs text-muted-foreground">
               {unitsArr.length === 0 ? "none" : unitsArr.join(", ")}
             </div>
           </div>
 
-          <div data-testid="health-disks" className={`rounded-md border p-3 ${toneFor(disksGood)}`}>
-            <div className="font-medium text-zinc-100">Disks</div>
+          <div data-testid="health-disks" className={`rounded-lg border p-3 ${toneFor(disksGood)}`}>
+            <div className="text-sm font-semibold text-foreground">Disks</div>
             {disksArr.map((d) => (
-              <div key={d.mount} className="text-xs text-zinc-400">
+              <div key={d.mount} className="mt-1 font-mono text-xs text-muted-foreground">
                 {d.mount}: {d.used_pct ?? "—"}% used, {d.free_gb ?? "—"} GB free ({d.status})
               </div>
             ))}

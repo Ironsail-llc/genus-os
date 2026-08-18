@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { RunsView } from "../runs-view";
 
@@ -25,12 +25,26 @@ describe("RunsView", () => {
     const detail = await screen.findByTestId("run-detail");
     expect(detail.textContent).toMatch(/blocked/i);
     const block = await screen.findByTestId("guardrail-event-0");
-    expect(block.className).toMatch(/amber/i);
+    expect(block.className).toMatch(/warning/i);
   });
 
   it("does not fetch when hidden", () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
     render(<RunsView visible={false} />);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("RunsView states", () => {
+  it("shows a loading skeleton while fetching", () => {
+    vi.spyOn(global, "fetch").mockReturnValue(new Promise(() => {}) as never);
+    render(<RunsView visible />);
+    expect(screen.getByTestId("runs-loading")).toBeTruthy();
+  });
+
+  it("shows an empty state when there is nothing to list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
+    render(<RunsView visible />);
+    expect(await screen.findByTestId("runs-empty")).toBeTruthy();
   });
 });

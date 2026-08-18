@@ -115,7 +115,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
             href={`${PR_URL}/browse`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-blue-500 hover:text-blue-400"
+            className="inline-flex items-center gap-1.5 text-sm text-info hover:text-info/80"
           >
             Browse Marketplace <ExternalLink className="w-3.5 h-3.5" />
           </a>
@@ -146,8 +146,8 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
           <div
             className={`text-sm px-3 py-2 rounded-md ${
               message.type === "success"
-                ? "bg-emerald-500/10 text-emerald-500"
-                : "bg-red-500/10 text-red-500"
+                ? "bg-success/10 text-success"
+                : "bg-destructive/10 text-destructive"
             }`}
           >
             {message.text}

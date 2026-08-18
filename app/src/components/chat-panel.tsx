@@ -840,8 +840,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       {/* Header — richer on mobile since there's no app header above */}
       <div className={`px-4 border-b border-border flex items-center gap-2 ${mobile ? "py-3.5" : "py-3"}`}>
         <div className="relative">
-          <div className="w-2 h-2 rounded-full bg-emerald-400" />
-          <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-400 animate-ping opacity-40" />
+          <div className="w-2 h-2 rounded-full bg-success" />
+          <div className="absolute inset-0 w-2 h-2 rounded-full bg-success animate-ping opacity-40" />
         </div>
         <span className={`font-semibold ${mobile ? "text-base" : "text-sm"}`}>{aiName}</span>
         {mobile && (
@@ -850,7 +850,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         {planMode && !deepMode && (
           <Badge
             variant="outline"
-            className={`border-amber-500/50 text-amber-400 text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
+            className={`border-warning/50 text-warning text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
             data-testid="plan-mode-badge"
           >
             Plan Mode
@@ -859,7 +859,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         {deepMode && (
           <Badge
             variant="outline"
-            className={`border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
+            className={`border-primary/50 text-primary text-[10px] px-1.5 py-0 ${mobile ? "ml-auto" : ""}`}
             data-testid="deep-mode-badge"
           >
             <Brain className="w-3 h-3 mr-1 inline" />
@@ -869,7 +869,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         {isDeepReasoning && (
           <Badge
             variant="outline"
-            className={`border-violet-500/50 text-violet-400 text-[10px] px-1.5 py-0 animate-pulse ${mobile ? "ml-auto" : ""}`}
+            className={`border-primary/50 text-primary text-[10px] px-1.5 py-0 animate-pulse ${mobile ? "ml-auto" : ""}`}
             data-testid="deep-reasoning-badge"
           >
             <Brain className="w-3 h-3 mr-1 inline" />
@@ -933,8 +933,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           {/* Plan approval card */}
           {activePlan && !isPlanExecuting && (
             <div className="flex justify-start" data-testid="plan-card">
-              <div className={`max-w-[90%] rounded-lg border p-4 space-y-3 ${activePlan.deep_plan ? "border-violet-500/30 bg-violet-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-                <div className={`flex items-center gap-2 text-sm font-semibold ${activePlan.deep_plan ? "text-violet-400" : "text-amber-400"}`}>
+              <div className={`max-w-[90%] rounded-lg border p-4 space-y-3 ${activePlan.deep_plan ? "border-primary/30 bg-primary/5" : "border-warning/30 bg-warning/5"}`}>
+                <div className={`flex items-center gap-2 text-sm font-semibold ${activePlan.deep_plan ? "text-primary" : "text-warning"}`}>
                   {activePlan.deep_plan ? <Brain className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
                   <span>{activePlan.deep_plan ? "Deep Research Plan" : "Proposed Plan"}</span>
                 </div>
@@ -947,7 +947,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   <Button
                     size="sm"
                     onClick={handlePlanApprove}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    className="bg-success hover:bg-success/90 text-success-foreground"
                     data-testid="plan-approve"
                   >
                     <Check className="w-3.5 h-3.5 mr-1" />
@@ -957,7 +957,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                     size="sm"
                     variant="ghost"
                     onClick={() => setShowFeedbackInput((prev) => !prev)}
-                    className="text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                    className="text-warning hover:bg-warning/10"
                     data-testid="plan-edit"
                   >
                     <MessageSquareText className="w-3.5 h-3.5 mr-1" />
@@ -967,7 +967,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                     size="sm"
                     variant="ghost"
                     onClick={handlePlanReject}
-                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    className="text-destructive hover:bg-destructive/10"
                     data-testid="plan-reject"
                   >
                     <X className="w-3.5 h-3.5 mr-1" />
@@ -980,14 +980,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       value={planFeedback}
                       onChange={(e) => setPlanFeedback(e.target.value)}
                       placeholder="What should change?"
-                      className="w-full resize-none rounded-md border border-amber-500/30 bg-background px-3 py-2 text-sm min-h-[60px] focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                      className="w-full resize-none rounded-md border border-warning/30 bg-background px-3 py-2 text-sm min-h-[60px] focus:outline-none focus:ring-1 focus:ring-warning/50"
                       data-testid="plan-feedback-input"
                     />
                     <Button
                       size="sm"
                       onClick={handlePlanRevise}
                       disabled={!planFeedback.trim()}
-                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                      className="bg-warning hover:bg-warning/90 text-warning-foreground"
                       data-testid="plan-revise"
                     >
                       Revise
@@ -1001,10 +1001,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           {/* Streaming indicator */}
           {(isStreaming || isPlanExecuting || isPlanning) && (
             <div className="flex justify-start" data-testid="streaming-message">
-              <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted ${isPlanning ? "border border-amber-500/30" : ""}`}>
+              <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted ${isPlanning ? "border border-warning/30" : ""}`}>
                 {isPlanning ? (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-amber-400" data-testid="planning-indicator">
+                    <div className="flex items-center gap-2 text-warning" data-testid="planning-indicator">
                       <ClipboardList className="w-3.5 h-3.5 animate-pulse" />
                       <span className="text-xs font-medium">
                         {activeToolName ? `Checking ${activeToolName}...` : "Exploring..."}
@@ -1036,8 +1036,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                         </ReactMarkdown>
                       </div>
                     ) : activeToolName ? (
-                      <div className="flex items-center gap-2 text-xs text-blue-400" data-testid="tool-indicator">
-                        <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+                      <div className="flex items-center gap-2 text-xs text-info" data-testid="tool-indicator">
+                        <span className="inline-block w-2 h-2 rounded-full bg-info animate-pulse" />
                         <span>{activeToolName.replace(/_/g, " ")}</span>
                       </div>
                     ) : (
@@ -1071,7 +1071,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 planMode && !deepMode
-                  ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                  ? "bg-warning/15 text-warning border border-warning/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
               data-testid="plan-toggle"
@@ -1097,7 +1097,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 deepMode
-                  ? "bg-violet-500/15 text-violet-400 border border-violet-500/30"
+                  ? "bg-primary/15 text-primary border border-primary/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
               data-testid="deep-toggle"
@@ -1123,7 +1123,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       setDeepPlan(false);
                       inputRef.current?.focus();
                     }}
-                    className={planMode && !deepMode ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : planMode && deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                    className={planMode && !deepMode ? "text-warning bg-warning/10 hover:bg-warning/20" : planMode && deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
                     data-testid="plan-toggle"
                   >
@@ -1153,7 +1153,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       });
                       inputRef.current?.focus();
                     }}
-                    className={deepMode ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" : "text-muted-foreground hover:text-foreground"}
+                    className={deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
                     data-testid="deep-toggle"
                   >
@@ -1172,7 +1172,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : "Ask me anything..."}
-            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-violet-500/30 focus:ring-violet-500/50" : planMode ? "border-amber-500/30 focus:ring-amber-500/50" : "border-border focus:ring-ring"}`}
+            className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
             disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"

@@ -58,7 +58,7 @@ describe("ControlsView", () => {
     render(<ControlsView />);
     const badge = await screen.findByTestId("verdict-ROBOTHOR_RBAC_MODE");
     expect(badge).toHaveAttribute("data-status", "ENFORCING");
-    expect(badge.className).toMatch(/emerald/i);
+    expect(badge.className).toMatch(/success/i);
   });
 
   it("requires a reason before allowing a mode change to be applied", async () => {

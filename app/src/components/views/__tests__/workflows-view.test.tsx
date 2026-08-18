@@ -22,3 +22,17 @@ describe("WorkflowsView", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("WorkflowsView states", () => {
+  it("shows a loading skeleton while fetching", () => {
+    vi.spyOn(global, "fetch").mockReturnValue(new Promise(() => {}) as never);
+    render(<WorkflowsView visible />);
+    expect(screen.getByTestId("workflows-loading")).toBeTruthy();
+  });
+
+  it("shows an empty state when there is nothing to list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
+    render(<WorkflowsView visible />);
+    expect(await screen.findByTestId("workflows-empty")).toBeTruthy();
+  });
+});

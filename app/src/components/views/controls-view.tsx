@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { RefreshCw, ShieldAlert } from "lucide-react";
+import { PageHeader } from "@/components/business/page-header";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 
 interface ControlVerdict {
   status: string;
@@ -45,13 +48,13 @@ const WARNING_STATUSES = new Set(["INERT", "BLIND", "UNKNOWN"]);
 
 function badgeClassFor(status: string): string {
   if (AFFIRMATIVE_STATUSES.has(status)) {
-    return "bg-emerald-500/10 text-emerald-500 border-emerald-500/30";
+    return "bg-success/10 text-success border-success/30";
   }
   if (WARNING_STATUSES.has(status)) {
-    return "bg-amber-500/10 text-amber-500 border-amber-500/30";
+    return "bg-warning/10 text-warning border-warning/30";
   }
   // UNPROVEN and any unrecognized status: neutral question mark, never green.
-  return "bg-zinc-500/10 text-zinc-400 border-zinc-500/30";
+  return "bg-muted text-muted-foreground border-border";
 }
 
 interface Draft {
@@ -140,24 +143,23 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
       data-testid="controls-view"
     >
       <div className="p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Controls</h2>
+        <PageHeader title="Controls" description="Governed platform flags with live enforcement verdicts">
           <button
             onClick={fetchControls}
             disabled={loading}
-            className="p-1 rounded hover:bg-accent"
+            className="p-1 rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             title="Refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
-        </div>
+        </PageHeader>
 
         {message && (
           <div
             className={`text-sm px-3 py-2 rounded-md ${
               message.type === "success"
-                ? "bg-emerald-500/10 text-emerald-500"
-                : "bg-red-500/10 text-red-500"
+                ? "bg-success/10 text-success"
+                : "bg-destructive/10 text-destructive"
             }`}
           >
             {message.text}
@@ -165,7 +167,7 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
         )}
 
         {error && (
-          <div className="text-sm px-3 py-2 rounded-md bg-red-500/10 text-red-500">{error}</div>
+          <div className="text-sm px-3 py-2 rounded-md bg-destructive/10 text-destructive">{error}</div>
         )}
 
         {loading && controls.length === 0 ? (
@@ -215,10 +217,9 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
 
                   {isOperator ? (
                     <div className="flex items-center gap-2 flex-wrap">
-                      <select
+                      <NativeSelect
                         value={draft.value}
                         onChange={(e) => setDraftValue(control.name, e.target.value)}
-                        className="text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
                         data-testid={`select-${control.name}`}
                       >
                         {values.map((v) => (
@@ -226,13 +227,13 @@ export function ControlsView({ visible = true }: ControlsViewProps) {
                             {v}
                           </option>
                         ))}
-                      </select>
-                      <input
+                      </NativeSelect>
+                      <Input
                         type="text"
                         placeholder="Reason (required)"
                         value={draft.reason}
                         onChange={(e) => setDraftReason(control.name, e.target.value)}
-                        className="flex-1 min-w-[160px] px-2 py-1 text-sm rounded-md border border-input bg-background"
+                        className="h-8 flex-1 min-w-[160px] text-sm"
                         data-testid={`reason-${control.name}`}
                       />
                       <button

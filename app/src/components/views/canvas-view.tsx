@@ -5,10 +5,26 @@ import { SrcdocRenderer } from "@/components/canvas/srcdoc-renderer";
 import { useCanvasBridge, type PendingProposal } from "@/components/canvas/use-canvas-bridge";
 import { CANVAS_SHIM_SOURCE } from "@/lib/canvas-shim";
 import { CANVAS_BINDER_SOURCE } from "@/lib/canvas-binder";
+import { PageHeader } from "@/components/business/page-header";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+// Module-level stale-while-revalidate cache: the last welcome HTML paints
+// instantly on every tab visit while a fresh copy is fetched in the
+// background — the LLM-generated welcome takes seconds to produce, and a
+// blank iframe on each visit made the tab feel broken.
+let welcomeHtmlCache = "";
 
 export function CanvasView({ visible = true }: { visible?: boolean }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const [code, setCode] = useState<string>("");
+  const [code, setCode] = useState<string>(welcomeHtmlCache);
   const [submitting, setSubmitting] = useState(false);
   const { pendingProposal, confirmProposal, cancelProposal, dropped } = useCanvasBridge(iframeRef);
 
@@ -22,10 +38,13 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
         if (res.ok) {
           const body = await res.json();
           if (!active) return;
-          setCode(typeof body?.html === "string" ? body.html : "");
+          if (typeof body?.html === "string") {
+            welcomeHtmlCache = body.html;
+            setCode(body.html);
+          }
         }
       } catch {
-        /* leave code empty; the tab still renders */
+        /* keep whatever is cached; the tab still renders */
       }
     })();
     return () => {
@@ -83,10 +102,10 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
 
   return (
     <div data-testid="canvas-view" className="flex-col gap-3 p-4" style={{ display: visible ? "flex" : "none" }}>
-      <h2 className="text-lg font-semibold text-zinc-100">Canvas</h2>
-      <p className="text-xs text-zinc-500">
-        Live canvas — the operator&apos;s system, rendered by the model. Reads are whitelisted; any change is confirmed by you.
-      </p>
+      <PageHeader
+        title="Canvas"
+        description="The operator's system, rendered live by the model. Reads are whitelisted; writes need your confirmation."
+      />
       {visible && (
         <SrcdocRenderer
           ref={iframeRef}
@@ -97,32 +116,56 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
       )}
 
       {dropped.length > 0 && (
-        <div data-testid="canvas-dropped" className="rounded border border-amber-500/50 bg-amber-500/5 p-2 text-xs text-amber-300">
+        <div data-testid="canvas-dropped" className="rounded-md border border-warning/25 bg-warning/10 p-2.5 text-xs text-warning">
           The canvas reached for {dropped.length} thing(s) it was not given:{" "}
           {dropped.map((d) => d.op).join(", ")}
         </div>
       )}
 
-      {shownProposal && (
-        <div data-testid="canvas-confirm" className="fixed inset-x-0 bottom-4 mx-auto w-max rounded-lg border border-zinc-600 bg-zinc-900 p-4 shadow-xl">
-          <p className="text-sm text-zinc-100">The canvas proposes: <strong>{shownProposal.describe}</strong></p>
-          <p className="mt-1 text-xs text-zinc-400">This is an operator write. Confirm to apply it.</p>
+      <Dialog
+        open={!!shownProposal}
+        onOpenChange={(open) => {
+          if (!open && !submitting) handleCancel();
+        }}
+      >
+        <DialogContent data-testid="canvas-confirm" showCloseButton={false} className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              The canvas proposes: {shownProposal?.describe}
+            </DialogTitle>
+            <DialogDescription>
+              This is an operator write. Confirm to apply it.
+            </DialogDescription>
+          </DialogHeader>
           {writeResult && (
             <p
               data-testid="canvas-write-result"
-              className={writeResult.ok ? "mt-2 text-xs text-emerald-400" : "mt-2 text-xs text-amber-300"}
+              className={writeResult.ok ? "text-xs text-success" : "text-xs text-warning"}
             >
               {writeResult.ok ? "Applied." : "Write failed — flag unchanged."}
             </p>
           )}
-          <div className="mt-3 flex gap-2">
-            <button data-testid="canvas-confirm-accept" disabled={submitting} onClick={handleConfirm}
-              className="rounded bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-500 disabled:opacity-50">Confirm</button>
-            <button data-testid="canvas-confirm-cancel" disabled={submitting} onClick={handleCancel}
-              className="rounded bg-zinc-700 px-3 py-1 text-sm text-zinc-100 hover:bg-zinc-600 disabled:opacity-50">Cancel</button>
-          </div>
-        </div>
-      )}
+          <DialogFooter className="gap-2 sm:justify-start">
+            <Button
+              data-testid="canvas-confirm-accept"
+              disabled={submitting}
+              onClick={handleConfirm}
+              size="sm"
+            >
+              Confirm
+            </Button>
+            <Button
+              data-testid="canvas-confirm-cancel"
+              disabled={submitting}
+              onClick={handleCancel}
+              variant="secondary"
+              size="sm"
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

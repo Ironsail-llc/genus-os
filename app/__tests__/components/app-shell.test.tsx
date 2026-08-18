@@ -116,7 +116,8 @@ describe("AppShell", () => {
   it("renders the header bar", () => {
     render(<AppShell />);
     expect(screen.getByTestId("header-bar")).toBeInTheDocument();
-    expect(screen.getByText("Genus OS")).toBeInTheDocument();
+    // brand lockup lives in the sidebar since the B3 chrome rework
+    expect(screen.getByTestId("sidebar-bolt")).toHaveTextContent(/Genus\s*OS/);
   });
 
   it("header shows current view title", () => {
@@ -134,8 +135,8 @@ describe("AppShell", () => {
     render(<AppShell />);
     const dot = screen.getByTestId("system-status-dot");
     expect(dot).toBeInTheDocument();
-    // 1 failed agent -> amber dot
-    expect(dot.className).toContain("bg-amber");
+    // 1 failed agent -> warning-token dot
+    expect(dot.className).toContain("bg-warning");
   });
 
   it("renders chat panel", () => {

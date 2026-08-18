@@ -149,7 +149,7 @@ describe("ChatPanel — Plan Mode", () => {
 
     // Toggle on
     fireEvent.click(toggle);
-    expect(toggle.className).toContain("text-amber-400");
+    expect(toggle.className).toContain("text-warning");
 
     // Badge appears
     expect(screen.getByTestId("plan-mode-badge")).toBeTruthy();

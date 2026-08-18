@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { FleetView } from "../fleet-view";
 
@@ -31,5 +31,19 @@ describe("FleetView", () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
     render(<FleetView visible={false} />);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("FleetView states", () => {
+  it("shows a loading skeleton while fetching", () => {
+    vi.spyOn(global, "fetch").mockReturnValue(new Promise(() => {}) as never);
+    render(<FleetView visible />);
+    expect(screen.getByTestId("fleet-loading")).toBeTruthy();
+  });
+
+  it("shows an empty state when there is nothing to list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByTestId("fleet-empty")).toBeTruthy();
   });
 });
