@@ -1,3 +1,9 @@
+## [1.30.0](https://github.com/Ironsail-llc/genus-os/compare/v1.29.2...v1.30.0) (2026-08-18)
+
+### Features
+
+* **dashboard:** premium redesign with aurora tokens, light/dark themes, cmd-k ([#220](https://github.com/Ironsail-llc/genus-os/issues/220)) ([976fc99](https://github.com/Ironsail-llc/genus-os/commit/976fc999b50e11a0ed52a4e3f138289ebb46bd27))
+
 ## [1.29.2](https://github.com/Ironsail-llc/genus-os/compare/v1.29.1...v1.29.2) (2026-08-18)
 
 ### Bug Fixes
