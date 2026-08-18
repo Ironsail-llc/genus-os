@@ -1,0 +1,9 @@
+{
+  "name": "Canary",
+  "id": "canary",
+  "version": "2026-03-02",
+  "format": "robothor-native/v1",
+  "department": "operations",
+  "description": "Test agent for validating error recovery, replanning, and helper spawning",
+  "tags": []
+}

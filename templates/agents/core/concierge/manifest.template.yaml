@@ -1,0 +1,55 @@
+id: concierge
+name: Concierge
+description: Self-configuring agent that detects usage patterns and proposes new agents
+version: "2026-03-04"
+department: core
+
+reports_to: {{ reports_to }}
+escalates_to: {{ escalates_to }}
+
+model:
+  primary: {{ model_primary }}
+  fallbacks:
+    - openrouter/minimax/minimax-m2.5
+    - openrouter/google/gemini-2.5-pro
+
+schedule:
+  cron: "0 20 * * *"
+  timezone: {{ timezone }}
+  timeout_seconds: 300
+  max_iterations: 10
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - search_memory
+  - store_memory
+  - memory_block_read
+  - memory_block_write
+  - memory_block_list
+  - list_tasks
+  - list_my_tasks
+  - create_task
+  - update_task
+  - resolve_task
+  - list_agent_runs
+  - get_agent_stats
+  - get_fleet_health
+  - detect_anomalies
+
+task_protocol: true
+status_file: brain/memory/concierge-status.md
+
+warmup:
+  memory_blocks: [concierge_observations, operational_findings]
+  context_files:
+    - brain/memory/concierge-status.md
+
+v2:
+  error_feedback: true
+  cost_budget_usd: 0.50

@@ -1,0 +1,9 @@
+{
+  "name": "Email Classifier",
+  "id": "email-classifier",
+  "version": "2026-03-03",
+  "format": "robothor-native/v1",
+  "department": "email",
+  "description": "Classifies incoming emails, creates tasks, routes to analyst or responder",
+  "tags": ["email", "reply-needed", "analytical", "escalation", "needs-owner"]
+}

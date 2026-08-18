@@ -1,0 +1,45 @@
+id: hello-world
+name: Hello World
+description: Minimal example agent — reads a file, writes status, done
+version: "{{ version }}"
+department: examples
+
+reports_to: main
+creates_tasks_for: []
+receives_tasks_from: []
+escalates_to: main
+
+model:
+  primary: {{ model_primary }}
+  fallbacks:
+    - "openrouter/anthropic/claude-sonnet-4-6"
+    - "gemini/gemini-2.5-pro"
+
+schedule:
+  cron: "{{ cron_expr }}"
+  timezone: {{ timezone }}
+  timeout_seconds: 120
+  max_iterations: 3
+  session_target: isolated
+
+delivery:
+  mode: none
+
+tools_allowed:
+  - read_file
+  - write_file
+  - exec
+tools_denied: []
+
+task_protocol: false
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/hello-world-status.md
+shared_working_state: false
+
+instruction_file: brain/agents/hello-world.md
+bootstrap_files:
+  - brain/AGENTS.md
+
+v2:
+  error_feedback: true

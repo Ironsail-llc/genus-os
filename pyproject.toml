@@ -127,6 +127,11 @@ packages = ["robothor"]
 # only applies what it can find. robothor/tests/test_migration_packaging.py
 # fails the build if this ever falls behind the manifest again.
 "crm/migrations" = "robothor/migrations/crm"
+# The init scaffold (repo-root templates/) ships as package data so a wheel
+# install can scaffold a workspace. Named bundled_scaffold to avoid colliding
+# with the robothor/templates/*.py code package that shares the parent dir.
+# robothor/tests/test_template_resolution.py pins this mapping.
+"templates" = "robothor/templates/bundled_scaffold"
 
 [tool.coverage.run]
 source = ["robothor"]

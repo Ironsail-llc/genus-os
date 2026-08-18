@@ -1,5 +1,6 @@
-# Symlinked directories (tracked in their own repos)
-/templates/
+# Symlinked directory (tracked in its own repo)
+# templates/ is platform code — the init scaffold, tracked here and shipped
+# in the wheel as robothor/templates/bundled_scaffold (see pyproject.toml).
 /tunnel/
 
 # Business adapters (local MCP server configs — not part of the public repo)

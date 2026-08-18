@@ -1,0 +1,37 @@
+# Failure Analyzer — template setup
+agent_id: failure-analyzer
+version: "2026-03-05"
+instruction_file_path: brain/agents/FAILURE_ANALYZER.md
+
+variables:
+  model_primary:
+    type: string
+    default: "openrouter/anthropic/claude-sonnet-4-6"
+    description: Primary LLM model
+  model_fallbacks:
+    type: list
+    default:
+      - "openrouter/xiaomi/mimo-v2-pro"
+      - "gemini/gemini-2.5-pro"
+    description: Fallback model chain
+  timezone:
+    type: string
+    default: "UTC"
+    description: Schedule timezone
+  cron_expr:
+    type: string
+    default: "25 */2 * * *"
+    description: "Cron schedule (every 2h at :25)"
+    prompt: "Cron schedule for failure analysis"
+  reports_to:
+    type: string
+    default: "main"
+    description: Agent to report to
+  escalates_to:
+    type: string
+    default: "main"
+    description: Agent to escalate to
+  delivery_mode:
+    type: string
+    default: "none"
+    description: Delivery mode (none for workers)

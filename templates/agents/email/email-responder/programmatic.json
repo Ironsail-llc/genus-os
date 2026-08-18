@@ -1,0 +1,9 @@
+{
+  "name": "Email Responder",
+  "id": "email-responder",
+  "version": "2026-03-09",
+  "format": "robothor-native/v1",
+  "department": "email",
+  "description": "Composes and sends email replies via gog gmail",
+  "tags": []
+}

@@ -1,0 +1,20 @@
+agent_id: auto-researcher
+version: "2026-03-31"
+instruction_file_path: brain/agents/AUTO_RESEARCHER.md
+variables:
+  model_primary:
+    type: string
+    description: Primary LLM model for hypothesis generation
+    default: "openrouter/anthropic/claude-sonnet-4.6"
+  timezone:
+    type: string
+    description: Schedule timezone
+    default: "UTC"
+  delivery_mode:
+    type: string
+    description: "Delivery mode for announcements (announce, none)"
+    default: "announce"
+  cost_budget_usd:
+    type: number
+    description: Maximum cost per agent run in USD
+    default: 3.0

@@ -1,0 +1,115 @@
+# Agent Manifest — {AGENT_NAME}
+# Schema: docs/agents/schema.yaml
+# Contract: docs/agents/INSTRUCTION_CONTRACT.md
+#
+# Drop this file in docs/agents/ and restart the engine:
+#   sudo systemctl restart robothor-engine
+
+# ── Required (schema-enforced) ──────────────────────────────────────────
+
+id: {AGENT_ID}
+name: {AGENT_NAME}
+description: {DESCRIPTION}
+version: "{VERSION}"
+department: custom    # email | calendar | operations | security | communications | crm | briefings | core | custom
+
+# ── Model ────────────────────────────────────────────────────────────────
+
+model:
+  primary: openrouter/moonshotai/kimi-k2.5
+  fallbacks:
+    - gemini/gemini-2.5-pro
+
+# ── Schedule ─────────────────────────────────────────────────────────────
+# Leave cron empty for hook-only or interactive agents.
+
+schedule:
+  cron: ""
+  timezone: UTC
+  timeout_seconds: 300
+  max_iterations: 10
+  session_target: isolated
+
+# ── Delivery ─────────────────────────────────────────────────────────────
+# mode: none (silent worker) | announce (delivers output to user) | log
+
+delivery:
+  mode: none
+
+# ── Tools ────────────────────────────────────────────────────────────────
+# STRICT: if tools_allowed is set, ONLY these tools are available.
+# Always include exec, read_file, write_file for file I/O.
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - search_memory
+  - create_task
+  - list_tasks
+  - list_my_tasks
+  - resolve_task
+tools_denied: []
+
+# ── Coordination ─────────────────────────────────────────────────────────
+
+task_protocol: false
+review_workflow: false
+notification_inbox: false
+status_file: ""
+shared_working_state: false
+
+# reports_to: supervisor
+# creates_tasks_for: []
+# receives_tasks_from: []
+# escalates_to: supervisor
+# downstream_agents: []
+
+# ── Event Hooks ──────────────────────────────────────────────────────────
+# Uncomment to trigger this agent on Redis Stream events.
+# Primary trigger path — cron serves as safety net.
+
+# hooks:
+#   - stream: email
+#     event_type: email.new
+#     message: "New email received. Process and classify."
+
+# ── Streams ──────────────────────────────────────────────────────────────
+
+# streams:
+#   read: []
+#   write: []
+
+# ── Warmup ───────────────────────────────────────────────────────────────
+# Files and memory blocks pre-loaded into context before each run.
+
+# warmup:
+#   memory_blocks: []
+#   context_files: []
+#   peer_agents: []
+
+# ── Files ────────────────────────────────────────────────────────────────
+
+instruction_file: brain/{INSTRUCTION_FILENAME}
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+# ── SLA ──────────────────────────────────────────────────────────────────
+
+# sla:
+#   urgent: 30m
+#   high: 2h
+#   normal: 8h
+#   low: 24h
+
+# ── Tags ─────────────────────────────────────────────────────────────────
+
+# tags_produced: []
+# tags_consumed: []
+
+# ── Changelog ────────────────────────────────────────────────────────────
+
+changelog:
+  - date: "{VERSION}"
+    change: Initial manifest creation

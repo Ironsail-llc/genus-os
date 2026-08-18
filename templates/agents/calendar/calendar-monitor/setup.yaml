@@ -1,0 +1,37 @@
+# Calendar Monitor — template setup
+agent_id: calendar-monitor
+version: "2026-03-09"
+instruction_file_path: brain/CALENDAR_MONITOR.md
+
+variables:
+  model_primary:
+    type: string
+    default: "openrouter/xiaomi/mimo-v2-pro"
+    description: Primary LLM model
+  model_fallbacks:
+    type: list
+    default:
+      - "openrouter/anthropic/claude-sonnet-4-6"
+      - "gemini/gemini-2.5-pro"
+    description: Fallback model chain
+  timezone:
+    type: string
+    default: "UTC"
+    description: Schedule timezone
+  cron_expr:
+    type: string
+    default: "8 6-22/6 * * *"
+    description: "Cron schedule (every 6h, 6:08 AM-10:08 PM)"
+    prompt: "Cron schedule for calendar monitoring"
+  reports_to:
+    type: string
+    default: "main"
+    description: Agent to report to
+  escalates_to:
+    type: string
+    default: "main"
+    description: Agent to escalate to
+  delivery_mode:
+    type: string
+    default: "none"
+    description: Delivery mode (none for workers)

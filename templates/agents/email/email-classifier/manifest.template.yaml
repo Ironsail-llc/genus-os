@@ -1,0 +1,99 @@
+id: email-classifier
+name: Email Classifier
+description: Classifies incoming emails, creates tasks, routes to analyst or responder
+version: "{{ version }}"
+department: email
+
+reports_to: {{ reports_to }}
+creates_tasks_for: [email-analyst, email-responder]
+receives_tasks_from: []
+escalates_to: {{ escalates_to }}
+
+model:
+  primary: {{ model_primary }}
+  fallbacks:
+    - "openrouter/anthropic/claude-sonnet-4.6"
+    - "gemini/gemini-2.5-pro"
+  payload_alias: kimi
+
+schedule:
+  cron: "{{ cron_expr }}"
+  timezone: {{ timezone }}
+  timeout_seconds: 600
+  max_iterations: 10
+  session_target: isolated
+
+delivery:
+  mode: {{ delivery_mode }}
+
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - search_memory
+  - get_entity
+  - store_memory
+  - list_conversations
+  - log_interaction
+  - create_person
+  - create_task
+  - list_tasks
+  - list_my_tasks
+  - resolve_task
+  - update_task
+  - append_to_block
+tools_denied:
+  - message
+bridge_endpoints:
+  - "GET /health"
+  - "GET /api/conversations"
+  - "POST /log-interaction"
+  - "POST /api/people"
+  - "POST /api/tasks"
+  - "GET /api/tasks"
+  - "PATCH /api/tasks/*"
+  - "GET /api/tasks/agent/*"
+  - "POST /api/tasks/*/resolve"
+  - "POST /api/memory/blocks/*/append"
+streams:
+  read: [email]
+  write: []
+
+sla:
+  urgent: 30m
+  high: 2h
+  normal: 8h
+  low: 24h
+
+task_protocol: true
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/email-classifier-status.md
+shared_working_state: true
+
+warmup:
+  context_files:
+    - brain/memory/email-classifier-status.md
+
+instruction_file: brain/EMAIL_CLASSIFIER.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+hooks:
+  - stream: email
+    event_type: email.new
+    message: "New email received. Process the triage inbox and classify emails."
+  - stream: email
+    event_type: triage.refreshed
+    message: "Triage inbox refreshed with new items. Process the triage inbox and classify emails."
+
+downstream_agents:
+  - email-analyst
+  - email-responder
+
+tags_produced: [email, reply-needed, analytical, escalation, needs-owner]
+tags_consumed: []
+
+v2:
+  error_feedback: true

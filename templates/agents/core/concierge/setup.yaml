@@ -1,0 +1,4 @@
+agent_id: concierge
+version: '2026-03-04'
+instruction_file_path: brain/instructions/CONCIERGE.md
+variables: {}

@@ -1,0 +1,4 @@
+agent_id: canary
+version: '2026-03-02'
+instruction_file_path: brain/instructions/CANARY.md
+variables: {}
