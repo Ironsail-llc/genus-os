@@ -1,3 +1,13 @@
+## [1.29.2](https://github.com/Ironsail-llc/genus-os/compare/v1.29.1...v1.29.2) (2026-08-18)
+
+### Bug Fixes
+
+* **dist:** working demo compose and honest PyPI card metadata ([#243](https://github.com/Ironsail-llc/genus-os/issues/243)) ([814a3d5](https://github.com/Ironsail-llc/genus-os/commit/814a3d556a249d88f9cd508c7cc4bfa8de67b741))
+
+### Documentation
+
+* fix dead clone URLs and the serve scope claim ([#242](https://github.com/Ironsail-llc/genus-os/issues/242)) ([45a051d](https://github.com/Ironsail-llc/genus-os/commit/45a051dff51b4299a77846a7b32af54ef54e1630))
+
 ## [1.29.1](https://github.com/Ironsail-llc/genus-os/compare/v1.29.0...v1.29.1) (2026-08-17)
 
 ### Bug Fixes
