@@ -348,15 +348,16 @@ def run_init(args: Any) -> int:
         print(" (run: robothor agent install --preset standard)", end="")
     print()
 
-    # Engine status
-    print("    Engine:      not running (run: sudo systemctl start robothor-engine)")
+    # Engine status + next steps (wording depends on install mode — a wheel
+    # install has no systemd units, so don't tell it to use them)
+    install_mode = _detect_install_mode()
+    if install_mode == "checkout":
+        print("    Engine:      not running (run: sudo systemctl start robothor-engine)")
+    else:
+        print("    Engine:      not running (run: robothor engine start)")
 
     print()
-    print("  Next steps:")
-    print("    1. robothor agent install --preset standard")
-    print("    2. sudo systemctl start robothor-engine")
-    print("    3. Open Claude Code for identity setup")
-    print()
+    _print_next_steps(install_mode)
     return 0
 
 
@@ -631,6 +632,49 @@ def _find_template_dir(package_dir: Path | None = None) -> Path | None:
         except Exception:  # pragma: no cover - defensive
             pass
     return None
+
+
+def _detect_install_mode() -> str:
+    """Return ``"checkout"`` or ``"wheel"`` for the running install.
+
+    Reuses ``_find_template_dir()`` (the #245 scaffold-resolution helper)
+    rather than re-deriving the checkout/wheel distinction: a checkout
+    resolves to the repo-root ``templates/`` directory, a wheel install
+    resolves to the bundled ``.../robothor/templates/bundled_scaffold``. If
+    neither can be resolved, default to "wheel" — the more conservative
+    guidance (no systemd assumptions).
+    """
+    template_dir = _find_template_dir()
+    if template_dir is not None and template_dir.name != "bundled_scaffold":
+        return "checkout"
+    return "wheel"
+
+
+def _print_next_steps(install_mode: str) -> None:
+    """Print truthful next-steps for the given install mode.
+
+    Checkout installs may still point at the systemd units, with a note that
+    they need the repo's infra/systemd setup. Wheel installs only get
+    commands that actually work from a pip install: the in-process
+    orchestrator/engine, status/tui, and agent install via the catalog.
+    Claude Code is an optional suggestion, not the first step.
+    """
+    print("  Next steps:")
+    steps = ["robothor agent install --preset standard"]
+    if install_mode == "checkout":
+        steps.append(
+            "sudo systemctl start robothor-engine (requires the repo's infra/systemd setup)"
+        )
+    else:
+        steps.append("robothor serve            # start the RAG orchestrator")
+        steps.append("robothor engine start     # start the agent engine (in-process)")
+        steps.append(
+            "robothor status / robothor tui   # check status (tui needs: pip install robothor[tui])"
+        )
+    for i, step in enumerate(steps, start=1):
+        print(f"    {i}. {step}")
+    print("    (optional) Open Claude Code for identity setup")
+    print()
 
 
 def run_migration(db_config: DatabaseConfig) -> int:

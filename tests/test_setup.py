@@ -341,6 +341,110 @@ class TestIdentityEnvVars:
         assert "ROBOTHOR_AI_NAME=Jarvis" in content
 
 
+class TestDetectInstallMode:
+    def test_checkout_when_template_dir_is_repo_templates(self, monkeypatch, tmp_path):
+        import robothor.setup as setup_mod
+
+        checkout_templates = tmp_path / "templates"
+        checkout_templates.mkdir()
+        monkeypatch.setattr(setup_mod, "_find_template_dir", lambda: checkout_templates)
+        assert setup_mod._detect_install_mode() == "checkout"
+
+    def test_wheel_when_template_dir_is_bundled_scaffold(self, monkeypatch, tmp_path):
+        import robothor.setup as setup_mod
+
+        bundled = tmp_path / "robothor" / "templates" / "bundled_scaffold"
+        bundled.mkdir(parents=True)
+        monkeypatch.setattr(setup_mod, "_find_template_dir", lambda: bundled)
+        assert setup_mod._detect_install_mode() == "wheel"
+
+    def test_wheel_when_template_dir_unresolved(self, monkeypatch):
+        """No env override, no checkout marker, no bundled scaffold found."""
+        import robothor.setup as setup_mod
+
+        monkeypatch.setattr(setup_mod, "_find_template_dir", lambda: None)
+        assert setup_mod._detect_install_mode() == "wheel"
+
+
+class TestPrintNextSteps:
+    def test_wheel_mode_has_no_systemd_guidance(self, capsys):
+        from robothor.setup import _print_next_steps
+
+        _print_next_steps("wheel")
+        out = capsys.readouterr().out
+
+        assert "sudo systemctl" not in out
+        assert "robothor serve" in out
+        assert "robothor engine start" in out
+        assert "robothor status" in out
+        assert "robothor tui" in out
+        assert "[tui]" in out
+        assert "robothor agent install --preset standard" in out
+
+    def test_checkout_mode_keeps_systemd_note(self, capsys):
+        from robothor.setup import _print_next_steps
+
+        _print_next_steps("checkout")
+        out = capsys.readouterr().out
+
+        assert "sudo systemctl start robothor-engine" in out
+        assert "infra" in out.lower()  # note that the units need the repo's infra setup
+
+    def test_claude_code_is_optional_not_step_one(self, capsys):
+        from robothor.setup import _print_next_steps
+
+        _print_next_steps("wheel")
+        out = capsys.readouterr().out
+
+        assert "Claude Code" in out
+        assert "optional" in out.lower()
+        numbered_lines = [line for line in out.splitlines() if line.strip()[:1].isdigit()]
+        assert not any("Claude Code" in line for line in numbered_lines)
+
+
+class TestRunInitNextStepsByMode:
+    def test_wheel_mode_end_to_end_has_no_sudo_systemctl(self, tmp_path, capsys, monkeypatch):
+        workspace = tmp_path / "robothor"
+        args = SimpleNamespace(
+            yes=True,
+            docker=False,
+            skip_models=True,
+            skip_db=True,
+            workspace=str(workspace),
+        )
+        import robothor.setup as setup_mod
+
+        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
+        monkeypatch.setattr(setup_mod, "_detect_install_mode", lambda: "wheel")
+
+        rc = run_init(args)
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        assert "sudo systemctl" not in out
+        assert "robothor serve" in out
+
+    def test_checkout_mode_end_to_end_keeps_systemd_note(self, tmp_path, capsys, monkeypatch):
+        workspace = tmp_path / "robothor"
+        args = SimpleNamespace(
+            yes=True,
+            docker=False,
+            skip_models=True,
+            skip_db=True,
+            workspace=str(workspace),
+        )
+        import robothor.setup as setup_mod
+
+        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
+        monkeypatch.setattr(setup_mod, "_detect_install_mode", lambda: "checkout")
+
+        rc = run_init(args)
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        assert "sudo systemctl start robothor-engine" in out
+
+
 class TestCliInit:
     def test_init_help(self, capsys):
         """robothor init --help should show all flags."""

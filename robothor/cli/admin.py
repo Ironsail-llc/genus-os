@@ -170,6 +170,18 @@ def cmd_mcp() -> int:
     return 0
 
 
+# In-process alternatives for services that have one, shown when their
+# systemd unit isn't installed (e.g. a plain pip install with no infra setup).
+_IN_PROCESS_ALTERNATIVES = {
+    "robothor-engine": "robothor engine start",
+}
+
+
+def _in_process_hint(svc: str) -> str:
+    alt = _IN_PROCESS_ALTERNATIVES.get(svc)
+    return f" — run: {alt}" if alt else ""
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start all Genus OS services."""
     import subprocess
@@ -178,24 +190,34 @@ def cmd_start(args: argparse.Namespace) -> int:
     print()
     for svc in _SERVICES:
         print(f"    {svc} ...", end=" ", flush=True)
-        result = subprocess.run(
-            ["sudo", "systemctl", "start", svc],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "start", svc],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            # No systemd/sudo on this box at all — nothing to shell out to.
+            print(f"skipped (systemd not available){_in_process_hint(svc)}")
+            continue
+
         if result.returncode == 0:
             print("started")
         else:
             # Service might not exist — check if unit file is present
-            check = subprocess.run(
-                ["systemctl", "list-unit-files", f"{svc}.service"],
-                capture_output=True,
-                text=True,
-            )
+            try:
+                check = subprocess.run(
+                    ["systemctl", "list-unit-files", f"{svc}.service"],
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError:
+                print(f"skipped (systemd not available){_in_process_hint(svc)}")
+                continue
             if svc in check.stdout:
                 print(f"FAILED ({result.stderr.strip()})")
             else:
-                print("skipped (not installed)")
+                print(f"skipped (not installed){_in_process_hint(svc)}")
 
     print()
     return cmd_status(args)
