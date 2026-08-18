@@ -14,11 +14,13 @@ privilege; the agent never gains it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATH_UNIT = REPO_ROOT / "infra/systemd/robothor-restart.path"
 SVC_UNIT = REPO_ROOT / "infra/systemd/robothor-restart.service"
+TELEGRAM_MODULE = REPO_ROOT / "robothor/engine/telegram.py"
 TRIGGER = "/run/robothor/restart-request"
 
 
@@ -56,4 +58,35 @@ def test_restart_service_only_restarts_robothor_units():
     assert "$(cat" not in src and "${" not in src.split("ExecStart")[-1].split("\n")[0], (
         "the unit to restart must NOT be read from the agent-writable trigger "
         "file — that would let an agent restart (or stop) any unit on the box"
+    )
+
+
+def test_handler_writes_the_trigger_not_sudo():
+    """The Telegram /restart handler must use the trigger-file mechanism
+    above, not shell out to `sudo systemd-run`.
+
+    Regression guard for the silent no-op: under the live NoNewPrivileges
+    sandbox, `sudo -n systemd-run ...` launched via Popen with all fds
+    DEVNULL and never awaited dies unseen in the child — the handler replied
+    "Restarting..." and then did nothing. This asserts the handler region
+    contains no "sudo" at all, so that failure mode cannot come back.
+    """
+    src = TELEGRAM_MODULE.read_text()
+    match = re.search(
+        r"async def _handle_restart_command\(.*?\n(?=    async def |\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert match, "_handle_restart_command not found in robothor/engine/telegram.py"
+    handler_src = match.group(0)
+    assert "sudo" not in handler_src.lower(), (
+        "the restart handler must not shell out to sudo — it must write the "
+        "trigger file that robothor-restart.path watches"
+    )
+    assert "systemd-run" not in handler_src, (
+        "the restart handler must not invoke systemd-run directly — that path "
+        "is owned by robothor-restart.service, triggered via the trigger file"
+    )
+    assert "_RESTART_TRIGGERS" in handler_src, (
+        "the restart handler must consult the injectable _RESTART_TRIGGERS map"
     )
