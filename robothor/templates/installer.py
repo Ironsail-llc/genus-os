@@ -20,6 +20,7 @@ from robothor.templates.resolver import TemplateResolver, deep_merge
 from robothor.templates.safety import (
     TemplateSecurityError,
     contained_path,
+    default_workspace_root,
     safe_relative_path,
     trusted_directory,
     validate_identifier,
@@ -29,18 +30,42 @@ from robothor.templates.safety import (
 
 
 def _find_repo_root() -> Path:
-    """Find the repository root."""
-    return Path(__file__).resolve().parent.parent.parent
+    """Find the workspace root that owns installed agent files.
+
+    Never derived from ``__file__`` — in a wheel install that resolves inside
+    site-packages, which would write ``docs/agents/`` and ``brain/`` files
+    where the engine never looks. Delegates to the same ``ROBOTHOR_WORKSPACE``
+    convention used across the rest of the engine.
+    """
+    return default_workspace_root()
 
 
 def _find_defaults_path(repo_root: Path) -> Path | None:
-    """Find _defaults.yaml in templates/agents/."""
+    """Find _defaults.yaml in templates/agents/.
+
+    Checked first directly under *repo_root* — the dev-checkout layout (and
+    what test fixtures simulate), where the workspace and the platform's
+    template catalog are the same tree. Falls back to the shared
+    template-source resolver introduced in #245
+    (``robothor.setup._find_template_dir``) for a real deployed instance,
+    where the workspace (``ROBOTHOR_WORKSPACE``) and the package's bundled
+    template catalog live in different directories — reusing that resolver
+    rather than inventing a third resolution scheme.
+    """
     candidates = [
         repo_root / "templates" / "agents" / "_defaults.yaml",
     ]
     for p in candidates:
         if p.exists():
             return p
+
+    from robothor.setup import _find_template_dir
+
+    template_dir = _find_template_dir()
+    if template_dir is not None:
+        fallback = template_dir / "agents" / "_defaults.yaml"
+        if fallback.exists():
+            return fallback
     return None
 
 

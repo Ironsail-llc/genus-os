@@ -18,6 +18,21 @@ class TemplateSecurityError(ValueError):
     """An agent bundle requested an unsafe identifier or filesystem path."""
 
 
+def default_workspace_root() -> Path:
+    """Resolve the workspace root a caller should use when it passes none.
+
+    Every filesystem destination for installed agent files (``docs/agents/``,
+    ``brain/``) lives under the operator's workspace. This must never be
+    derived from ``__file__`` — in a wheel install ``__file__`` resolves
+    inside ``site-packages``, which would scatter installed agent files where
+    the engine never looks. Instead this follows the same
+    ``ROBOTHOR_WORKSPACE`` convention used throughout the engine (see
+    ``InstanceConfig._find_instance_dir``).
+    """
+
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+
+
 def trusted_directory(root: str | Path, *, label: str = "directory") -> Path:
     """Return an existing directory after resolving and rejecting symlinks.
 
