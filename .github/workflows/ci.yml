@@ -216,6 +216,41 @@ jobs:
           /tmp/wheel-smoke-venv/bin/genusos version
           /tmp/wheel-smoke-venv/bin/robothor --help
           /tmp/wheel-smoke-venv/bin/python -c "import robothor"
+      - name: Verify the init scaffold shipped in the wheel
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q "robothor/templates/bundled_scaffold/SOUL.md"
+          count=$(python -m zipfile -l dist/*.whl | grep -c "robothor/templates/bundled_scaffold/")
+          echo "bundled_scaffold entries in wheel: $count"
+          test "$count" -ge 90
+      - name: Scaffold a workspace from the installed wheel
+        # Runs create_workspace() against the wheel install (cwd moved off the
+        # checkout so resolution cannot fall back to the repo's templates/)
+        # and asserts the scaffold actually lands.
+        working-directory: /tmp
+        env:
+          ROBOTHOR_WORKSPACE: /tmp/wheel-smoke-workspace
+        run: |
+          /tmp/wheel-smoke-venv/bin/python - <<'EOF'
+          import os
+          from pathlib import Path
+
+          from robothor.setup import EXPECTED_SCAFFOLD_FILES, _find_template_dir, create_workspace
+
+          workspace = Path(os.environ["ROBOTHOR_WORKSPACE"])
+          template_dir = _find_template_dir()
+          assert template_dir is not None, "no scaffold resolved from the wheel install"
+          assert template_dir.name == "bundled_scaffold", f"resolved {template_dir}"
+          create_workspace(workspace)
+          scaffolded = [p for p in workspace.rglob("*") if p.is_file()]
+          expected = len(EXPECTED_SCAFFOLD_FILES)
+          assert len(scaffolded) >= expected, (
+              f"{len(scaffolded)} files scaffolded, expected >= {expected}: "
+              f"{sorted(str(p.relative_to(workspace)) for p in scaffolded)}"
+          )
+          for rel in ("CLAUDE.md", "AGENT_BUILDER.md", "brain/SOUL.md", "brain/CLAUDE.md"):
+              assert (workspace / rel).is_file(), f"scaffold missing {rel}"
+          print(f"scaffolded {len(scaffolded)} files from {template_dir}")
+          EOF
       # Regression tripwire: crm/migrations/*delphi*.sql are gitignored
       # instance files (see .gitignore) that must never ship in the wheel.
       # They're absent on CI's clean clone today, so this passes now -- it
