@@ -26,6 +26,12 @@ from robothor.config import (
 )
 
 
+def _raise_no_home(cls):
+    """Simulates Path.home()'s real failure mode: no HOME and no passwd
+    entry for the running UID (a real k8s ``runAsUser`` case)."""
+    raise RuntimeError("simulated: no home directory could be determined")
+
+
 @pytest.fixture(autouse=True)
 def clean_config():
     reset_config()
@@ -133,6 +139,9 @@ class TestLoadEnvFile:
         _load_env_file(path)  # must not raise
         assert os.environ.get("ROBOTHOR_TEST_DOTENV_KEY") == "bar"
 
+    def test_none_path_is_silently_fine(self):
+        _load_env_file(None)  # must not raise; nothing to load
+
 
 class TestEnvFilePath:
     def test_defaults_to_home_robothor(self, monkeypatch):
@@ -177,3 +186,33 @@ class TestConfigIntegration:
         _load_env_file(_env_file_path())
         cfg = get_config()
         assert cfg.db.host == "systemd-real-host"
+
+
+class TestImportTimeSafety:
+    """``os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor")``
+    would evaluate ``Path.home()`` eagerly regardless of whether the env
+    var is set, and ``Path.home()`` raises ``RuntimeError`` when it can't
+    resolve a home directory (no ``HOME`` and no passwd entry for the
+    running UID — a real container/k8s ``runAsUser`` case). Since the
+    dotenv loader runs at ``config.py`` import time
+    (``_load_env_file(_env_file_path())`` at module scope), that would
+    crash every importer of ``robothor.config``. These call that exact
+    pair directly — the same statement import time runs — under both
+    conditions the reviewer flagged, deliberately avoiding
+    ``importlib.reload`` (reloading the module rebuilds its dataclasses as
+    new class objects, which would break ``isinstance`` checks holding a
+    pre-reload ``Config``/``DatabaseConfig`` reference in every other test
+    module in the session)."""
+
+    def test_workspace_env_set_survives_home_raising(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(Path, "home", classmethod(_raise_no_home))
+        _load_env_file(_env_file_path())  # must not raise
+        # Path.home() must not even be consulted when the env var is set.
+        assert _env_file_path() == tmp_path / ".env"
+
+    def test_workspace_env_absent_survives_home_raising(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_WORKSPACE", raising=False)
+        monkeypatch.setattr(Path, "home", classmethod(_raise_no_home))
+        _load_env_file(_env_file_path())  # must not raise
+        assert _env_file_path() is None  # no safe default workspace: load nothing

@@ -18,14 +18,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-def _env_file_path() -> Path:
+def _env_file_path() -> Path | None:
     """Resolve the workspace .env file path ``robothor init`` writes.
 
     Mirrors the workspace resolution ``_load_from_env`` uses below: the
     real ``ROBOTHOR_WORKSPACE`` env var if set, else ``~/robothor``.
+
+    Never raises. ``Path.home()`` only runs when ``ROBOTHOR_WORKSPACE`` is
+    unset (unlike a ``os.environ.get(..., Path.home() / ...)`` default,
+    whose eager evaluation would call it every time). And even then, a
+    ``RuntimeError`` from ``Path.home()`` — no ``HOME`` and no passwd entry
+    for the running UID, a real container/k8s ``runAsUser`` case — is
+    caught: there's no safe default workspace, so this returns ``None``
+    and .env loading is skipped rather than crashing every importer of
+    this module.
     """
-    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
-    return workspace / ".env"
+    workspace_env = os.environ.get("ROBOTHOR_WORKSPACE")
+    if workspace_env:
+        return Path(workspace_env) / ".env"
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return None
+    return home / "robothor" / ".env"
 
 
 def _parse_env_file(text: str) -> dict[str, str]:
@@ -53,15 +68,19 @@ def _parse_env_file(text: str) -> dict[str, str]:
     return values
 
 
-def _load_env_file(path: Path) -> None:
+def _load_env_file(path: Path | None) -> None:
     """Load ``path`` into ``os.environ``, without ever overriding a value
     the real environment already set (e.g. systemd's ``EnvironmentFile``).
 
-    A missing or unreadable file is silently fine — ``robothor init`` may
-    never have run, or may have written to a different workspace. Safe to
-    call more than once: already-set keys (including ones this function
-    set on a prior call) are left alone.
+    ``path`` may be ``None`` (``_env_file_path()`` couldn't resolve a
+    workspace) — nothing to load, which is silently fine, same as a
+    missing or unreadable file. ``robothor init`` may never have run, or
+    may have written to a different workspace. Safe to call more than
+    once: already-set keys (including ones this function set on a prior
+    call) are left alone.
     """
+    if path is None:
+        return
     try:
         text = path.read_text()
     except OSError:
