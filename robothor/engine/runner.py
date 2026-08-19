@@ -106,6 +106,12 @@ ANNOUNCE_MIN_OUTPUT_CHARS = 200
 # failure mode where runs sit for 30+ minutes with 0 tokens consumed.
 INIT_TIMEOUT_SECONDS = 60
 
+# Defined before the env-tunable constants below: _int_env_with_fallback and
+# the soft>=hard sanity check run AT IMPORT TIME, so the logger must already
+# exist on a fresh import (reload-based tests mask this — the old module dict
+# keeps a stale binding alive).
+logger = logging.getLogger(__name__)
+
 
 def _int_env_with_fallback(name: str, default: int) -> int:
     """Read an int env var; fall back to ``default`` on missing/garbage values.
@@ -117,7 +123,7 @@ def _int_env_with_fallback(name: str, default: int) -> int:
     if raw is None or not raw.strip():
         return default
     try:
-        return int(raw.strip())
+        value = int(raw.strip())
     except (TypeError, ValueError):
         logger.warning(
             "Invalid %s=%r (expected an integer); falling back to default %d",
@@ -126,6 +132,18 @@ def _int_env_with_fallback(name: str, default: int) -> int:
             default,
         )
         return default
+    if value <= 0:
+        # A zero/negative hard cap would trip `used >= cap` at iteration 0
+        # of every run (instant budget_exhausted, fleet-wide). Never honor
+        # non-positive thresholds.
+        logger.warning(
+            "Invalid %s=%r (must be a positive integer); falling back to default %d",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return value
 
 
 # Fleet-wide runaway-token thresholds. Applied to the cumulative
@@ -139,6 +157,16 @@ def _int_env_with_fallback(name: str, default: int) -> int:
 # breaker; this guard would have stopped it at 5M.
 RUNAWAY_TOKEN_ALERT = _int_env_with_fallback("ROBOTHOR_RUNAWAY_ALERT_TOKENS", 500_000)
 RUNAWAY_TOKEN_HARD_CAP = _int_env_with_fallback("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", 5_000_000)
+
+if RUNAWAY_TOKEN_ALERT >= RUNAWAY_TOKEN_HARD_CAP:
+    # Still safe (the hard cap always protects), but the soft-alert branch
+    # becomes unreachable — say so at startup instead of failing silently.
+    logger.warning(
+        "ROBOTHOR_RUNAWAY_ALERT_TOKENS (%d) >= ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS (%d): "
+        "soft alerts will never fire — runs hit the hard cap first.",
+        RUNAWAY_TOKEN_ALERT,
+        RUNAWAY_TOKEN_HARD_CAP,
+    )
 
 # Soft-alert batching: post-recovery catch-up runs routinely cross the soft
 # threshold several times in quick succession (legitimate backlog burn,
@@ -198,12 +226,20 @@ def _send_soft_runaway_alert(
 
     if _soft_runaway_pending:
         # Window expired with events accrued while it was open. This event
-        # is the trigger that flushes them as one summary and opens a fresh
-        # window — it isn't paged individually itself (that would defeat the
-        # "at most one page per window" point of batching in the first
-        # place); if more soft events follow, THEY'll open with an immediate
-        # page under the quiet-period branch below.
-        pending = _soft_runaway_pending
+        # joins them and the whole batch is flushed as ONE summary page
+        # (never an individual page — that would defeat the batching), and
+        # a fresh window opens. Including the trigger in the summary means
+        # no crossing is ever dropped from alerting.
+        #
+        # Known trade-off: events that accrue in a window with NO subsequent
+        # soft event stay pending until the next crossing, however far away
+        # that is. Each crossing is still logger.warning'd per-run at the
+        # call site, and the hard cap contains the runs themselves — only
+        # the page is deferred, never the protection.
+        pending = [
+            *_soft_runaway_pending,
+            {"agent": agent_id, "run_id": run_id, "tokens": tokens, "ts": now},
+        ]
         _soft_runaway_pending = []
         _soft_runaway_window_started_at = now
         count = len(pending)
@@ -211,8 +247,8 @@ def _send_soft_runaway_alert(
         if count > 10:
             run_list += f", +{count - 10} more"
         body = (
-            f"{count} more run{'s' if count != 1 else ''} crossed the soft token "
-            f"threshold ({RUNAWAY_TOKEN_ALERT:,}) in the last hour: {run_list}. "
+            f"{count} run{'s' if count != 1 else ''} crossed the soft token "
+            f"threshold ({RUNAWAY_TOKEN_ALERT:,}) since the last page: {run_list}. "
             f"All contained by the budget guard (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
         )
         get_task_registry().spawn(
@@ -242,8 +278,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from robothor.identity import IdentityContext
-
-logger = logging.getLogger(__name__)
 
 # Trigger types that run with no interactive human and are therefore governed by
 # the agent's service_role under the RBAC ladder (see the system-run gate in

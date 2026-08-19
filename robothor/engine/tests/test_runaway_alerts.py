@@ -82,6 +82,77 @@ class TestEnvTunableThresholds:
             monkeypatch.delenv("ROBOTHOR_RUNAWAY_ALERT_TOKENS", raising=False)
             importlib.reload(runner)
 
+    def test_zero_hard_cap_falls_back_to_default(self, monkeypatch) -> None:
+        # ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS=0 would make `used >= cap` true at
+        # iteration 0 of EVERY run (budget_exhausted before the first LLM
+        # call) — a single-env-var fleet kill switch. Non-positive values
+        # must fall back to the default, not be honored.
+        monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", "0")
+        from robothor.engine import runner
+
+        try:
+            importlib.reload(runner)
+            assert runner.RUNAWAY_TOKEN_HARD_CAP == 5_000_000
+        finally:
+            monkeypatch.delenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", raising=False)
+            importlib.reload(runner)
+
+    def test_negative_alert_threshold_falls_back_to_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_RUNAWAY_ALERT_TOKENS", "-1")
+        from robothor.engine import runner
+
+        try:
+            importlib.reload(runner)
+            assert runner.RUNAWAY_TOKEN_ALERT == 500_000
+        finally:
+            monkeypatch.delenv("ROBOTHOR_RUNAWAY_ALERT_TOKENS", raising=False)
+            importlib.reload(runner)
+
+    @pytest.mark.slow
+    def test_garbage_env_survives_fresh_import(self) -> None:
+        # importlib.reload() keeps the old module dict alive, which masked a
+        # real bug: the garbage-fallback path referenced `logger` before it
+        # was defined, so a FRESH import (i.e. the production daemon) died
+        # with NameError on any malformed env value. Pin fresh-import
+        # behavior in a subprocess, where nothing is pre-imported.
+        import os
+        import subprocess
+        import sys
+
+        env = dict(os.environ, ROBOTHOR_RUNAWAY_ALERT_TOKENS="garbage")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import robothor.engine.runner as r; print(r.RUNAWAY_TOKEN_ALERT)",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "500000"
+
+    def test_soft_at_or_above_hard_cap_warns(self, monkeypatch, caplog) -> None:
+        # Misconfiguration where soft >= hard means soft alerts can never
+        # fire (the hard cap stops the run first). Still safe — but the
+        # operator should be told at startup, not discover it by silence.
+        monkeypatch.setenv("ROBOTHOR_RUNAWAY_ALERT_TOKENS", "6000000")
+        monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", "5000000")
+        import logging
+
+        from robothor.engine import runner
+
+        try:
+            with caplog.at_level(logging.WARNING, logger="robothor.engine.runner"):
+                importlib.reload(runner)
+            assert any("soft alerts will never fire" in rec.getMessage() for rec in caplog.records)
+        finally:
+            monkeypatch.delenv("ROBOTHOR_RUNAWAY_ALERT_TOKENS", raising=False)
+            monkeypatch.delenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", raising=False)
+            importlib.reload(runner)
+
 
 class TestSoftAlertBatching:
     """Drives runner._send_soft_runaway_alert directly with a fake clock."""
@@ -174,9 +245,14 @@ class TestSoftAlertBatching:
             )
             await asyncio.sleep(0)  # let the spawned alert task run
 
-        assert "1" in captured["body"]
+        # The summary must account for EVERY crossing since the last page:
+        # the one accrued in-window (crm-sync) AND the event that triggered
+        # the flush (crm-followup). Dropping the trigger would silently lose
+        # a crossing from alerting entirely.
+        assert "2 runs" in captured["body"]
         assert "crm-sync" in captured["body"]
-        assert "last hour" in captured["body"]
+        assert "crm-followup" in captured["body"]
+        assert "since the last page" in captured["body"]
 
     async def test_immediate_alert_body_notes_containment_and_cost(self, runner_module) -> None:
         fake_now = [1000.0]
