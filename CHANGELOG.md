@@ -1,3 +1,9 @@
+## [1.30.10](https://github.com/Ironsail-llc/genus-os/compare/v1.30.9...v1.30.10) (2026-08-19)
+
+### Bug Fixes
+
+* **llm:** make the Ollama client actually retry with a real budget ([#255](https://github.com/Ironsail-llc/genus-os/issues/255)) ([923d90f](https://github.com/Ironsail-llc/genus-os/commit/923d90f92e0f9590e748ea5132bf1e0ff9945d81))
+
 ## [1.30.9](https://github.com/Ironsail-llc/genus-os/compare/v1.30.8...v1.30.9) (2026-08-19)
 
 ### Bug Fixes
