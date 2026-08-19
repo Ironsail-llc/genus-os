@@ -47,6 +47,7 @@ The config is a singleton. Call `reset_config()` in tests to reload from environ
 | `ROBOTHOR_RERANKER_MODEL` | `Qwen3-Reranker-0.6B:F16` | Cross-encoder reranker |
 | `ROBOTHOR_GENERATION_MODEL` | `qwen3-next:latest` | RAG generation model |
 | `ROBOTHOR_VISION_MODEL` | `llama3.2-vision:11b` | Vision scene analysis model |
+| `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | `24` | autoDream only unloads the generation model when available memory (GiB) drops below this; `0` disables the unload entirely |
 
 ## Service Ports
 

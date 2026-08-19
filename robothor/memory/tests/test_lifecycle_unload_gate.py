@@ -80,6 +80,31 @@ class TestShouldUnloadGenerationModel:
         assert should_unload is True
         assert threshold_gb == 8.0
 
+    def test_garbage_env_falls_back_to_default(self, monkeypatch):
+        # A bad env value must never crash the nightly deep pass — fall back
+        # to the built-in default instead.
+        monkeypatch.setenv("ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", "lots")
+        monkeypatch.setattr(lifecycle, "_available_memory_gb", lambda: 10.0)
+        should_unload, _, threshold_gb = lifecycle._should_unload_generation_model()
+        assert threshold_gb == lifecycle._DEFAULT_UNLOAD_BELOW_GB
+        assert should_unload is True
+
+    def test_float_env_threshold_accepted(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", "12.5")
+        monkeypatch.setattr(lifecycle, "_available_memory_gb", lambda: 12.0)
+        should_unload, _, threshold_gb = lifecycle._should_unload_generation_model()
+        assert threshold_gb == 12.5
+        assert should_unload is True
+
+    def test_zero_env_threshold_disables_unload(self, monkeypatch):
+        # Threshold 0 is a valid operator opt-out: available memory can never
+        # be measurably below zero, so the unload never fires.
+        monkeypatch.setenv("ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", "0")
+        monkeypatch.setattr(lifecycle, "_available_memory_gb", lambda: 0.5)
+        should_unload, _, threshold_gb = lifecycle._should_unload_generation_model()
+        assert threshold_gb == 0.0
+        assert should_unload is False
+
 
 class TestPerformGenerationModelUnload:
     async def test_unload_skipped_when_memory_free(self, monkeypatch):
@@ -105,15 +130,13 @@ class TestPerformGenerationModelUnload:
         monkeypatch.setattr(lifecycle.asyncio, "sleep", AsyncMock())
         client = _mock_client()
         # Simulate misconfiguration: generation model name collides with the
-        # embedding model. The unload must refuse rather than silently evict
-        # the (protected) embedding model.
+        # embedding model. The unload must refuse (logged skip) rather than
+        # evict the (protected) embedding model — and must NOT raise, because
+        # a crash here would kill the whole nightly deep pass.
         monkeypatch.setattr(
             lifecycle.llm_client, "GENERATION_MODEL", lifecycle.llm_client._embedding_model()
         )
-        with (
-            patch("robothor.memory.lifecycle.httpx.AsyncClient", return_value=client),
-            pytest.raises(AssertionError),
-        ):
+        with patch("robothor.memory.lifecycle.httpx.AsyncClient", return_value=client):
             await lifecycle._perform_generation_model_unload()
         client.post.assert_not_called()
 

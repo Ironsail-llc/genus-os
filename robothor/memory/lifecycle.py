@@ -860,9 +860,18 @@ def _should_unload_generation_model() -> tuple[bool, float | None, float]:
     ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB, default 24GiB). When availability
     can't be determined, defaults to NOT unloading.
     """
-    threshold_gb = float(
-        os.environ.get("ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", str(_DEFAULT_UNLOAD_BELOW_GB))
+    raw_threshold = os.environ.get(
+        "ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", str(_DEFAULT_UNLOAD_BELOW_GB)
     )
+    try:
+        threshold_gb = float(raw_threshold)
+    except ValueError:
+        logger.warning(
+            "Invalid ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB=%r, using default %.1f",
+            raw_threshold,
+            _DEFAULT_UNLOAD_BELOW_GB,
+        )
+        threshold_gb = _DEFAULT_UNLOAD_BELOW_GB
     available_gb = _available_memory_gb()
     if available_gb is None:
         return False, None, threshold_gb
@@ -873,8 +882,9 @@ async def _perform_generation_model_unload(pause_after_s: float = 0.0) -> None:
     """Unload the generation model via Ollama keep_alive=0, gated on memory pressure.
 
     Never targets the embedding model — a config collision there would evict
-    the model a sibling fix pins resident, so this asserts rather than
-    silently doing the wrong thing.
+    the model a sibling fix pins resident, so that case is refused with a
+    loud log and a skip (never an exception: a crash here would abort the
+    whole nightly deep pass, and ``assert`` would vanish under ``python -O``).
     """
     should_unload, available_gb, threshold_gb = _should_unload_generation_model()
     if not should_unload:
@@ -886,9 +896,13 @@ async def _perform_generation_model_unload(pause_after_s: float = 0.0) -> None:
 
     target_model = llm_client.GENERATION_MODEL
     embedding_model = llm_client._embedding_model()
-    assert target_model != embedding_model, (
-        f"autoDream refused to unload {target_model!r}: it matches the embedding model"
-    )
+    if target_model == embedding_model:
+        logger.error(
+            "autoDream refused to unload %r: it matches the embedding model "
+            "(check ROBOTHOR_GENERATION_MODEL / embedding config)",
+            target_model,
+        )
+        return
 
     logger.warning(
         "autoDream: unloading generation model (available=%.1fGiB < %.1fGiB)",
@@ -1233,7 +1247,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     if swept > 0:
         logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
 
-    # Step 6: Store discovered insights (needs embeddings, model already unloaded)
+    # Step 6: Store discovered insights (needs embeddings; generation model was
+    # unloaded above only if memory pressure warranted it)
     insight_result: dict[str, Any] = {
         "discovered": len(discovered_insights),
         "stored": 0,
