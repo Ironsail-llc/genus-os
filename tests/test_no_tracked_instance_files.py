@@ -13,6 +13,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ALLOWED = {
@@ -22,6 +24,16 @@ ALLOWED = {
 
 
 def test_no_tracked_instance_files():
+    # hatchling's default sdist inclusion follows the VCS file list, so this
+    # test ships in the sdist tarball. Extracted from that tarball (or any
+    # other non-git checkout — e.g. a wheel's unlikely-but-possible test
+    # collection) there is no .git to ask, so skip rather than let `git`
+    # fail the collection with a raw CalledProcessError. `.git` is a
+    # directory in a normal clone and a file in a worktree — either way its
+    # presence means `git ls-files` is meaningful here.
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout — nothing to ls-files against")
+
     out = subprocess.run(
         ["git", "ls-files", "brain/", "local/"],
         cwd=REPO_ROOT,
