@@ -259,6 +259,69 @@ async def test_openrouter_chat_payload_and_think_stripping(monkeypatch):
     assert _FakeAsyncClient.last_init_kwargs.get("timeout") == generation.REMOTE_TIMEOUT_S
 
 
+async def test_openrouter_chat_think_true_inflates_max_tokens(monkeypatch):
+    """Remote reasoning tokens count against max_tokens (unlike local Ollama,
+    where thinking is budgeted separately). think=True must add the same
+    overhead ollama.chat adds, or small-budget callers (judge_importance,
+    max_tokens=64) get their whole budget eaten by reasoning and an empty
+    content back — live-confirmed on xiaomi/mimo-v2.5 (finish_reason=length).
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    _FakeAsyncClient.response_payload = {"choices": [{"message": {"content": "0.1"}}]}
+    monkeypatch.setattr(generation.httpx, "AsyncClient", _FakeAsyncClient)
+
+    await generation._openrouter_chat(
+        [{"role": "user", "content": "rate"}],
+        temperature=0.2,
+        max_tokens=64,
+        format=None,
+        think=True,
+    )
+    payload = _FakeAsyncClient.last_post["json"]
+    assert payload["max_tokens"] == 64 + generation.REMOTE_THINKING_OVERHEAD
+    assert "reasoning" not in payload
+
+
+async def test_openrouter_chat_think_false_disables_reasoning(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    _FakeAsyncClient.response_payload = {"choices": [{"message": {"content": "[]"}}]}
+    monkeypatch.setattr(generation.httpx, "AsyncClient", _FakeAsyncClient)
+
+    await generation._openrouter_chat(
+        [{"role": "user", "content": "extract"}],
+        temperature=0.2,
+        max_tokens=1024,
+        format=None,
+        think=False,
+    )
+    payload = _FakeAsyncClient.last_post["json"]
+    assert payload["max_tokens"] == 1024  # no inflation without thinking
+    assert payload["reasoning"] == {"enabled": False}
+
+
+async def test_generate_passes_think_to_remote(monkeypatch):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    remote = AsyncMock(return_value="remote result")
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await generation.generate(prompt="x", think=False)
+    assert remote.await_args.kwargs["think"] is False
+
+    await generation.generate(prompt="y")
+    assert remote.await_args.kwargs["think"] is True
+
+
+async def test_chat_passes_think_to_remote(monkeypatch):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    remote = AsyncMock(return_value="remote chat")
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await generation.chat([{"role": "user", "content": "hi"}], think=False)
+    assert remote.await_args.kwargs["think"] is False
+
+
 async def test_openrouter_chat_respects_model_env(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/deepseek/deepseek-chat")
