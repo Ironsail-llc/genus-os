@@ -1,3 +1,9 @@
+## [1.30.4](https://github.com/Ironsail-llc/genus-os/compare/v1.30.3...v1.30.4) (2026-08-19)
+
+### Bug Fixes
+
+* **config:** load the workspace .env that init writes ([#247](https://github.com/Ironsail-llc/genus-os/issues/247)) ([40693c2](https://github.com/Ironsail-llc/genus-os/commit/40693c2f817652f634639d47289830f6a939f89c))
+
 ## [1.30.3](https://github.com/Ironsail-llc/genus-os/compare/v1.30.2...v1.30.3) (2026-08-19)
 
 ### Bug Fixes
