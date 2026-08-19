@@ -106,17 +106,136 @@ ANNOUNCE_MIN_OUTPUT_CHARS = 200
 # failure mode where runs sit for 30+ minutes with 0 tokens consumed.
 INIT_TIMEOUT_SECONDS = 60
 
+
+def _int_env_with_fallback(name: str, default: int) -> int:
+    """Read an int env var; fall back to ``default`` on missing/garbage values.
+
+    Read once at module import (see call sites below) — these are fleet-wide
+    thresholds, not per-run config, so there's no need to re-read per call.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid %s=%r (expected an integer); falling back to default %d",
+            name,
+            raw,
+            default,
+        )
+        return default
+
+
 # Fleet-wide runaway-token thresholds. Applied to the cumulative
 # session.run.input_tokens + session.run.output_tokens across the run.
-#   - Crossing ALERT fires a one-time Telegram warning so the operator can
-#     decide whether to intervene.
+#   - Crossing ALERT fires a (batched — see RUNAWAY_SOFT_ALERT_WINDOW_SECONDS
+#     below) Telegram warning so the operator can decide whether to intervene.
 #   - Reaching HARD_CAP stops the loop cleanly with budget_exhausted=True.
-# These are fleet-wide constants (not per-agent configurable) so a
-# misconfigured manifest can never disable the protection. A main run at
+# These are fleet-wide, env-tunable but NOT per-agent-manifest-configurable,
+# so a misconfigured manifest can never disable the protection. A main run at
 # Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
 # breaker; this guard would have stopped it at 5M.
-RUNAWAY_TOKEN_ALERT = 500_000
-RUNAWAY_TOKEN_HARD_CAP = 5_000_000
+RUNAWAY_TOKEN_ALERT = _int_env_with_fallback("ROBOTHOR_RUNAWAY_ALERT_TOKENS", 500_000)
+RUNAWAY_TOKEN_HARD_CAP = _int_env_with_fallback("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", 5_000_000)
+
+# Soft-alert batching: post-recovery catch-up runs routinely cross the soft
+# threshold several times in quick succession (legitimate backlog burn,
+# contained by the hard cap) — paging once per run turned 6 runs in 90
+# minutes into 6 pages for ~$0.35 of working-as-designed spend (2026-08-19).
+# At most one page fires per quiet-period boundary: the first soft-runaway
+# event after a quiet window pages immediately (with context); everything
+# else within the window accumulates silently and is reported as a single
+# summary the next time a soft event lands after the window has expired.
+# Hard-cap alerts are NOT subject to this — they always page immediately.
+RUNAWAY_SOFT_ALERT_WINDOW_SECONDS = 3600
+
+# Module-level batching registry. Touched only from the single asyncio event
+# loop that drives agent runs (_run_loop is `await`ed, never threaded), and
+# _send_soft_runaway_alert() itself has no `await` in its body — so it runs
+# to completion atomically with respect to other coroutines on the loop.
+# No locks needed.
+_soft_runaway_window_started_at: float | None = None
+_soft_runaway_pending: list[dict[str, Any]] = []
+
+
+def _runaway_alert_clock() -> float:
+    """Indirection point so tests can fake elapsed time without real sleeps."""
+    return time.monotonic()
+
+
+def _send_soft_runaway_alert(
+    agent_id: str,
+    run_id: str,
+    tokens: int,
+    model_used: str | None,
+    cost_usd: float,
+) -> None:
+    """Fire-and-forget soft-runaway alert, batched to at most one per window.
+
+    Sync, not async: the whole decision + dispatch happens without an
+    `await`, which is what makes the module-level state safe to touch from
+    any coroutine on the loop without a lock (see module docstring above).
+    """
+    global _soft_runaway_window_started_at, _soft_runaway_pending
+
+    from robothor.engine.alerts import alert as _alert
+    from robothor.engine.task_registry import get_task_registry
+
+    now = _runaway_alert_clock()
+    window_active = (
+        _soft_runaway_window_started_at is not None
+        and (now - _soft_runaway_window_started_at) < RUNAWAY_SOFT_ALERT_WINDOW_SECONDS
+    )
+
+    if window_active:
+        # Within an active window: accumulate silently, no page.
+        _soft_runaway_pending.append(
+            {"agent": agent_id, "run_id": run_id, "tokens": tokens, "ts": now}
+        )
+        return
+
+    if _soft_runaway_pending:
+        # Window expired with events accrued while it was open. This event
+        # is the trigger that flushes them as one summary and opens a fresh
+        # window — it isn't paged individually itself (that would defeat the
+        # "at most one page per window" point of batching in the first
+        # place); if more soft events follow, THEY'll open with an immediate
+        # page under the quiet-period branch below.
+        pending = _soft_runaway_pending
+        _soft_runaway_pending = []
+        _soft_runaway_window_started_at = now
+        count = len(pending)
+        run_list = ", ".join(f"{e['agent']} ({e['tokens']:,} tok)" for e in pending[:10])
+        if count > 10:
+            run_list += f", +{count - 10} more"
+        body = (
+            f"{count} more run{'s' if count != 1 else ''} crossed the soft token "
+            f"threshold ({RUNAWAY_TOKEN_ALERT:,}) in the last hour: {run_list}. "
+            f"All contained by the budget guard (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
+        )
+        get_task_registry().spawn(
+            _alert("info", "Runaway-token alerts (batched summary)", body),
+            name=f"runaway-alert-summary:{agent_id}",
+        )
+        return
+
+    # Quiet period: first soft-runaway event in a while. Page immediately,
+    # with enough context to read severity at a glance — contained-by-guard
+    # and approximate cost up front, so this doesn't read as an emergency.
+    _soft_runaway_window_started_at = now
+    cost_note = f"~${cost_usd:.2f} (negligible)" if cost_usd else "negligible"
+    body = (
+        f"run_id={run_id} tokens={tokens:,} (soft threshold {RUNAWAY_TOKEN_ALERT:,}, "
+        f"hard cap {RUNAWAY_TOKEN_HARD_CAP:,}) model={model_used}. "
+        f"Contained by the budget guard — cost so far {cost_note}. "
+        f"Further soft alerts batched for {RUNAWAY_SOFT_ALERT_WINDOW_SECONDS // 60}min."
+    )
+    get_task_registry().spawn(
+        _alert("warning", f"Runaway-token alert: {agent_id}", body),
+        name=f"runaway-alert:{agent_id}",
+    )
 
 
 if TYPE_CHECKING:
@@ -1904,18 +2023,12 @@ class AgentRunner:
                     _used_tokens,
                 )
                 try:
-                    from robothor.engine.alerts import alert as _alert
-                    from robothor.engine.task_registry import get_task_registry
-
-                    get_task_registry().spawn(
-                        _alert(
-                            "warning",
-                            f"Runaway-token alert: {agent_config.id}",
-                            f"run_id={session.run_id} tokens={_used_tokens:,} "
-                            f"(hard cap at {RUNAWAY_TOKEN_HARD_CAP:,}) "
-                            f"model={session.run.model_used}",
-                        ),
-                        name=f"runaway-alert:{agent_config.id}",
+                    _send_soft_runaway_alert(
+                        agent_config.id,
+                        str(session.run_id),
+                        _used_tokens,
+                        session.run.model_used,
+                        session.run.total_cost_usd or 0.0,
                     )
                 except Exception:
                     logger.debug("Runaway-token alert dispatch failed", exc_info=True)
