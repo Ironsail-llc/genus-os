@@ -1,3 +1,9 @@
+## [1.30.3](https://github.com/Ironsail-llc/genus-os/compare/v1.30.2...v1.30.3) (2026-08-19)
+
+### Bug Fixes
+
+* **docker:** copy the scaffold templates into the python image build ([#254](https://github.com/Ironsail-llc/genus-os/issues/254)) ([376e2ad](https://github.com/Ironsail-llc/genus-os/commit/376e2adf870c7d193cc397da65874c97546ef684)), closes [#250](https://github.com/Ironsail-llc/genus-os/issues/250)
+
 ## [1.30.2](https://github.com/Ironsail-llc/genus-os/compare/v1.30.1...v1.30.2) (2026-08-18)
 
 ### Bug Fixes
