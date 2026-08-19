@@ -1,0 +1,11 @@
+# Adopted as-is from the live unit alongside the .service fix — see that
+# file for the 2026-08-16 incident this PR addresses.
+[Unit]
+Description=Daily robothor guardrail soak report
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
