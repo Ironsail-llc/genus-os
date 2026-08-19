@@ -9,6 +9,16 @@
 # Instance CLAUDE.md lives at brain/CLAUDE.md (covered by brain/*.md pattern below)
 # Root CLAUDE.md is the tracked platform rules file.
 
+# Instance artifacts formerly tracked by mistake (untracked 2026-08-19; the
+# tripwire test tests/test_no_tracked_instance_files.py guards the whole dirs)
+brain/.aider*
+brain/.crush/
+brain/*.png
+brain/agent_capabilities.json
+brain/voice-server/
+brain/memory_system/*.py
+brain/memory_system/searxng/
+
 # Instance data — user-land config created by `genusos init`, never part of platform
 # Agent manifests and instruction files
 brain/*.md
