@@ -27,7 +27,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
-from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 from robothor.memory.blocks import read_block, write_block
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ async def extract_preferences_from_facts(
 
     for fact in candidates:
         try:
-            raw = await llm_client.generate(
+            raw = await generation.generate(
                 prompt=(
                     "Below is a fact from memory. If it expresses a durable "
                     "preference of the user (e.g., 'prefers X over Y', 'dislikes Z', "

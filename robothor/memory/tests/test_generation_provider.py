@@ -145,9 +145,7 @@ async def test_fallback_counter_accumulates(monkeypatch):
     monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(generation.ollama, "generate", AsyncMock(return_value="local"))
-    monkeypatch.setattr(
-        generation, "_openrouter_chat", AsyncMock(side_effect=RuntimeError("boom"))
-    )
+    monkeypatch.setattr(generation, "_openrouter_chat", AsyncMock(side_effect=RuntimeError("boom")))
 
     await generation.generate(prompt="a")
     await generation.generate(prompt="b")
@@ -192,7 +190,7 @@ def test_strip_think_blocks_handles_unopened_close_tag():
 
 
 def test_strip_think_blocks_multiline_and_multiple():
-    text = "<think>\nstep 1\nstep 2\n</think>\n{\"a\": 1}<think>more</think>"
+    text = '<think>\nstep 1\nstep 2\n</think>\n{"a": 1}<think>more</think>'
     assert generation.strip_think_blocks(text) == '{"a": 1}'
 
 
@@ -294,10 +292,15 @@ async def test_openrouter_chat_empty_content_raises(monkeypatch):
 async def test_extract_facts_uses_generation_seam(monkeypatch):
     from robothor.memory import facts
 
-    fake = AsyncMock(return_value='[{"fact_text": "Alice prefers tea", "category": "preference"}]')
+    fake = AsyncMock(
+        return_value=(
+            '[{"fact_text": "Alice prefers tea over coffee", '
+            '"category": "preference", "entities": ["Alice"], "confidence": 0.9}]'
+        )
+    )
     monkeypatch.setattr(generation, "generate", fake)
 
     result = await facts.extract_facts("Alice said she prefers tea over coffee.")
 
     fake.assert_awaited()
-    assert result and result[0]["fact_text"] == "Alice prefers tea"
+    assert result and result[0]["fact_text"] == "Alice prefers tea over coffee"

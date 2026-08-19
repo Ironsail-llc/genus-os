@@ -48,6 +48,22 @@ The config is a singleton. Call `reset_config()` in tests to reload from environ
 | `ROBOTHOR_GENERATION_MODEL` | `qwen3-next:latest` | RAG generation model |
 | `ROBOTHOR_VISION_MODEL` | `llama3.2-vision:11b` | Vision scene analysis model |
 
+## Memory Generation Provider
+
+Memory generation (fact extraction, episode summaries, insight discovery,
+conflict classification, intent inference) can be offloaded from the local
+Ollama GPU to a remote provider. Embeddings and reranking always stay local.
+On remote failure the system falls back to local Ollama with a WARNING log
+containing `MEMORY_GENERATION_REMOTE_FALLBACK` — watch for that marker.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROBOTHOR_MEMORY_GENERATION_PROVIDER` | `ollama` | `ollama` (local, unchanged behavior) or `openrouter` (remote) |
+| `ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL` | `openrouter/xiaomi/mimo-v2.5` | Remote model when the provider is `openrouter` |
+
+`openrouter` requires `OPENROUTER_API_KEY` in the environment; if it is
+missing, an ERROR is logged once and generation stays local.
+
 ## Service Ports
 
 | Variable | Default | Description |

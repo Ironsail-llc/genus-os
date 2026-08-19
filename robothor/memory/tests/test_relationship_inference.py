@@ -153,7 +153,7 @@ class TestInferRelations:
 
         with (
             patch(
-                "robothor.memory.entities.llm_client.generate",
+                "robothor.memory.entities.generation.generate",
                 new_callable=AsyncMock,
                 return_value=llm_response,
             ),
@@ -188,7 +188,7 @@ class TestInferRelations:
 
         with (
             patch(
-                "robothor.memory.entities.llm_client.generate",
+                "robothor.memory.entities.generation.generate",
                 new_callable=AsyncMock,
                 return_value=llm_response,
             ),
@@ -220,7 +220,7 @@ class TestInferRelations:
             },
         ]
         with patch(
-            "robothor.memory.entities.llm_client.generate",
+            "robothor.memory.entities.generation.generate",
             new_callable=AsyncMock,
             side_effect=Exception("LLM timeout"),
         ):
@@ -250,7 +250,7 @@ class TestInferRelations:
 
         with (
             patch(
-                "robothor.memory.entities.llm_client.generate",
+                "robothor.memory.entities.generation.generate",
                 new_callable=AsyncMock,
                 return_value=llm_response,
             ),
@@ -276,7 +276,7 @@ class TestInferRelations:
             },
         ]
         with patch(
-            "robothor.memory.entities.llm_client.generate",
+            "robothor.memory.entities.generation.generate",
             new_callable=AsyncMock,
             return_value="not valid json {{{",
         ):
