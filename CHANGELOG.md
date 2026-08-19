@@ -1,3 +1,9 @@
+## [1.30.7](https://github.com/Ironsail-llc/genus-os/compare/v1.30.6...v1.30.7) (2026-08-19)
+
+### Bug Fixes
+
+* **engine:** /restart writes the restart-request file, not sudo ([#251](https://github.com/Ironsail-llc/genus-os/issues/251)) ([0604099](https://github.com/Ironsail-llc/genus-os/commit/0604099d08c5733978f1afd929a40987288b7ff4))
+
 ## [1.30.6](https://github.com/Ironsail-llc/genus-os/compare/v1.30.5...v1.30.6) (2026-08-19)
 
 ### Bug Fixes
