@@ -1,3 +1,9 @@
+## [1.30.12](https://github.com/Ironsail-llc/genus-os/compare/v1.30.11...v1.30.12) (2026-08-19)
+
+### Bug Fixes
+
+* **memory:** gate autoDream's model unload dance on memory pressure ([#257](https://github.com/Ironsail-llc/genus-os/issues/257)) ([52255f9](https://github.com/Ironsail-llc/genus-os/commit/52255f9b28727f6a2e55c205bc23f6aa3e357e3a))
+
 ## [1.30.11](https://github.com/Ironsail-llc/genus-os/compare/v1.30.10...v1.30.11) (2026-08-19)
 
 ### Bug Fixes
