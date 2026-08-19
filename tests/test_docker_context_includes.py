@@ -56,8 +56,7 @@ def _build_hook_scripts() -> list[str]:
     build = hatch.get("build", {})
     scripts: list[str] = []
     hook_tables = [build.get("hooks", {})]
-    for target in build.get("targets", {}).values():
-        hook_tables.append(target.get("hooks", {}))
+    hook_tables.extend(t.get("hooks", {}) for t in build.get("targets", {}).values())
     for hooks in hook_tables:
         custom = hooks.get("custom")
         if custom is not None:
