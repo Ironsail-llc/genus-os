@@ -81,6 +81,7 @@ FROM build-deps AS dev
 COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
+COPY templates /app/templates
 COPY conftest.py /app/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -97,6 +98,7 @@ FROM build-deps AS prod-builder
 COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
+COPY templates /app/templates
 COPY conftest.py /app/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
