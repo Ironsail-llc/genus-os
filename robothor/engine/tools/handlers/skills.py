@@ -108,7 +108,7 @@ async def _invoke_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 @_handler("list_skills")
 async def _list_skills(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Return catalog of available skills."""
-    from robothor.engine.skills import load_skills, read_skill_meta
+    from robothor.engine.skills import load_skills, read_skill_view
 
     skills = load_skills()
     return {
@@ -129,8 +129,13 @@ async def _list_skills(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 ],
                 "output_format": s.output_format,
                 **(
-                    {"usage_count": meta.get("usage_count", 0), "auto_generated": True}
-                    if (meta := read_skill_meta(s.name)) is not None
+                    {
+                        "usage_count": view.get("usage_count", 0),
+                        "auto_generated": bool(
+                            view.get("auto_generated") or view.get("is_agent_created")
+                        ),
+                    }
+                    if (view := read_skill_view(s.name)) is not None
                     else {}
                 ),
             }
@@ -153,7 +158,7 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         get_skill_content,
         increment_usage,
         load_skills,
-        read_skill_meta,
+        read_skill_view,
     )
 
     name = (args.get("name") or "").strip()
@@ -166,7 +171,7 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     skills = load_skills()
     defn = skills[name]
-    meta = read_skill_meta(name) or {}
+    view = read_skill_view(name) or {}
 
     # Side effect: bump the usage counter so the curator can
     # distinguish hot skills (don't archive) from cold ones
@@ -194,9 +199,9 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "trigger_phrases": list(defn.trigger_phrases),
         "tools_required": list(defn.tools_required),
         "output_format": defn.output_format,
-        "write_origin": meta.get("write_origin", "foreground"),
-        "is_agent_created": meta.get("is_agent_created", False),
-        "usage_count": meta.get("usage_count", 0),
+        "write_origin": view.get("write_origin", "foreground"),
+        "is_agent_created": view.get("is_agent_created", False),
+        "usage_count": view.get("usage_count", 0),
     }
 
 
@@ -207,11 +212,13 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         _MAX_CONTENT_LEN,
         _content_hash,
         create_skill_meta,
+        create_skill_state,
         load_skills,
         read_skill_meta,
         validate_skill_name,
         write_skill_file,
         write_skill_meta,
+        write_skill_state,
     )
 
     name = args.get("name", "").strip()
@@ -314,6 +321,8 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     meta["is_agent_created"] = is_agent_authored_origin(origin)
 
     write_skill_meta(name, meta)
+    # Runtime telemetry starts fresh in the gitignored state.json sidecar.
+    write_skill_state(name, create_skill_state())
 
     logger.info(
         "Skill '%s' created by agent '%s' (origin=%s) at %s",
@@ -342,7 +351,7 @@ async def _skill_archive(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     import shutil
 
     import robothor.engine.skills as _skills_mod
-    from robothor.engine.skills import _skills_dir, read_skill_meta
+    from robothor.engine.skills import _skills_dir, read_skill_view
 
     name = (args.get("name") or "").strip()
     if not name:
@@ -353,7 +362,7 @@ async def _skill_archive(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     if not src.is_relative_to(skills_dir.resolve()) or not src.is_dir():
         return {"error": f"Skill '{name}' not found"}
 
-    meta = read_skill_meta(name) or {}
+    meta = read_skill_view(name) or {}
     if meta.get("pinned"):
         return {"error": f"Skill '{name}' is pinned — archive refused"}
     if not (meta.get("is_agent_created") or meta.get("auto_generated")):
@@ -375,6 +384,7 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     """Update an existing skill with an improved version."""
     from robothor.engine.skills import (
         _MAX_CONTENT_LEN,
+        RUNTIME_STATE_KEYS,
         _content_hash,
         load_skills,
         read_skill_meta,
@@ -426,8 +436,12 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     if old_defn.output_format != "text":
         frontmatter["output_format"] = old_defn.output_format
 
-    # Archive previous version hash in meta
+    # Archive previous version hash in meta. Strip any legacy runtime keys
+    # (pre-migration meta.json) so they are never re-persisted — runtime
+    # state lives in the state.json sidecar.
     meta = read_skill_meta(name) or {}
+    for key in RUNTIME_STATE_KEYS:
+        meta.pop(key, None)
     old_hash = meta.get("content_hash", "")
     revision = meta.get("revision", 1) + 1
 

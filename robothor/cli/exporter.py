@@ -112,7 +112,12 @@ def _export_skills(output_dir: Path) -> int:
     for skill_dir in sorted(source.iterdir()):
         if not (skill_dir / "SKILL.md").exists():
             continue
-        shutil.copytree(skill_dir, target / skill_dir.name, dirs_exist_ok=True)
+        shutil.copytree(
+            skill_dir,
+            target / skill_dir.name,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("state.json", "*.json.tmp"),
+        )
         count += 1
 
     return count

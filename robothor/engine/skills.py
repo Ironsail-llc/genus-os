@@ -265,6 +265,14 @@ def _meta_path(skill_name: str, base: Path | None = None) -> Path:
     return result
 
 
+def _state_path(skill_name: str, base: Path | None = None) -> Path:
+    base = base or _skills_dir()
+    result = (base / skill_name / "state.json").resolve()
+    if not result.is_relative_to(base.resolve()):
+        raise ValueError(f"Skill name {skill_name!r} resolves outside skills directory")
+    return result
+
+
 def _skill_path(skill_name: str, base: Path | None = None) -> Path:
     base = base or _skills_dir()
     result = (base / skill_name / "SKILL.md").resolve()
@@ -405,13 +413,132 @@ def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | Non
     return copy.deepcopy(result)
 
 
-def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
-    """Write meta.json sidecar for a skill."""
-    path = _meta_path(name, base)
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically write *payload* as JSON via tmp-file + rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(meta, indent=2, default=str) + "\n")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+    tmp.replace(path)
+
+
+def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
+    """Write meta.json (static, tracked metadata) for a skill."""
+    path = _meta_path(name, base)
+    _atomic_write_json(path, meta)
     with contextlib.suppress(OSError):
         _meta_cache[str(path)] = (path.stat().st_mtime, copy.deepcopy(meta))
+
+
+# ── Runtime state sidecar (state.json) ───────────────────────────────
+# meta.json is tracked in git and must stay byte-stable at runtime. All
+# mutable telemetry (usage_count, last_used) lives in a gitignored
+# state.json sidecar next to it; lifecycle "state" is never persisted at
+# all — it is pure-derived via compute_skill_state. Callers should read
+# skills through read_skill_view so they never learn about the split.
+
+#: Runtime keys that must never be (re-)persisted into meta.json.
+RUNTIME_STATE_KEYS = ("usage_count", "last_used", "state")
+
+_state_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def read_skill_state(name: str, base: Path | None = None) -> dict[str, Any] | None:
+    """Read state.json runtime sidecar for a skill, or None if missing."""
+    path = _state_path(name, base)
+    if not path.exists():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    key = str(path)
+    cached = _state_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return copy.deepcopy(cached[1])
+    try:
+        result: dict[str, Any] = json.loads(path.read_text())
+    except Exception as e:
+        logger.warning("Failed to read skill state %s: %s", path, e)
+        return None
+    _state_cache[key] = (mtime, result)
+    return copy.deepcopy(result)
+
+
+def write_skill_state(name: str, state: dict[str, Any], base: Path | None = None) -> None:
+    """Atomically write state.json runtime sidecar for a skill."""
+    path = _state_path(name, base)
+    _atomic_write_json(path, state)
+    with contextlib.suppress(OSError):
+        _state_cache[str(path)] = (path.stat().st_mtime, copy.deepcopy(state))
+
+
+def create_skill_state() -> dict[str, Any]:
+    """Build a fresh state.json payload for a newly created skill."""
+    return {"usage_count": 0, "last_used": None}
+
+
+def read_skill_view(
+    name: str, base: Path | None = None, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """Merged skill record: meta.json static fields + state.json runtime
+    fields + derived lifecycle ``state``.
+
+    The one accessor callers should use — it hides the meta/state split.
+    Back-compat: legacy runtime keys still living in meta.json (pre-
+    migration) are used as fallback; the sidecar wins when both exist.
+    Returns None when the skill has neither file.
+    """
+    meta = read_skill_meta(name, base)
+    state = read_skill_state(name, base)
+    if meta is None and state is None:
+        return None
+    view: dict[str, Any] = dict(meta or {})
+    if state:
+        for key in ("usage_count", "last_used"):
+            if key in state:
+                view[key] = state[key]
+    view.setdefault("usage_count", 0)
+    view.setdefault("last_used", None)
+    view["state"] = compute_skill_state(view, now)
+    return view
+
+
+def migrate_skill_runtime_state(base: Path | None = None) -> dict[str, list[str]]:
+    """One-shot, idempotent migration: move runtime keys out of meta.json.
+
+    For every ``<skill>/meta.json`` still carrying runtime keys
+    (usage_count, last_used, state): seed ``state.json`` with the runtime
+    values (an existing sidecar wins) and rewrite meta.json without them,
+    preserving key order. Safe to re-run — a second pass finds nothing to
+    move and touches no files.
+
+    Returns {"migrated": [...], "unchanged": [...], "errors": [...]}.
+    """
+    root = base or _skills_dir()
+    result: dict[str, list[str]] = {"migrated": [], "unchanged": [], "errors": []}
+    for meta_path in sorted(root.glob("*/meta.json")):
+        name = meta_path.parent.name
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception as e:
+            logger.warning("migrate-state: unreadable meta.json for %s: %s", name, e)
+            result["errors"].append(name)
+            continue
+        present = [k for k in RUNTIME_STATE_KEYS if k in meta]
+        if not present:
+            result["unchanged"].append(name)
+            continue
+        existing = read_skill_state(name, root) or {}
+        new_state = {
+            "usage_count": existing.get("usage_count", meta.get("usage_count", 0) or 0),
+            "last_used": existing.get("last_used", meta.get("last_used")),
+        }
+        write_skill_state(name, new_state, root)
+        for key in present:
+            meta.pop(key, None)
+        write_skill_meta(name, meta, root)
+        result["migrated"].append(name)
+    return result
 
 
 def write_skill_file(
@@ -441,28 +568,43 @@ def write_skill_file(
 
 
 def increment_usage(name: str, base: Path | None = None) -> None:
-    """Increment usage_count in a skill's meta.json (if it exists)."""
-    meta = read_skill_meta(name, base)
-    if meta is None:
+    """Increment usage_count in a skill's state.json sidecar.
+
+    No-op when the skill directory doesn't exist. Legacy runtime keys
+    still living in meta.json (pre-migration) seed the counter so no
+    history is lost the first time the sidecar is written.
+    """
+    try:
+        skill_dir = _state_path(name, base).parent
+    except ValueError:
         return
-    meta["usage_count"] = meta.get("usage_count", 0) + 1
-    meta["last_used"] = datetime.now(UTC).isoformat()
-    write_skill_meta(name, meta, base)
+    if not skill_dir.is_dir():
+        return
+    state = read_skill_state(name, base)
+    if state is None:
+        legacy = read_skill_meta(name, base) or {}
+        state = {
+            "usage_count": legacy.get("usage_count", 0) or 0,
+            "last_used": legacy.get("last_used"),
+        }
+    state["usage_count"] = int(state.get("usage_count", 0) or 0) + 1
+    state["last_used"] = datetime.now(UTC).isoformat()
+    write_skill_state(name, state, base)
 
 
 def create_skill_meta(
     *,
     created_by: str = "",
 ) -> dict[str, Any]:
-    """Build initial meta.json for a newly created skill."""
+    """Build initial meta.json (static fields only) for a newly created skill.
+
+    Runtime telemetry lives in the state.json sidecar — see create_skill_state.
+    """
     return {
         "auto_generated": True,
         "created_by": created_by,
         "created_at": datetime.now(UTC).isoformat(),
         "revision": 1,
-        "usage_count": 0,
-        "last_used": None,
-        "state": "active",
         "revision_history": [],
     }
 
@@ -518,37 +660,29 @@ def compute_skill_state(meta: dict[str, Any] | None, now: datetime | None = None
 def apply_skill_lifecycle(
     base: Path | None = None, now: datetime | None = None
 ) -> dict[str, list[str]]:
-    """Persist computed state transitions into each agent-skill's meta.json.
+    """Report each agent-skill's derived lifecycle state — read-only.
 
-    Returns {transition: [skill names]} for observability. The catalog filter
-    does not depend on this running (it computes state on the fly), but a
-    periodic pass keeps the persisted state honest for dashboards and the curator.
+    Lifecycle state is pure-derived (compute_skill_state) and never
+    persisted: meta.json is static tracked metadata and state.json holds
+    only usage telemetry. Returns {"stale": [...], "archived": [...]} for
+    observability (daemon curator loop, dashboards).
     """
     now = now or datetime.now(UTC)
-    transitions: dict[str, list[str]] = {"to_stale": [], "to_archived": [], "reactivated": []}
+    report: dict[str, list[str]] = {"stale": [], "archived": []}
     for fp in _skills_dir().glob("*/SKILL.md") if base is None else base.glob("*/SKILL.md"):
         name = fp.parent.name
-        meta = read_skill_meta(name, base)
-        if meta is None:
+        view = read_skill_view(name, base, now=now)
+        if view is None:
             continue
-        prev = meta.get("state", "active")
-        new = compute_skill_state(meta, now)
-        if new == prev:
-            continue
-        meta["state"] = new
-        if new == "stale":
-            transitions["to_stale"].append(name)
-        elif new == "archived":
-            transitions["to_archived"].append(name)
-        elif new == "active" and prev in ("stale", "archived"):
-            transitions["reactivated"].append(name)
-        write_skill_meta(name, meta, base)
-    return transitions
+        state = view["state"]
+        if state in report:
+            report[state].append(name)
+    return report
 
 
 def _skill_is_archived(name: str, now: datetime | None = None) -> bool:
     """True if the skill should be hidden from the prompt catalog (anti-bloat)."""
-    return compute_skill_state(read_skill_meta(name), now) == "archived"
+    return (read_skill_view(name, now=now) or {}).get("state") == "archived"
 
 
 def _content_hash(text: str) -> str:

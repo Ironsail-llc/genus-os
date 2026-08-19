@@ -87,7 +87,9 @@ class HermesImporter(PlatformImporter):
         from robothor.engine.skills import (
             _skills_dir,
             create_skill_meta,
+            create_skill_state,
             write_skill_meta,
+            write_skill_state,
         )
 
         target = _skills_dir()
@@ -104,14 +106,18 @@ class HermesImporter(PlatformImporter):
                 result.warnings.append(f"Skill '{name}' already exists, skipping")
                 continue
 
-            # Copy the entire skill directory (SKILL.md + references/)
-            shutil.copytree(skill_dir, target_dir)
+            # Copy the entire skill directory (SKILL.md + references/),
+            # leaving the source instance's runtime state behind.
+            shutil.copytree(
+                skill_dir, target_dir, ignore=shutil.ignore_patterns("state.json", "*.json.tmp")
+            )
 
-            # Create meta.json marking as imported
+            # Create meta.json marking as imported + a fresh runtime sidecar
             meta = create_skill_meta(created_by="import:hermes")
             meta["imported_from"] = "hermes"
             meta["import_source"] = str(skill_dir)
             write_skill_meta(name, meta)
+            write_skill_state(name, create_skill_state())
 
             count += 1
             logger.info("Imported skill: %s", name)

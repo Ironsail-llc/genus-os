@@ -24,7 +24,6 @@ from robothor.engine.skills import (
     migrate_skill_runtime_state,
     read_skill_state,
     read_skill_view,
-    write_skill_meta,
     write_skill_state,
 )
 
@@ -94,7 +93,7 @@ class TestSidecarIO:
         _mk_skill(tmp_path, "sk")
         write_skill_state("sk", {"usage_count": 7, "last_used": None}, base=tmp_path)
         with (
-            patch("robothor.engine.skills.os.replace", side_effect=OSError("boom")),
+            patch.object(Path, "replace", side_effect=OSError("boom")),
             pytest.raises(OSError),
         ):
             write_skill_state("sk", {"usage_count": 8, "last_used": None}, base=tmp_path)
@@ -288,9 +287,7 @@ class TestHandlersDoNotMutateMeta:
         from robothor.engine.tools.handlers.skills import _update_skill
 
         with _patch_skills_dir(tmp_path):
-            result = await _update_skill(
-                {"name": "legacy-skill", "content": "v2 body"}, _FakeCtx()
-            )
+            result = await _update_skill({"name": "legacy-skill", "content": "v2 body"}, _FakeCtx())
 
         assert result.get("updated") is True
         meta = json.loads((tmp_path / "legacy-skill" / "meta.json").read_text())
@@ -428,9 +425,7 @@ class TestRepoHygiene:
         out = _git("ls-files", "-v", "--", "agents/skills")
         if out.returncode != 0:
             pytest.skip("git ls-files unavailable")
-        flagged = [
-            ln for ln in out.stdout.splitlines() if ln.strip() and not ln.startswith("H ")
-        ]
+        flagged = [ln for ln in out.stdout.splitlines() if ln.strip() and not ln.startswith("H ")]
         assert flagged == [], f"skip-worktree/assume-unchanged flags found: {flagged}"
 
     def test_no_state_json_tracked(self):

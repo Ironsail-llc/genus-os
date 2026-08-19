@@ -127,6 +127,11 @@ credentials.json
 status/
 !app/src/app/api/**/status/
 
+# Skill runtime telemetry sidecars (usage_count/last_used) — meta.json
+# stays static and tracked; state.json is per-instance runtime state.
+agents/skills/*/state.json
+agents/skills/*/*.json.tmp
+
 # Instance-specific data and local overrides
 .robothor/
 local/
