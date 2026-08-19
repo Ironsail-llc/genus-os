@@ -1,0 +1,37 @@
+id: main
+name: Main
+description: Primary interactive agent — talks to the operator and delegates work to the fleet
+version: "2026-08-18"
+department: core
+
+model:
+  primary: {{ model_primary }}
+  fallbacks:
+    - openrouter/anthropic/claude-sonnet-4.6
+    - openrouter/moonshotai/kimi-k2.5
+
+schedule:
+  cron: ""
+  timezone: {{ timezone }}
+  timeout_seconds: 0
+  max_iterations: 20
+  session_target: persistent
+
+delivery:
+  mode: none
+
+task_protocol: true
+status_file: brain/memory/main-status.md
+
+instruction_file: brain/agents/main.md
+bootstrap_files:
+  - brain/AGENTS.md
+  - brain/TOOLS.md
+
+warmup:
+  context_files:
+    - brain/memory/main-status.md
+
+v2:
+  can_spawn_agents: true
+  error_feedback: true

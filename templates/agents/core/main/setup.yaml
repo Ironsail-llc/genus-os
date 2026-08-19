@@ -1,0 +1,5 @@
+# Main — primary interactive agent template
+agent_id: main
+version: "2026-08-18"
+instruction_file_path: brain/agents/main.md
+variables: {}
