@@ -13,10 +13,14 @@ Post-install:
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+from robothor.templates.safety import default_workspace_root
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class ValidationError:
@@ -187,7 +191,7 @@ def validate_post_install(
     manifest = yaml.safe_load(manifest_path.read_text()) or {}
 
     if repo_root is None:
-        repo_root = Path(__file__).resolve().parent.parent.parent
+        repo_root = default_workspace_root()
 
     # Load all manifests for cross-reference checks
     manifest_dir = repo_root / "docs" / "agents"
@@ -230,7 +234,7 @@ def validate_chain_post_install(
     manifest = yaml.safe_load(manifest_path.read_text()) or {}
 
     if repo_root is None:
-        repo_root = Path(__file__).resolve().parent.parent.parent
+        repo_root = default_workspace_root()
 
     # Load all manifests for cross-reference checks
     manifest_dir = repo_root / "docs" / "agents"
