@@ -267,18 +267,21 @@ jobs:
       - run: python -m build
       - run: twine check dist/*
 
-      # Mirrors ci.yml's wheel-smoke tripwire, extended to the sdist:
-      # gitignored delphi instance files must never ship in a distribution.
-      # Absent on a clean clone today; catches a future packaging-exclude
-      # regression.
+      # Mirrors ci.yml's wheel-smoke tripwire, extended to the sdist and to
+      # the instance-layer directories: gitignored delphi migrations must
+      # never ship, and neither may brain/ or local/ (instance user-land —
+      # legacy tracked files there are excluded via
+      # [tool.hatch.build.targets.sdist] in pyproject.toml; this catches a
+      # future packaging-exclude regression).
       - name: Verify no instance files leaked into the distributions
         run: |
-          if python -m zipfile -l dist/*.whl | grep -i delphi; then
-            echo "::error::delphi instance files leaked into the wheel"
+          pattern='delphi|(^|/)(brain|local)/'
+          if python -m zipfile -l dist/*.whl | grep -iE "$pattern"; then
+            echo "::error::instance files leaked into the wheel"
             exit 1
           fi
-          if tar -tzf dist/*.tar.gz | grep -i delphi; then
-            echo "::error::delphi instance files leaked into the sdist"
+          if tar -tzf dist/*.tar.gz | grep -iE "$pattern"; then
+            echo "::error::instance files leaked into the sdist"
             exit 1
           fi
 

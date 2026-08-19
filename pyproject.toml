@@ -133,6 +133,23 @@ packages = ["robothor"]
 # robothor/tests/test_template_resolution.py pins this mapping.
 "templates" = "robothor/templates/bundled_scaffold"
 
+[tool.hatch.build.targets.sdist]
+# brain/ and local/ are instance-layer user-land (see CLAUDE.md). A handful of
+# legacy files in them are still git-tracked, and hatchling's default sdist is
+# "everything not VCS-ignored" — so without this exclude the sdist ships
+# operator instance files (brain/ logs, aider history, memory_system scripts)
+# to the GitHub Release and PyPI. The release workflow's instance-leak
+# tripwire greps for these paths as defense-in-depth.
+exclude = [
+  "/brain",
+  "/local",
+  # .gitignore re-includes these two via `!` negations, which outrank the
+  # directory excludes above in hatchling's pattern merge — name them
+  # explicitly so nothing under brain/ or local/ ships.
+  "/brain/README.md",
+  "/local/owner.env.example",
+]
+
 [tool.coverage.run]
 source = ["robothor"]
 omit = ["*/tests/*"]

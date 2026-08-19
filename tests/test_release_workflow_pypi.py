@@ -68,7 +68,29 @@ class TestBuildDist:
         scripts = " ".join(step.get("run", "") for step in jobs["build-dist"]["steps"])
         assert "zipfile -l dist/*.whl" in scripts
         assert "tar -tzf dist/*.tar.gz" in scripts
+        # The tripwire must cover gitignored delphi migrations AND the
+        # instance-layer directories (brain/, local/) that carry legacy
+        # tracked files excluded from the sdist in pyproject.toml.
         assert "delphi" in scripts
+        assert "brain" in scripts
+        assert "local" in scripts
+
+    def test_sdist_excludes_instance_layer_directories(self) -> None:
+        """pyproject must exclude brain/ and local/ from the sdist.
+
+        hatchling's default sdist is "everything not VCS-ignored", and a
+        handful of legacy instance files under brain/ and local/ are still
+        git-tracked -- without the exclude they ship to the GitHub Release
+        and PyPI.
+        """
+        pyproject = (WORKFLOW.parents[2] / "pyproject.toml").read_text(encoding="utf-8")
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # pragma: no cover - py<3.11
+            pytest.skip("tomllib unavailable")
+        sdist = tomllib.loads(pyproject)["tool"]["hatch"]["build"]["targets"]["sdist"]
+        assert "/brain" in sdist["exclude"]
+        assert "/local" in sdist["exclude"]
 
 
 class TestPublishPypi:
