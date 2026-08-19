@@ -135,8 +135,26 @@ packages = ["robothor"]
 # static entry.
 "templates" = "robothor/templates/bundled_scaffold"
 
-[tool.hatch.build.hooks.custom]
+# Scoped to the wheel target on purpose. A build-wide hook also runs for the
+# sdist, and hatchling treats force-included sources as *relocations*: the 88
+# tracked crm migrations would ship inside the sdist at robothor/migrations/
+# and vanish from crm/migrations/ — a silent source-layout change. The sdist
+# keeps its source layout and gets its own delphi guard below.
+[tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
+
+# The sdist walks the whole tree. .gitignore covers today's delphi migrations
+# by enumerated number (053_delphi_* ... 091_delphi_*), so a FUTURE delphi
+# migration with a new number would leak into the sdist through the normal
+# walk — the wheel hook cannot help there (force_include only adds files).
+# These patterns close that hole for any delphi name, any case, forever.
+# robothor/tests/test_migration_packaging.py pins both this and the hook
+# registration above.
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "crm/migrations/*[Dd][Ee][Ll][Pp][Hh][Ii]*",
+  "infra/migrations/*[Dd][Ee][Ll][Pp][Hh][Ii]*",
+]
 
 [tool.coverage.run]
 source = ["robothor"]

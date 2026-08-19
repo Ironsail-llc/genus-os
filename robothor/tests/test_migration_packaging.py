@@ -150,6 +150,43 @@ class TestInstanceFilesNeverShip:
                 "in pyproject.toml — it bypasses the hook's exclude filtering"
             )
 
+    def test_hook_is_registered_for_the_wheel_target(self):
+        # The hook only filters if hatchling actually loads it. Every other
+        # test here imports hatch_build.py directly, so deleting the
+        # [tool.hatch.build.targets.wheel.hooks.custom] registration from
+        # pyproject.toml would keep this whole file green while wheels ship
+        # with ZERO migrations (the static directory entries are gone too) —
+        # the exact silent-RLS-absent failure this file exists to prevent.
+        cfg = tomllib.loads((REPO / "pyproject.toml").read_text())
+        hooks = cfg["tool"]["hatch"]["build"]["targets"]["wheel"].get("hooks", {})
+        assert hooks.get("custom", {}).get("path") == "hatch_build.py", (
+            "hatch_build.py is not registered as the wheel target's custom build "
+            "hook — wheels would ship with no migrations at all"
+        )
+        # And NOT build-wide: a build-wide hook also runs for the sdist, where
+        # hatchling relocates force-included sources (crm/migrations/*.sql
+        # would move to robothor/migrations/ inside the sdist).
+        assert "custom" not in cfg["tool"]["hatch"]["build"].get("hooks", {}), (
+            "the custom hook must be scoped to the wheel target, not build-wide"
+        )
+
+    def test_sdist_excludes_cover_delphi_in_both_migration_trees(self):
+        # The wheel hook cannot protect the sdist (force_include only adds
+        # files) and .gitignore only enumerates today's delphi migration
+        # numbers, so a future 092_delphi_*.sql would ship in the sdist via
+        # the normal walk. The sdist exclude patterns are the guard; pin that
+        # they exist and actually match delphi names in both trees, any case.
+        cfg = tomllib.loads((REPO / "pyproject.toml").read_text())
+        patterns = cfg["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"]
+        for probe in (
+            "crm/migrations/092_delphi_future.sql",
+            "crm/migrations/055_DELPHI_case.sql",
+            "infra/migrations/010_delphi_infra.sql",
+        ):
+            assert any(fnmatch.fnmatch(probe, p) for p in patterns), (
+                f"sdist exclude patterns {patterns} do not cover {probe}"
+            )
+
     def test_computed_force_include_matches_git_tracked_files_exactly(self):
         # The strongest cheap assertion available: what the hook would ship
         # for these two trees must be EXACTLY the set of files git tracks

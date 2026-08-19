@@ -33,6 +33,20 @@ is real.
 ``templates`` (the init scaffold) stays a plain static force-include entry in
 pyproject.toml — checked on this box via ``git status --ignored -- templates``
 and clean, no instance files under it.
+
+The hook is registered for the WHEEL target only
+(``[tool.hatch.build.targets.wheel.hooks.custom]``). Registering it
+build-wide would run it for the sdist too, where hatchling treats
+force-included sources as relocations: the tracked migrations would move to
+``robothor/migrations/`` inside the sdist and disappear from their source
+paths. The sdist is protected separately by
+``[tool.hatch.build.targets.sdist].exclude`` patterns in pyproject.toml —
+``exclude`` IS consulted for the sdist's normal walk (the exclude-blindness
+above is specific to force-includes), and unlike .gitignore's enumerated
+``NNN_delphi_*`` entries it catches future delphi migrations with new
+numbers. A wheel built from that sdist re-runs this hook against the
+unpacked ``crm/migrations``/``infra/migrations`` trees, so ``pip install``
+from either the source tree or the sdist gets the same filtered map.
 """
 
 from __future__ import annotations
@@ -41,7 +55,15 @@ import fnmatch
 from pathlib import Path
 from typing import Any
 
-from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+try:
+    from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+except ModuleNotFoundError:  # pragma: no cover
+    # hatchling is a build-system requirement, guaranteed inside pip/build's
+    # isolated build env but NOT in test venvs (CI's unit jobs import this
+    # module via robothor/tests/test_migration_packaging.py). The tests only
+    # exercise compute_migration_force_include and the constants — pure
+    # stdlib — so fall back to a plain base class instead of failing import.
+    BuildHookInterface = object  # type: ignore[assignment,misc]
 
 # Case-insensitive glob patterns. Any filename under a tree listed in
 # MIGRATION_FORCE_INCLUDE_DIRS that matches one of these never enters a wheel,
