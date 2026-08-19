@@ -44,3 +44,23 @@ def test_force_include_sources_survive_dockerignore():
         f"force-include sources excluded from the Docker build context: {blocked} — "
         "the image build will fail with 'Forced include not found'"
     )
+
+
+def test_force_include_sources_are_copied_into_the_python_image():
+    """.dockerignore admission is not enough — Dockerfile.python COPYies
+    selectively, so a force-include source absent from its COPY list still
+    fails the in-image install (v1.30.2 died exactly here on templates/)."""
+    dockerfile = (REPO / "Dockerfile.python").read_text()
+    copied = {
+        line.split()[1].rstrip("/")
+        for line in dockerfile.splitlines()
+        if line.startswith("COPY ") and "--from" not in line
+    }
+    missing = [
+        s
+        for s in _force_include_sources()
+        if s.split("/")[0] not in copied and s.rstrip("/") not in copied
+    ]
+    assert not missing, (
+        f"force-include sources never COPYied into the python image: {missing}"
+    )
