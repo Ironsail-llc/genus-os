@@ -471,8 +471,23 @@ jobs:
   deploy-production:
     name: Deploy to production
     needs: [release, build, promote-production]
+    # Kill switch: the ArgoCD automation token (repo secret ARGOCD_TOKEN)
+    # expired ~2026-07-16 and this job has failed red on every production
+    # release since, training alarm fatigue on an otherwise-green release
+    # train. Gated behind a repo VARIABLE so the job shows SKIPPED (grey)
+    # instead of FAILED (red) while the token is dead. No job depends on
+    # deploy-production via `needs:` (promote-production already runs and
+    # commits the GitOps promotion before this job, independent of it), so
+    # skipping it breaks nothing downstream.
+    #
+    # Re-enable: refresh the ArgoCD token, update the `ARGOCD_TOKEN`
+    # repository secret, then set the repository VARIABLE
+    # ARGOCD_DEPLOY_ENABLED=true (Settings → Secrets and variables →
+    # Actions → Variables). Unset/false keeps both this job and
+    # deploy-staging (below) skipped.
     if: |
       always()
+      && vars.ARGOCD_DEPLOY_ENABLED == 'true'
       && needs.build.result == 'success'
       && needs.promote-production.result == 'success'
       && needs.release.outputs.new_release_published == 'true'
@@ -567,8 +582,14 @@ jobs:
   deploy-staging:
     name: Deploy to staging
     needs: [build]
+    # Shares the same ArgoCD automation token as deploy-production (repo
+    # secret ARGOCD_TOKEN) — same expired-token failure, same kill switch.
+    # See the deploy-production comment above for the full explanation and
+    # re-enable steps: set repo VARIABLE ARGOCD_DEPLOY_ENABLED=true after
+    # refreshing ARGOCD_TOKEN.
     if: |
       always()
+      && vars.ARGOCD_DEPLOY_ENABLED == 'true'
       && needs.build.result == 'success'
       && github.event_name == 'pull_request'
       && github.event.action != 'closed'
