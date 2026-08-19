@@ -373,6 +373,10 @@ def validate_agent(
         ci: When True, skip checks that require local symlinks (C, J).
     """
     if repo_root is None:
+        # NOTE: same __file__-derived default fixed for installer.py/validators.py
+        # by #248 (breaks under a wheel install). Left as-is here: every caller in
+        # that fix always passes an explicit repo_root, so this default is dead on
+        # that path. Follow-up, not fixed in #248 to avoid scope creep.
         repo_root = Path(__file__).resolve().parent.parent.parent
 
     # Load schema for check A

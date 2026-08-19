@@ -18,6 +18,89 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _env_file_path() -> Path | None:
+    """Resolve the workspace .env file path ``robothor init`` writes.
+
+    Mirrors the workspace resolution ``_load_from_env`` uses below: the
+    real ``ROBOTHOR_WORKSPACE`` env var if set, else ``~/robothor``.
+
+    Never raises. ``Path.home()`` only runs when ``ROBOTHOR_WORKSPACE`` is
+    unset (unlike a ``os.environ.get(..., Path.home() / ...)`` default,
+    whose eager evaluation would call it every time). And even then, a
+    ``RuntimeError`` from ``Path.home()`` — no ``HOME`` and no passwd entry
+    for the running UID, a real container/k8s ``runAsUser`` case — is
+    caught: there's no safe default workspace, so this returns ``None``
+    and .env loading is skipped rather than crashing every importer of
+    this module.
+    """
+    workspace_env = os.environ.get("ROBOTHOR_WORKSPACE")
+    if workspace_env:
+        return Path(workspace_env) / ".env"
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return None
+    return home / "robothor" / ".env"
+
+
+def _parse_env_file(text: str) -> dict[str, str]:
+    """Minimal stdlib ``.env`` parser: ``KEY=VALUE`` lines only.
+
+    Blank lines and ``#``-prefixed comments are ignored. Lines without an
+    ``=`` or with an empty key are skipped. Surrounding whitespace is
+    stripped from both key and value, and a value wrapped in a single
+    matching pair of single or double quotes has them stripped. Never
+    raises — arbitrary/malformed content just yields fewer entries.
+    """
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _load_env_file(path: Path | None) -> None:
+    """Load ``path`` into ``os.environ``, without ever overriding a value
+    the real environment already set (e.g. systemd's ``EnvironmentFile``).
+
+    ``path`` may be ``None`` (``_env_file_path()`` couldn't resolve a
+    workspace) — nothing to load, which is silently fine, same as a
+    missing or unreadable file. ``robothor init`` may never have run, or
+    may have written to a different workspace. Safe to call more than
+    once: already-set keys (including ones this function set on a prior
+    call) are left alone.
+    """
+    if path is None:
+        return
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    for key, value in _parse_env_file(text).items():
+        try:
+            os.environ.setdefault(key, value)
+        except ValueError:
+            # e.g. an embedded NUL byte from truly malformed file content —
+            # skip that one entry rather than let a bad line crash startup.
+            continue
+
+
+# Load the workspace .env file (if any) once at import time, before any
+# config reader below consults os.environ. Real environment variables always
+# win — this only fills in gaps, so it can never shadow systemd-injected
+# production config.
+_load_env_file(_env_file_path())
+
+
 @dataclass(frozen=True)
 class DatabaseConfig:
     """PostgreSQL connection parameters."""
