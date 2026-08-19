@@ -190,12 +190,120 @@ class TestEmbedRetry:
 
         assert sleeps == [7.0]
 
+    async def test_embed_retries_mid_stream_read_error(self, monkeypatch):
+        """A connection reset mid-response (Ollama restarting) must be retried."""
+
+        async def fake_sleep(seconds: float) -> None:
+            pass
+
+        monkeypatch.setattr(ollama.asyncio, "sleep", fake_sleep)
+
+        calls = {"n": 0}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ReadError("connection reset by peer", request=request)
+            return _embed_response()
+
+        _install_transport(handler)
+
+        result = await get_embedding_async("some text")
+
+        assert result == [0.1, 0.2, 0.3]
+        assert calls["n"] == 2
+
+    async def test_chat_retries_remote_protocol_error(self, monkeypatch):
+        """Server disconnect mid-response (RemoteProtocolError) must be retried."""
+
+        async def fake_sleep(seconds: float) -> None:
+            pass
+
+        monkeypatch.setattr(ollama.asyncio, "sleep", fake_sleep)
+
+        calls = {"n": 0}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("server disconnected", request=request)
+            return _chat_response("recovered")
+
+        _install_transport(handler)
+
+        result = await chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert result == "recovered"
+        assert calls["n"] == 2
+
+    async def test_embed_malformed_retry_after_does_not_crash(self, monkeypatch):
+        """A date-format or garbage Retry-After falls back to normal backoff."""
+        sleeps: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(ollama.asyncio, "sleep", fake_sleep)
+
+        calls = {"n": 0}
+        headers = ["Wed, 21 Oct 2026 07:28:00 GMT", "nan"]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] <= len(headers):
+                return httpx.Response(
+                    429,
+                    headers={"Retry-After": headers[calls["n"] - 1]},
+                    text="slow down",
+                )
+            return _embed_response()
+
+        _install_transport(handler)
+
+        result = await get_embedding_async("some text")
+
+        assert result == [0.1, 0.2, 0.3]
+        assert len(sleeps) == 2
+        for s in sleeps:
+            # Backoff fallback: finite, positive, within the per-sleep cap
+            # (+jitter). Never nan, never derived from the malformed header.
+            assert s == s  # not nan
+            assert 0 < s <= ollama.EMBED_BACKOFF_CAP_SECONDS * 1.25
+
 
 class TestEmbedKeepAlive:
     def test_embed_keep_alive_is_pinned(self):
         from robothor.config import get_config
 
-        assert get_config().ollama.keep_alive_embedding == "-1"
+        # Must be a negative *duration with a unit*: Ollama parses string
+        # keep_alive via Go time.ParseDuration, and a bare "-1" is a 400.
+        assert get_config().ollama.keep_alive_embedding == "-1m"
+
+    def test_all_keep_alive_values_are_valid_go_durations(self):
+        """Ollama parses string keep_alive with Go time.ParseDuration.
+
+        Every unit-less value except "0" (e.g. "-1", "15") is rejected with
+        HTTP 400 "missing unit in duration" — which the retry classifier
+        correctly treats as non-retryable, turning a config typo into a hard
+        outage of the whole embed path. Enforce the grammar here.
+        """
+        import re
+
+        from robothor.config import get_config
+
+        go_duration = re.compile(r"^-?(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$|^0$")
+        cfg = get_config().ollama
+        for field in (
+            "keep_alive_embedding",
+            "keep_alive_reranker",
+            "keep_alive_generation",
+            "keep_alive_vision",
+        ):
+            value = getattr(cfg, field)
+            assert go_duration.match(value), (
+                f"{field}={value!r} is not a valid Go duration; "
+                'Ollama would reject it with HTTP 400 (use e.g. "-1m", "15m")'
+            )
 
     async def test_embed_payload_sends_pinned_keep_alive(self):
         seen_payloads: list[dict] = []
@@ -210,4 +318,4 @@ class TestEmbedKeepAlive:
 
         await get_embedding_async("some text")
 
-        assert seen_payloads[0]["keep_alive"] == "-1"
+        assert seen_payloads[0]["keep_alive"] == "-1m"

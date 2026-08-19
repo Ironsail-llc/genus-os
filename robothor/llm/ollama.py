@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import random
 from typing import TYPE_CHECKING, Any
@@ -63,9 +64,21 @@ def _client(timeout: float) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, transport=_transport)
 
 
+# Transport-level failures worth retrying: timeouts, connect/read/write resets
+# (NetworkError covers ConnectError/ReadError/WriteError/CloseError), and the
+# server hanging up mid-response (RemoteProtocolError — exactly what an Ollama
+# restart mid-request produces). LocalProtocolError/UnsupportedProtocol are
+# client-side bugs and stay non-retryable.
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
+
+
 def _is_retryable_embed_error(e: Exception) -> bool:
-    """5xx, 429, and network-level failures are retryable; other 4xx are not."""
-    if isinstance(e, (httpx.TimeoutException, httpx.ConnectError)):
+    """5xx, 429, and transport-level failures are retryable; other 4xx are not."""
+    if isinstance(e, _RETRYABLE_TRANSPORT_ERRORS):
         return True
     if isinstance(e, httpx.HTTPStatusError):
         status = e.response.status_code
@@ -86,7 +99,9 @@ def _embed_backoff_seconds(attempt: int, error: Exception | None = None) -> floa
                 seconds = float(retry_after)
             except ValueError:
                 seconds = None
-            if seconds is not None:
+            # Guard non-finite values ("nan"/"inf"): nan slips through
+            # min/max clamps and would reach asyncio.sleep(nan).
+            if seconds is not None and math.isfinite(seconds):
                 return min(max(seconds, 0.0), EMBED_BACKOFF_CAP_SECONDS)
 
     base = EMBED_BACKOFF_BASE_SECONDS * (EMBED_BACKOFF_FACTOR**attempt)
@@ -304,7 +319,7 @@ async def chat(
                         int(payload["options"]["num_predict"]),
                     )
                 return content
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
+        except _RETRYABLE_TRANSPORT_ERRORS as e:
             last_error = e
             if is_last:
                 logger.warning(
@@ -459,7 +474,7 @@ async def get_embedding_async(
                 resp.raise_for_status()
                 embeddings: list[float] = resp.json()["embeddings"][0]
                 return embeddings
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+        except (httpx.HTTPStatusError, *_RETRYABLE_TRANSPORT_ERRORS) as e:
             if not _is_retryable_embed_error(e):
                 raise
             last_error = e
@@ -528,7 +543,7 @@ async def get_embeddings_batch_async(
                     len(texts),
                 )
                 break  # Wrong count — fall through to sequential
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+        except (httpx.HTTPStatusError, *_RETRYABLE_TRANSPORT_ERRORS) as e:
             if not _is_retryable_embed_error(e):
                 raise
             last_error = e
