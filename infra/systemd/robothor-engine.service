@@ -13,10 +13,10 @@ WatchdogSec=300
 User=robothor
 Group=robothor
 EnvironmentFile=/etc/robothor/robothor.env
-ExecStartPre=${ROBOTHOR_WORKSPACE}/scripts/decrypt-secrets.sh
+ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
 EnvironmentFile=-/run/robothor/secrets.env
-ExecStart=${ROBOTHOR_WORKSPACE}/venv/bin/python -m robothor.engine.daemon
-WorkingDirectory=${ROBOTHOR_WORKSPACE}
+ExecStart=/opt/robothor/venv/bin/python -m robothor.engine.daemon
+WorkingDirectory=/opt/robothor
 Restart=always
 RestartSec=5
 TimeoutStopSec=15
@@ -43,13 +43,15 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=read-only
 # The workspace: repo, brain/ (agent memory + status files), logs, scratch.
-ReadWritePaths=%h/robothor
+ReadWritePaths=/opt/robothor
 # Instance state and refreshed OAuth tokens. gws/gog rewrite their token cache
 # on refresh, so these MUST stay writable or the email/calendar agents break.
-ReadWritePaths=%h/.config/robothor
-ReadWritePaths=%h/.config/gws
-ReadWritePaths=%h/.config/gog
-ReadWritePaths=%h/.config/gogcli
+# NOTE: /home/robothor is the render placeholder for the SERVICE USER'S home —
+# never write %h here: in a system unit %h is /root (a past incident).
+ReadWritePaths=/home/robothor/.config/robothor
+ReadWritePaths=/home/robothor/.config/gws
+ReadWritePaths=/home/robothor/.config/gog
+ReadWritePaths=/home/robothor/.config/gogcli
 # Decrypted secrets (ExecStartPre writes here) and the runtime dir.
 ReadWritePaths=/run/robothor
 # PostgreSQL's Unix socket — connect(2) needs write access to the socket file.

@@ -56,8 +56,12 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/robothor
-ReadWritePaths=%h/.config/robothor
+# /opt/robothor = workspace placeholder, /home/robothor = service-user home
+# placeholder (rendered by scripts/render-unit.sh). Never %h: in a system unit
+# %h is /root — a past incident. NOTE: the live bridge unit is known-divergent
+# from this template; adoption of the live deltas is tracked separately (R7).
+ReadWritePaths=/opt/robothor
+ReadWritePaths=/home/robothor/.config/robothor
 ReadWritePaths=/run/robothor
 ReadWritePaths=/var/run/postgresql
 PrivateTmp=yes

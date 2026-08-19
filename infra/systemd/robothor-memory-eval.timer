@@ -1,6 +1,6 @@
 [Unit]
 Description=Nightly memory retrieval benchmark
-Documentation=file:///home/philip/robothor/docs/benchmarks/memory/BASELINE.md
+Documentation=file:///opt/robothor/docs/benchmarks/memory/BASELINE.md
 
 [Timer]
 # 03:45 sits after the 03:30 intelligence pipeline and before the 04:00 fleet
