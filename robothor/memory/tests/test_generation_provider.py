@@ -244,6 +244,7 @@ async def test_openrouter_chat_payload_and_think_stripping(monkeypatch):
         temperature=0.2,
         max_tokens=512,
         format=schema,
+        think=False,
     )
 
     assert result == '{"facts": []}'

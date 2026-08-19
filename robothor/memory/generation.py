@@ -51,6 +51,14 @@ DEFAULT_REMOTE_MODEL = "openrouter/xiaomi/mimo-v2.5"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 REMOTE_TIMEOUT_S = 60.0
 
+# Remote reasoning tokens count against max_tokens (unlike local Ollama, which
+# budgets the separate ``thinking`` channel on top of num_predict — see
+# ollama.chat's thinking_overhead). Mirror that allowance, or small-budget
+# callers (judge_importance passes max_tokens=64) get their entire completion
+# budget consumed by reasoning and an empty content back (live-confirmed on
+# xiaomi/mimo-v2.5: finish_reason=length, content="").
+REMOTE_THINKING_OVERHEAD = 8192
+
 # Distinctive log markers — grep targets for alerting.
 FALLBACK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK"
 MISSING_KEY_MARKER = "MEMORY_GENERATION_REMOTE_MISCONFIGURED"
@@ -125,14 +133,25 @@ async def _openrouter_chat(
     temperature: float,
     max_tokens: int,
     format: Any | None,  # noqa: A002 — parity with ollama.chat
+    think: bool = True,
 ) -> str:
-    """One OpenRouter chat-completions call, normalized to Ollama semantics."""
+    """One OpenRouter chat-completions call, normalized to Ollama semantics.
+
+    ``think`` parity: local Ollama gives thinking its own token budget and
+    keeps it out of the caller's view. Remotely, reasoning tokens share
+    ``max_tokens`` with the answer, so ``think=True`` adds the same overhead
+    ollama.chat adds; ``think=False`` disables reasoning outright via
+    OpenRouter's ``reasoning`` config (models without reasoning control
+    ignore it; a hard 4xx falls back to local like any other remote error).
+    """
     payload: dict[str, Any] = {
         "model": _remote_model(),
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens + REMOTE_THINKING_OVERHEAD if think else max_tokens,
     }
+    if not think:
+        payload["reasoning"] = {"enabled": False}
     if isinstance(format, dict):
         payload["response_format"] = {
             "type": "json_schema",
@@ -182,7 +201,11 @@ async def chat(
     if _remote_enabled():
         try:
             return await _openrouter_chat(
-                messages, temperature=temperature, max_tokens=max_tokens, format=format
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                format=format,
+                think=think,
             )
         except Exception as e:
             _record_fallback(e)
@@ -213,7 +236,11 @@ async def generate(
         messages.append({"role": "user", "content": prompt})
         try:
             return await _openrouter_chat(
-                messages, temperature=temperature, max_tokens=max_tokens, format=format
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                format=format,
+                think=think,
             )
         except Exception as e:
             _record_fallback(e)
