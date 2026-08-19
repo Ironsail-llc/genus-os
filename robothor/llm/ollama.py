@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -35,6 +36,63 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 logger = logging.getLogger(__name__)
+
+# Test seam: set to an httpx.MockTransport to intercept requests without
+# touching the network. Left None (the httpx default) in production.
+_transport: httpx.AsyncBaseTransport | None = None
+
+# chat() retry budget — Ollama is on localhost; transient failures (a model
+# reload, a brief 5xx/429 blip) are short-lived, so two attempts is enough.
+CHAT_MAX_ATTEMPTS = 2
+CHAT_RETRY_DELAY_SECONDS = 3.0
+
+# Embedding retry budget — sized to survive a multi-minute 5xx/timeout storm
+# (e.g. the model being evicted and reloaded) without burning the caller's
+# whole request budget. 5 attempts of base=2s * factor=3 (capped at 45s,
+# +/-25% jitter) sum to ~71s uncapped / ~89s worst-case jittered — comfortably
+# under the ~2 minute target.
+EMBED_MAX_ATTEMPTS = 5
+EMBED_BACKOFF_BASE_SECONDS = 2.0
+EMBED_BACKOFF_FACTOR = 3.0
+EMBED_BACKOFF_CAP_SECONDS = 45.0
+EMBED_BACKOFF_JITTER_FRACTION = 0.25
+
+
+def _client(timeout: float) -> httpx.AsyncClient:
+    """Construct the shared AsyncClient, honoring an injected test transport."""
+    return httpx.AsyncClient(timeout=timeout, transport=_transport)
+
+
+def _is_retryable_embed_error(e: Exception) -> bool:
+    """5xx, 429, and network-level failures are retryable; other 4xx are not."""
+    if isinstance(e, (httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        return status == 429 or status >= 500
+    return False
+
+
+def _embed_backoff_seconds(attempt: int, error: Exception | None = None) -> float:
+    """Jittered exponential backoff for embed retry `attempt` (0-indexed).
+
+    Honors a Retry-After header on an HTTPStatusError when present, clamped
+    to the same cap so a misbehaving server can't blow the retry budget.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        retry_after = error.response.headers.get("Retry-After")
+        if retry_after is not None:
+            try:
+                seconds = float(retry_after)
+            except ValueError:
+                seconds = None
+            if seconds is not None:
+                return min(max(seconds, 0.0), EMBED_BACKOFF_CAP_SECONDS)
+
+    base = EMBED_BACKOFF_BASE_SECONDS * (EMBED_BACKOFF_FACTOR**attempt)
+    capped = min(base, EMBED_BACKOFF_CAP_SECONDS)
+    jitter = capped * EMBED_BACKOFF_JITTER_FRACTION
+    return capped + random.uniform(-jitter, jitter)
 
 
 def _keep_alive_for(model_class: str) -> str:
@@ -154,7 +212,7 @@ async def generate_stream(
         payload["system"] = system
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with _client(60.0) as client:
         async with client.stream("POST", f"{url}/api/generate", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -221,9 +279,10 @@ async def chat(
 
     url = _ollama_url()
     last_error: Exception | None = None
-    for attempt in range(1):
+    for attempt in range(CHAT_MAX_ATTEMPTS):
+        is_last = attempt == CHAT_MAX_ATTEMPTS - 1
         try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
+            async with _client(180.0) as client:
                 resp = await client.post(f"{url}/api/chat", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -247,27 +306,46 @@ async def chat(
                 return content
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             last_error = e
-            wait = 3 * (attempt + 1)
-            logger.warning(
-                "Chat attempt %d/2 failed (transient): %s (retrying in %ds)",
-                attempt + 1,
-                e,
-                wait,
-            )
-            await asyncio.sleep(wait)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code >= 500:
-                last_error = e
-                wait = 3 * (attempt + 1)
+            if is_last:
                 logger.warning(
-                    "Chat attempt %d/2 failed (5xx): %s (retrying in %ds)",
+                    "Chat attempt %d/%d failed (transient, giving up): %s",
                     attempt + 1,
+                    CHAT_MAX_ATTEMPTS,
                     e,
-                    wait,
                 )
-                await asyncio.sleep(wait)
             else:
-                raise  # 4xx errors are not transient
+                logger.warning(
+                    "Chat attempt %d/%d failed (transient): %s (retrying in %ds)",
+                    attempt + 1,
+                    CHAT_MAX_ATTEMPTS,
+                    e,
+                    CHAT_RETRY_DELAY_SECONDS,
+                )
+                await asyncio.sleep(CHAT_RETRY_DELAY_SECONDS)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status >= 500 or status == 429:
+                last_error = e
+                if is_last:
+                    logger.warning(
+                        "Chat attempt %d/%d failed (%d, giving up): %s",
+                        attempt + 1,
+                        CHAT_MAX_ATTEMPTS,
+                        status,
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Chat attempt %d/%d failed (%d): %s (retrying in %ds)",
+                        attempt + 1,
+                        CHAT_MAX_ATTEMPTS,
+                        status,
+                        e,
+                        CHAT_RETRY_DELAY_SECONDS,
+                    )
+                    await asyncio.sleep(CHAT_RETRY_DELAY_SECONDS)
+            else:
+                raise  # non-retryable 4xx
     raise last_error  # type: ignore[misc]
 
 
@@ -297,7 +375,7 @@ async def chat_stream(
     }
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with _client(60.0) as client:
         async with client.stream("POST", f"{url}/api/chat", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -353,7 +431,7 @@ async def analyze_image(
     }
 
     url = _ollama_url()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with _client(60.0) as client:
         resp = await client.post(f"{url}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -364,7 +442,7 @@ async def analyze_image(
 
 
 async def get_embedding_async(
-    text: str, model: str | None = None, max_retries: int = 3
+    text: str, model: str | None = None, max_retries: int = EMBED_MAX_ATTEMPTS
 ) -> list[float]:
     """Get embedding vector via Ollama (async version) with retry."""
     payload = {
@@ -376,22 +454,33 @@ async def get_embedding_async(
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with _client(30.0) as client:
                 resp = await client.post(f"{url}/api/embed", json=payload)
                 resp.raise_for_status()
                 embeddings: list[float] = resp.json()["embeddings"][0]
                 return embeddings
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            if not _is_retryable_embed_error(e):
+                raise
             last_error = e
-            wait = 2**attempt
-            logger.warning(
-                "Embedding attempt %d/%d failed: %s (retrying in %ds)",
-                attempt + 1,
-                max_retries,
-                e,
-                wait,
-            )
-            await asyncio.sleep(wait)
+            is_last = attempt == max_retries - 1
+            if is_last:
+                logger.warning(
+                    "Embedding attempt %d/%d failed (giving up): %s",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                )
+            else:
+                wait = _embed_backoff_seconds(attempt, e)
+                logger.warning(
+                    "Embedding attempt %d/%d failed: %s (retrying in %.1fs)",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                    wait,
+                )
+                await asyncio.sleep(wait)
     raise last_error  # type: ignore[misc]
 
 
@@ -424,9 +513,9 @@ async def get_embeddings_batch_async(
     }
     url = _ollama_url()
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(EMBED_MAX_ATTEMPTS):
         try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
+            async with _client(180.0) as client:
                 resp = await client.post(f"{url}/api/embed", json=payload)
                 resp.raise_for_status()
                 embeddings: list[list[float]] = resp.json()["embeddings"]
@@ -440,21 +529,35 @@ async def get_embeddings_batch_async(
                 )
                 break  # Wrong count — fall through to sequential
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            if not _is_retryable_embed_error(e):
+                raise
             last_error = e
-            wait = 2**attempt
-            logger.warning(
-                "Batch embed attempt %d/3 failed: %s (retrying in %ds)",
-                attempt + 1,
-                e,
-                wait,
-            )
-            await asyncio.sleep(wait)
+            is_last = attempt == EMBED_MAX_ATTEMPTS - 1
+            if is_last:
+                logger.warning(
+                    "Batch embed attempt %d/%d failed (giving up): %s",
+                    attempt + 1,
+                    EMBED_MAX_ATTEMPTS,
+                    e,
+                )
+            else:
+                wait = _embed_backoff_seconds(attempt, e)
+                logger.warning(
+                    "Batch embed attempt %d/%d failed: %s (retrying in %.1fs)",
+                    attempt + 1,
+                    EMBED_MAX_ATTEMPTS,
+                    e,
+                    wait,
+                )
+                await asyncio.sleep(wait)
         except Exception as e:
             logger.warning("batch embed failed (%s), falling back to sequential", e)
             break
     else:
         logger.warning(
-            "batch embed failed after 3 attempts (%s), falling back to sequential", last_error
+            "batch embed failed after %d attempts (%s), falling back to sequential",
+            EMBED_MAX_ATTEMPTS,
+            last_error,
         )
 
     # Fallback: sequential single-text calls
@@ -469,7 +572,7 @@ async def check_model_available(model: str | None = None) -> bool:
     """Check if a model is available in Ollama."""
     try:
         url = _ollama_url()
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with _client(5.0) as client:
             resp = await client.get(f"{url}/api/tags")
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
@@ -484,7 +587,7 @@ async def detect_generation_model() -> str | None:
     global GENERATION_MODEL
     try:
         url = _ollama_url()
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with _client(5.0) as client:
             resp = await client.get(f"{url}/api/tags")
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
