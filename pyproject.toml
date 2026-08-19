@@ -115,23 +115,46 @@ Issues = "https://github.com/Ironsail-llc/genus-os/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["robothor"]
 
+# crm/migrations and infra/migrations are NOT declared here as directory
+# force-includes. hatchling's force-include walks a directory raw and never
+# consults `exclude` config or .gitignore for it, and those two trees are
+# also where this instance's untracked, gitignored Delphi migrations live on
+# disk (crm/migrations/053_delphi_*.sql and friends). A directory-level
+# force-include would ship them in any wheel built on a box where they
+# happen to exist. hatch_build.py (a custom build hook, activated below)
+# recomputes both trees at build time as an explicit per-file map with
+# instance files filtered out, and still fails the build if a real platform
+# migration ever falls behind — see hatch_build.py's module docstring and
+# robothor/tests/test_migration_packaging.py.
 [tool.hatch.build.targets.wheel.force-include]
-"infra/migrations" = "robothor/migrations/infra"
-# NOTE: 081-089 are absent from this list — a pre-existing packaging gap that
-# means wheel-based deploys ship without them. Tracked separately; do not
-# extend it. 092 is listed so the access-log roll-up ships with the wheel.
-# Directory-level, NOT one line per file. The enumerated form drifted 10
-# migrations behind — including 081 (tenant RLS backstop), 084 (feature flags)
-# and 086 (user permissions) — so a wheel deploy would have come up with
-# row-level security absent and nothing anywhere reporting an error. The runner
-# only applies what it can find. robothor/tests/test_migration_packaging.py
-# fails the build if this ever falls behind the manifest again.
-"crm/migrations" = "robothor/migrations/crm"
 # The init scaffold (repo-root templates/) ships as package data so a wheel
 # install can scaffold a workspace. Named bundled_scaffold to avoid colliding
 # with the robothor/templates/*.py code package that shares the parent dir.
-# robothor/tests/test_template_resolution.py pins this mapping.
+# robothor/tests/test_template_resolution.py pins this mapping. Checked clean
+# of instance files (git status --ignored -- templates); stays a plain
+# static entry.
 "templates" = "robothor/templates/bundled_scaffold"
+
+# Scoped to the wheel target on purpose. A build-wide hook also runs for the
+# sdist, and hatchling treats force-included sources as *relocations*: the 88
+# tracked crm migrations would ship inside the sdist at robothor/migrations/
+# and vanish from crm/migrations/ — a silent source-layout change. The sdist
+# keeps its source layout and gets its own delphi guard below.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+# The sdist walks the whole tree. .gitignore covers today's delphi migrations
+# by enumerated number (053_delphi_* ... 091_delphi_*), so a FUTURE delphi
+# migration with a new number would leak into the sdist through the normal
+# walk — the wheel hook cannot help there (force_include only adds files).
+# These patterns close that hole for any delphi name, any case, forever.
+# robothor/tests/test_migration_packaging.py pins both this and the hook
+# registration above.
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "crm/migrations/*[Dd][Ee][Ll][Pp][Hh][Ii]*",
+  "infra/migrations/*[Dd][Ee][Ll][Pp][Hh][Ii]*",
+]
 
 [tool.coverage.run]
 source = ["robothor"]
