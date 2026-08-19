@@ -76,6 +76,17 @@ _ONBOARDING_NOTIFY_INTERVAL_SECONDS = 3600.0
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
+# Units the Telegram /restart family can queue a restart for, mapped to the
+# advisory trigger file that ``robothor-restart.path`` (infra/systemd/) watches.
+# The restart TARGET is hardcoded in that path unit's paired .service — this
+# file's contents are never read as the unit to restart, only as an audit
+# trail (UTC timestamp + sender). Module-level so tests can inject a tmp_path.
+# A unit with no entry here has no path-unit watching for it yet (e.g.
+# robothor-delphi-engine) — the handler tells the caller to use SSH instead.
+_RESTART_TRIGGERS: dict[str, Path] = {
+    "robothor-engine.service": Path("/run/robothor/restart-request"),
+}
+
 # Friendly tool names for streaming indicators
 _TOOL_LABELS = {
     "search_memory": "Searching memory",
@@ -2848,21 +2859,20 @@ class TelegramBot:
             )
 
     async def _handle_restart_command(self, message: Message, unit_name: str) -> None:
-        """Acknowledge in chat, then detach a `systemctl restart` via systemd-run.
+        """Queue a restart by writing the advisory trigger file that
+        ``robothor-restart.path`` (infra/systemd/robothor-restart.path) watches.
 
-        Owner-only (gate on default_chat_id). Uses ``systemd-run --no-block
-        --collect`` so the restart request runs in a transient unit *outside*
-        our cgroup — systemd-killing our own main process (for
-        robothor-engine.service) does not kill the queued restart.
+        Owner-only (gate on default_chat_id). systemd — not this process —
+        holds the privilege to restart the unit: the path unit's paired
+        service hardcodes the restart target, so this handler's write is
+        advisory only (a UTC timestamp + sender, for audit) and can never
+        choose which unit gets restarted.
 
-        For a healthy engine this is a clean reboot; it is not a recovery
-        path for a crash-looping engine (Telegram polling has to be up to
-        receive the command). The real escape hatch for a dead engine is
-        still SSH + ``sudo systemctl restart``.
+        Only ``robothor-engine.service`` has a path unit today (see
+        ``_RESTART_TRIGGERS``); any other unit — e.g.
+        robothor-delphi-engine.service — gets told to use SSH instead of
+        silently doing nothing.
         """
-        import shutil
-        import subprocess
-
         chat_id = str(message.chat.id)
         sender_id = message.from_user.id if message.from_user else "unknown"
         if not self._check_owner_gate(
@@ -2876,35 +2886,22 @@ class TelegramBot:
             await message.answer("Unauthorized.")
             return
 
-        if not shutil.which("systemd-run"):
-            await message.answer("systemd-run not available on this host.")
+        trigger_path = _RESTART_TRIGGERS.get(unit_name)
+        if trigger_path is None:
+            await message.answer(
+                f"No restart path-unit exists for {unit_name} — use SSH to restart it."
+            )
             return
 
-        await message.answer(f"Restarting {unit_name}…")
-
-        transient_unit = f"{unit_name.replace('.service', '')}-restart-request"
+        line = f"{datetime.now(UTC).isoformat()} telegram:{sender_id}\n"
         try:
-            subprocess.Popen(
-                [
-                    "sudo",
-                    "-n",
-                    "systemd-run",
-                    "--no-block",
-                    "--collect",
-                    f"--unit={transient_unit}",
-                    "--description=Deferred engine restart from Telegram /restart",
-                    "/bin/sh",
-                    "-c",
-                    f"sleep 2 && systemctl restart {unit_name}",
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except Exception as e:
-            logger.exception("Failed to queue restart of %s", unit_name)
-            await message.answer(f"Failed to queue restart: {e}")
+            trigger_path.write_text(line)
+        except OSError as e:
+            logger.exception("Failed to write restart trigger for %s", unit_name)
+            await message.answer(f"Failed to queue restart of {unit_name}: {e}")
+            return
+
+        await message.answer(f"Restart of {unit_name} queued.")
 
     async def _handle_goal_command(self, message: Message) -> None:
         """Manage the operator's long-running session goal from Telegram.

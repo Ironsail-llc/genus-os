@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1582,22 +1583,111 @@ class TestRestartCommandRoleGate:
         msg.answer.assert_called_once_with("Unauthorized.")
 
     @pytest.mark.asyncio
-    async def test_enforce_mode_owner_in_other_chat_passes_gate(self, bot):
+    async def test_enforce_mode_owner_in_other_chat_passes_gate(self, bot, tmp_path):
         msg = MagicMock()
         msg.chat.id = 99999
         msg.from_user.id = 1
         msg.answer = AsyncMock()
 
+        trigger = tmp_path / "restart-request"
         with patch.dict(os.environ, {"ROBOTHOR_TELEGRAM_ROLE_GATES": "enforce"}, clear=True):
             with patch(
                 "robothor.engine.users.lookup_user",
                 return_value={"tenant_id": "test-tenant", "display_name": "Alice", "role": "owner"},
             ):
-                with patch("shutil.which", return_value=None):
+                with patch(
+                    "robothor.engine.telegram._RESTART_TRIGGERS",
+                    {"robothor-engine.service": trigger},
+                ):
                     await bot._handle_restart_command(msg, "robothor-engine.service")
 
-        # Gate passed — got past "Unauthorized." to the next real check.
-        msg.answer.assert_called_once_with("systemd-run not available on this host.")
+        # Gate passed — got past "Unauthorized." to the real trigger write.
+        assert trigger.exists()
+        msg.answer.assert_called_once_with("Restart of robothor-engine.service queued.")
+
+
+class TestRestartCommandTriggerFile:
+    """The handler's only mechanism now: write the advisory trigger file
+    that ``robothor-restart.path`` watches. No sudo, no systemd-run."""
+
+    @staticmethod
+    def _owner_message(unit_name: str = "robothor-engine.service") -> MagicMock:
+        del unit_name
+        msg = MagicMock()
+        msg.chat.id = 12345  # matches engine_config.default_chat_id, off-mode gate passes
+        msg.from_user.id = 42
+        msg.answer = AsyncMock()
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_writes_trigger_and_replies_queued_only_after_write(self, bot, tmp_path):
+        trigger = tmp_path / "restart-request"
+        msg = self._owner_message()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "robothor.engine.telegram._RESTART_TRIGGERS",
+                {"robothor-engine.service": trigger},
+            ):
+                await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        assert trigger.exists(), "handler must write the trigger file"
+        content = trigger.read_text()
+        assert "telegram:42" in content
+
+        # Exactly one reply, sent after the write succeeded — no premature
+        # "Restarting..." acknowledgment sent before the write is attempted.
+        msg.answer.assert_called_once_with("Restart of robothor-engine.service queued.")
+
+    @pytest.mark.asyncio
+    async def test_write_failure_produces_failure_reply(self, bot, tmp_path):
+        trigger = tmp_path / "restart-request"
+        msg = self._owner_message()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "robothor.engine.telegram._RESTART_TRIGGERS",
+                {"robothor-engine.service": trigger},
+            ):
+                with patch.object(Path, "write_text", side_effect=PermissionError("denied")):
+                    await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        assert not trigger.exists()
+        msg.answer.assert_called_once()
+        (reply_text,) = msg.answer.call_args.args
+        assert "queued" not in reply_text.lower()
+        assert "robothor-engine.service" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_delphi_engine_has_no_trigger_and_gets_ssh_reply(self, bot):
+        msg = self._owner_message()
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bot._handle_restart_command(msg, "robothor-delphi-engine.service")
+
+        msg.answer.assert_called_once()
+        (reply_text,) = msg.answer.call_args.args
+        assert "ssh" in reply_text.lower()
+        assert "robothor-delphi-engine.service" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_owner_gate_regression_still_enforced(self, bot, tmp_path):
+        """Trigger-file rewrite must not weaken the existing owner gate."""
+        trigger = tmp_path / "restart-request"
+        msg = MagicMock()
+        msg.chat.id = 99999
+        msg.from_user.id = 2
+        msg.answer = AsyncMock()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "robothor.engine.telegram._RESTART_TRIGGERS",
+                {"robothor-engine.service": trigger},
+            ):
+                await bot._handle_restart_command(msg, "robothor-engine.service")
+
+        assert not trigger.exists()
+        msg.answer.assert_called_once_with("Unauthorized.")
 
 
 class TestDelphiProposalCallbackGate:
