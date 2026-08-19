@@ -1,3 +1,9 @@
+## [1.30.9](https://github.com/Ironsail-llc/genus-os/compare/v1.30.8...v1.30.9) (2026-08-19)
+
+### Bug Fixes
+
+* **ops:** guardrail-watch orders after postgres and survives DB loss ([#253](https://github.com/Ironsail-llc/genus-os/issues/253)) ([ca6d374](https://github.com/Ironsail-llc/genus-os/commit/ca6d374f15ad86ddaccf4098831a5c2f768938df))
+
 ## [1.30.8](https://github.com/Ironsail-llc/genus-os/compare/v1.30.7...v1.30.8) (2026-08-19)
 
 ### Bug Fixes
