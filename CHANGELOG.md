@@ -1,3 +1,9 @@
+## [1.30.8](https://github.com/Ironsail-llc/genus-os/compare/v1.30.7...v1.30.8) (2026-08-19)
+
+### Bug Fixes
+
+* **ops:** drop backup mount from engine sandbox, mirror live hardening ([#252](https://github.com/Ironsail-llc/genus-os/issues/252)) ([27abe4c](https://github.com/Ironsail-llc/genus-os/commit/27abe4c40626a1d78c65a7b1f172a03a6a2998d5))
+
 ## [1.30.7](https://github.com/Ironsail-llc/genus-os/compare/v1.30.6...v1.30.7) (2026-08-19)
 
 ### Bug Fixes
