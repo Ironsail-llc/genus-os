@@ -104,6 +104,40 @@ class TestSidecarIO:
     def test_create_skill_state_defaults(self):
         assert create_skill_state() == {"usage_count": 0, "last_used": None}
 
+    def test_concurrent_writers_use_unique_tmp_names(self, tmp_path: Path):
+        """Two processes writing the same sidecar must not rename each
+        other's tmp file away (fixed tmp names raced to FileNotFoundError)."""
+        import robothor.engine.skills as _mod
+
+        _mk_skill(tmp_path, "sk")
+        seen: list[str] = []
+        real_mkstemp = _mod.tempfile.mkstemp
+
+        def spy(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            seen.append(name)
+            return fd, name
+
+        with patch.object(_mod.tempfile, "mkstemp", side_effect=spy):
+            write_skill_state("sk", {"usage_count": 1, "last_used": None}, base=tmp_path)
+            write_skill_state("sk", {"usage_count": 2, "last_used": None}, base=tmp_path)
+        assert len(seen) == 2 and seen[0] != seen[1]
+        assert all(n.endswith(".json.tmp") for n in seen)
+
+    def test_non_dict_state_json_is_ignored(self, tmp_path: Path):
+        d = _mk_skill(tmp_path, "sk", meta={"auto_generated": True})
+        (d / "state.json").write_text("[1, 2, 3]\n")
+        assert read_skill_state("sk", base=tmp_path) is None
+        view = read_skill_view("sk", base=tmp_path, now=NOW)
+        assert view is not None
+        assert view["usage_count"] == 0
+
+    def test_non_dict_meta_json_is_ignored(self, tmp_path: Path):
+        d = _mk_skill(tmp_path, "sk")
+        (d / "meta.json").write_text("[1, 2, 3]\n")
+        view = read_skill_view("sk", base=tmp_path, now=NOW)  # must not raise
+        assert view is None
+
     def test_create_skill_meta_is_static_only(self):
         meta = create_skill_meta(created_by="main")
         for key in ("usage_count", "last_used", "state"):
@@ -137,6 +171,15 @@ class TestIncrementUsage:
     def test_noop_for_missing_skill(self, tmp_path: Path):
         increment_usage("no-such-skill", base=tmp_path)  # should not raise
         assert not (tmp_path / "no-such-skill").exists()
+
+    def test_write_failure_does_not_raise(self, tmp_path: Path):
+        """Counter is best-effort telemetry — an I/O race (e.g. a concurrent
+        rename) must never break the skill invocation that triggered it."""
+        import robothor.engine.skills as _mod
+
+        _mk_skill(tmp_path, "sk", meta=create_skill_meta(created_by="main"))
+        with patch.object(_mod, "write_skill_state", side_effect=FileNotFoundError("raced")):
+            increment_usage("sk", base=tmp_path)  # must not raise
 
 
 # ─── read_skill_view: the merged accessor ────────────────────────────
@@ -374,6 +417,13 @@ class TestMigration:
         result = migrate_skill_runtime_state(base=tmp_path)
         assert "good" in result["migrated"]
         assert "bad" in result["errors"]
+
+    def test_non_dict_meta_is_an_error(self, tmp_path: Path):
+        d = _mk_skill(tmp_path, "listy")
+        (d / "meta.json").write_text("[1, 2, 3]\n")
+        result = migrate_skill_runtime_state(base=tmp_path)
+        assert "listy" in result["errors"]
+        assert (d / "meta.json").read_text() == "[1, 2, 3]\n"  # left untouched
 
     def test_cli_hook(self, tmp_path: Path, monkeypatch, capsys):
         import argparse

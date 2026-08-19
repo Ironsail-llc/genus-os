@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -409,16 +410,37 @@ def read_skill_meta(name: str, base: Path | None = None) -> dict[str, Any] | Non
     except Exception as e:
         logger.warning("Failed to read skill meta %s: %s", path, e)
         return None
+    if not isinstance(result, dict):
+        logger.warning("Skill meta %s is not a JSON object — ignoring", path)
+        return None
     _meta_cache[key] = (mtime, result)
     return copy.deepcopy(result)
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Atomically write *payload* as JSON via tmp-file + rename."""
+    """Atomically write *payload* as JSON via tmp-file + rename.
+
+    The tmp file lives in the target's own directory (same filesystem, so
+    the rename is atomic — never cross-device) and carries a unique name so
+    concurrent writers in separate processes can't rename each other's tmp
+    file out from under themselves. Concurrent writes are last-write-wins.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str) + "\n")
-    tmp.replace(path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".json.tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(payload, indent=2, default=str) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        # mkstemp creates 0600; restore normal umask-style perms so other
+        # readers (dashboards, backup jobs) aren't locked out.
+        tmp.chmod(0o644)
+        tmp.replace(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def write_skill_meta(name: str, meta: dict[str, Any], base: Path | None = None) -> None:
@@ -459,6 +481,9 @@ def read_skill_state(name: str, base: Path | None = None) -> dict[str, Any] | No
         result: dict[str, Any] = json.loads(path.read_text())
     except Exception as e:
         logger.warning("Failed to read skill state %s: %s", path, e)
+        return None
+    if not isinstance(result, dict):
+        logger.warning("Skill state %s is not a JSON object — ignoring", path)
         return None
     _state_cache[key] = (mtime, result)
     return copy.deepcopy(result)
@@ -524,6 +549,10 @@ def migrate_skill_runtime_state(base: Path | None = None) -> dict[str, list[str]
             logger.warning("migrate-state: unreadable meta.json for %s: %s", name, e)
             result["errors"].append(name)
             continue
+        if not isinstance(meta, dict):
+            logger.warning("migrate-state: meta.json for %s is not a JSON object", name)
+            result["errors"].append(name)
+            continue
         present = [k for k in RUNTIME_STATE_KEYS if k in meta]
         if not present:
             result["unchanged"].append(name)
@@ -573,6 +602,11 @@ def increment_usage(name: str, base: Path | None = None) -> None:
     No-op when the skill directory doesn't exist. Legacy runtime keys
     still living in meta.json (pre-migration) seed the counter so no
     history is lost the first time the sidecar is written.
+
+    Best-effort telemetry: the read-modify-write is not locked, so
+    concurrent invokes are last-write-wins (a racing bump can be lost),
+    and an I/O failure is logged rather than raised — the counter must
+    never break a skill invocation.
     """
     try:
         skill_dir = _state_path(name, base).parent
@@ -589,7 +623,10 @@ def increment_usage(name: str, base: Path | None = None) -> None:
         }
     state["usage_count"] = int(state.get("usage_count", 0) or 0) + 1
     state["last_used"] = datetime.now(UTC).isoformat()
-    write_skill_state(name, state, base)
+    try:
+        write_skill_state(name, state, base)
+    except OSError as e:
+        logger.warning("increment_usage: could not write state.json for %s: %s", name, e)
 
 
 def create_skill_meta(
