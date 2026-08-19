@@ -178,8 +178,34 @@ def check_stale_goals() -> None:
         print("  (nag sent to Telegram)")
 
 
-def check_dropin_drift() -> None:
-    """Surface divergence between the live systemd drop-in and its repo mirror.
+# The repo mirror directory and its live counterpart. Every *.conf mirrored
+# here gets a drift check automatically — adding a new mirrored drop-in is
+# enough; there is no separate list to remember to update (unlike
+# HOST_SCRIPT_DRIFT_PAIRS below, which has no directory to enumerate).
+DROPIN_MIRROR_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
+DROPIN_LIVE_DIR = Path("/etc/systemd/system/robothor-engine.service.d")
+
+
+def dropin_conf_pairs(
+    mirror_dir: Path = DROPIN_MIRROR_DIR, live_dir: Path = DROPIN_LIVE_DIR
+) -> list[tuple[str, str]]:
+    """(live path, repo mirror path) for every *.conf file under mirror_dir.
+
+    Kept separate from check_dropin_drift() so discovery is testable without
+    touching /etc, per the injectable-pairs pattern below.
+    """
+    if not mirror_dir.exists():
+        return []
+    return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+
+
+def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
+    """Surface divergence between each live systemd drop-in and its repo mirror.
+
+    Originally checked exactly one file (upgrade-rip-flags.conf); now iterates
+    every *.conf mirrored under infra/systemd/robothor-engine.service.d/ (see
+    dropin_conf_pairs), so hardening.conf and zz-sandbox.conf get the same
+    coverage instead of drifting invisibly.
 
     The drop-in is the production guardrail posture; an unversioned live edit
     must show up in the daily report rather than silently persist.
@@ -187,9 +213,12 @@ def check_dropin_drift() -> None:
     script = Path(__file__).resolve().parent / "check_dropin_drift.sh"
     if not script.exists():
         return
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
     print("\n=== drop-in drift check ===")
-    print(result.stdout.rstrip())
+    for live, mirror in pairs if pairs is not None else dropin_conf_pairs():
+        result = subprocess.run(
+            ["bash", str(script), live, mirror], capture_output=True, text=True, timeout=30
+        )
+        print(result.stdout.rstrip())
 
 
 # (live path, repo-relative mirror path) — kept in sync by
