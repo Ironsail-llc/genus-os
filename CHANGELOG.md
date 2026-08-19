@@ -1,3 +1,9 @@
+## [1.30.13](https://github.com/Ironsail-llc/genus-os/compare/v1.30.12...v1.30.13) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** keep untracked instance SQL out of built wheels ([#258](https://github.com/Ironsail-llc/genus-os/issues/258)) ([02f243f](https://github.com/Ironsail-llc/genus-os/commit/02f243f698d993abe72df5141f2bd57790e0608c)), closes [#244](https://github.com/Ironsail-llc/genus-os/issues/244)
+
 ## [1.30.12](https://github.com/Ironsail-llc/genus-os/compare/v1.30.11...v1.30.12) (2026-08-19)
 
 ### Bug Fixes
