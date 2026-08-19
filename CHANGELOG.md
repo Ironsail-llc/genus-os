@@ -1,3 +1,9 @@
+## [1.30.6](https://github.com/Ironsail-llc/genus-os/compare/v1.30.5...v1.30.6) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** bundle the agent catalog and a generic starter agent ([#249](https://github.com/Ironsail-llc/genus-os/issues/249)) ([a6e93ca](https://github.com/Ironsail-llc/genus-os/commit/a6e93caf19265dd23142a45fec1be84e79d8bc54))
+
 ## [1.30.5](https://github.com/Ironsail-llc/genus-os/compare/v1.30.4...v1.30.5) (2026-08-19)
 
 ### Bug Fixes
