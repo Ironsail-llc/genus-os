@@ -233,6 +233,94 @@ jobs:
             echo "new_release_version=" >> "$GITHUB_OUTPUT"
           fi
 
+  # ───────────────────────────────────────────────────────────────────────
+  # Python distribution. On every release, build sdist+wheel from the
+  # released tag on a clean CI clone and attach them to the GitHub Release.
+  # PyPI publication is a separate job double-gated on the repository
+  # variable PYPI_PUBLISH_ENABLED, so it skips cleanly (never red) until
+  # the PyPI trusted publisher + `pypi` environment exist.
+  # ───────────────────────────────────────────────────────────────────────
+  build-dist:
+    name: Build & attach release distributions
+    needs: [release]
+    if: |
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
+    steps:
+      # Build from the released tag on a clean clone, never a pre-existing
+      # workspace: the tag commit carries the version metadata committed by
+      # semantic-release, and the clean checkout is the primary guarantee
+      # that gitignored instance files (delphi migrations, brain/) cannot
+      # leak into the published distributions.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: v${{ needs.release.outputs.new_release_version }}
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      # Mirrors ci.yml's wheel-smoke tripwire, extended to the sdist:
+      # gitignored delphi instance files must never ship in a distribution.
+      # Absent on a clean clone today; catches a future packaging-exclude
+      # regression.
+      - name: Verify no instance files leaked into the distributions
+        run: |
+          if python -m zipfile -l dist/*.whl | grep -i delphi; then
+            echo "::error::delphi instance files leaked into the wheel"
+            exit 1
+          fi
+          if tar -tzf dist/*.tar.gz | grep -i delphi; then
+            echo "::error::delphi instance files leaked into the sdist"
+            exit 1
+          fi
+
+      - name: Attach distributions to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: gh release upload "v${VERSION}" dist/* --clobber
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-dist-v${{ needs.release.outputs.new_release_version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [release, build-dist]
+    # Job-level gate: a plain false condition marks the job "skipped"
+    # (green), never failed. Flip the repository VARIABLE
+    # PYPI_PUBLISH_ENABLED to 'true' once the PyPI trusted publisher and
+    # the `pypi` GitHub environment exist.
+    if: |
+      needs.release.outputs.new_release_published == 'true'
+      && vars.PYPI_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI Trusted Publishing (OIDC) — no API token
+    steps:
+      # Publish exactly the artifacts built from the clean tag checkout and
+      # already attached to the GitHub Release — no rebuild, no drift.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-dist-v${{ needs.release.outputs.new_release_version }}
+          path: dist/
+      # Third-party action SHA-pinned + tag-commented.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+
   build:
     name: Build & Push (${{ matrix.image.name }})
     needs: [verify, release]
