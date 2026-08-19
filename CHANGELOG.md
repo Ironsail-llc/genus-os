@@ -1,3 +1,9 @@
+## [1.30.5](https://github.com/Ironsail-llc/genus-os/compare/v1.30.4...v1.30.5) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** installer resolves paths outside site-packages installs ([#248](https://github.com/Ironsail-llc/genus-os/issues/248)) ([7ae1933](https://github.com/Ironsail-llc/genus-os/commit/7ae19335548af3a2516cf9d907bc41535865e31e)), closes [#245](https://github.com/Ironsail-llc/genus-os/issues/245)
+
 ## [1.30.4](https://github.com/Ironsail-llc/genus-os/compare/v1.30.3...v1.30.4) (2026-08-19)
 
 ### Bug Fixes
