@@ -1,3 +1,9 @@
+## [1.30.11](https://github.com/Ironsail-llc/genus-os/compare/v1.30.10...v1.30.11) (2026-08-19)
+
+### Bug Fixes
+
+* **engine:** batch soft runaway-token alerts, make thresholds tunable ([#256](https://github.com/Ironsail-llc/genus-os/issues/256)) ([9d9e928](https://github.com/Ironsail-llc/genus-os/commit/9d9e928a53530b76b71e447714d8b61a4bd16174))
+
 ## [1.30.10](https://github.com/Ironsail-llc/genus-os/compare/v1.30.9...v1.30.10) (2026-08-19)
 
 ### Bug Fixes
