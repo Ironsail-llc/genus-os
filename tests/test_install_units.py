@@ -26,6 +26,7 @@ idempotently to <root>/etc/systemd/system/.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -396,3 +397,8 @@ def test_repo_templates_use_canonical_spellings(unit: Path):
                 f"{unit.name}: {line!r} hardcodes an instance account — use the "
                 "robothor placeholder (rendered to ROBOTHOR_SERVICE_USER)"
             )
+    for home in re.findall(r"/home/[A-Za-z0-9._-]+", text):
+        assert home == "/home/robothor", (
+            f"{unit.name}: {home} is an instance home path — use /home/robothor "
+            "(the placeholder) or /opt/robothor for workspace paths"
+        )
