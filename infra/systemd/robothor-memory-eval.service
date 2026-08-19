@@ -1,13 +1,13 @@
 [Unit]
 Description=Robothor memory retrieval benchmark (memory-recall-v1)
-Documentation=file:///home/philip/robothor/docs/benchmarks/memory/BASELINE.md
+Documentation=file:///opt/robothor/docs/benchmarks/memory/BASELINE.md
 After=network-online.target postgresql.service
 OnFailure=robothor-alert@%n.service
 
 [Service]
 Type=oneshot
-User=philip
-WorkingDirectory=/home/philip/robothor
+User=robothor
+WorkingDirectory=/opt/robothor
 EnvironmentFile=/etc/robothor/robothor.env
 # The suite seeds fixtures under its own tenant. Without this the process
 # carries the production tenant and migration 081's WITH CHECK policy rejects
@@ -23,7 +23,7 @@ EnvironmentFile=/etc/robothor/robothor.env
 # Generous ceiling so a slow model load is not mistaken for a hang.
 TimeoutStartSec=3600
 ExecStart=/usr/bin/env ROBOTHOR_TENANT_ID=memory-eval \
-    /home/philip/robothor/venv/bin/python -m robothor.cli memory-eval \
+    /opt/robothor/venv/bin/python -m robothor.cli memory-eval \
     --suite docs/benchmarks/memory/suite.yaml --record --triggered-by cron
 
 [Install]

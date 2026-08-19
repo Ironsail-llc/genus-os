@@ -124,9 +124,7 @@ def test_renders_opt_robothor_to_workspace(sample_unit: Path):
 
 def test_renders_legacy_workspace_var_spelling(tmp_path: Path):
     unit = tmp_path / "robothor-legacy.service"
-    unit.write_text(
-        "[Service]\nUser=robothor\nExecStart=${ROBOTHOR_WORKSPACE}/scripts/run.sh\n"
-    )
+    unit.write_text("[Service]\nUser=robothor\nExecStart=${ROBOTHOR_WORKSPACE}/scripts/run.sh\n")
     result = render(unit, base_env())
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"ExecStart={WS}/scripts/run.sh\n" in result.stdout
@@ -174,9 +172,7 @@ def test_renders_legacy_percent_h(tmp_path: Path):
 
 def test_percent_i_instance_specifier_is_preserved(tmp_path: Path):
     unit = tmp_path / "robothor-a@.service"
-    unit.write_text(
-        "[Service]\nUser=robothor\nExecStart=/opt/robothor/scripts/alert.sh %i\n"
-    )
+    unit.write_text("[Service]\nUser=robothor\nExecStart=/opt/robothor/scripts/alert.sh %i\n")
     result = render(unit, base_env())
     assert result.returncode == 0, result.stdout + result.stderr
     assert "%i" in result.stdout
@@ -223,9 +219,7 @@ def test_fails_when_home_needed_but_unresolvable(tmp_path: Path):
 
 def test_env_file_fallback_resolves_unset_vars(tmp_path: Path):
     env_file = tmp_path / "robothor.env"
-    env_file.write_text(
-        f"ROBOTHOR_WORKSPACE={WS}\nROBOTHOR_SERVICE_USER={USER}\n"
-    )
+    env_file.write_text(f"ROBOTHOR_WORKSPACE={WS}\nROBOTHOR_SERVICE_USER={USER}\n")
     unit = tmp_path / "robothor-envfile.service"
     unit.write_text("[Service]\nUser=robothor\nWorkingDirectory=/opt/robothor\n")
     env = base_env(
@@ -244,9 +238,7 @@ def test_unknown_robothor_var_fails_the_render(tmp_path: Path):
     """A `${ROBOTHOR_*}` spelling the renderer does not know must fail loudly —
     systemd cannot expand it, so letting it through installs a broken unit."""
     unit = tmp_path / "robothor-mystery.service"
-    unit.write_text(
-        "[Service]\nUser=robothor\nExecStart=${ROBOTHOR_MYSTERY}/bin/run\n"
-    )
+    unit.write_text("[Service]\nUser=robothor\nExecStart=${ROBOTHOR_MYSTERY}/bin/run\n")
     result = render(unit, base_env())
     assert result.returncode != 0
     assert "ROBOTHOR_MYSTERY" in result.stderr or "placeholder" in result.stderr.lower()
@@ -276,7 +268,7 @@ def test_installs_rendered_units_into_root(tmp_path: Path):
         mode = dest.stat().st_mode & 0o777
         assert mode == 0o644, f"{dest} mode is {oct(mode)}, expected 0644"
 
-    engine = (system_dir / "robothor-engine.service").read_text()
+    engine = directives((system_dir / "robothor-engine.service").read_text())
     assert f"ExecStart={WS}/venv/bin/python" in engine
     assert f"User={USER}" in engine
     assert "${" not in engine
@@ -357,6 +349,13 @@ def repo_units() -> list[Path]:
     return units
 
 
+def directives(text: str) -> str:
+    """Unit-file content minus comment lines — comments may legitimately
+    DISCUSS a placeholder (e.g. 'never write %h here') and are passed
+    through the renderer untouched."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(("#", ";")))
+
+
 @pytest.mark.parametrize("unit", repo_units(), ids=lambda p: p.name)
 def test_repo_units_render_installable(unit: Path):
     """Render every repo robothor-* unit; nothing unexpanded may survive.
@@ -364,7 +363,7 @@ def test_repo_units_render_installable(unit: Path):
     handle means the installed unit would be broken."""
     result = render(unit, base_env())
     assert result.returncode == 0, f"{unit.name}: {result.stdout}{result.stderr}"
-    rendered = result.stdout
+    rendered = directives(result.stdout)
     assert "${" not in rendered, f"{unit.name}: unexpanded ${{...}} survives rendering"
     assert "%h" not in rendered, f"{unit.name}: %h survives rendering (== /root in system units)"
     for line in rendered.splitlines():
@@ -381,7 +380,7 @@ def test_repo_templates_use_canonical_spellings(unit: Path):
     workspace placeholder, /home/robothor THE home placeholder, robothor THE
     service account. No `${ROBOTHOR_*}` (systemd cannot expand it — verify
     fails) and no `%h` (expands to /root in system units — a past incident)."""
-    text = unit.read_text()
+    text = directives(unit.read_text())
     assert "${ROBOTHOR_" not in text, (
         f"{unit.name}: use /opt/robothor, not ${{ROBOTHOR_WORKSPACE}} — systemd "
         "cannot expand it and systemd-analyze verify fails on it"
