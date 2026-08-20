@@ -340,13 +340,27 @@ def test_verify_is_skipped_under_root_test_mode(tmp_path: Path):
 
 
 def repo_units() -> list[Path]:
+    """Git-TRACKED unit templates only. Gitignored instance units (e.g. a
+    local delphi service with a real User=) legitimately sit in infra/systemd/
+    on a dev box; they are not platform templates and must not fail the
+    template gates."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "infra/systemd"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+        cwd=REPO_ROOT,
+    ).stdout.splitlines()
+    tracked_paths = {REPO_ROOT / line for line in tracked if line}
     units = sorted(
         p
         for pattern in ("robothor-*.service", "robothor-*.timer", "robothor-*.path")
         for p in UNIT_DIR.glob(pattern)
+        if p in tracked_paths
     )
-    units += sorted(UNIT_DIR.glob("robothor-*.service.d/*.conf"))
-    assert units, "no unit templates found in infra/systemd/"
+    units += sorted(p for p in UNIT_DIR.glob("robothor-*.service.d/*.conf") if p in tracked_paths)
+    assert units, "no tracked unit templates found in infra/systemd/"
     return units
 
 

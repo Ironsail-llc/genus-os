@@ -430,7 +430,7 @@ async def vision_mode_get() -> Any:
 
 @app.post("/vision/mode")
 async def vision_mode_set(req: VisionModeRequest) -> Any:
-    """Switch the vision mode (disarmed, basic, armed)."""
+    """Switch the vision mode (disarmed, basic, armed, disabled)."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(_vision_url("/mode"), json={"mode": req.mode})

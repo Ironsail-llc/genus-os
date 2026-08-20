@@ -115,7 +115,7 @@ class TestToolDefinitions:
         tool = next(t for t in get_tool_definitions() if t["name"] == "set_vision_mode")
         mode_prop = tool["inputSchema"]["properties"]["mode"]
         assert "enum" in mode_prop
-        assert set(mode_prop["enum"]) == {"disarmed", "basic", "armed"}
+        assert set(mode_prop["enum"]) == {"disarmed", "basic", "armed", "disabled"}
 
 
 # ─── Tool Handler ────────────────────────────────────────────────────

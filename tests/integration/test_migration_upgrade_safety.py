@@ -22,7 +22,9 @@ def _apply_quietly(connection, migration_id: str) -> None:
 
 
 def test_legacy_data_is_preserved_and_buddy_cutover_is_enforced() -> None:
-    admin_dsn = os.environ["ROBOTHOR_TEST_DB_DSN"]
+    admin_dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN")
+    if not admin_dsn:
+        pytest.skip("requires ROBOTHOR_TEST_DB_DSN")
     database = f"genus_upgrade_{uuid.uuid4().hex[:12]}"
     admin = psycopg2.connect(admin_dsn)
     admin.autocommit = True

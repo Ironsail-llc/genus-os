@@ -23,7 +23,8 @@ from __future__ import annotations
 import robothor.crm.dal as dal
 from robothor.engine.feature_flags import notify_guardrail_alert
 
-# The DB's check constraint on crm_agent_notifications.notification_type.
+# The DB's check constraint on crm_agent_notifications.notification_type
+# (migration 099; test_schema_drift.py keeps write sites in lockstep).
 VALID_TYPES = {
     "task_assigned",
     "review_requested",
@@ -35,6 +36,9 @@ VALID_TYPES = {
     "info",
     "custom",
     "escalation",
+    "alert_digest",
+    "alert_fallback",
+    "workflow_failure",
 }
 
 

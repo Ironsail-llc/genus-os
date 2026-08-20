@@ -27,3 +27,11 @@ sudo systemctl start robothor-alert@manual-test
 
 Scope deliberately small (~6 core units) to avoid alert fatigue; timers'
 oneshot services can be added case-by-case once the baseline is quiet.
+
+## Engine alert severity routing
+
+Application-level alerts go through `robothor/engine/alerts.py::alert()`:
+`critical` pages Telegram immediately; `warning`/`info` are written as
+`alert_digest` notification rows surfaced by the morning briefing and
+heartbeat instead of paging. A failed page falls back to an `alert_fallback`
+notification row so the alert still reaches the next briefing.

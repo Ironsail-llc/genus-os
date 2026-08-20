@@ -211,14 +211,14 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "set_vision_mode",
-            "description": "Switch the vision service mode. Modes: disarmed (no processing), basic (motion only), armed (full YOLO + face ID + escalation).",
+            "description": "Switch the vision service mode. Modes: disarmed (no processing), basic (motion only), armed (full YOLO + face ID + escalation), disabled (service deliberately off, persists across restarts).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "description": "Vision mode: disarmed, basic, or armed",
-                        "enum": ["disarmed", "basic", "armed"],
+                        "description": "Vision mode: disarmed, basic, armed, or disabled",
+                        "enum": ["disarmed", "basic", "armed", "disabled"],
                     }
                 },
                 "required": ["mode"],
@@ -1043,8 +1043,8 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 
     elif name == "set_vision_mode":
         mode = arguments.get("mode", "")
-        if mode not in ("disarmed", "basic", "armed"):
-            return {"error": f"Invalid mode: {mode}. Valid: disarmed, basic, armed"}
+        if mode not in ("disarmed", "basic", "armed", "disabled"):
+            return {"error": f"Invalid mode: {mode}. Valid: disarmed, basic, armed, disabled"}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(_svc_url("vision", "/mode"), json={"mode": mode})

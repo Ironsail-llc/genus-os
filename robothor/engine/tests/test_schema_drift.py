@@ -16,13 +16,11 @@ enum addition that ships without its constraint migration.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from pathlib import Path
 
+import robothor.engine
 from robothor.db.migrate import _discover
 from robothor.engine.models import RunStatus, TriggerType
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _balanced_slice(text: str, open_paren_index: int) -> str:
@@ -92,6 +90,53 @@ class TestTriggerTypeConstraintDrift:
 
     def test_check_allows_no_duplicates(self):
         allowed, source = _newest_check_values("agent_runs", "trigger_type")
+        assert len(allowed) == len(set(allowed)), f"Duplicate values in {source.name}"
+
+
+_ENGINE_ROOT = Path(robothor.engine.__file__).resolve().parent
+
+# Literal notification_type values the engine writes into
+# crm_agent_notifications: kwarg-style call sites plus the positional
+# first argument of alerts._write_notification.
+_NOTIFICATION_TYPE_WRITE_PATTERNS = (
+    re.compile(r"""notification_type=["']([A-Za-z0-9_]+)["']"""),
+    re.compile(r"""_write_notification\(\s*["']([A-Za-z0-9_]+)["']"""),
+)
+
+
+def _engine_written_notification_types() -> dict[str, set[str]]:
+    """Map notification_type literal -> engine source files that write it."""
+    written: dict[str, set[str]] = {}
+    for source in _ENGINE_ROOT.rglob("*.py"):
+        if "tests" in source.parts:
+            continue
+        text = source.read_text(encoding="utf-8")
+        for pattern in _NOTIFICATION_TYPE_WRITE_PATTERNS:
+            for value in pattern.findall(text):
+                written.setdefault(value, set()).add(source.name)
+    return written
+
+
+class TestNotificationTypeConstraintDrift:
+    def test_every_engine_written_notification_type_is_allowed_by_the_check(self):
+        allowed, source = _newest_check_values("crm_agent_notifications", "notification_type")
+        written = _engine_written_notification_types()
+        assert written, "No notification_type write sites found in engine source"
+        missing = {
+            f"{value} (written by {', '.join(sorted(files))})"
+            for value, files in written.items()
+            if value not in allowed
+        }
+        assert not missing, (
+            f"Engine writes notification types not allowed by "
+            f"crm_agent_notifications_notification_type_check (newest definition: "
+            f"{source.name}): {sorted(missing)}. Those INSERTs fail at runtime. "
+            "Add a migration that recreates the constraint "
+            "(see crm/migrations/099_notification_types.sql for the DO $$ pattern)."
+        )
+
+    def test_check_allows_no_duplicates(self):
+        allowed, source = _newest_check_values("crm_agent_notifications", "notification_type")
         assert len(allowed) == len(set(allowed)), f"Duplicate values in {source.name}"
 
 

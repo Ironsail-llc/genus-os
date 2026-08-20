@@ -390,3 +390,42 @@ class TestWhoIsHere:
 
         assert result["people_present"] == ["alice-front"]
         assert result["identifications"] == [{"label": "alice-front", "verified": False}]
+
+
+# ─── set_vision_mode ────────────────────────────────────────────────────
+
+
+class TestSetVisionMode:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["disarmed", "basic", "armed", "disabled"])
+    async def test_valid_modes_are_proxied_to_the_service(self, mode):
+        """Every mode in the vision service's VALID_MODES — including
+        'disabled' (added in the disabled-state contract) — must pass the
+        handler's validation and reach the service."""
+        client = _mock_client(post=_mock_response({"mode": mode, "status": "ok"}))
+
+        with patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client):
+            result = await HANDLERS["set_vision_mode"]({"mode": mode}, CTX)
+
+        assert result == {"mode": mode, "status": "ok"}
+        client.post.assert_awaited_once()
+        assert client.post.await_args.kwargs["json"] == {"mode": mode}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["", "off", "ARMED", "paused"])
+    async def test_invalid_modes_are_rejected_before_any_http_call(self, mode):
+        client = _mock_client(post=_mock_response({"mode": mode}))
+
+        with patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client):
+            result = await HANDLERS["set_vision_mode"]({"mode": mode}, CTX)
+
+        assert "error" in result
+        client.post.assert_not_awaited()
+
+    def test_handler_validation_matches_service_valid_modes(self):
+        """The handler's allowed set must stay in lockstep with the vision
+        service's VALID_MODES so agents can set every mode that exists."""
+        from robothor.engine.tools.handlers.vision import _SET_MODE_VALID
+        from robothor.vision.service import VALID_MODES
+
+        assert set(_SET_MODE_VALID) == set(VALID_MODES)
