@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from typing import TYPE_CHECKING
@@ -21,6 +22,27 @@ from robothor.events.capabilities import check_endpoint_access, load_capabilitie
 
 # Load the agent capabilities manifest once at import time
 load_capabilities()
+
+logger = logging.getLogger(__name__)
+
+
+def _log_unauthorized(request: Request, reason: str) -> None:
+    """One WARNING per 401 that names the caller, so a rejected local client
+    can be attributed from the journal (production showed repeated loopback
+    401s with no way to tell which client held the stale token).
+
+    Identity only — User-Agent and remote address. Never the credential.
+    """
+    client = request.client
+    remote_addr = client.host if client is not None else "-"
+    logger.warning(
+        "401 %s %s from %s ua=%r: %s",
+        request.method,
+        request.url.path,
+        remote_addr,
+        request.headers.get("user-agent", "-"),
+        reason,
+    )
 
 
 class TenantMiddleware(BaseHTTPMiddleware):
@@ -151,6 +173,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     },
                     status="denied",
                 )
+                _log_unauthorized(request, "invalid or expired token")
                 return JSONResponse(status_code=401, content={"error": "invalid or expired token"})
 
         path = request.url.path
@@ -161,6 +184,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 details={"method": request.method, "path": path},
                 status="denied",
             )
+            _log_unauthorized(request, "authentication required")
             return JSONResponse(status_code=401, content={"error": "authentication required"})
 
         auth = request.state.auth
