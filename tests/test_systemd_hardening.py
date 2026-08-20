@@ -78,9 +78,10 @@ def test_every_long_running_unit_is_hardened():
 
 # --- engine service.d drop-in mirrors ---------------------------------------
 #
-# infra/systemd/robothor-engine.service.d/ mirrors the LIVE drop-ins verbatim
-# (instance-rendered paths and all — these are mirrors, not templates; the
-# unit renderer arrives in a later PR). The live hardening.conf grants
+# infra/systemd/robothor-engine.service.d/ carries the engine drop-ins as
+# TEMPLATES (canonical placeholder spellings per infra/systemd/README.md,
+# rendered by scripts/render-unit.sh; check_dropin_drift.sh renders before
+# diffing against live). The live hardening.conf grants
 # ReadWritePaths=/mnt/robothor-backup: undocumented, and no code under
 # robothor/ touches that mount (the backup units run as their own systemd
 # services) — so write access there is pure prompt-injected-agent blast
