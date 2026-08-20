@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from robothor.identity.scope import DataScope
 
+import httpx
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
@@ -602,7 +603,17 @@ async def search_insights(
     Returns:
         List of matching insight dictionaries sorted by similarity.
     """
-    embedding = await llm_client.get_embedding_async(query)
+    try:
+        embedding = await llm_client.get_embedding_async(query)
+    except httpx.HTTPError as e:
+        # Insight search is vector-only: without an embedding there is no
+        # keyword leg to fall back to. Degrade to no insights rather than
+        # killing the caller's whole search with a transport error.
+        logger.warning(
+            "search_insights: embedding fetch failed (%s) — returning no insights",
+            type(e).__name__,
+        )
+        return []
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -801,7 +812,7 @@ async def _append_auxiliary(
     result: list[dict[str, Any]],
     *,
     query: str,
-    embedding: list[float],
+    embedding: list[float] | None,
     tenant_id: str,
     _tenant: str,
     include_insights: bool,
@@ -826,7 +837,7 @@ async def _append_auxiliary(
             result.extend(await search_episodes(query, limit=3, tenant_id=tenant_id))
         except Exception:
             pass  # Episode search is best-effort
-    if include_chat_turns:
+    if include_chat_turns and embedding is not None:
         try:
             from robothor.engine.chat_store import search_chat_turns
 
@@ -891,7 +902,25 @@ async def search_facts(
     if use_reranker is None:
         use_reranker = _reranker_enabled_default()
 
-    embedding = await llm_client.get_embedding_async(query)
+    # Hybrid search treats the embedding as one leg, not a prerequisite: when
+    # the embedding service is down (GPU wedge, post-boot model load), degrade
+    # to the BM25 keyword leg instead of failing the whole memory read path.
+    degraded: str | None = None
+    try:
+        embedding = await llm_client.get_embedding_async(query)
+    except httpx.HTTPError as embed_exc:
+        logger.warning(
+            "search_facts: embedding fetch failed (%s) — degrading to keyword-only search",
+            type(embed_exc).__name__,
+        )
+        embedding = None
+        degraded = "keyword-only (embedding service unavailable)"
+
+    def _mark_degraded(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if degraded is not None:
+            for r in rows:
+                r["degraded"] = degraded
+        return rows
 
     active_clause = "AND is_active = TRUE" if active_only else ""
     scope_clause = ""
@@ -914,21 +943,24 @@ async def search_facts(
         apply_hnsw_session(cur)
 
         # Vector search — also pull the ranking signals (importance/recency/access).
-        cur.execute(
-            f"""
-            SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at, importance_score, access_count, superseded_by,
-                   person_id,
-                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
-                   1 - (embedding <=> %s::vector) as similarity
-            FROM memory_facts
-            WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause} {scope_clause}
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-            """,
-            (embedding, _tenant, *scope_params, embedding, fetch_limit),
-        )
-        vector_results = [dict(r) for r in cur.fetchall()]
+        # Skipped entirely when the embedding fetch degraded: BM25 carries the search.
+        vector_results: list[dict[str, Any]] = []
+        if embedding is not None:
+            cur.execute(
+                f"""
+                SELECT id, fact_text, category, entities, confidence, source_type,
+                       metadata, created_at, importance_score, access_count, superseded_by,
+                       person_id,
+                       EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
+                       1 - (embedding <=> %s::vector) as similarity
+                FROM memory_facts
+                WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause} {scope_clause}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (embedding, _tenant, *scope_params, embedding, fetch_limit),
+            )
+            vector_results = [dict(r) for r in cur.fetchall()]
 
         # BM25 keyword search
         cur.execute(
@@ -1084,20 +1116,22 @@ async def search_facts(
                     reranked.extend(insights)
                 except Exception:
                     pass
-            return reranked
+            return _mark_degraded(reranked)
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)
 
     result = _blend_rank(candidates, limit) if _rank_blend_enabled() else candidates[:limit]
-    return await _append_auxiliary(
-        result,
-        query=query,
-        embedding=embedding,
-        tenant_id=tenant_id,
-        _tenant=_tenant,
-        include_insights=include_insights,
-        include_episodes=include_episodes,
-        include_chat_turns=include_chat_turns,
+    return _mark_degraded(
+        await _append_auxiliary(
+            result,
+            query=query,
+            embedding=embedding,
+            tenant_id=tenant_id,
+            _tenant=_tenant,
+            include_insights=include_insights,
+            include_episodes=include_episodes,
+            include_chat_turns=include_chat_turns,
+        )
     )
 
 

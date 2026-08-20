@@ -1113,6 +1113,11 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 
     elif name == "log_interaction":
         try:
+            # The bridge is fail-closed (PR #176): every call must carry a
+            # verifiable service token or it 401s.
+            from robothor.constants import DEFAULT_TENANT
+            from robothor.engine.tools.service_client import bridge_headers
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     _svc_url("bridge", "/log-interaction"),
@@ -1126,6 +1131,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
                             "channel_identifier",
                         ]
                     },
+                    headers=bridge_headers("engine:mcp", DEFAULT_TENANT),
                 )
                 resp.raise_for_status()
                 return resp.json()  # type: ignore[no-any-return]

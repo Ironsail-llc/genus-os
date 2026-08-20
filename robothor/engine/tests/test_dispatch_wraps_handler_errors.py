@@ -50,8 +50,47 @@ async def test_httpstatus_error_does_not_propagate() -> None:
     ):
         # Must not raise — the whole point of the guard
         result = await dispatch._execute_tool("log_interaction", {}, user_role="service")
-    assert result.get("tool_crashed") is True
-    assert "HTTPStatusError" in result.get("error", "")
+    # Transport/HTTP failures from backing services are mapped to a short
+    # structured error, not a tool crash, and never echo internal URLs.
+    assert result.get("error") == "backing service error (HTTP 500)"
+    assert result.get("retryable") is True
+    assert result.get("tool_crashed") is None
+    assert "127.0.0.1" not in str(result)
+
+
+async def _connect_error_handler(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    import httpx
+
+    raise httpx.ConnectError("All connection attempts failed")
+
+
+async def _read_timeout_handler(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    # The store_memory path when Ollama embeddings are down: the ReadTimeout
+    # escapes robothor.memory.facts.store_fact and reaches dispatch.
+    import httpx
+
+    raise httpx.ReadTimeout("embedding fetch timed out")
+
+
+@pytest.mark.asyncio
+async def test_transport_error_maps_to_short_unreachable_error() -> None:
+    with patch.object(dispatch, "_get_handlers", return_value={"look": _connect_error_handler}):
+        result = await dispatch._execute_tool("look", {}, user_role="service")
+    assert result.get("error") == "backing service unreachable: ConnectError"
+    assert result.get("retryable") is True
+    assert result.get("tool_crashed") is None
+
+
+@pytest.mark.asyncio
+async def test_embedding_timeout_maps_to_short_structured_error() -> None:
+    with patch.object(
+        dispatch, "_get_handlers", return_value={"store_memory": _read_timeout_handler}
+    ):
+        result = await dispatch._execute_tool("store_memory", {}, user_role="service")
+    assert result.get("error") == "backing service unreachable: ReadTimeout"
+    assert result.get("retryable") is True
+    assert result.get("tool_crashed") is None
+    assert "traceback" not in str(result).lower()
 
 
 @pytest.mark.asyncio

@@ -344,6 +344,27 @@ def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:
     return failed
 
 
+def _select_log_renderer() -> Any:
+    """Pick the structlog renderer for this process.
+
+    An explicit ``ROBOTHOR_LOG_FORMAT`` ("json" or "console") always wins.
+    Without it, the dev ConsoleRenderer is used only when stdout is an
+    interactive terminal; under systemd/journald the default is single-line
+    JSON — the rich console renderer used to emit 224-line box-drawing
+    tracebacks (with frame locals, including DSNs) per tool crash.
+    """
+    import structlog
+
+    explicit = os.environ.get("ROBOTHOR_LOG_FORMAT", "").strip().lower()
+    if explicit == "json":
+        return structlog.processors.JSONRenderer()
+    if explicit == "console":
+        return structlog.dev.ConsoleRenderer()
+    if sys.stdout.isatty():
+        return structlog.dev.ConsoleRenderer()
+    return structlog.processors.JSONRenderer()
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
@@ -373,11 +394,7 @@ async def main() -> int:
         cache_logger_on_first_use=True,
     )
 
-    formatter = structlog.stdlib.ProcessorFormatter(
-        processor=structlog.dev.ConsoleRenderer()
-        if os.environ.get("ROBOTHOR_LOG_FORMAT") != "json"
-        else structlog.processors.JSONRenderer(),
-    )
+    formatter = structlog.stdlib.ProcessorFormatter(processor=_select_log_renderer())
 
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
