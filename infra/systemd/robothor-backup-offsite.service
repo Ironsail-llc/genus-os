@@ -5,6 +5,11 @@
 Description=Robothor — offsite backup replication
 After=network-online.target
 Wants=network-online.target
+# The source dumps live on the encrypted backup volume. Persistent=true makes
+# the timer fire at boot, where this raced the mount and failed on "backup
+# source directory not found" (observed Aug 2/9/10/11/19) — while the failure
+# page itself died on boot-window DNS. Do not start before the mount exists.
+RequiresMountsFor=/mnt/robothor-backup
 OnFailure=robothor-alert@%n.service
 
 [Service]
