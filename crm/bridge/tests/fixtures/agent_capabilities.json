@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Agent RBAC manifest — declares what each agent can access via Bridge (:9100)",
+  "description": "Test fixture — RBAC manifest shape used by crm/bridge/tests. Not the operator's live manifest; that one lives at brain/agent_capabilities.json (instance-owned, gitignored) and is never read by CI.",
   "default_policy": "allow",
   "agents": {
     "email-classifier": {

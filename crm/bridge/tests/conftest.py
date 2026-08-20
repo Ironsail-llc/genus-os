@@ -23,7 +23,11 @@ from bridge_service import app  # noqa: E402
 
 from robothor.events.capabilities import load_capabilities, reset  # noqa: E402
 
-CAPABILITIES_MANIFEST = BRIDGE_DIR.parents[1] / "brain" / "agent_capabilities.json"
+# Platform-owned test fixture — NOT the operator's live brain/agent_capabilities.json.
+# That file is instance-owned (CLAUDE.md rule 11) and gitignored, so it doesn't exist
+# on a fresh clone/CI checkout; the bridge RBAC suite needs its own tracked manifest
+# with the same shape so `test_rbac.py`'s allow/deny assertions hold everywhere.
+CAPABILITIES_MANIFEST = Path(__file__).resolve().parent / "fixtures" / "agent_capabilities.json"
 
 
 @pytest.fixture(autouse=True)
