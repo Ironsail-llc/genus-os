@@ -1,3 +1,14 @@
+## [1.31.0](https://github.com/Ironsail-llc/genus-os/compare/v1.30.13...v1.31.0) (2026-08-20)
+
+### Features
+
+* **ops:** install-units.sh renders and verifies repo units ([#259](https://github.com/Ironsail-llc/genus-os/issues/259)) ([03f96e1](https://github.com/Ironsail-llc/genus-os/commit/03f96e16bc9489b3d0d5093c09fe263c41492c99)), closes [#241](https://github.com/Ironsail-llc/genus-os/issues/241)
+
+### Bug Fixes
+
+* **docker:** copy hatch_build.py into the python image build ([#265](https://github.com/Ironsail-llc/genus-os/issues/265)) ([0254597](https://github.com/Ironsail-llc/genus-os/commit/02545973be4991d1cd30a4f09323eab6a0c78f0d)), closes [#258](https://github.com/Ironsail-llc/genus-os/issues/258) [#254](https://github.com/Ironsail-llc/genus-os/issues/254) [#254](https://github.com/Ironsail-llc/genus-os/issues/254)
+* **ops:** genericize mirrored drop-ins and render-aware drift checks ([#266](https://github.com/Ironsail-llc/genus-os/issues/266)) ([05aa81e](https://github.com/Ironsail-llc/genus-os/commit/05aa81ed15a2cb88c3e5d6ce7c03e37a706d7cc6)), closes [#252](https://github.com/Ironsail-llc/genus-os/issues/252) [#259](https://github.com/Ironsail-llc/genus-os/issues/259) [#252](https://github.com/Ironsail-llc/genus-os/issues/252)
+
 ## [1.30.13](https://github.com/Ironsail-llc/genus-os/compare/v1.30.12...v1.30.13) (2026-08-19)
 
 ### Bug Fixes
