@@ -17,4 +17,4 @@ Type=oneshot
 User=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
-ExecStart=/usr/bin/env bash /opt/robothor/scripts/backup-offsite.sh
+ExecStart=/usr/bin/bash /opt/robothor/scripts/backup-offsite.sh

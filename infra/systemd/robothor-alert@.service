@@ -22,6 +22,6 @@ StartLimitBurst=5
 Type=exec
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
-ExecStart=/usr/bin/env bash /opt/robothor/scripts/send_failure_alert.sh %i
+ExecStart=/usr/bin/bash /opt/robothor/scripts/send_failure_alert.sh %i
 Restart=on-failure
 RestartSec=60
