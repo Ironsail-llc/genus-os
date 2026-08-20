@@ -230,3 +230,6 @@ brain/scratch/
 
 # Helm chart dependency archives — fetched by 'helm dependency update'
 helm/*/charts/*.tgz
+
+# MkDocs build output (docs site)
+/site/

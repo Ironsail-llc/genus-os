@@ -130,7 +130,7 @@ pytest robothor/memory/tests/ -v
 2. **Write tests** for any new functionality
 3. **Run the test suite** and ensure it passes
 4. **Update documentation** if you changed APIs or behavior
-5. **Open a PR** — the [PR template](.github/PULL_REQUEST_TEMPLATE.md) will guide you through the checklist
+5. **Open a PR** — the [PR template](https://github.com/Ironsail-llc/genus-os/blob/main/.github/PULL_REQUEST_TEMPLATE.md) will guide you through the checklist
 
 All PRs are **squash-merged** into `main` to keep history clean. Write a clear PR title — it becomes the commit message.
 

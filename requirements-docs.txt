@@ -1,0 +1,4 @@
+# Documentation site build (mkdocs.yml + .github/workflows/docs.yml).
+# Kept separate from pyproject extras so the Pages build never installs the
+# platform package or its dependency tree.
+mkdocs-material==9.7.7

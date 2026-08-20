@@ -1,0 +1,93 @@
+# Genus OS documentation site — built by .github/workflows/docs.yml and
+# published to GitHub Pages. Local build: pip install -r requirements-docs.txt
+# && mkdocs build --strict.
+#
+# The site publishes an explicit allowlist of pages (exclude_docs below).
+# docs/ also holds internal material — runbooks, benchmarks, plans, agent
+# schemas — that is platform-tracked but not part of the public site. Add a
+# page by extending the allowlist AND the nav, and sweep it for
+# instance-specific data first (see docs/PLATFORM_INSTANCE.md).
+
+site_name: Genus OS
+site_description: The enterprise AI operating system you deploy on your own infrastructure.
+site_url: https://ironsail-llc.github.io/genus-os/
+repo_url: https://github.com/Ironsail-llc/genus-os
+repo_name: Ironsail-llc/genus-os
+edit_uri: ""
+
+theme:
+  name: material
+  logo: images/genus-os-logo.png
+  favicon: images/genus-os-logo.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+# Allowlist: everything under docs/ is excluded unless re-included here.
+# This keeps internal material (runbooks, benchmarks, plans, agent schemas,
+# workflow YAML) off the public site by default.
+exclude_docs: |
+  /*
+  !/index.md
+  !/quickstart.md
+  !/configuration.md
+  !/deployment.md
+  !/architecture.md
+  !/memory-system.md
+  !/event-bus.md
+  !/PLATFORM_INSTANCE.md
+  !/READING_GUIDE.md
+  !/contributing.md
+  !/security.md
+  !/images
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick Start: quickstart.md
+      - Configuration: configuration.md
+      - Deployment: deployment.md
+  - Architecture:
+      - Overview: architecture.md
+      - Memory System: memory-system.md
+      - Event Bus: event-bus.md
+      - Platform vs Instance: PLATFORM_INSTANCE.md
+  - Project:
+      - Contributing: contributing.md
+      - Security: security.md
+      - Reading Guide: READING_GUIDE.md
