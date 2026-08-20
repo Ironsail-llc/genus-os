@@ -79,6 +79,9 @@ jobs:
           ROBOTHOR_DB_NAME: robothor_release_gate
           ROBOTHOR_DB_USER: robothor
           ROBOTHOR_DB_PASSWORD: robothor
+          # The pytest DB guard (robothor/db/connection.py assert_test_database)
+          # only opens non-*_test databases that are explicitly allowed.
+          ROBOTHOR_TEST_DB_ALLOW: robothor_release_gate
         run: |
           python -m robothor.cli migrate
           python -m robothor.cli migrate --check

@@ -27,6 +27,25 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
+def isolated_model_breaker(monkeypatch: pytest.MonkeyPatch):
+    """Swap the global model breaker for a fresh, alert-less one per test.
+
+    The production singleton is wired to ``_alert_operator``, which writes a
+    real ``crm_agent_notifications`` row and posts to Telegram. Tests that
+    drive ``_call_llm`` into repeated failures (e.g. with a 1s timeout) used to
+    trip it and send real escalations — 92 phantom "openrouter/test/model"
+    escalations landed in the operator's inbox this way. ``on_open=None`` makes
+    the breaker inert, and a fresh instance per test stops open-circuit state
+    leaking between tests. monkeypatch restores the real breaker afterwards.
+    """
+    from robothor.engine import model_breaker
+
+    fresh = model_breaker.ModelBreaker(on_open=None)
+    monkeypatch.setattr(model_breaker, "_BREAKER", fresh)
+    yield fresh
+
+
+@pytest.fixture(autouse=True)
 def explicit_loopback_engine_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy unit apps mount Engine routers without the production middleware.
 
