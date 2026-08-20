@@ -46,6 +46,43 @@ def test_force_include_sources_survive_dockerignore():
     )
 
 
+def _build_hook_scripts() -> list[str]:
+    """Build-hook scripts hatchling needs at install time (v1.30.13 died when
+    hatch_build.py was referenced by [tool.hatch.build.hooks.custom] but never
+    COPYied into the image)."""
+    with (REPO / "pyproject.toml").open("rb") as f:
+        data = tomllib.load(f)
+    hatch = data.get("tool", {}).get("hatch", {})
+    build = hatch.get("build", {})
+    scripts: list[str] = []
+    hook_tables = [build.get("hooks", {})]
+    hook_tables.extend(t.get("hooks", {}) for t in build.get("targets", {}).values())
+    for hooks in hook_tables:
+        custom = hooks.get("custom")
+        if custom is not None:
+            scripts.append(custom.get("path", "hatch_build.py"))
+    return scripts
+
+
+def test_build_hook_scripts_reach_the_python_image():
+    scripts = _build_hook_scripts()
+    assert scripts, "expected the wheel-filter build hook from #258 to be declared"
+    blocked = [s for s in scripts if _dockerignored(s)]
+    assert not blocked, f"build-hook scripts excluded by .dockerignore: {blocked}"
+    dockerfile = (REPO / "Dockerfile.python").read_text()
+    copied = {
+        part.rstrip("/")
+        for line in dockerfile.splitlines()
+        if line.startswith("COPY ") and "--from" not in line
+        for part in line.split()[1:-1]
+    }
+    missing = [s for s in scripts if s not in copied]
+    assert not missing, (
+        f"build-hook scripts never COPYied into the python image: {missing} — "
+        "uv pip install fails with 'Build script does not exist'"
+    )
+
+
 def test_force_include_sources_are_copied_into_the_python_image():
     """.dockerignore admission is not enough — Dockerfile.python COPYies
     selectively, so a force-include source absent from its COPY list still

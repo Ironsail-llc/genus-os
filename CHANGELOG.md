@@ -1,3 +1,68 @@
+## [1.31.0](https://github.com/Ironsail-llc/genus-os/compare/v1.30.13...v1.31.0) (2026-08-20)
+
+### Features
+
+* **ops:** install-units.sh renders and verifies repo units ([#259](https://github.com/Ironsail-llc/genus-os/issues/259)) ([03f96e1](https://github.com/Ironsail-llc/genus-os/commit/03f96e16bc9489b3d0d5093c09fe263c41492c99)), closes [#241](https://github.com/Ironsail-llc/genus-os/issues/241)
+
+### Bug Fixes
+
+* **docker:** copy hatch_build.py into the python image build ([#265](https://github.com/Ironsail-llc/genus-os/issues/265)) ([0254597](https://github.com/Ironsail-llc/genus-os/commit/02545973be4991d1cd30a4f09323eab6a0c78f0d)), closes [#258](https://github.com/Ironsail-llc/genus-os/issues/258) [#254](https://github.com/Ironsail-llc/genus-os/issues/254) [#254](https://github.com/Ironsail-llc/genus-os/issues/254)
+* **ops:** genericize mirrored drop-ins and render-aware drift checks ([#266](https://github.com/Ironsail-llc/genus-os/issues/266)) ([05aa81e](https://github.com/Ironsail-llc/genus-os/commit/05aa81ed15a2cb88c3e5d6ce7c03e37a706d7cc6)), closes [#252](https://github.com/Ironsail-llc/genus-os/issues/252) [#259](https://github.com/Ironsail-llc/genus-os/issues/259) [#252](https://github.com/Ironsail-llc/genus-os/issues/252)
+
+## [1.30.13](https://github.com/Ironsail-llc/genus-os/compare/v1.30.12...v1.30.13) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** keep untracked instance SQL out of built wheels ([#258](https://github.com/Ironsail-llc/genus-os/issues/258)) ([02f243f](https://github.com/Ironsail-llc/genus-os/commit/02f243f698d993abe72df5141f2bd57790e0608c)), closes [#244](https://github.com/Ironsail-llc/genus-os/issues/244)
+
+## [1.30.12](https://github.com/Ironsail-llc/genus-os/compare/v1.30.11...v1.30.12) (2026-08-19)
+
+### Bug Fixes
+
+* **memory:** gate autoDream's model unload dance on memory pressure ([#257](https://github.com/Ironsail-llc/genus-os/issues/257)) ([52255f9](https://github.com/Ironsail-llc/genus-os/commit/52255f9b28727f6a2e55c205bc23f6aa3e357e3a))
+
+## [1.30.11](https://github.com/Ironsail-llc/genus-os/compare/v1.30.10...v1.30.11) (2026-08-19)
+
+### Bug Fixes
+
+* **engine:** batch soft runaway-token alerts, make thresholds tunable ([#256](https://github.com/Ironsail-llc/genus-os/issues/256)) ([9d9e928](https://github.com/Ironsail-llc/genus-os/commit/9d9e928a53530b76b71e447714d8b61a4bd16174))
+
+## [1.30.10](https://github.com/Ironsail-llc/genus-os/compare/v1.30.9...v1.30.10) (2026-08-19)
+
+### Bug Fixes
+
+* **llm:** make the Ollama client actually retry with a real budget ([#255](https://github.com/Ironsail-llc/genus-os/issues/255)) ([923d90f](https://github.com/Ironsail-llc/genus-os/commit/923d90f92e0f9590e748ea5132bf1e0ff9945d81))
+
+## [1.30.9](https://github.com/Ironsail-llc/genus-os/compare/v1.30.8...v1.30.9) (2026-08-19)
+
+### Bug Fixes
+
+* **ops:** guardrail-watch orders after postgres and survives DB loss ([#253](https://github.com/Ironsail-llc/genus-os/issues/253)) ([ca6d374](https://github.com/Ironsail-llc/genus-os/commit/ca6d374f15ad86ddaccf4098831a5c2f768938df))
+
+## [1.30.8](https://github.com/Ironsail-llc/genus-os/compare/v1.30.7...v1.30.8) (2026-08-19)
+
+### Bug Fixes
+
+* **ops:** drop backup mount from engine sandbox, mirror live hardening ([#252](https://github.com/Ironsail-llc/genus-os/issues/252)) ([27abe4c](https://github.com/Ironsail-llc/genus-os/commit/27abe4c40626a1d78c65a7b1f172a03a6a2998d5))
+
+## [1.30.7](https://github.com/Ironsail-llc/genus-os/compare/v1.30.6...v1.30.7) (2026-08-19)
+
+### Bug Fixes
+
+* **engine:** /restart writes the restart-request file, not sudo ([#251](https://github.com/Ironsail-llc/genus-os/issues/251)) ([0604099](https://github.com/Ironsail-llc/genus-os/commit/0604099d08c5733978f1afd929a40987288b7ff4))
+
+## [1.30.6](https://github.com/Ironsail-llc/genus-os/compare/v1.30.5...v1.30.6) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** bundle the agent catalog and a generic starter agent ([#249](https://github.com/Ironsail-llc/genus-os/issues/249)) ([a6e93ca](https://github.com/Ironsail-llc/genus-os/commit/a6e93caf19265dd23142a45fec1be84e79d8bc54))
+
+## [1.30.5](https://github.com/Ironsail-llc/genus-os/compare/v1.30.4...v1.30.5) (2026-08-19)
+
+### Bug Fixes
+
+* **dist:** installer resolves paths outside site-packages installs ([#248](https://github.com/Ironsail-llc/genus-os/issues/248)) ([7ae1933](https://github.com/Ironsail-llc/genus-os/commit/7ae19335548af3a2516cf9d907bc41535865e31e)), closes [#245](https://github.com/Ironsail-llc/genus-os/issues/245)
+
 ## [1.30.4](https://github.com/Ironsail-llc/genus-os/compare/v1.30.3...v1.30.4) (2026-08-19)
 
 ### Bug Fixes

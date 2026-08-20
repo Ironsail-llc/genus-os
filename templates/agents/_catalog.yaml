@@ -16,12 +16,12 @@ departments:
     agents: [calendar-monitor]
   communications:
     name: Communications
-    description: Conversation inbox, resolution, and chat
-    agents: [conversation-inbox, conversation-resolver, chat-responder]
+    description: Conversation inbox and resolution
+    agents: [conversation-inbox, conversation-resolver]
   crm:
     name: CRM Operations
-    description: Contact hygiene and enrichment
-    agents: [crm-hygiene, crm-dedup, crm-enrichment]
+    description: Contact hygiene, dedup, and enrichment
+    agents: [crm-steward]
   security:
     name: Security & Vision
     description: Camera monitoring and person detection
@@ -33,7 +33,7 @@ departments:
   operations:
     name: Operations
     description: Engine health, canary testing, and failure analysis
-    agents: [engine-report, canary, auto-researcher]
+    agents: [failure-analyzer, canary, auto-researcher]
   examples:
     name: Examples
     description: Learning templates for new agent builders
@@ -55,7 +55,7 @@ presets:
       - morning-briefing
       - evening-winddown
       - canary
-      - engine-report
+      - failure-analyzer
   full:
     description: "All agents including CRM, comms, security, and ops"
     agents: all

@@ -391,6 +391,10 @@ def plan_to_scaffold(
     import yaml
 
     if repo_root is None:
+        # NOTE: same __file__-derived default fixed for installer.py/validators.py
+        # by #248 (breaks under a wheel install). Left as-is here: the interactive
+        # agent-builder wizard is a dev/checkout-only flow today. Follow-up, not
+        # fixed in #248 to avoid scope creep.
         repo_root = Path(__file__).resolve().parent.parent.parent
 
     # Fill in agent-specific fields

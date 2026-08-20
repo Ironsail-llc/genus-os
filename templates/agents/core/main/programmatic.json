@@ -1,0 +1,9 @@
+{
+  "name": "Main",
+  "id": "main",
+  "version": "2026-08-18",
+  "format": "robothor-native/v1",
+  "department": "core",
+  "description": "Primary interactive agent — talks to the operator and delegates work to the fleet",
+  "tags": ["interactive", "coordinator", "core"]
+}

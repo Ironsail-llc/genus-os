@@ -216,9 +216,15 @@ class OllamaConfig:
     vision_model: str = "llama3.2-vision:11b"
 
     # Per-model-class keep_alive: how long models stay loaded after last use.
-    # Small models (embedding/reranker) stay warm between 10-min cron cycles.
+    # Embedding model is small (5.8GiB of 54GiB free) and on the hot path for
+    # every memory write/read — never unload it (any negative duration pins it
+    # forever), so a long 5xx/timeout storm can't starve it out mid-incident
+    # (2026-08-18). NOTE: this is sent as a JSON *string*, and Ollama parses
+    # string keep_alive with Go's time.ParseDuration — a bare "-1" is rejected
+    # with HTTP 400 ("missing unit in duration"); it must carry a unit.
+    # Reranker stays warm between 10-min cron cycles.
     # Large models (generation/vision) evict quickly to free memory.
-    keep_alive_embedding: str = "15m"
+    keep_alive_embedding: str = "-1m"
     keep_alive_reranker: str = "15m"
     keep_alive_generation: str = "5m"
     keep_alive_vision: str = "5m"

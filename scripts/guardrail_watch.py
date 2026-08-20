@@ -178,8 +178,34 @@ def check_stale_goals() -> None:
         print("  (nag sent to Telegram)")
 
 
-def check_dropin_drift() -> None:
-    """Surface divergence between the live systemd drop-in and its repo mirror.
+# The repo mirror directory and its live counterpart. Every *.conf mirrored
+# here gets a drift check automatically — adding a new mirrored drop-in is
+# enough; there is no separate list to remember to update (unlike
+# HOST_SCRIPT_DRIFT_PAIRS below, which has no directory to enumerate).
+DROPIN_MIRROR_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
+DROPIN_LIVE_DIR = Path("/etc/systemd/system/robothor-engine.service.d")
+
+
+def dropin_conf_pairs(
+    mirror_dir: Path = DROPIN_MIRROR_DIR, live_dir: Path = DROPIN_LIVE_DIR
+) -> list[tuple[str, str]]:
+    """(live path, repo mirror path) for every *.conf file under mirror_dir.
+
+    Kept separate from check_dropin_drift() so discovery is testable without
+    touching /etc, per the injectable-pairs pattern below.
+    """
+    if not mirror_dir.exists():
+        return []
+    return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+
+
+def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
+    """Surface divergence between each live systemd drop-in and its repo mirror.
+
+    Originally checked exactly one file (upgrade-rip-flags.conf); now iterates
+    every *.conf mirrored under infra/systemd/robothor-engine.service.d/ (see
+    dropin_conf_pairs), so hardening.conf and zz-sandbox.conf get the same
+    coverage instead of drifting invisibly.
 
     The drop-in is the production guardrail posture; an unversioned live edit
     must show up in the daily report rather than silently persist.
@@ -187,9 +213,12 @@ def check_dropin_drift() -> None:
     script = Path(__file__).resolve().parent / "check_dropin_drift.sh"
     if not script.exists():
         return
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30)
     print("\n=== drop-in drift check ===")
-    print(result.stdout.rstrip())
+    for live, mirror in pairs if pairs is not None else dropin_conf_pairs():
+        result = subprocess.run(
+            ["bash", str(script), live, mirror], capture_output=True, text=True, timeout=30
+        )
+        print(result.stdout.rstrip())
 
 
 # (live path, repo-relative mirror path) — kept in sync by
@@ -292,7 +321,13 @@ def check_memory_scoping_is_not_vacuous() -> None:
         send_telegram(msg)
 
 
-def main() -> int:
+def _run_db_dependent_checks() -> None:
+    """Everything here needs a live database connection.
+
+    Kept out of main()'s DB-free section deliberately: if this raises (DB
+    down, not up yet at boot, ...), main() must still have already produced
+    the drift-check output before this ever ran.
+    """
     from robothor.db.connection import get_connection
 
     with get_connection() as conn:
@@ -334,11 +369,37 @@ def main() -> int:
             print(f"  {status:12} {n}")
         if total:
             print(f"  error+timeout rate: {100 * bad / total:.1f}%  ({bad}/{total})")
-    check_soak_deadlines()
+
     check_stale_goals()
+    check_memory_scoping_is_not_vacuous()
+
+
+def main() -> int:
+    # DB-free checks run FIRST and unconditionally. 2026-08-16: this unit's
+    # Persistent=true timer fired at boot before postgres was up. The
+    # DB-dependent section used to run first in this function; get_connection()
+    # raised, and the drift checks below — which need no database at all —
+    # never ran. The drift watchdog was undetectably down: no exception
+    # reached anyone, no report, nothing. A DB outage must never take the
+    # DB-free checks down with it.
+    check_soak_deadlines()
     check_dropin_drift()
     check_host_script_drift()
-    check_memory_scoping_is_not_vacuous()
+
+    try:
+        _run_db_dependent_checks()
+    except Exception as exc:
+        print(
+            f"\n=== DATABASE UNAVAILABLE: {exc} ===\n"
+            "guardrail-watch: the DB-dependent checks (guardrail events, run "
+            "outcomes, stale goals, memory scoping) were skipped. The DB-free "
+            "checks above (flag soak deadlines, drop-in drift, host-script "
+            "drift) already ran and are valid — this is a partial report, "
+            "not a silent skip. Exiting non-zero so systemd marks the run "
+            "failed and OnFailure pages."
+        )
+        return 1
+
     return 0
 
 

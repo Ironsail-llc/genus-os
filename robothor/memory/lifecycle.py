@@ -22,6 +22,7 @@ import math
 import os
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -820,6 +821,106 @@ async def run_insight_discovery(hours_back: int = 24) -> dict[str, Any]:
 _LIFECYCLE_LOCK_KEY = "robothor:lifecycle:maintenance_lock"
 _LIFECYCLE_LOCK_TTL = 1800  # 30 minutes — prevents concurrent maintenance runs
 
+# autoDream generation-model unload gate.
+#
+# The deep maintenance pass used to unconditionally evict the generation
+# model twice via Ollama's keep_alive=0 ("free GPU pressure" for the
+# embedding-heavy steps that follow). That rationale predates the current
+# unified-memory hardware (GB10, tens of GiB free at idle) and on 2026-08-18
+# the eviction raced concurrent chat traffic reloading ~30GiB, fast-failing
+# the embedding endpoint (503) 307 times in 23 minutes. The unload now only
+# fires when system memory is measurably under pressure.
+_MEMINFO_PATH = "/proc/meminfo"
+_DEFAULT_UNLOAD_BELOW_GB = 24.0
+
+
+def _available_memory_gb() -> float | None:
+    """Read available system memory (GiB) from /proc/meminfo.
+
+    Returns None when it can't be determined (missing file, unexpected
+    format, non-Linux host) — callers must treat that as "unknown" and
+    skip the unload rather than guess.
+    """
+    try:
+        with Path(_MEMINFO_PATH).open() as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb / (1024 * 1024)
+    except Exception as e:
+        logger.debug("Could not read %s: %s", _MEMINFO_PATH, e)
+    return None
+
+
+def _should_unload_generation_model() -> tuple[bool, float | None, float]:
+    """Decide whether autoDream should unload the generation model.
+
+    Returns (should_unload, available_gb, threshold_gb). Unloads only when
+    available memory is measurably below threshold_gb (env-tunable via
+    ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB, default 24GiB). When availability
+    can't be determined, defaults to NOT unloading.
+    """
+    raw_threshold = os.environ.get(
+        "ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", str(_DEFAULT_UNLOAD_BELOW_GB)
+    )
+    try:
+        threshold_gb = float(raw_threshold)
+    except ValueError:
+        logger.warning(
+            "Invalid ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB=%r, using default %.1f",
+            raw_threshold,
+            _DEFAULT_UNLOAD_BELOW_GB,
+        )
+        threshold_gb = _DEFAULT_UNLOAD_BELOW_GB
+    available_gb = _available_memory_gb()
+    if available_gb is None:
+        return False, None, threshold_gb
+    return available_gb < threshold_gb, available_gb, threshold_gb
+
+
+async def _perform_generation_model_unload(pause_after_s: float = 0.0) -> None:
+    """Unload the generation model via Ollama keep_alive=0, gated on memory pressure.
+
+    Never targets the embedding model — a config collision there would evict
+    the model a sibling fix pins resident, so that case is refused with a
+    loud log and a skip (never an exception: a crash here would abort the
+    whole nightly deep pass, and ``assert`` would vanish under ``python -O``).
+    """
+    should_unload, available_gb, threshold_gb = _should_unload_generation_model()
+    if not should_unload:
+        if available_gb is not None:
+            logger.info("autoDream: skipping model unload, %.1fGiB available", available_gb)
+        else:
+            logger.info("autoDream: skipping model unload, memory availability unknown")
+        return
+
+    target_model = llm_client.GENERATION_MODEL
+    embedding_model = llm_client._embedding_model()
+    if target_model == embedding_model:
+        logger.error(
+            "autoDream refused to unload %r: it matches the embedding model "
+            "(check ROBOTHOR_GENERATION_MODEL / embedding config)",
+            target_model,
+        )
+        return
+
+    logger.warning(
+        "autoDream: unloading generation model (available=%.1fGiB < %.1fGiB)",
+        available_gb,
+        threshold_gb,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{llm_client._ollama_url()}/api/generate",
+                json={"model": target_model, "keep_alive": 0},
+            )
+        logger.info("Unloaded generation model")
+        if pause_after_s:
+            await asyncio.sleep(pause_after_s)  # Brief pause for Ollama to release GPU
+    except Exception as e:
+        logger.warning("Failed to unload generation model: %s", e)
+
 
 def _release_lifecycle_lock() -> None:
     """Release the Redis distributed lock. Best-effort — TTL is the backstop."""
@@ -1061,16 +1162,9 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["importance_scoring"],
     )
 
-    # Unload generation model to free GPU for embedding model (used by later steps)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{llm_client._ollama_url()}/api/generate",
-                json={"model": llm_client.GENERATION_MODEL, "keep_alive": 0},
-            )
-        logger.info("Unloaded generation model to free GPU for embeddings")
-    except Exception as e:
-        logger.warning("Failed to unload generation model: %s", e)
+    # Unload generation model to free GPU for embedding model (used by later steps),
+    # but only under real memory pressure — see _should_unload_generation_model().
+    await _perform_generation_model_unload()
 
     # Step 2: Update decay scores — chunked, budgeted, off the event loop.
     # See _run_decay_pass_sync for why (was a 200-330s synchronous pass
@@ -1113,17 +1207,11 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     except Exception as e:
         logger.warning("Insight discovery LLM phase failed: %s", e)
 
-    # Unload generation model to free GPU for embedding-heavy storage
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{llm_client._ollama_url()}/api/generate",
-                json={"model": llm_client.GENERATION_MODEL, "keep_alive": 0},
-            )
-        logger.info("Unloaded generation model for embedding phase")
-        await asyncio.sleep(2)  # Brief pause for Ollama to release GPU
-    except Exception as e:
-        logger.warning("Failed to unload generation model: %s", e)
+    # Unload generation model to free GPU for embedding-heavy storage,
+    # but only under real memory pressure — see _should_unload_generation_model().
+    # The 2s pause (only taken when the unload actually runs) gives Ollama
+    # time to release the GPU before the embedding-heavy phase below.
+    await _perform_generation_model_unload(pause_after_s=2.0)
 
     # Phase B: Store consolidated facts (needs embeddings)
     for result, group in pending_consolidations:
@@ -1159,7 +1247,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     if swept > 0:
         logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
 
-    # Step 6: Store discovered insights (needs embeddings, model already unloaded)
+    # Step 6: Store discovered insights (needs embeddings; generation model was
+    # unloaded above only if memory pressure warranted it)
     insight_result: dict[str, Any] = {
         "discovered": len(discovered_insights),
         "stored": 0,
