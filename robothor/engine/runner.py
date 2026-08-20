@@ -1362,12 +1362,22 @@ class AgentRunner:
                 if self._should_plan(agent_config, route):
                     plan_result = await self._run_planner(agent_config, message, tool_names, models)
                     if plan_result and plan_result.success:
-                        from robothor.engine.planner import format_plan_context
+                        # Planner is non-fatal end to end: a malformed plan must
+                        # never abort the run over an optional context string.
+                        try:
+                            from robothor.engine.planner import format_plan_context
 
-                        plan_context = format_plan_context(plan_result)
-                        if plan_context:
-                            session.messages.append(
-                                {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
+                            plan_context = format_plan_context(plan_result)
+                            if plan_context:
+                                session.messages.append(
+                                    {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
+                                )
+                        except Exception as e:
+                            plan_context = ""
+                            logger.warning(
+                                "Plan context formatting failed (non-fatal, "
+                                "continuing without plan): %s",
+                                _sanitize(e),
                             )
 
                         # Dispatch PLAN_CREATED hook
@@ -3044,7 +3054,16 @@ class AgentRunner:
                         plan_result = new_plan
                         _replan_count += 1
                         scratchpad.set_plan(new_plan.plan)
-                        plan_context = format_plan_context(new_plan)
+                        # Non-fatal: replan formatting must not abort the run.
+                        try:
+                            plan_context = format_plan_context(new_plan)
+                        except Exception as e:
+                            plan_context = ""
+                            logger.warning(
+                                "Replan context formatting failed (non-fatal, "
+                                "continuing without revised plan context): %s",
+                                _sanitize(e),
+                            )
                         # Dispatch REPLAN hook
                         if hook_registry:
                             with contextlib.suppress(Exception):
@@ -3057,12 +3076,15 @@ class AgentRunner:
                                         metadata={"replan_count": _replan_count},
                                     ),
                                 )
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}",
-                            }
-                        )
+                        if plan_context:
+                            session.messages.append(
+                                {
+                                    "role": ENGINE_CONTEXT_ROLE,
+                                    "content": (
+                                        f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}"
+                                    ),
+                                }
+                            )
 
             # ── [CHECKPOINT] Save state ──
             if checkpoint and checkpoint.should_checkpoint():
