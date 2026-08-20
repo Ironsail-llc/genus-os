@@ -7,10 +7,12 @@ alert through `robothor.engine.alerts.alert()` when the signal crosses
 Telegram page). In-process dedup prevents alert storms on repeated signals.
 
 Detectors included:
-    - repeat_error_detector       — same (agent, error_type) ≥3 in last hour
-    - tool_degradation_detector   — tool failure volume or rate spike
-    - runaway_burn_detector       — runs with >500K tokens still running
-    - zombie_runner_detector      — running rows with no recent step activity
+    - repeat_error_detector             — same (agent, error_type) ≥3 in last hour
+    - tool_degradation_detector         — tool failure volume or rate spike
+    - runaway_burn_detector             — runs with >500K tokens still running
+    - zombie_runner_detector            — running rows with no recent step activity
+    - stuck_workflow_detector           — workflow_runs 'running' beyond timeout+grace
+    - workflow_failure_streak_detector  — same workflow failing ≥3 consecutive runs
 
 None of these are global timeouts. They alert so the operator (or an agent
 with self-diagnosis tools) can decide whether to intervene.
@@ -358,5 +360,128 @@ async def zombie_runner_detector() -> int:
         )
         if not await alert("warning", "Zombie runner (no recent steps)", body):
             logger.warning("Alert delivery failed for %s", fingerprint)
+        fired += 1
+    return fired
+
+
+# ── 5. Stuck workflow runs ──────────────────────────────────────────────
+
+
+def check_stuck_workflow_runs(
+    timeout_seconds: int = 900,
+    grace_seconds: int = 600,
+) -> list[dict[str, Any]]:
+    """workflow_runs still 'running' beyond the workflow timeout + grace.
+
+    Per-workflow timeouts live in YAML (not the DB), so the threshold uses
+    the platform's maximum workflow timeout (900s default) plus a grace
+    period. Anything 'running' past that is an orphan — usually an engine
+    restart mid-run whose CancelledError finalizer could not persist.
+    Alert-only: the daemon reaper owns the state transition.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, workflow_id, started_at,
+                   EXTRACT(EPOCH FROM (NOW() - started_at))::int AS age_s
+            FROM workflow_runs
+            WHERE status = 'running'
+              AND started_at < NOW() - make_interval(secs => %s)
+            ORDER BY started_at ASC
+            LIMIT 10
+            """,
+            (timeout_seconds + grace_seconds,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+async def stuck_workflow_detector() -> int:
+    """Alert on workflow_runs stuck 'running' beyond timeout + grace."""
+    if not detectors_enabled():
+        return 0
+    fired = 0
+    try:
+        stuck = check_stuck_workflow_runs()
+    except Exception as e:
+        logger.debug("stuck_workflow_detector query failed: %s", e)
+        return 0
+    from robothor.engine.alerts import alert
+
+    for s in stuck:
+        run_id = str(s["id"])
+        fingerprint = f"workflow-stuck:{run_id}"
+        if not _should_fire(fingerprint):
+            continue
+        body = (
+            f"workflow={s.get('workflow_id')} run_id={run_id} "
+            f"age={s.get('age_s')}s started_at={s.get('started_at')}"
+        )
+        await alert("warning", "Stuck workflow run", body)
+        fired += 1
+    return fired
+
+
+# ── 6. Workflow failure streaks ─────────────────────────────────────────
+
+
+def check_workflow_failure_streaks(
+    threshold: int = 3,
+) -> list[dict[str, Any]]:
+    """Workflows whose last ``threshold`` terminal runs all failed/timed out.
+
+    'cancelled' and 'skipped' rows are excluded from the window — a shutdown
+    mid-run says nothing about the workflow's health either way.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT workflow_id,
+                   COUNT(*) AS streak,
+                   (ARRAY_AGG(error_message ORDER BY rn))[1] AS last_error
+            FROM (
+                SELECT workflow_id, status, error_message,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY workflow_id ORDER BY started_at DESC
+                       ) AS rn
+                FROM workflow_runs
+                WHERE status IN ('completed', 'failed', 'timeout')
+            ) recent
+            WHERE rn <= %s
+            GROUP BY workflow_id
+            HAVING COUNT(*) >= %s
+               AND BOOL_AND(status IN ('failed', 'timeout'))
+            LIMIT 10
+            """,
+            (threshold, threshold),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+async def workflow_failure_streak_detector() -> int:
+    """Alert when the same workflow has failed several consecutive runs."""
+    if not detectors_enabled():
+        return 0
+    fired = 0
+    try:
+        streaks = check_workflow_failure_streaks()
+    except Exception as e:
+        logger.debug("workflow_failure_streak_detector query failed: %s", e)
+        return 0
+    from robothor.engine.alerts import alert
+
+    for s in streaks:
+        workflow_id = str(s.get("workflow_id") or "unknown")
+        fingerprint = f"workflow-failing:{workflow_id}"
+        if not _should_fire(fingerprint):
+            continue
+        last_error = str(s.get("last_error") or "")[:300]
+        body = f"last {s.get('streak')} runs all failed/timed out.\nlast error: {last_error}"
+        await alert("warning", f"Workflow failing repeatedly: {workflow_id}", body)
         fired += 1
     return fired

@@ -162,6 +162,19 @@ def _eval_node(node: Any, ctx: dict[str, Any]) -> Any:  # noqa: PLR0911
 # Template pattern: {{ expr }}
 _TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 
+# Backoff schedule (seconds) between retries of a failed step when the step
+# declares retry_count > 0. First retry waits 60s, every later retry 300s.
+# All retries run inside the workflow's asyncio.timeout, so the workflow
+# deadline still bounds the total budget.
+_RETRY_BACKOFF_SECONDS: tuple[int, ...] = (60, 300)
+
+
+def _retry_delay(attempt: int) -> int:
+    """Backoff before retry ``attempt`` (0-based): 60s, then 300s thereafter."""
+    if not _RETRY_BACKOFF_SECONDS:
+        return 0
+    return _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
+
 
 def _render_template(template: str, context: dict[str, Any]) -> str:
     """Render {{ expr }} templates against context dict.
@@ -274,11 +287,41 @@ class WorkflowEngine:
                     self._workflows[wf.id] = wf
                     loaded += 1
                     logger.info("Loaded workflow: %s (%d steps)", wf.id, len(wf.steps))
+                    self._warn_dangling_agent_refs(wf)
             except Exception as e:
                 logger.error("Failed to load workflow %s: %s", f, e)
 
         logger.info("Loaded %d workflows from %s", loaded, workflow_dir)
         return loaded
+
+    def _warn_dangling_agent_refs(self, wf: WorkflowDef) -> None:
+        """Warn when an agent step references an agent_id with no config.
+
+        A dangling reference (agent retired, manifest renamed) otherwise only
+        surfaces as a run failure the next time the workflow fires — the
+        monthly-goal-review workflow failed silently every month for four
+        months this way. Same channel as manifest checks ('Config validation
+        [...]') so it lands in the startup log and validation surfaces.
+        Warn-only: the workflow still loads.
+        """
+        from robothor.engine.config import load_agent_config
+
+        for step in wf.steps:
+            if step.type != WorkflowStepType.AGENT or not step.agent_id:
+                continue
+            try:
+                found = load_agent_config(step.agent_id, self.config.manifest_dir) is not None
+            except Exception as e:
+                logger.debug("Agent-ref check failed for %s: %s", _sanitize(step.agent_id), e)
+                continue
+            if not found:
+                logger.warning(
+                    "Config validation [workflow:%s]: step '%s' references agent "
+                    "'%s' with no registered agent config",
+                    _sanitize(wf.id),
+                    _sanitize(step.id),
+                    _sanitize(step.agent_id),
+                )
 
     def get_workflow(self, workflow_id: str) -> WorkflowDef | None:
         """Get a workflow definition by ID."""
@@ -423,6 +466,26 @@ class WorkflowEngine:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = f"Timed out after {wf.timeout_seconds}s"
                 logger.warning("Workflow %s timed out", _sanitize(workflow_id))
+            except asyncio.CancelledError:
+                # Engine shutdown/restart cancelled this task mid-run. Without
+                # this finalizer the DB row stays 'running' forever (the 2026-08
+                # diagnosis found 29 immortal orphans, oldest 171 days old).
+                # Persist a terminal status, then re-raise so cancellation
+                # propagates normally.
+                run.status = RunStatus.CANCELLED
+                run.error_message = "Cancelled: engine shutdown mid-run"
+                run.completed_at = datetime.now(UTC)
+                if run.started_at:
+                    run.duration_ms = int(
+                        (run.completed_at - run.started_at).total_seconds() * 1000
+                    )
+                self._persist_run_end(run)
+                logger.warning(
+                    "Workflow %s cancelled mid-run (engine shutdown), run=%s",
+                    _sanitize(workflow_id),
+                    run.id,
+                )
+                raise
             except Exception as e:
                 run.status = RunStatus.FAILED
                 run.error_message = str(e)
@@ -443,6 +506,26 @@ class WorkflowEngine:
                 failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
                 run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
 
+            # A FAILED run that consumed the whole workflow budget was really
+            # killed by the deadline: asyncio.timeout cancels the step, but the
+            # runner swallows the CancelledError and reports a step *failure*
+            # ('Run cancelled externally'), so the TimeoutError branch above is
+            # unreachable for agent steps. Reclassify honestly.
+            if run.status == RunStatus.FAILED and run.duration_ms >= wf.timeout_seconds * 1000:
+                last = run.step_results[-1] if run.step_results else None
+                last_step = last.step_id if last else "unknown"
+                last_error = (last.error_message if last else None) or run.error_message or ""
+                run.status = RunStatus.TIMEOUT
+                run.error_message = (
+                    f"Timed out after {wf.timeout_seconds}s "
+                    f"(step '{last_step}' cancelled: {last_error})"
+                )
+                logger.warning(
+                    "Workflow %s reclassified failed→timeout (budget %ds exhausted)",
+                    _sanitize(workflow_id),
+                    wf.timeout_seconds,
+                )
+
             self._persist_run_end(run)
 
             logger.info(
@@ -453,9 +536,84 @@ class WorkflowEngine:
                 len(run.step_results),
             )
 
+            # Cron pipelines run unattended — a terminal failure must page the
+            # operator and leave a durable notification, not just a log line.
+            if run.trigger_type == "cron" and run.status in (
+                RunStatus.FAILED,
+                RunStatus.TIMEOUT,
+            ):
+                self._notify_run_failure(run)
+
             return run
         finally:
             await release(dedup_key)
+
+    def _notify_run_failure(self, run: WorkflowRun) -> None:
+        """Page the operator about a failed/timed-out cron workflow run.
+
+        Two independent, best-effort channels (2026-08-20: a total
+        email-pipeline failure produced zero pages and zero notifications):
+
+        1. ``robothor.engine.alerts.alert('critical', ...)`` spawned via the
+           task registry — the immediate Telegram page.
+        2. A ``crm_agent_notifications`` row so the failure lands in briefings
+           deterministically even if Telegram is down.
+        """
+        error = run.error_message or f"status={run.status.value}"
+
+        try:
+            from robothor.engine.alerts import alert
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                alert("critical", f"Workflow failed: {run.workflow_id}", error),
+                name=f"workflow-failure-alert:{run.workflow_id}",
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to spawn workflow failure alert for %s: %s",
+                _sanitize(run.workflow_id),
+                e,
+            )
+
+        try:
+            from robothor.crm import dal
+
+            # 'workflow_failure' is not in the crm_agent_notifications CHECK
+            # constraint (migration 031) — an INSERT with it would be silently
+            # rejected, which is the exact failure mode this control exists to
+            # prevent. Use the allowed 'agent_error' type and carry the precise
+            # kind in metadata.
+            notif_id = dal.send_notification(
+                from_agent="engine",
+                to_agent="main",
+                notification_type="agent_error",
+                subject=f"Workflow failed: {run.workflow_id}",
+                body=(
+                    f"Workflow '{run.workflow_id}' finished {run.status.value} "
+                    f"(trigger={run.trigger_type}, run={run.id}, "
+                    f"duration={run.duration_ms}ms).\n\n{error}"
+                ),
+                metadata={
+                    "kind": "workflow_failure",
+                    "workflow_id": run.workflow_id,
+                    "run_id": run.id,
+                    "status": run.status.value,
+                },
+                tenant_id=run.tenant_id,
+            )
+            if not notif_id:
+                logger.error(
+                    "Workflow failure notification for %s was dropped — the "
+                    "briefing fallback is not delivering",
+                    _sanitize(run.workflow_id),
+                )
+        except Exception as e:
+            logger.error(
+                "Failed to write workflow failure notification for %s: %s",
+                _sanitize(run.workflow_id),
+                e,
+            )
 
     async def _execute_steps(self, run: WorkflowRun, wf: WorkflowDef) -> None:
         """Execute workflow steps sequentially with flow control."""
@@ -467,6 +625,25 @@ class WorkflowEngine:
             step = wf.steps[current_idx]
 
             result = await self._execute_step(step, run, wf)
+
+            # Retry failed steps per step.retry_count (backoff 60s, then
+            # 300s). The surrounding asyncio.timeout still bounds the total
+            # budget, so retries can never outlive the workflow deadline.
+            attempt = 0
+            while result.status == WorkflowStepStatus.FAILED and attempt < step.retry_count:
+                delay = _retry_delay(attempt)
+                logger.warning(
+                    "Step %s failed (attempt %d/%d) — retrying in %ds: %s",
+                    step.id,
+                    attempt + 1,
+                    step.retry_count + 1,
+                    delay,
+                    result.error_message,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                result = await self._execute_step(step, run, wf)
+
             run.step_results.append(result)
 
             # Store result in context for template rendering
