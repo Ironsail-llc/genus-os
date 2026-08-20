@@ -1,3 +1,9 @@
+## [1.31.1](https://github.com/Ironsail-llc/genus-os/compare/v1.31.0...v1.31.1) (2026-08-20)
+
+### Bug Fixes
+
+* **engine:** move skill runtime state to state.json sidecars ([#261](https://github.com/Ironsail-llc/genus-os/issues/261)) ([240b345](https://github.com/Ironsail-llc/genus-os/commit/240b3459ca69189c7eaf534a334660500faf59eb))
+
 ## [1.31.0](https://github.com/Ironsail-llc/genus-os/compare/v1.30.13...v1.31.0) (2026-08-20)
 
 ### Features
