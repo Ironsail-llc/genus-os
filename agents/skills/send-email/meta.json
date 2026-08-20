@@ -11,7 +11,5 @@
       "content_hash": "",
       "reason": "The skill recommended `gog gmail send --reply-all` for thread replies, which has a confirmed bug: silently resolves zero recipients and sends with an empty To field. This has caused real incidents. Updated to use the correct native GWS tools (gws_gmail_reply for replies, gws_gmail_send for new threads) with mandatory verification step."
     }
-  ],
-  "usage_count": 1,
-  "last_used": "2026-07-09T01:00:41.794426+00:00"
+  ]
 }

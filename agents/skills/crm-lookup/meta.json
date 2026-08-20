@@ -32,7 +32,5 @@
       "content_hash": "5af8cadde0fd4d4f",
       "reason": "Added pitfall: \"Apollo 403 \u2260 bad credentials\" \u2014 session showed Apollo tool routing to deprecated endpoint while the key was valid. Captured the diagnosis sequence (curl the raw API, check tool source routing) as a durable pattern for debugging API 403s across external integrations."
     }
-  ],
-  "usage_count": 7,
-  "last_used": "2026-06-20T10:17:06.636431+00:00"
+  ]
 }
