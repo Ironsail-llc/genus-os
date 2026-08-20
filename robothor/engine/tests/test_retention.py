@@ -55,6 +55,128 @@ class TestRetentionPolicy:
         assert "synced_at IS NOT NULL" in fed_policy.get("extra_where", "")
 
 
+class TestDelphiPolicies:
+    """Delphi shadow-pipeline tables must have retention (they grew unbounded)."""
+
+    def test_market_snapshots_policy(self):
+        policy = RETENTION_POLICY["delphi_market_snapshots"]
+        assert policy["days"] == 30
+        assert policy["timestamp_col"] == "ts"
+
+    def test_intents_policy(self):
+        policy = RETENTION_POLICY["delphi_intents"]
+        assert policy["days"] == 90
+        assert policy["timestamp_col"] == "created_at"
+
+    def test_estimates_policy(self):
+        policy = RETENTION_POLICY["delphi_estimates"]
+        assert policy["days"] == 90
+        assert policy["timestamp_col"] == "ts"
+
+    def test_delphi_policies_are_deletes(self):
+        for table in ("delphi_market_snapshots", "delphi_intents", "delphi_estimates"):
+            assert RETENTION_POLICY[table].get("action", "delete") == "delete"
+
+
+class TestMemoryFactsEmbeddingPolicy:
+    """Inactive facts older than 90 days lose their embedding (UPDATE, not DELETE)."""
+
+    def test_policy_shape(self):
+        policy = RETENTION_POLICY["memory_facts"]
+        assert policy["days"] == 90
+        assert policy["timestamp_col"] == "updated_at"
+        assert policy["action"] == "update"
+        assert policy["set_clause"] == "embedding = NULL"
+
+    def test_policy_only_touches_inactive_rows_with_embeddings(self):
+        extra = RETENTION_POLICY["memory_facts"]["extra_where"]
+        assert "is_active = FALSE" in extra
+        assert "embedding IS NOT NULL" in extra
+
+
+class TestUpdateAction:
+    @patch("robothor.db.connection.get_connection")
+    def test_update_action_emits_update_sql(self, mock_get_conn):
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 7
+        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.__enter__ = lambda s: s
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_conn
+
+        changed = _cleanup_table(
+            "memory_facts",
+            days=90,
+            timestamp_col="updated_at",
+            action="update",
+            set_clause="embedding = NULL",
+            extra_where="is_active = FALSE AND embedding IS NOT NULL",
+        )
+
+        assert changed == 7
+        sql = mock_cursor.execute.call_args[0][0]
+        assert sql.lstrip().startswith("UPDATE memory_facts SET embedding = NULL")
+        assert "DELETE" not in sql
+        assert "is_active = FALSE AND embedding IS NOT NULL" in sql
+
+    def test_update_action_requires_set_clause(self):
+        with pytest.raises(ValueError, match="set_clause"):
+            _cleanup_table(
+                "memory_facts",
+                days=90,
+                timestamp_col="updated_at",
+                action="update",
+            )
+
+    def test_rejects_unknown_action(self):
+        with pytest.raises(ValueError, match="action"):
+            _cleanup_table(
+                "audit_log",
+                days=90,
+                timestamp_col="timestamp",
+                action="truncate",
+            )
+
+    def test_delete_action_rejects_set_clause(self):
+        with pytest.raises(ValueError, match="set_clause"):
+            _cleanup_table(
+                "audit_log",
+                days=90,
+                timestamp_col="timestamp",
+                set_clause="embedding = NULL",
+            )
+
+
+class TestPolicyColumnsMatchSchema:
+    """Every policy's timestamp column must exist on the live table (information_schema)."""
+
+    def test_timestamp_columns_exist(self):
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                for table, policy in RETENTION_POLICY.items():
+                    cur.execute(
+                        """
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = %s
+                        """,
+                        (table,),
+                    )
+                    cols = {r[0] for r in cur.fetchall()}
+                    if not cols:
+                        continue  # table not present in this schema (e.g. instance-land)
+                    assert policy["timestamp_col"] in cols, (
+                        f"{table}: timestamp_col {policy['timestamp_col']!r} not in schema"
+                    )
+        except Exception as e:  # pragma: no cover - environment-dependent
+            if isinstance(e, AssertionError):
+                raise
+            pytest.skip(f"database unavailable: {e}")
+
+
 # ─── Cleanup Table Tests ────────────────────────────────────────────
 
 

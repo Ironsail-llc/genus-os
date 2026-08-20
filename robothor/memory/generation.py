@@ -113,6 +113,14 @@ MISSING_KEY_MARKER = "MEMORY_GENERATION_REMOTE_MISCONFIGURED"
 # Module counter: number of remote-generation calls that fell back to local.
 remote_fallback_count: int = 0
 
+# Consecutive remote→local fallbacks (reset on any remote success). A
+# sustained streak means the GPU offload the remote path exists for is
+# defeated — escalate to ERROR with a grep-able marker so the operator
+# looks at the remote provider instead of the symptom (GPU load).
+FALLBACK_STREAK_THRESHOLD = 5
+FALLBACK_STREAK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK_STREAK"
+_consecutive_fallbacks: int = 0
+
 # Log the missing-key ERROR once per process, not once per memory write.
 _missing_key_logged: bool = False
 
@@ -239,8 +247,9 @@ def _remote_backoff_seconds(attempt: int, error: Exception | None = None) -> flo
 
 
 def _record_fallback(error: Exception) -> None:
-    global remote_fallback_count
+    global remote_fallback_count, _consecutive_fallbacks
     remote_fallback_count += 1
+    _consecutive_fallbacks += 1
     logger.warning(
         "%s #%d: remote memory generation via %s failed (%s: %s) — falling back to local ollama",
         FALLBACK_MARKER,
@@ -249,6 +258,18 @@ def _record_fallback(error: Exception) -> None:
         type(error).__name__,
         error,
     )
+    if _consecutive_fallbacks % FALLBACK_STREAK_THRESHOLD == 0:
+        logger.error(
+            "%s: %d consecutive remote fallbacks — remote memory generation is"
+            " effectively down and the load is back on the local GPU",
+            FALLBACK_STREAK_MARKER,
+            _consecutive_fallbacks,
+        )
+
+
+def _record_remote_success() -> None:
+    global _consecutive_fallbacks
+    _consecutive_fallbacks = 0
 
 
 async def _openrouter_chat(
@@ -385,7 +406,7 @@ async def chat(
     """
     if _remote_enabled():
         try:
-            return await _openrouter_chat_with_retry(
+            result = await _openrouter_chat_with_retry(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -394,6 +415,9 @@ async def chat(
             )
         except Exception as e:
             _record_fallback(e)
+        else:
+            _record_remote_success()
+            return result
     return await ollama.chat(
         messages,
         temperature=temperature,
@@ -420,7 +444,7 @@ async def generate(
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            return await _openrouter_chat_with_retry(
+            result = await _openrouter_chat_with_retry(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -429,6 +453,9 @@ async def generate(
             )
         except Exception as e:
             _record_fallback(e)
+        else:
+            _record_remote_success()
+            return result
     return await ollama.generate(
         prompt=prompt,
         system=system,

@@ -619,3 +619,34 @@ def test_min_interval_env_override_and_defaults(monkeypatch):
     for garbage in ("soon", "nan", "inf", "-1"):
         monkeypatch.setenv(generation.MIN_INTERVAL_ENV, garbage)
         assert generation._min_interval_s() == generation.DEFAULT_MIN_INTERVAL_S
+
+
+# ─── consecutive-fallback streak escalation ──────────────────────────────
+
+
+class TestFallbackStreakEscalation:
+    """Sustained remote→local fallback defeats the GPU offload — after
+    FALLBACK_STREAK_THRESHOLD consecutive fallbacks an ERROR with a grep-able
+    marker fires; any remote success resets the streak."""
+
+    def test_streak_escalates_at_threshold(self, caplog, monkeypatch):
+        monkeypatch.setattr(generation, "_consecutive_fallbacks", 0)
+        with caplog.at_level(logging.WARNING, logger=generation.logger.name):
+            for _ in range(generation.FALLBACK_STREAK_THRESHOLD):
+                generation._record_fallback(RuntimeError("boom"))
+        streak_errors = [
+            r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
+        ]
+        assert len(streak_errors) == 1
+        assert streak_errors[0].levelno == logging.ERROR
+
+    def test_success_resets_streak(self, caplog, monkeypatch):
+        monkeypatch.setattr(generation, "_consecutive_fallbacks", 0)
+        with caplog.at_level(logging.WARNING, logger=generation.logger.name):
+            for _ in range(generation.FALLBACK_STREAK_THRESHOLD - 1):
+                generation._record_fallback(RuntimeError("boom"))
+            generation._record_remote_success()
+            generation._record_fallback(RuntimeError("boom"))
+        assert not [
+            r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
+        ]
