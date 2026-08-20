@@ -102,7 +102,15 @@ class TestAgainstLiveData:
     def test_rejection_rate_on_live_facts_is_sane(self):
         # If this gate would reject a large fraction of real memory, the rules
         # are wrong, not the data. Enforcing it would then be an outage.
+        #
+        # This is a production-data audit: under the pytest DB-isolation
+        # default the connected database is robothor_test, whose memory_facts
+        # are synthetic fixtures the gate rightly rejects — skip there.
+        from robothor.config import get_config
         from robothor.db.connection import get_connection
+
+        if get_config().db.name.endswith("_test"):
+            pytest.skip("live-data audit — meaningless against a *_test database")
 
         with get_connection() as conn:
             cur = conn.cursor()
