@@ -110,6 +110,7 @@ If the leak checker flags your code, move the personal data to `brain/CLAUDE.md`
 - **Tests live alongside code.** `robothor/<module>/tests/test_<feature>.py`
 - **Use `test_prefix` fixture** for database isolation in integration tests.
 - **Mock LLMs in unit tests.** Only use real LLM calls in `@pytest.mark.llm` tests.
+- **Tests only ever talk to a `*_test` database.** The root `conftest.py` pins `ROBOTHOR_DB_NAME=robothor_test`, and `robothor.db.connection` refuses to open any non-`*_test` database from inside pytest (`ROBOTHOR_TEST_DB_ALLOW` is the explicit escape hatch, used by the release gate). Never hardcode a production database name in a test — use `ROBOTHOR_TEST_DB_DSN` for integration DSNs.
 
 ### Running Tests
 

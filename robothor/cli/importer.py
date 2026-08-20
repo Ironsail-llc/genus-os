@@ -258,7 +258,7 @@ def cmd_import(args: argparse.Namespace) -> int:
     source_str = getattr(args, "source", None)
     from robothor.constants import DEFAULT_TENANT
 
-    tenant_id = getattr(args, "tenant", DEFAULT_TENANT)
+    tenant_id = getattr(args, "tenant", None) or DEFAULT_TENANT
 
     # Default source paths per platform
     if source_str:

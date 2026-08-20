@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import uuid
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,32 @@ from robothor.db.connection import get_connection as get_connection
 from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
+
+
+# ── Benchmark sandbox ────────────────────────────────────────────────
+# The DAL cannot see the engine's ToolContext (layering: crm must stay
+# importable without the engine), so the engine's tool dispatch sets this
+# ContextVar for the duration of a benchmark tool call. DAL paths that
+# create operator-facing state (session goals today) check it and refuse,
+# so benchmark fixture text can never materialize as a real escalation.
+# ContextVar keeps the flag per-asyncio-task and it survives
+# ``asyncio.to_thread`` (which copies the calling context).
+_benchmark_sandbox: ContextVar[bool] = ContextVar("crm_benchmark_sandbox", default=False)
+
+
+def set_benchmark_sandbox(active: bool = True) -> Token[bool]:
+    """Mark the current context as a benchmark sandbox; returns a reset token."""
+    return _benchmark_sandbox.set(active)
+
+
+def reset_benchmark_sandbox(token: Token[bool]) -> None:
+    """Restore the prior sandbox state. Pair every set with one reset."""
+    _benchmark_sandbox.reset(token)
+
+
+def benchmark_sandbox_active() -> bool:
+    """True while the current context belongs to a benchmark tool call."""
+    return _benchmark_sandbox.get()
 
 
 def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwargs: Any) -> None:
@@ -1643,7 +1670,15 @@ def create_session_goal(
     typed evidence in ``session_goal_meta`` JSONB. Tasks are tagged
     ``[session_goal, agent:<agent_id>, thread]`` so the thread pool +
     forward planner pick them up automatically.
+
+    Refuses (ValueError) when the benchmark sandbox is active: goal tasks
+    are operator-facing escalations (``requires_human``, picked up by the
+    thread pool and briefings), so a benchmark run must never create one.
+    ValueError is the session-goal machinery's established refusal channel
+    — the goal tool handler converts it to a structured tool error.
     """
+    if benchmark_sandbox_active():
+        raise ValueError("benchmark sandbox: create_session_goal writes are disabled")
     tags = [SESSION_GOAL_TAG, "thread"]
     if agent_id:
         tags.append(_agent_scope_tag(agent_id))

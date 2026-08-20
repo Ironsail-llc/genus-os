@@ -13,6 +13,7 @@ Tests cover:
 - Error resilience (audit never breaks callers)
 """
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -35,14 +36,26 @@ try:
 except ImportError:
     pytest.skip("bridge dependencies not deployed (audit module missing)", allow_module_level=True)
 
+# These tests exercise a real PostgreSQL database — run them in the
+# integration lane only, and always against the TEST database. The DSN used
+# to hardcode the production database by name; 186 soft-deleted
+# '__audit_test_%' crm_people rows in prod were the result.
+pytestmark = pytest.mark.integration
+
 # Prefix for test data isolation
 TEST_PREFIX = f"__audit_test_{uuid.uuid4().hex[:6]}__"
+
+# Same convention as tests/conftest_integration.py — never a production name.
+PG_DSN = os.environ.get(
+    "ROBOTHOR_TEST_DB_DSN",
+    "dbname=robothor_test user=robothor host=/var/run/postgresql",
+)
 
 
 @pytest.fixture(autouse=True)
 def use_real_dsn():
-    """Ensure audit module uses real database for integration tests."""
-    audit.set_dsn("dbname=robothor_memory user=robothor host=/var/run/postgresql")
+    """Ensure audit module uses the real TEST database for integration tests."""
+    audit.set_dsn(PG_DSN)
     yield
 
 

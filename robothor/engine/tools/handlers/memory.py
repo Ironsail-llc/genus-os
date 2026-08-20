@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -12,10 +12,42 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
+# Memory-mutating tools — refused when ctx.is_benchmark. Mirrors the
+# gws and crm mutating-tool guards: benchmark fixture text stored as memory_facts or
+# agent blocks is read back by later real runs as established fact
+# (the "recurring pattern" self-reinforcement). record_resolution is
+# included because it retires real open items/alerts. Reads
+# (search_memory, memory_block_read, get_entity, …) stay allowed.
+_MEMORY_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "store_memory",
+        "append_to_block",
+        "memory_block_write",
+        "record_resolution",
+    }
+)
+
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        HANDLERS[name] = fn
+        if name in _MEMORY_MUTATING_TOOLS:
+
+            async def gated(
+                args: dict[str, Any],
+                ctx: ToolContext,
+                _fn: Callable[..., Any] = fn,
+                _name: str = name,
+            ) -> dict[str, Any]:
+                if ctx.is_benchmark:
+                    return {
+                        "error": f"benchmark sandbox: {_name} writes are disabled",
+                        "guard": "is_benchmark",
+                    }
+                return cast("dict[str, Any]", await _fn(args, ctx))
+
+            HANDLERS[name] = gated
+        else:
+            HANDLERS[name] = fn
         return fn
 
     return decorator

@@ -2,6 +2,14 @@
 # An unverified backup is a hope, not a backup.
 [Unit]
 Description=Robothor — verify the offsite backup copy
+# Verify compares the local dumps (on the encrypted backup volume) against the
+# offsite remote, so it needs both the mount and the network. Persistent=true
+# fires the timer at boot, where this unit raced both and failed every weekly
+# catch-up run for ~3 weeks (Aug 2–19) — silently, because the failure page
+# died on boot-window DNS.
+RequiresMountsFor=/mnt/robothor-backup
+After=network-online.target
+Wants=network-online.target
 OnFailure=robothor-alert@%n.service
 
 [Service]

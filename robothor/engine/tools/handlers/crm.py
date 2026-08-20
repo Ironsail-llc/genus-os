@@ -12,10 +12,44 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
+# Task-mutating / operator-facing CRM tools — refused when ctx.is_benchmark.
+# Mirrors _GWS_MUTATING_TOOLS (handlers/gws.py): a benchmark run otherwise
+# materializes fixture text as real crm_tasks and notifications, which the
+# briefing then reports as genuine events. Reads (get_task, list_tasks,
+# search_records, …) stay allowed so benchmark prompts can inspect state.
+_CRM_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "resolve_task",
+        "delete_task",
+        "approve_task",
+        "reject_task",
+        "send_notification",
+    }
+)
+
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        HANDLERS[name] = fn
+        if name in _CRM_MUTATING_TOOLS:
+
+            async def gated(
+                args: dict[str, Any],
+                ctx: ToolContext,
+                _fn: Callable[..., Any] = fn,
+                _name: str = name,
+            ) -> dict[str, Any]:
+                if ctx.is_benchmark:
+                    return {
+                        "error": f"benchmark sandbox: {_name} writes are disabled",
+                        "guard": "is_benchmark",
+                    }
+                return cast("dict[str, Any]", await _fn(args, ctx))
+
+            HANDLERS[name] = gated
+        else:
+            HANDLERS[name] = fn
         return fn
 
     return decorator
@@ -1041,57 +1075,6 @@ async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     if company_merge:
         return {"success": True, "keeper": company_merge}
     return {"error": "Merge failed — one or both IDs not found"}
-
-
-# ── Agent Reviews ──
-
-
-@_handler("review_agent")
-async def _review_agent(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Submit a review for an agent."""
-    from robothor.crm.dal import create_review
-
-    agent_id = args.get("agent_id", "").strip()
-    if not agent_id:
-        return {"error": "agent_id is required"}
-    rating = args.get("rating")
-    if not isinstance(rating, int) or not 1 <= rating <= 5:
-        return {"error": "rating must be an integer 1-5"}
-
-    review_id = await asyncio.to_thread(
-        create_review,
-        agent_id=agent_id,
-        reviewer=args.get("reviewer", ctx.agent_id),
-        reviewer_type=args.get("reviewer_type", "agent"),
-        rating=rating,
-        categories=args.get("categories"),
-        feedback=args.get("feedback"),
-        action_items=args.get("action_items"),
-        run_id=args.get("run_id"),
-        tenant_id=ctx.tenant_id,
-    )
-    return (
-        {"success": True, "review_id": review_id}
-        if review_id
-        else {"error": "Failed to create review"}
-    )
-
-
-@_handler("get_agent_reviews")
-async def _get_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Get reviews and summary for an agent."""
-    from robothor.crm.dal import get_review_summary, get_reviews
-
-    agent_id = args.get("agent_id", "").strip()
-    if not agent_id:
-        return {"error": "agent_id is required"}
-
-    days = args.get("days", 30)
-    reviews = await asyncio.to_thread(get_reviews, agent_id, days=days, tenant_id=ctx.tenant_id)
-    summary = await asyncio.to_thread(
-        get_review_summary, agent_id, days=days, tenant_id=ctx.tenant_id
-    )
-    return {"reviews": reviews, "summary": summary}
 
 
 # ── Contact 360 — agent-facing holistic lookup ───────────────────────────

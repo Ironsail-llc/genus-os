@@ -142,15 +142,48 @@ def classify_reap_reason(
     )
 
 
+def _cleanup_stale_workflow_runs() -> int:
+    """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
+
+    Engine shutdown mid-run used to leave workflow_runs rows 'running'
+    forever: retention excludes 'running' rows, so orphans were immortal
+    (29 found in the 2026-08 diagnosis, oldest 171 days). The max workflow
+    timeout is 900s, so anything 'running' for 2 hours is dead. Returns the
+    number of rows reaped.
+    """
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE workflow_runs SET status='timeout', "
+                "completed_at=NOW(), "
+                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
+                "error_message='Reaped: engine restarted mid-run' "
+                "WHERE status='running' AND started_at < NOW() - INTERVAL '2 hours'"
+            )
+            reaped = cur.rowcount or 0
+            conn.commit()
+            if reaped:
+                logger.warning("Cleaned up %d stale workflow runs", reaped)
+            return reaped
+    except Exception as e:
+        logger.warning("Stale workflow run cleanup failed: %s", e)
+        return 0
+
+
 def _cleanup_stale_runs() -> int:
     """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
 
     Called on startup and periodically by the watchdog. Instead of applying a
     single hardcoded error_message to every reaped row, this now inspects the
     run's step history to produce a truthful diagnosis (see classify_reap_reason).
+    Also reaps workflow_runs stuck 'running' >2h (engine restarts mid-run).
 
-    Returns the number of runs cleaned up.
+    Returns the number of runs cleaned up (agent + workflow).
     """
+    wf_reaped = _cleanup_stale_workflow_runs()
     try:
         from robothor.db.connection import get_connection
 
@@ -165,7 +198,7 @@ def _cleanup_stale_runs() -> int:
             )
             stale = cur.fetchall()
             if not stale:
-                return 0
+                return wf_reaped
 
             for run_id, agent_id, started_at in stale:
                 started_iso = started_at.isoformat() if started_at is not None else ""
@@ -194,10 +227,10 @@ def _cleanup_stale_runs() -> int:
             for row in stale:
                 release_sync(row[1])
 
-            return len(stale)
+            return len(stale) + wf_reaped
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
-        return 0
+        return wf_reaped
 
 
 async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
@@ -279,7 +312,7 @@ async def _maybe_run_alert_selftest() -> None:
         logger.debug("Alert delivery self-test failed: %s", e)
 
 
-def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
+def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:
     """Log the outcome of each finished top-level subsystem task.
 
     Mirrors task_registry.py's ``_on_done``: a task that ended cancelled
@@ -290,19 +323,29 @@ def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
     watchdog cancelling the wrong task (Aug 5/9 crashes); the sleep-inside-
     try fixes on the curiosity/curator loops are the primary fix, this is
     the backstop for any other task that ends up cancelled.
+
+    Returns:
+        True when any finished task ended with an exception — i.e. this
+        shutdown was triggered by a subsystem crash, not a clean stop.
+        ``run()`` threads this into the process exit code so systemd's
+        OnFailure pager fires (a crash that exits 0 crash-loops silently
+        behind Restart=always forever).
     """
+    failed = False
     for task in done:
         if task.cancelled():
             logger.error("Task %s was cancelled externally", task.get_name())
             continue
         if task.exception():
             logger.error("Task %s failed: %s", task.get_name(), task.exception())
+            failed = True
         else:
             logger.info("Task %s completed", task.get_name())
+    return failed
 
 
-async def main() -> None:
-    """Start all engine subsystems."""
+async def main() -> int:
+    """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
     # loading agents, or starting any background subsystem. The Engine verifies
     # Bridge-issued tokens but is not an SSO exchange authority, so it must not
@@ -588,8 +631,9 @@ async def main() -> None:
     # which completes the telegram task — that's our shutdown trigger)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-    # Log what finished
-    _log_task_results(done)
+    # Log what finished — and remember whether this shutdown is a subsystem
+    # crash (non-zero exit → OnFailure pages) or a clean stop (exit 0).
+    subsystem_crashed = _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
 
@@ -646,6 +690,7 @@ async def main() -> None:
 
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
+    return 1 if subsystem_crashed else 0
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:
@@ -845,6 +890,23 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     logger.info("Detectors: %d zombie-runner alerts fired", fired)
             except Exception as e:
                 logger.debug("Detectors: zombie_runner check failed: %s", e)
+
+        # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
+        if tick_count % 20 == 0:
+            try:
+                from robothor.engine.detectors import (
+                    stuck_workflow_detector,
+                    workflow_failure_streak_detector,
+                )
+
+                fired = await stuck_workflow_detector()
+                if fired:
+                    logger.info("Detectors: %d stuck-workflow alerts fired", fired)
+                fired = await workflow_failure_streak_detector()
+                if fired:
+                    logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: workflow health checks failed: %s", e)
 
         # Daily maintenance: chat-session TTL cleanup + data retention.
         # Wall-clock gated (>=24h since the persisted last run, checked every
@@ -1242,12 +1304,17 @@ async def _autodream_loop() -> None:
 def run() -> None:
     """Entry point for python -m robothor.engine.daemon"""
     try:
-        asyncio.run(main())
+        exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        return
     except Exception as e:
         logger.error("Engine crashed: %s", e, exc_info=True)
         sys.exit(1)
+    if exit_code != 0:
+        # A subsystem task died and triggered this shutdown. Exit non-zero so
+        # systemd's OnFailure pager fires — exit 0 here means Restart=always
+        # silently crash-loops the engine with no page, forever.
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

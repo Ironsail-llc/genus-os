@@ -171,6 +171,7 @@ export function ContactTable({ data, contacts, title, search, limit, onSelect }:
     return [];
   }, [data, contacts, fetched]);
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- useReactTable returns non-memoizable functions; React Compiler skips this component by design
   const table = useReactTable({
     data: normalizedData,
     columns,
