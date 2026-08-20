@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -666,6 +667,54 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
         logger.debug("Watchdog event recording failed", exc_info=True)
 
 
+# Daily maintenance (chat-session TTL + data retention) fires on wall-clock,
+# not uptime: the old `tick_count % 2880` gate required 24h of *continuous*
+# uptime, which a daemon restarting more than once a day never reached, so
+# retention silently starved.
+_DAILY_MAINTENANCE_INTERVAL_SECONDS = 24 * 3600
+
+# Matches the entry format written by _record_watchdog_event, e.g.
+# a line of the form ``[<YYYY-MM-DD HH:MM> UTC] <event_type>: <detail>``.
+_WATCHDOG_EVENT_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\] ([a-z_]+):")
+
+
+def _read_last_watchdog_event_ts(*event_types: str) -> float | None:
+    """Newest UNIX timestamp among watchdog_log entries of the given types.
+
+    Reads the same memory block _record_watchdog_event() appends to, so the
+    last-run marker survives daemon restarts. Returns None when the block is
+    missing, unreadable, or holds no matching entry.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        from robothor.memory.blocks import read_block
+
+        existing = read_block("watchdog_log")
+        content = existing.get("content", "") if "error" not in existing else ""
+    except Exception:
+        logger.debug("Reading watchdog_log block failed", exc_info=True)
+        return None
+
+    latest: float | None = None
+    for line in (content or "").splitlines():
+        match = _WATCHDOG_EVENT_RE.match(line.strip())
+        if not match or match.group(2) not in event_types:
+            continue
+        try:
+            ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=UTC).timestamp()
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    return latest
+
+
+def _daily_maintenance_due(now: float, last_run: float | None) -> bool:
+    """True when daily maintenance should fire: never run, or >=24h ago."""
+    return last_run is None or (now - last_run) >= _DAILY_MAINTENANCE_INTERVAL_SECONDS
+
+
 async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
     global _autodream_stale_alerted  # noqa: PLW0603
@@ -673,6 +722,17 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
+
+    # Wall-clock gate for daily maintenance — persisted via the watchdog_log
+    # block so restarts don't reset the clock. Legacy retention_* event names
+    # are recognized so the first post-upgrade boot doesn't re-fire early.
+    loop = asyncio.get_running_loop()
+    daily_maintenance_last: float | None = await loop.run_in_executor(
+        None,
+        lambda: _read_last_watchdog_event_ts(
+            "daily_maintenance", "retention_cleanup", "retention_timeout"
+        ),
+    )
 
     while True:
         await asyncio.sleep(30)
@@ -786,8 +846,17 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.debug("Detectors: zombie_runner check failed: %s", e)
 
-        # Daily chat session TTL cleanup (every 2880 ticks = 24h)
-        if tick_count % 2880 == 0:
+        # Daily maintenance: chat-session TTL cleanup + data retention.
+        # Wall-clock gated (>=24h since the persisted last run, checked every
+        # 10 ticks = 5 min) so daemon restarts can never starve it — the old
+        # `% 2880` gate needed 24h of continuous uptime.
+        if tick_count % 10 == 0 and _daily_maintenance_due(time.time(), daily_maintenance_last):
+            daily_maintenance_last = time.time()
+            # Recorded up front (and unconditionally) so a failed or empty
+            # sweep still advances the persisted clock instead of re-firing
+            # every 5 minutes.
+            _record_watchdog_event("daily_maintenance", "chat TTL + retention sweep started")
+
             try:
                 from robothor.engine.chat_store import cleanup_stale_sessions
 
@@ -798,8 +867,6 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
-        # Data retention cleanup (every 2880 ticks = 24h)
-        if tick_count % 2880 == 0:
             try:
                 from robothor.engine.retention import run_retention_cleanup
 
@@ -817,6 +884,19 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                 _record_watchdog_event("retention_timeout", "cleanup exceeded 300s")
             except Exception as e:
                 logger.warning("Watchdog: retention cleanup failed: %s", e)
+
+        # Chat-message embedding backfill (every 60 ticks = 30 min).
+        # Sweeps rows the fire-and-forget embed task missed (process restart)
+        # and everything the sync scheduler save path never embeds at all.
+        if tick_count % 60 == 0:
+            try:
+                from robothor.engine.chat_store import backfill_chat_embeddings
+
+                embedded = await backfill_chat_embeddings()
+                if embedded:
+                    logger.info("Watchdog: backfilled embeddings for %d chat messages", embedded)
+            except Exception as e:
+                logger.warning("Watchdog: chat embedding backfill failed: %s", e)
 
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
