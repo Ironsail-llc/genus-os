@@ -758,9 +758,12 @@ class AgentRunner:
         # suspenders in robothor/engine/tools/handlers/benchmark.py.
         session.run.is_benchmark = bool(getattr(agent_config, "is_benchmark", False))
 
-        # Sub-agent: link to parent run + inherit user identity
+        # Sub-agent: link to parent run + inherit user identity. An empty
+        # parent_run_id means the parent's own row was never recorded
+        # (tracking_disabled) — insert NULL rather than a dangling FK that
+        # would sink this child's entire row.
         if spawn_context:
-            session.run.parent_run_id = spawn_context.parent_run_id
+            session.run.parent_run_id = spawn_context.parent_run_id or None
             session.run.nesting_depth = spawn_context.nesting_depth + 1
             if not session.run.user_id and spawn_context.user_id:
                 session.run.user_id = spawn_context.user_id
@@ -1264,8 +1267,46 @@ class AgentRunner:
         try:
             async with asyncio.timeout(hard_timeout):
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
+                import psycopg2
+
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                except psycopg2.IntegrityError as e:
+                    # Deterministic rejection (CHECK/FK/unique violation) —
+                    # retries would fail identically forever, e.g. a TriggerType
+                    # enum member missing from agent_runs_trigger_type_check.
+                    # Never break the run over tracking, but this is not a blip:
+                    # the whole run tree would be invisible to accounting, so
+                    # page the operator and stop attempting dependent writes
+                    # (steps FK to the missing run row; see tracking_disabled).
+                    session.run.tracking_disabled = True
+                    logger.error(
+                        "Run recording rejected by integrity constraint (run=%s agent=%s trigger=%s): %s",
+                        session.run.id,
+                        agent_config.id,
+                        trigger_type.value,
+                        _sanitize(e),
+                    )
+                    try:
+                        from robothor.engine.alerts import alert as _alert
+                        from robothor.engine.task_registry import get_task_registry
+
+                        get_task_registry().spawn(
+                            _alert(
+                                "critical",
+                                f"Run recording rejected: {agent_config.id}",
+                                f"run_id={session.run.id} trigger={trigger_type.value} "
+                                f"error={type(e).__name__}: {_sanitize(e)}\n"
+                                "Deterministic schema rejection — this run tree is "
+                                "untracked and every run of this shape will be too "
+                                "until a constraint migration lands.",
+                            ),
+                            name=f"run-recording-alert:{agent_config.id}",
+                        )
+                    except Exception as alert_error:
+                        logger.warning(
+                            "Failed to dispatch run-recording alert: %s", _sanitize(alert_error)
+                        )
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
 
@@ -1321,12 +1362,22 @@ class AgentRunner:
                 if self._should_plan(agent_config, route):
                     plan_result = await self._run_planner(agent_config, message, tool_names, models)
                     if plan_result and plan_result.success:
-                        from robothor.engine.planner import format_plan_context
+                        # Planner is non-fatal end to end: a malformed plan must
+                        # never abort the run over an optional context string.
+                        try:
+                            from robothor.engine.planner import format_plan_context
 
-                        plan_context = format_plan_context(plan_result)
-                        if plan_context:
-                            session.messages.append(
-                                {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
+                            plan_context = format_plan_context(plan_result)
+                            if plan_context:
+                                session.messages.append(
+                                    {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
+                                )
+                        except Exception as e:
+                            plan_context = ""
+                            logger.warning(
+                                "Plan context formatting failed (non-fatal, "
+                                "continuing without plan): %s",
+                                _sanitize(e),
                             )
 
                         # Dispatch PLAN_CREATED hook
@@ -1895,7 +1946,10 @@ class AgentRunner:
             from robothor.engine.tools import _current_spawn_context
 
             fresh_ctx = SpawnContext(
-                parent_run_id=session.run.id,
+                # An untracked run (tracking_disabled) has no agent_runs row —
+                # advertising its id would make every child's insert fail the
+                # parent_run_id FK. Empty string → children record NULL parent.
+                parent_run_id="" if session.run.tracking_disabled else session.run.id,
                 parent_agent_id=agent_config.id,
                 correlation_id=session.run.correlation_id or str(uuid.uuid4()),
                 nesting_depth=0,
@@ -3000,7 +3054,16 @@ class AgentRunner:
                         plan_result = new_plan
                         _replan_count += 1
                         scratchpad.set_plan(new_plan.plan)
-                        plan_context = format_plan_context(new_plan)
+                        # Non-fatal: replan formatting must not abort the run.
+                        try:
+                            plan_context = format_plan_context(new_plan)
+                        except Exception as e:
+                            plan_context = ""
+                            logger.warning(
+                                "Replan context formatting failed (non-fatal, "
+                                "continuing without revised plan context): %s",
+                                _sanitize(e),
+                            )
                         # Dispatch REPLAN hook
                         if hook_registry:
                             with contextlib.suppress(Exception):
@@ -3013,12 +3076,15 @@ class AgentRunner:
                                         metadata={"replan_count": _replan_count},
                                     ),
                                 )
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}",
-                            }
-                        )
+                        if plan_context:
+                            session.messages.append(
+                                {
+                                    "role": ENGINE_CONTEXT_ROLE,
+                                    "content": (
+                                        f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}"
+                                    ),
+                                }
+                            )
 
             # ── [CHECKPOINT] Save state ──
             if checkpoint and checkpoint.should_checkpoint():
@@ -4125,7 +4191,9 @@ class AgentRunner:
             # per-iteration flushes (see AgentSession.flush_new_steps_sync)
             # persist along the way, so on normal completion this is
             # usually the tail (record_error + final assistant turn).
-            pending = run.steps[run.persisted_step_count :]
+            # An untracked run has no agent_runs row, so every step insert
+            # would fail the run_id FK — skip them entirely.
+            pending = [] if run.tracking_disabled else run.steps[run.persisted_step_count :]
             if pending:
                 try:
                     create_steps_batch(pending)

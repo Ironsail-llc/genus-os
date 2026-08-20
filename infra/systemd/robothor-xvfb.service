@@ -1,0 +1,27 @@
+# Virtual X display for the headless desktop (browser automation, VNC).
+#
+# Rendered by scripts/render-unit.sh (see infra/systemd/README.md):
+#   /home/robothor -> $ROBOTHOR_SERVICE_HOME
+#   User=robothor  -> $ROBOTHOR_SERVICE_USER
+[Unit]
+Description=Robothor Virtual Display (Xvfb)
+# Xvfb segfaulted (signal 11, core-dump) on the FIRST start of 3-of-3 recent
+# boots, racing GPU/driver initialization at early boot; the Restart= retry 5s
+# later always succeeded, cascading transient robothor-desktop/-vnc failures
+# meanwhile. Order after the NVIDIA persistence daemon so the driver is
+# initialized before the X server starts. (After= is ordering-only: harmless
+# on boxes without nvidia-persistenced.)
+After=network.target nvidia-persistenced.service
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp -ac
+Restart=always
+RestartSec=5
+KillMode=control-group
+Environment=HOME=/home/robothor
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,15 @@ import os as _os
 
 _os.environ["ROBOTHOR_DEFAULT_TENANT"] = "default"
 
+# Pin the database to the test DB before any robothor import resolves config.
+# The platform default is the PRODUCTION name (robothor_memory), so a plain
+# `pytest` run used to write chat sessions, audit rows, and guardrail
+# escalations straight into prod. setdefault keeps CI's explicit
+# ROBOTHOR_DB_NAME (robothor_test / robothor_release_gate) authoritative.
+# robothor/db/connection.py additionally hard-fails inside pytest when the
+# resolved name is not a *_test database — see assert_test_database().
+_os.environ.setdefault("ROBOTHOR_DB_NAME", "robothor_test")
+
 import uuid  # noqa: E402
 
 import pytest  # noqa: E402

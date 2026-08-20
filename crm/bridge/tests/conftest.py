@@ -4,6 +4,7 @@ Shared test fixtures for the Bridge Service test suite.
 Provides async test client, mock helpers for crm_dal and external HTTP calls.
 """
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -13,6 +14,13 @@ import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport
+
+# Bridge tests can run from their own rootdir (`pytest crm/bridge/tests/`),
+# where the repo-root conftest.py — and its ROBOTHOR_DB_NAME pin — is not
+# loaded. Duplicate the pin here, before any robothor import resolves config,
+# so bridge tests can never write to the production database either.
+# setdefault keeps an explicit CI/dev ROBOTHOR_DB_NAME authoritative.
+os.environ.setdefault("ROBOTHOR_DB_NAME", "robothor_test")
 
 # Add bridge source directory to path so imports resolve
 BRIDGE_DIR = Path(__file__).resolve().parent.parent

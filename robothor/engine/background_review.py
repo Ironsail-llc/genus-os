@@ -72,11 +72,12 @@ SKILL_NUDGE_INTERVAL = 15
 # doing something the user didn't ask for.
 REVIEW_TOOL_WHITELIST: frozenset[str] = frozenset(
     {
-        # Memory
-        "memory_search",
-        "memory_write",
-        "memory_update",
-        "memory_delete",
+        # Memory — the registered Genus tool names. (The Hermes-upstream names
+        # memory_search/memory_write/memory_update/memory_delete do not exist
+        # here; carrying them silently denied every memory call the review
+        # fork attempted. Guarded by test_tool_registry_parity.py.)
+        "search_memory",
+        "store_memory",
         # Skills
         "invoke_skill",
         "list_skills",

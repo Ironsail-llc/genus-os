@@ -8,6 +8,7 @@ Validates end-to-end correctness of audit logging:
 - Error resilience (audit failures don't break CRM operations)
 """
 
+import os
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -32,9 +33,19 @@ try:
 except ImportError:
     pytest.skip("bridge dependencies not deployed (audit module missing)", allow_module_level=True)
 
+# These tests exercise a real PostgreSQL database — run them in the
+# integration lane only, and always against the TEST database (the DSN used
+# to hardcode the production database by name).
+pytestmark = pytest.mark.integration
+
 # Prefix for test data isolation
 TEST_PREFIX = f"__p1_verify_{uuid.uuid4().hex[:6]}__"
-PG_DSN = "dbname=robothor_memory user=robothor host=/var/run/postgresql"
+
+# Same convention as tests/conftest_integration.py — never a production name.
+PG_DSN = os.environ.get(
+    "ROBOTHOR_TEST_DB_DSN",
+    "dbname=robothor_test user=robothor host=/var/run/postgresql",
+)
 
 
 @pytest.fixture(autouse=True)

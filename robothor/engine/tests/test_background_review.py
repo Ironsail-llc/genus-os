@@ -59,8 +59,15 @@ class TestReviewToolWhitelist:
         assert isinstance(REVIEW_TOOL_WHITELIST, frozenset)
 
     def test_memory_tools_included(self) -> None:
-        for t in ("memory_search", "memory_write", "memory_update", "memory_delete"):
+        # The REGISTERED Genus names — the Hermes-upstream names
+        # (memory_search/memory_write/...) don't exist here and sat in the
+        # whitelist for months, denying every real memory call the fork made.
+        for t in ("search_memory", "store_memory"):
             assert t in REVIEW_TOOL_WHITELIST
+
+    def test_hermes_upstream_names_absent(self) -> None:
+        for t in ("memory_search", "memory_write", "memory_update", "memory_delete"):
+            assert t not in REVIEW_TOOL_WHITELIST
 
     def test_skill_tools_included(self) -> None:
         for t in ("invoke_skill", "list_skills", "skill_view", "create_skill", "update_skill"):

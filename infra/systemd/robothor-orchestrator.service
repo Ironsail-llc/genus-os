@@ -1,0 +1,32 @@
+# Genus OS RAG orchestrator (uvicorn) — systemd service template.
+#
+# Rendered by scripts/render-unit.sh (see infra/systemd/README.md):
+#   /opt/robothor  -> $ROBOTHOR_WORKSPACE
+#   User=robothor  -> $ROBOTHOR_SERVICE_USER
+[Unit]
+Description=Robothor RAG Orchestrator
+After=network.target ollama.service postgresql.service docker.service
+Wants=ollama.service postgresql.service
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/env python -m uvicorn robothor.api.orchestrator:app --host 0.0.0.0 --port 9099
+Restart=on-failure
+RestartSec=5
+# KillMode=mixed sends SIGTERM to the MAIN process (uvicorn) directly, then
+# SIGKILLs the whole cgroup at TimeoutStopSec. Under the default control-group
+# mode every stop timed out: "State 'stop-sigterm' timed out. Killing ...
+# uvicorn ... Failed with result timeout" (observed 2026-08-19). uvicorn still
+# takes long to drain on SIGTERM — what blocks its graceful shutdown (in-flight
+# task or signal propagation through the venv shim) is under investigation;
+# once fixed, TimeoutStopSec here can come down.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

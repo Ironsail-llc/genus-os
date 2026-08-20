@@ -1,0 +1,25 @@
+# VNC access to the headless desktop (x11vnc on the Xvfb display).
+#
+# Rendered by scripts/render-unit.sh (see infra/systemd/README.md):
+#   /home/robothor -> $ROBOTHOR_SERVICE_HOME
+#   User=robothor  -> $ROBOTHOR_SERVICE_USER
+[Unit]
+Description=Robothor VNC Server (x11vnc)
+After=robothor-xvfb.service
+Requires=robothor-xvfb.service
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+# -noipv6: x11vnc's IPv6 listener spammed ~200 "rfbListenOnTCP6Port error in
+# getaddrinfo" journal lines per boot on this stack; the server is
+# localhost-only anyway.
+ExecStart=/usr/bin/x11vnc -display :99 -forever -nopw -localhost -noipv6 -shared
+Restart=always
+RestartSec=5
+KillMode=control-group
+Environment=HOME=/home/robothor
+
+[Install]
+WantedBy=multi-user.target

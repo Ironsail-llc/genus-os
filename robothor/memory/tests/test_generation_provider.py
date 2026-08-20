@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from unittest.mock import AsyncMock
 
 import httpx
@@ -23,13 +24,14 @@ def _reset_state(monkeypatch):
     """Isolate provider env vars and module state per test."""
     monkeypatch.delenv(generation.PROVIDER_ENV, raising=False)
     monkeypatch.delenv(generation.REMOTE_MODEL_ENV, raising=False)
-    monkeypatch.delenv(generation.CONCURRENCY_ENV, raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    # Disable inter-call pacing by default so unrelated tests stay fast;
+    # pacing tests set their own interval.
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "0")
     generation.remote_fallback_count = 0
-    generation.consecutive_fallback_count = 0
     generation._missing_key_logged = False
-    generation._remote_sem = None
-    generation._remote_sem_loop = None
+    generation._last_remote_call_at = 0.0
+    generation._pacing_lock = None  # never reuse a lock across event loops
 
 
 # ─── Default provider: local ollama, no remote calls ────────────────────
@@ -208,8 +210,6 @@ def test_strip_think_blocks_passthrough():
 
 
 class _FakeResponse:
-    status_code = 200
-
     def __init__(self, payload):
         self._payload = payload
 
@@ -378,194 +378,275 @@ async def test_extract_facts_uses_generation_seam(monkeypatch):
     assert result and result[0]["fact_text"] == "Alice prefers tea over coffee"
 
 
-# ─── 429 backoff before fallback ─────────────────────────────────────────
+# ─── Rate-limit retry: 429/503 back off before falling back ──────────────
+#
+# Incident 2026-08-19 04:43: a ~26-call nightly batch hit OpenRouter's rate
+# limit; every call abandoned remote after a single 429 and fell back to
+# local. 429/503 must be retried with backoff; other 4xx stay fail-fast.
 
 
-class _ScriptedClient:
-    """Fake httpx.AsyncClient returning scripted status codes per POST."""
-
-    script: list[int] = []
-    calls: int = 0
-    good_payload: dict = {"choices": [{"message": {"content": "remote ok"}}]}
-
-    def __init__(self, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
-    async def post(self, url, json=None, headers=None):
-        cls = type(self)
-        status = cls.script[min(cls.calls, len(cls.script) - 1)]
-        cls.calls += 1
-        request = httpx.Request("POST", url)
-        if status == 200:
-            return httpx.Response(200, json=cls.good_payload, request=request)
-        return httpx.Response(status, text="rate limited", request=request)
+def _status_error(status: int, headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", generation.OPENROUTER_API_URL)
+    response = httpx.Response(status, headers=headers or {}, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=request, response=response)
 
 
-@pytest.fixture
-def scripted_client(monkeypatch):
-    _ScriptedClient.script = []
-    _ScriptedClient.calls = 0
-    monkeypatch.setattr(generation.httpx, "AsyncClient", _ScriptedClient)
-    # No real sleeping in tests.
-    monkeypatch.setattr(generation, "RETRY_429_BASE_SECONDS", 0.0)
-    monkeypatch.setattr(generation, "RETRY_429_CAP_SECONDS", 0.0)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    return _ScriptedClient
-
-
-async def test_429_is_retried_with_backoff_then_succeeds(scripted_client, caplog):
-    scripted_client.script = [429, 429, 200]
-
-    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
-        result = await generation._openrouter_chat(
-            [{"role": "user", "content": "x"}],
-            temperature=0.2,
-            max_tokens=64,
-            format=None,
-            think=False,
-        )
-
-    assert result == "remote ok"
-    assert scripted_client.calls == 3
-    assert any("429" in r.getMessage() for r in caplog.records)
-
-
-async def test_429_storm_exhausts_retries_then_raises(scripted_client):
-    scripted_client.script = [429]
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await generation._openrouter_chat(
-            [{"role": "user", "content": "x"}],
-            temperature=0.2,
-            max_tokens=64,
-            format=None,
-            think=False,
-        )
-    assert scripted_client.calls == generation.RETRY_429_MAX_ATTEMPTS
-
-
-async def test_429_exhaustion_falls_back_to_local(scripted_client, monkeypatch, caplog):
+def _remote_env(monkeypatch):
     monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
-    scripted_client.script = [429]
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+
+def _fake_sleep(monkeypatch) -> list[float]:
+    """Fake clock: record requested sleeps, return immediately."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(generation.asyncio, "sleep", fake_sleep)
+    return sleeps
+
+
+async def test_429_then_success_retries_without_fallback(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
     local = AsyncMock(return_value="local result")
-    monkeypatch.setattr(generation.ollama, "chat", local)
+    remote = AsyncMock(side_effect=[_status_error(429), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
 
     with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
-        result = await generation.chat([{"role": "user", "content": "x"}])
+        result = await generation.generate(prompt="x")
+
+    assert result == "remote result"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+    assert generation.remote_fallback_count == 0
+    # The loud-fallback marker fires only when remote is abandoned.
+    assert not any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_503_then_success_retries_without_fallback(monkeypatch):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=[_status_error(503), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.generate(prompt="x") == "remote result"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+
+
+async def test_429_exhaustion_falls_back_with_marker(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=_status_error(429))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
 
     assert result == "local result"
+    assert remote.await_count == generation.REMOTE_RATE_LIMIT_MAX_ATTEMPTS
+    assert len(sleeps) == generation.REMOTE_RATE_LIMIT_MAX_ATTEMPTS - 1
+    assert generation.remote_fallback_count == 1
     assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
 
 
-async def test_500_is_not_retried_in_remote_client(scripted_client):
-    """Only 429 gets the backoff loop — other failures fall back immediately."""
-    scripted_client.script = [500]
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await generation._openrouter_chat(
-            [{"role": "user", "content": "x"}],
-            temperature=0.2,
-            max_tokens=64,
-            format=None,
-            think=False,
-        )
-    assert scripted_client.calls == 1
-
-
-# ─── consecutive-fallback streak alarm ───────────────────────────────────
-
-
-async def test_consecutive_fallback_streak_logs_error(monkeypatch, caplog):
-    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(generation.ollama, "generate", AsyncMock(return_value="local"))
-    monkeypatch.setattr(generation, "_openrouter_chat", AsyncMock(side_effect=RuntimeError("boom")))
+async def test_400_stays_fail_fast(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=_status_error(400))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
 
     with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
-        for _ in range(generation.FALLBACK_STREAK_THRESHOLD):
-            await generation.generate(prompt="x")
+        result = await generation.generate(prompt="x")
 
-    errors = [
-        r
-        for r in caplog.records
-        if r.levelno == logging.ERROR and generation.FALLBACK_STREAK_MARKER in r.getMessage()
-    ]
-    assert len(errors) == 1, "the streak alarm must fire once the threshold is reached"
-    assert generation.consecutive_fallback_count == generation.FALLBACK_STREAK_THRESHOLD
+    assert result == "local result"
+    remote.assert_awaited_once()
+    assert sleeps == []
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
 
 
-async def test_remote_success_resets_consecutive_streak(monkeypatch):
-    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(generation.ollama, "generate", AsyncMock(return_value="local"))
-    remote = AsyncMock(side_effect=[RuntimeError("boom"), "remote ok"])
+async def test_timeout_retried_once_then_fallback(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    assert remote.await_count == 2  # one retry, then fallback
+    assert len(sleeps) == 1
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_timeout_then_success_does_not_fall_back(monkeypatch):
+    _remote_env(monkeypatch)
+    _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=[httpx.ConnectError("reset"), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.generate(prompt="x") == "remote result"
+    local.assert_not_awaited()
+    assert generation.remote_fallback_count == 0
+
+
+async def test_chat_retries_429_too(monkeypatch):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local chat")
+    remote = AsyncMock(side_effect=[_status_error(429), "remote chat"])
+    monkeypatch.setattr(generation.ollama, "chat", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.chat([{"role": "user", "content": "hi"}]) == "remote chat"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+
+
+# ─── Retry-After handling ─────────────────────────────────────────────────
+
+
+def test_backoff_honors_finite_retry_after():
+    err = _status_error(429, {"Retry-After": "7"})
+    assert generation._remote_backoff_seconds(0, err) == 7.0
+
+
+def test_backoff_caps_retry_after():
+    err = _status_error(429, {"Retry-After": "9999"})
+    assert generation._remote_backoff_seconds(0, err) == generation.REMOTE_BACKOFF_CAP_SECONDS
+
+
+def test_backoff_clamps_negative_retry_after():
+    err = _status_error(429, {"Retry-After": "-5"})
+    assert generation._remote_backoff_seconds(0, err) == 0.0
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "soon", ""])
+def test_backoff_ignores_garbage_retry_after(value):
+    # nan slips through min/max clamps and would reach asyncio.sleep(nan).
+    err = _status_error(429, {"Retry-After": value})
+    wait = generation._remote_backoff_seconds(0, err)
+    assert math.isfinite(wait)
+    assert 0 < wait <= generation.REMOTE_BACKOFF_CAP_SECONDS
+
+
+def test_backoff_is_jittered_exponential():
+    # attempt 0: base 2s +/-25%; attempt 1: 6s +/-25%; always <= per-sleep cap.
+    for _ in range(20):
+        first = generation._remote_backoff_seconds(0)
+        second = generation._remote_backoff_seconds(1)
+        assert 1.5 <= first <= 2.5
+        assert 4.5 <= second <= 7.5
+
+
+async def test_sleep_budget_exhaustion_falls_back_with_marker(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    monkeypatch.setattr(generation, "REMOTE_BACKOFF_BUDGET_SECONDS", 5.0)
+    local = AsyncMock(return_value="local result")
+    # Retry-After 10s > remaining 5s budget: abandon remote instead of sleeping.
+    remote = AsyncMock(side_effect=_status_error(429, {"Retry-After": "10"}))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    remote.assert_awaited_once()
+    assert sleeps == []
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+# ─── Inter-call pacing ────────────────────────────────────────────────────
+
+
+async def test_pacing_spaces_concurrent_remote_calls(monkeypatch):
+    _remote_env(monkeypatch)
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "1.5")
+    sleeps = _fake_sleep(monkeypatch)
+    remote = AsyncMock(return_value="remote result")
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await asyncio.gather(generation.generate(prompt="a"), generation.generate(prompt="b"))
+
+    assert remote.await_count == 2
+    # First call goes straight through; the second waits out the interval.
+    assert len(sleeps) == 1
+    assert 1.0 <= sleeps[0] <= 1.5
+
+
+async def test_pacing_zero_disables(monkeypatch):
+    _remote_env(monkeypatch)
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "0")
+    sleeps = _fake_sleep(monkeypatch)
+    remote = AsyncMock(return_value="remote result")
     monkeypatch.setattr(generation, "_openrouter_chat", remote)
 
     await generation.generate(prompt="a")
-    assert generation.consecutive_fallback_count == 1
     await generation.generate(prompt="b")
-    assert generation.consecutive_fallback_count == 0
-    # The lifetime counter is NOT reset — it is a monotonic metric.
-    assert generation.remote_fallback_count == 1
+
+    assert sleeps == []
 
 
-# ─── bounded remote concurrency ──────────────────────────────────────────
+def test_min_interval_env_override_and_defaults(monkeypatch):
+    monkeypatch.delenv(generation.MIN_INTERVAL_ENV, raising=False)
+    assert generation._min_interval_s() == generation.DEFAULT_MIN_INTERVAL_S
+
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "2.5")
+    assert generation._min_interval_s() == 2.5
+
+    for garbage in ("soon", "nan", "inf", "-1"):
+        monkeypatch.setenv(generation.MIN_INTERVAL_ENV, garbage)
+        assert generation._min_interval_s() == generation.DEFAULT_MIN_INTERVAL_S
 
 
-async def test_remote_concurrency_is_bounded(monkeypatch):
-    monkeypatch.setenv(generation.CONCURRENCY_ENV, "2")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-    in_flight = {"now": 0, "peak": 0}
-
-    class _SlowClient:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-        async def post(self, url, json=None, headers=None):
-            in_flight["now"] += 1
-            in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
-            await asyncio.sleep(0.01)
-            in_flight["now"] -= 1
-            request = httpx.Request("POST", url)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "ok"}}]},
-                request=request,
-            )
-
-    monkeypatch.setattr(generation.httpx, "AsyncClient", _SlowClient)
-
-    async def one():
-        return await generation._openrouter_chat(
-            [{"role": "user", "content": "x"}],
-            temperature=0.2,
-            max_tokens=64,
-            format=None,
-            think=False,
-        )
-
-    results = await asyncio.gather(*[one() for _ in range(6)])
-    assert all(r == "ok" for r in results)
-    assert in_flight["peak"] <= 2
+# ─── consecutive-fallback streak escalation ──────────────────────────────
 
 
-def test_concurrency_env_default_and_override(monkeypatch):
-    monkeypatch.delenv(generation.CONCURRENCY_ENV, raising=False)
-    assert generation._remote_concurrency() == generation.DEFAULT_REMOTE_CONCURRENCY
-    monkeypatch.setenv(generation.CONCURRENCY_ENV, "7")
-    assert generation._remote_concurrency() == 7
-    monkeypatch.setenv(generation.CONCURRENCY_ENV, "garbage")
-    assert generation._remote_concurrency() == generation.DEFAULT_REMOTE_CONCURRENCY
+class TestFallbackStreakEscalation:
+    """Sustained remote→local fallback defeats the GPU offload — after
+    FALLBACK_STREAK_THRESHOLD consecutive fallbacks an ERROR with a grep-able
+    marker fires; any remote success resets the streak."""
+
+    def test_streak_escalates_at_threshold(self, caplog, monkeypatch):
+        monkeypatch.setattr(generation, "_consecutive_fallbacks", 0)
+        with caplog.at_level(logging.WARNING, logger=generation.logger.name):
+            for _ in range(generation.FALLBACK_STREAK_THRESHOLD):
+                generation._record_fallback(RuntimeError("boom"))
+        streak_errors = [
+            r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
+        ]
+        assert len(streak_errors) == 1
+        assert streak_errors[0].levelno == logging.ERROR
+
+    def test_success_resets_streak(self, caplog, monkeypatch):
+        monkeypatch.setattr(generation, "_consecutive_fallbacks", 0)
+        with caplog.at_level(logging.WARNING, logger=generation.logger.name):
+            for _ in range(generation.FALLBACK_STREAK_THRESHOLD - 1):
+                generation._record_fallback(RuntimeError("boom"))
+            generation._record_remote_success()
+            generation._record_fallback(RuntimeError("boom"))
+        assert not [
+            r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
+        ]

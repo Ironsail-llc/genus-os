@@ -243,6 +243,7 @@ class ToolRegistry:
                     len(unresolved),
                     ", ".join(sorted(unresolved)),
                 )
+                self._escalate_unresolved(config.id, sorted(unresolved))
             names.extend(n for n in GOAL_TOOLS if n in self._schemas and n not in names)
         else:
             names = list(self._schemas.keys())
@@ -272,6 +273,36 @@ class ToolRegistry:
             names = [n for n in names if n not in TOOLSEARCH_TOOLS]
 
         return names
+
+    @staticmethod
+    def _escalate_unresolved(agent_id: str, unresolved: list[str]) -> None:
+        """Escalate declared-but-unresolvable manifest tools to the operator.
+
+        This is operator-actionable instance drift — the manifest names a tool
+        the platform does not register — and the journald warning alone has
+        proven invisible (months of unactioned warnings). Fire-and-forget at
+        warning level, deduped per agent per process by the caller's warn-once
+        set. Degrades to log-only when no event loop is running (CLI, template
+        validation, tests).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        from robothor.engine import alerts
+        from robothor.engine.task_registry import get_task_registry
+
+        get_task_registry().spawn(
+            alerts.alert(
+                "warning",
+                f"Agent '{agent_id}' declares unavailable tools",
+                "Declared in the manifest but not registered — silently "
+                "unavailable to the agent: " + ", ".join(unresolved) + ". "
+                "Fix the manifest, or register the missing tool schema.",
+            ),
+            name=f"tool-drift-alert:{agent_id}",
+        )
 
     async def execute(
         self,

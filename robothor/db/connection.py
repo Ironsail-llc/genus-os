@@ -37,6 +37,32 @@ _pool_lock = threading.Lock()
 _POOL_GETCONN_TIMEOUT = 10  # seconds to wait for a connection before raising
 
 
+def assert_test_database(name: str) -> None:
+    """Refuse to touch a non-test database from inside pytest.
+
+    A plain local ``pytest`` run used to resolve the production database
+    (``robothor_memory``) and every fire-and-forget persistence path — chat
+    exchange saves, tool-call audit logs, model-breaker escalations — landed in
+    prod. The root conftest now pins ``ROBOTHOR_DB_NAME=robothor_test``; this
+    guard is the backstop that turns any remaining misconfiguration into a
+    crisp hard failure instead of silent production writes.
+
+    Outside pytest this is a no-op. A non-``*_test`` name can be explicitly
+    allowed via ``ROBOTHOR_TEST_DB_ALLOW`` (the release gate legitimately runs
+    integration tests against ``robothor_release_gate``).
+    """
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        return
+    if name.endswith("_test") or name == os.environ.get("ROBOTHOR_TEST_DB_ALLOW", ""):
+        return
+    raise RuntimeError(
+        f"Refusing to open a database connection to {name!r} from inside pytest — "
+        "tests must never touch a production database. Set ROBOTHOR_DB_NAME to a "
+        "*_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to "
+        "explicitly allow it."
+    )
+
+
 def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConnectionPool:
     """Get or create the connection pool."""
     global _pool
@@ -48,6 +74,7 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
             return _pool
 
         cfg = get_config().db
+        assert_test_database(cfg.name)
         logger.info(
             "Creating connection pool: %s@%s:%s/%s (min=%d, max=%d)",
             cfg.user,

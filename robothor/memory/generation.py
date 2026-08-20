@@ -16,11 +16,23 @@ Configuration (read at call time, not import time):
   is accepted and stripped for the raw API call).
 - ``OPENROUTER_API_KEY``: required when the provider is ``openrouter``.
 
+- ``ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S``: minimum interval between
+  remote calls (default 1.5s, ``0`` disables) — smooths nightly batches
+  under provider rate limits.
+
 Failure policy (audit lesson: silent fallbacks hide primary-model death):
 
-- Remote call fails → fall back to local Ollama, log a WARNING containing
+- 429/503 → retry up to ``REMOTE_RATE_LIMIT_MAX_ATTEMPTS`` attempts with
+  jittered exponential backoff, honoring a finite ``Retry-After`` (each
+  sleep capped at 20s, total sleep budget 45s — memory writes tolerate
+  latency; incident 2026-08-19: a nightly batch abandoned remote in 20s
+  because every 429 fell back after a single attempt).
+- Timeouts / network errors → one retry, then fallback.
+- Any other error (4xx included) → fail fast.
+- Remote abandoned → fall back to local Ollama, log a WARNING containing
   ``MEMORY_GENERATION_REMOTE_FALLBACK`` and increment
-  ``remote_fallback_count``. Never silent.
+  ``remote_fallback_count``. Never silent, and never before retries are
+  exhausted.
 - Provider is ``openrouter`` but ``OPENROUTER_API_KEY`` is unset → log an
   ERROR containing ``MEMORY_GENERATION_REMOTE_MISCONFIGURED`` once per
   process and use local.
@@ -40,6 +52,7 @@ import math
 import os
 import random
 import re
+import time
 from typing import Any
 
 import httpx
@@ -50,29 +63,40 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_ENV = "ROBOTHOR_MEMORY_GENERATION_PROVIDER"
 REMOTE_MODEL_ENV = "ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL"
+MIN_INTERVAL_ENV = "ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S"
 DEFAULT_REMOTE_MODEL = "openrouter/xiaomi/mimo-v2.5"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 REMOTE_TIMEOUT_S = 60.0
 
-# Bounded remote concurrency: the nightly memory batch used to fan out
-# unthrottled and got rate-limited 26x in one hour (2026-08-20), silently
-# pushing the whole load back onto the local GPU the remote offload exists
-# to protect.
-CONCURRENCY_ENV = "ROBOTHOR_MEMORY_GENERATION_CONCURRENCY"
-DEFAULT_REMOTE_CONCURRENCY = 4
+# Retry budget for provider back-pressure (429) and brief unavailability
+# (503). Memory writes tolerate latency, so waiting beats abandoning remote:
+# 3 attempts of base=2s * factor=3 (+/-25% jitter) sleep ~8s typical; a
+# Retry-After header may push each sleep to the 20s cap, bounded overall by
+# the 45s total budget. Other 4xx are deterministic → fail fast; timeouts
+# and network errors get exactly one retry.
+REMOTE_RATE_LIMIT_MAX_ATTEMPTS = 3
+REMOTE_TRANSPORT_MAX_ATTEMPTS = 2
+REMOTE_BACKOFF_BASE_SECONDS = 2.0
+REMOTE_BACKOFF_FACTOR = 3.0
+REMOTE_BACKOFF_CAP_SECONDS = 20.0
+REMOTE_BACKOFF_BUDGET_SECONDS = 45.0
+REMOTE_BACKOFF_JITTER_FRACTION = 0.25
 
-# 429s are retried with exponential backoff BEFORE falling back to local
-# ollama — a rate limit is a "slow down" signal, not a provider outage.
-RETRY_429_MAX_ATTEMPTS = 4  # 1 initial call + 3 backoff retries
-RETRY_429_BASE_SECONDS = 2.0
-RETRY_429_CAP_SECONDS = 30.0
-RETRY_429_JITTER_FRACTION = 0.25
+# Minimum interval between remote calls (seconds). Nightly memory batches
+# fire dozens of back-to-back generations; pacing them keeps the batch under
+# provider rate limits instead of triggering a 429 storm.
+DEFAULT_MIN_INTERVAL_S = 1.5
 
-# After this many CONSECUTIVE remote→local fallbacks, escalate to ERROR with
-# a grep-able marker: sustained fallback means the GPU offload is defeated
-# and the operator should look at the remote provider.
-FALLBACK_STREAK_THRESHOLD = 5
-FALLBACK_STREAK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK_STREAK"
+_RETRYABLE_STATUS_CODES = frozenset({429, 503})
+
+# Same transport-failure taxonomy as robothor.llm.ollama: timeouts,
+# connect/read/write resets, and the server hanging up mid-response.
+# LocalProtocolError/UnsupportedProtocol are client-side bugs — not retried.
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
 
 # Remote reasoning tokens count against max_tokens (unlike local Ollama, which
 # budgets the separate ``thinking`` channel on top of num_predict — see
@@ -89,69 +113,23 @@ MISSING_KEY_MARKER = "MEMORY_GENERATION_REMOTE_MISCONFIGURED"
 # Module counter: number of remote-generation calls that fell back to local.
 remote_fallback_count: int = 0
 
-# CONSECUTIVE fallbacks since the last remote success — resets on success,
-# drives the FALLBACK_STREAK_MARKER escalation.
-consecutive_fallback_count: int = 0
+# Consecutive remote→local fallbacks (reset on any remote success). A
+# sustained streak means the GPU offload the remote path exists for is
+# defeated — escalate to ERROR with a grep-able marker so the operator
+# looks at the remote provider instead of the symptom (GPU load).
+FALLBACK_STREAK_THRESHOLD = 5
+FALLBACK_STREAK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK_STREAK"
+_consecutive_fallbacks: int = 0
 
 # Log the missing-key ERROR once per process, not once per memory write.
 _missing_key_logged: bool = False
 
-# Per-event-loop semaphore bounding concurrent remote calls. Lazily (re)built
-# so CLI scripts with their own asyncio.run() don't trip over a semaphore
-# bound to a dead loop.
-_remote_sem: asyncio.Semaphore | None = None
-_remote_sem_loop: asyncio.AbstractEventLoop | None = None
-
-
-def _remote_concurrency() -> int:
-    """Max concurrent remote generation calls (env-tunable, defaults sane)."""
-    raw = os.environ.get(CONCURRENCY_ENV, "").strip()
-    if not raw:
-        return DEFAULT_REMOTE_CONCURRENCY
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning(
-            "%s=%r is not an integer — using default %d",
-            CONCURRENCY_ENV,
-            raw,
-            DEFAULT_REMOTE_CONCURRENCY,
-        )
-        return DEFAULT_REMOTE_CONCURRENCY
-    return value if value > 0 else DEFAULT_REMOTE_CONCURRENCY
-
-
-def _remote_semaphore() -> asyncio.Semaphore:
-    """The current loop's remote-concurrency semaphore."""
-    global _remote_sem, _remote_sem_loop
-    loop = asyncio.get_running_loop()
-    if _remote_sem is None or _remote_sem_loop is not loop:
-        _remote_sem = asyncio.Semaphore(_remote_concurrency())
-        _remote_sem_loop = loop
-    return _remote_sem
-
-
-def _retry_429_backoff_seconds(attempt: int, response: httpx.Response | None = None) -> float:
-    """Jittered exponential backoff for 429 retry ``attempt`` (0-indexed).
-
-    Honors a finite Retry-After header when present, clamped to the cap so a
-    misbehaving server can't blow the retry budget.
-    """
-    if response is not None:
-        retry_after = response.headers.get("Retry-After")
-        if retry_after is not None:
-            try:
-                seconds: float | None = float(retry_after)
-            except ValueError:
-                seconds = None
-            if seconds is not None and math.isfinite(seconds):
-                return min(max(seconds, 0.0), RETRY_429_CAP_SECONDS)
-
-    # float() because int ** int is Any to mypy (recorded platform lesson).
-    capped = min(RETRY_429_BASE_SECONDS * float(2**attempt), RETRY_429_CAP_SECONDS)
-    jitter = capped * RETRY_429_JITTER_FRACTION
-    return max(0.0, capped + random.uniform(-jitter, jitter))
-
+# Inter-call pacing state. The engine runs a single event loop, so a
+# monotonic timestamp guarded by one asyncio.Lock is sufficient. The lock is
+# created lazily: asyncio primitives bind to the running loop on first use,
+# and import time has no loop.
+_pacing_lock: asyncio.Lock | None = None
+_last_remote_call_at: float = 0.0
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -198,10 +176,80 @@ def _remote_enabled() -> bool:
     return True
 
 
+def _min_interval_s() -> float:
+    """Minimum seconds between remote calls; 0 disables pacing.
+
+    Garbage, non-finite, or negative env values fall back to the default —
+    a typo must never disable pacing or wedge the loop.
+    """
+    raw = os.environ.get(MIN_INTERVAL_ENV)
+    if raw is None:
+        return DEFAULT_MIN_INTERVAL_S
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return DEFAULT_MIN_INTERVAL_S
+    if not math.isfinite(value) or value < 0:
+        return DEFAULT_MIN_INTERVAL_S
+    return value
+
+
+def _get_pacing_lock() -> asyncio.Lock:
+    global _pacing_lock
+    if _pacing_lock is None:
+        _pacing_lock = asyncio.Lock()
+    return _pacing_lock
+
+
+async def _pace_remote_call() -> None:
+    """Space remote calls at least ``_min_interval_s()`` apart.
+
+    Each caller reserves the next available slot under the lock, then sleeps
+    outside it — concurrent callers queue up at interval spacing instead of
+    bursting into the provider's rate limit.
+    """
+    interval = _min_interval_s()
+    if interval <= 0:
+        return
+    global _last_remote_call_at
+    async with _get_pacing_lock():
+        now = time.monotonic()
+        scheduled = max(now, _last_remote_call_at + interval)
+        _last_remote_call_at = scheduled
+    wait = scheduled - now
+    if wait > 0:
+        await asyncio.sleep(wait)
+
+
+def _remote_backoff_seconds(attempt: int, error: Exception | None = None) -> float:
+    """Jittered exponential backoff for remote retry ``attempt`` (0-indexed).
+
+    Honors a Retry-After header on an HTTPStatusError when present, clamped
+    to the per-sleep cap so a misbehaving server can't blow the retry
+    budget. Mirrors robothor.llm.ollama._embed_backoff_seconds.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        retry_after = error.response.headers.get("Retry-After")
+        if retry_after is not None:
+            try:
+                seconds: float | None = float(retry_after)
+            except ValueError:
+                seconds = None
+            # Guard non-finite values ("nan"/"inf"): nan slips through
+            # min/max clamps and would reach asyncio.sleep(nan).
+            if seconds is not None and math.isfinite(seconds):
+                return min(max(seconds, 0.0), REMOTE_BACKOFF_CAP_SECONDS)
+
+    base = REMOTE_BACKOFF_BASE_SECONDS * (REMOTE_BACKOFF_FACTOR**attempt)
+    capped = min(base, REMOTE_BACKOFF_CAP_SECONDS)
+    jitter = capped * REMOTE_BACKOFF_JITTER_FRACTION
+    return capped + random.uniform(-jitter, jitter)
+
+
 def _record_fallback(error: Exception) -> None:
-    global consecutive_fallback_count, remote_fallback_count
+    global remote_fallback_count, _consecutive_fallbacks
     remote_fallback_count += 1
-    consecutive_fallback_count += 1
+    _consecutive_fallbacks += 1
     logger.warning(
         "%s #%d: remote memory generation via %s failed (%s: %s) — falling back to local ollama",
         FALLBACK_MARKER,
@@ -210,21 +258,18 @@ def _record_fallback(error: Exception) -> None:
         type(error).__name__,
         error,
     )
-    # Fires at the threshold and every multiple after it, so a sustained
-    # outage keeps re-surfacing in the journal instead of alarming once.
-    if consecutive_fallback_count % FALLBACK_STREAK_THRESHOLD == 0:
+    if _consecutive_fallbacks % FALLBACK_STREAK_THRESHOLD == 0:
         logger.error(
-            "%s: %d consecutive remote memory-generation fallbacks — the GPU "
-            "offload is defeated; check the remote provider (%s) and its rate limits",
+            "%s: %d consecutive remote fallbacks — remote memory generation is"
+            " effectively down and the load is back on the local GPU",
             FALLBACK_STREAK_MARKER,
-            consecutive_fallback_count,
-            _remote_model(),
+            _consecutive_fallbacks,
         )
 
 
 def _record_remote_success() -> None:
-    global consecutive_fallback_count
-    consecutive_fallback_count = 0
+    global _consecutive_fallbacks
+    _consecutive_fallbacks = 0
 
 
 async def _openrouter_chat(
@@ -268,27 +313,10 @@ async def _openrouter_chat(
         "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
         "Content-Type": "application/json",
     }
-    # Bounded concurrency + 429 backoff: the nightly batch must not stampede
-    # the remote provider, and a rate limit is retried (it means "slow down"),
-    # not immediately dumped onto the local GPU.
-    async with _remote_semaphore():
-        async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
-            for attempt in range(RETRY_429_MAX_ATTEMPTS):
-                resp = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
-                if resp.status_code == 429 and attempt < RETRY_429_MAX_ATTEMPTS - 1:
-                    wait = _retry_429_backoff_seconds(attempt, resp)
-                    logger.warning(
-                        "remote memory generation rate-limited (429) — retrying "
-                        "in %.1fs (attempt %d/%d)",
-                        wait,
-                        attempt + 1,
-                        RETRY_429_MAX_ATTEMPTS,
-                    )
-                    await asyncio.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                break
+    async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
+        resp = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
 
     content = strip_think_blocks(data["choices"][0]["message"]["content"] or "")
     if not content:
@@ -299,6 +327,67 @@ async def _openrouter_chat(
         payload["model"],
     )
     return content
+
+
+async def _openrouter_chat_with_retry(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float,
+    max_tokens: int,
+    format: Any | None,  # noqa: A002 — parity with ollama.chat
+    think: bool = True,
+) -> str:
+    """_openrouter_chat with pacing and retry-on-back-pressure.
+
+    Raises only when remote is truly abandoned, so the caller's loud
+    fallback (FALLBACK_MARKER) fires exactly once per abandoned call —
+    never on an interim retry.
+    """
+    slept_total = 0.0
+    rate_limit_attempts = 0
+    transport_attempts = 0
+    while True:
+        await _pace_remote_call()
+        try:
+            return await _openrouter_chat(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                format=format,
+                think=think,
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status not in _RETRYABLE_STATUS_CODES:
+                raise  # deterministic 4xx/5xx — fail fast to fallback
+            rate_limit_attempts += 1
+            if rate_limit_attempts >= REMOTE_RATE_LIMIT_MAX_ATTEMPTS:
+                raise
+            wait = _remote_backoff_seconds(rate_limit_attempts - 1, e)
+            if slept_total + wait > REMOTE_BACKOFF_BUDGET_SECONDS:
+                raise  # sleep budget exhausted — abandon remote
+            attempt, max_attempts = rate_limit_attempts, REMOTE_RATE_LIMIT_MAX_ATTEMPTS
+            label = f"HTTP {status}"
+        except _RETRYABLE_TRANSPORT_ERRORS as e:
+            transport_attempts += 1
+            if transport_attempts >= REMOTE_TRANSPORT_MAX_ATTEMPTS:
+                raise
+            wait = _remote_backoff_seconds(transport_attempts - 1)
+            if slept_total + wait > REMOTE_BACKOFF_BUDGET_SECONDS:
+                raise  # sleep budget exhausted — abandon remote
+            attempt, max_attempts = transport_attempts, REMOTE_TRANSPORT_MAX_ATTEMPTS
+            label = type(e).__name__
+
+        # Interim retry: WARNING but deliberately without FALLBACK_MARKER.
+        logger.warning(
+            "remote memory generation attempt %d/%d failed (%s) — retrying in %.1fs",
+            attempt,
+            max_attempts,
+            label,
+            wait,
+        )
+        await asyncio.sleep(wait)
+        slept_total += wait
 
 
 async def chat(
@@ -317,7 +406,7 @@ async def chat(
     """
     if _remote_enabled():
         try:
-            content = await _openrouter_chat(
+            result = await _openrouter_chat_with_retry(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -328,7 +417,7 @@ async def chat(
             _record_fallback(e)
         else:
             _record_remote_success()
-            return content
+            return result
     return await ollama.chat(
         messages,
         temperature=temperature,
@@ -355,7 +444,7 @@ async def generate(
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            content = await _openrouter_chat(
+            result = await _openrouter_chat_with_retry(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -366,7 +455,7 @@ async def generate(
             _record_fallback(e)
         else:
             _record_remote_success()
-            return content
+            return result
     return await ollama.generate(
         prompt=prompt,
         system=system,

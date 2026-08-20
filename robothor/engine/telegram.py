@@ -27,7 +27,7 @@ import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
@@ -3561,16 +3561,33 @@ class TelegramBot:
             logger.warning("Failed to set bot commands: %s", e)
 
         logger.info("Starting Telegram bot polling...")
-        try:
-            # Explicitly resolve allowed_updates from registered handlers so the
-            # message_reaction handler (Phase 2 operator signals) actually receives
-            # reaction updates — Telegram omits them from getUpdates by default.
-            await self.dp.start_polling(
-                self.bot, allowed_updates=self.dp.resolve_used_update_types()
-            )
-        except Exception as e:
-            logger.error("Telegram polling failed: %s", e, exc_info=True)
-            raise
+        # Bounded-backoff retry on network errors (5s doubling to a 60s cap,
+        # indefinitely). A boot-time DNS failure used to propagate out of this
+        # task, which the daemon's FIRST_COMPLETED wait treats as a shutdown
+        # trigger — one transient getUpdates failure restarted the whole
+        # engine (with exit 0, so OnFailure never paged). A Telegram outage
+        # must not take down the scheduler/health/watchdog subsystems.
+        backoff = 5.0
+        while True:
+            attempt_started = time.monotonic()
+            try:
+                # Explicitly resolve allowed_updates from registered handlers so the
+                # message_reaction handler (Phase 2 operator signals) actually receives
+                # reaction updates — Telegram omits them from getUpdates by default.
+                await self.dp.start_polling(
+                    self.bot, allowed_updates=self.dp.resolve_used_update_types()
+                )
+                return  # clean stop (aiogram handles SIGTERM/SIGINT) — shutdown
+            except TelegramNetworkError as e:
+                # After a healthy long-lived session, restart the backoff ladder.
+                if time.monotonic() - attempt_started > 300:
+                    backoff = 5.0
+                logger.warning("Telegram polling network error (retrying in %.0fs): %s", backoff, e)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+            except Exception as e:
+                logger.error("Telegram polling failed: %s", e, exc_info=True)
+                raise
 
     async def stop(self) -> None:
         """Stop the bot gracefully."""

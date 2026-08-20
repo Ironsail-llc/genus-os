@@ -78,6 +78,49 @@ DEFAULT_PLAN: dict[str, Any] = {
 MAX_REPLANS = 2
 
 
+def _normalize_steps(raw: Any) -> list[dict[str, Any]]:
+    """Coerce an LLM-provided plan array into a list of dict steps.
+
+    JSON-mode responses can be truncated mid-generation and repaired by the
+    provider's constrained decoding, leaving garbage elements (e.g. the
+    string ``'risks: ['``) inside the plan array. Downstream consumers
+    (format_plan_context, replan, Scratchpad) assume dict steps, so
+    normalize at parse time:
+
+    - non-list input → ``[]``
+    - dict elements are kept as-is
+    - non-empty strings are wrapped as ``{"step": i+1, "action": s, "tool": ""}``
+    - everything else is dropped
+    """
+    if not isinstance(raw, list):
+        if raw is not None:
+            logger.warning("Plan is not a list (%s) — treating as empty plan", type(raw).__name__)
+        return []
+
+    steps: list[dict[str, Any]] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, dict):
+            steps.append(item)
+        elif isinstance(item, str) and item.strip():
+            steps.append({"step": i + 1, "action": item, "tool": ""})
+        else:
+            logger.warning("Dropping malformed plan step %d: %s", i + 1, sanitize_log(repr(item)))
+    return steps
+
+
+def _warn_if_truncated(response: Any, model: str) -> None:
+    """Log a warning when the plan response was cut off at max_tokens."""
+    try:
+        finish_reason = response.choices[0].finish_reason
+    except (AttributeError, IndexError):
+        return
+    if finish_reason == "length":
+        logger.warning(
+            "Plan response from %s was truncated (finish_reason=length) — plan may be incomplete",
+            sanitize_log(model),
+        )
+
+
 @dataclass
 class PlanResult:
     """Result of the planning phase."""
@@ -124,12 +167,13 @@ async def generate_plan(
             if not content:
                 continue
 
+            _warn_if_truncated(response, m)
             data = json.loads(content)
             return PlanResult(
                 success=True,
                 difficulty=data.get("difficulty", "moderate"),
                 estimated_steps=int(data.get("estimated_steps", 5)),
-                plan=data.get("plan", []),
+                plan=_normalize_steps(data.get("plan", [])),
                 risks=data.get("risks", []),
                 success_criteria=data.get("success_criteria", ""),
                 raw=data,
@@ -148,11 +192,16 @@ def format_plan_context(plan: PlanResult) -> str:
 
     lines = ["[EXECUTION PLAN]", f"Difficulty: {plan.difficulty}"]
     for step in plan.plan:
+        if not isinstance(step, dict):
+            # Defense in depth: steps are normalized at parse time, but a
+            # hand-built or checkpoint-restored plan may still carry junk.
+            lines.append(f"  - {step}")
+            continue
         tool = step.get("tool", "")
         tool_str = f" (tool: {tool})" if tool else ""
         lines.append(f"  {step.get('step', '?')}. {step.get('action', '?')}{tool_str}")
     if plan.risks:
-        lines.append(f"Risks: {', '.join(plan.risks)}")
+        lines.append(f"Risks: {', '.join(str(r) for r in plan.risks)}")
     if plan.success_criteria:
         lines.append(f"Success: {plan.success_criteria}")
     return "\n".join(lines)
@@ -246,12 +295,13 @@ async def replan(
             if not content:
                 continue
 
+            _warn_if_truncated(response, m)
             data = json.loads(content)
             return PlanResult(
                 success=True,
                 difficulty=data.get("difficulty", original_plan.difficulty),
                 estimated_steps=int(data.get("estimated_steps", 5)),
-                plan=data.get("plan", []),
+                plan=_normalize_steps(data.get("plan", [])),
                 risks=data.get("risks", []),
                 success_criteria=data.get("success_criteria", ""),
                 raw=data,
