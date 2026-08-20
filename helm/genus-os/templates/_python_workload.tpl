@@ -113,18 +113,37 @@ spec:
           env:
             - name: JOB_NAME
               value: {{ include "genus-os.migrationJobName" $root }}
+            - name: WAIT_TIMEOUT_SECONDS
+              value: {{ $root.Values.migrations.waitTimeoutSeconds | quote }}
+            - name: MISSING_JOB_GRACE_SECONDS
+              value: {{ $root.Values.migrations.missingJobGraceSeconds | quote }}
           command:
             - sh
             - -c
             - |
-              echo "Waiting for migration Job $JOB_NAME..."
+              # The wait is BOUNDED and fails loudly. The old version looped
+              # `while true` and swallowed kubectl's stderr, so "Job deleted by
+              # TTL" and "RBAC forbids reading this Job" were indistinguishable
+              # from "Job still running" -- pods sat in Init:0/1 for weeks,
+              # which in turn wedged Karpenter behind their PodDisruptionBudget.
+              echo "Waiting for migration Job $JOB_NAME (timeout ${WAIT_TIMEOUT_SECONDS}s)..."
+              start=$(date +%s)
               while true; do
-                if [ "$(kubectl get job "$JOB_NAME" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)" = "True" ]; then
-                  echo "Migration Job $JOB_NAME complete."
-                  exit 0
+                elapsed=$(( $(date +%s) - start ))
+                if status=$(kubectl get job "$JOB_NAME" \
+                      -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}|{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null); then
+                  case "$status" in
+                    True\|*) echo "Migration Job $JOB_NAME complete."; exit 0 ;;
+                    *\|True) echo "Migration Job $JOB_NAME failed; aborting pod start."; exit 1 ;;
+                  esac
+                elif [ "$elapsed" -ge "$MISSING_JOB_GRACE_SECONDS" ]; then
+                  echo "Migration Job $JOB_NAME is not readable after ${elapsed}s."
+                  echo "It was deleted (ttlSecondsAfterFinished?) or this ServiceAccount cannot read it."
+                  kubectl get job "$JOB_NAME" || true
+                  exit 1
                 fi
-                if [ "$(kubectl get job "$JOB_NAME" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null)" = "True" ]; then
-                  echo "Migration Job $JOB_NAME failed; aborting pod start."
+                if [ "$elapsed" -ge "$WAIT_TIMEOUT_SECONDS" ]; then
+                  echo "Migration Job $JOB_NAME did not finish within ${WAIT_TIMEOUT_SECONDS}s; aborting pod start."
                   exit 1
                 fi
                 sleep 3

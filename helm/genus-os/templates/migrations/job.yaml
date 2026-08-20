@@ -12,7 +12,15 @@ metadata:
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
-  ttlSecondsAfterFinished: 86400
+  {{- with .Values.migrations.ttlSecondsAfterFinished }}
+  # OFF by default. The Job name is content-addressed on global.imageTag, so
+  # Helm/ArgoCD already prunes the previous release's Job on the next sync --
+  # a TTL adds no cleanup value, but it DOES delete the object that every app
+  # pod's wait-for-migrations initContainer polls. Any pod (re)created after
+  # the TTL fires -- a node rotation, a reschedule, a scale-up -- then blocks
+  # forever on a Job that no longer exists.
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
   template:
     metadata:
       labels:
