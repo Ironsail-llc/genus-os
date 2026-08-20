@@ -92,10 +92,11 @@ class TestHandlerIntegration:
     """The handler should call class_level_check only when Rip 2 is enabled."""
 
     @pytest.mark.asyncio
-    async def test_create_skill_blocked_by_rip2_when_enabled(self) -> None:
+    async def test_create_skill_blocked_by_rip2_when_enabled(self, tmp_path) -> None:
         from robothor.engine.tools.handlers.skills import _create_skill
 
-        with patch.dict(os.environ, {"ROBOTHOR_RIP_2_ENABLED": "1"}, clear=True):
+        env = {"ROBOTHOR_RIP_2_ENABLED": "1", "ROBOTHOR_WORKSPACE": str(tmp_path)}
+        with patch.dict(os.environ, env, clear=True):
             result = await _create_skill(
                 {
                     "name": "fix-broken-typecheck",
@@ -109,10 +110,13 @@ class TestHandlerIntegration:
         assert "CLASS-LEVEL umbrella" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_create_skill_allows_one_off_when_rip2_disabled(self) -> None:
+    async def test_create_skill_allows_one_off_when_rip2_disabled(self, tmp_path) -> None:
         from robothor.engine.tools.handlers.skills import _create_skill
 
-        with patch.dict(os.environ, {}, clear=True):
+        # ROBOTHOR_WORKSPACE must be pinned: with a cleared env the skills dir
+        # falls back to the real ~/robothor workspace and this test writes a
+        # live agents/skills/fix-broken-typecheck/ stub (it did, since July).
+        with patch.dict(os.environ, {"ROBOTHOR_WORKSPACE": str(tmp_path)}, clear=True):
             result = await _create_skill(
                 {
                     "name": "fix-broken-typecheck",
@@ -126,3 +130,5 @@ class TestHandlerIntegration:
         # happens next (write_skill_file path errors, etc.) is fine
         # for this test; we only assert the rejection didn't trigger.
         assert result.get("rejected_by") != "class_level_check"
+        # And the write landed inside the isolated workspace, not the repo.
+        assert (tmp_path / "agents" / "skills" / "fix-broken-typecheck" / "SKILL.md").exists()
