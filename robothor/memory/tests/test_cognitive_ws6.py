@@ -13,7 +13,7 @@ from robothor.memory.vault import _vault_populate_enabled, extract_vault_candida
 class TestRouterCues:
     def test_confirm_resolve_route_temporal(self) -> None:
         assert (
-            classify_query("Did Philip confirm the OpenRouter login was legitimate?") == "temporal"
+            classify_query("Did Alice confirm the OpenRouter login was legitimate?") == "temporal"
         )
         assert classify_query("is the openrouter login resolved") == "temporal"
         assert classify_query("was the OpenRouter login legitimate") == "temporal"

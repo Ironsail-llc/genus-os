@@ -4,9 +4,29 @@
 # stay dependency-free: bash + curl only, credentials from the environment.
 #
 # Usage: send_failure_alert.sh <unit-name>
+#
+# systemd fires OnFailure= exactly ONCE per failure — if this script cannot
+# deliver the page, the page is gone forever. That is precisely what happened
+# on the 2026-08-19 boot: one page died on "Could not resolve host:
+# api.telegram.org" (DNS not up yet) and another on "ROBOTHOR_TELEGRAM_BOT_TOKEN
+# is not set" (secrets not decrypted yet). Both failures were real; neither
+# reached the operator. So the send is a bounded retry loop (default 10
+# attempts, 30s apart, ~5min total) and the secrets are re-sourced INSIDE the
+# loop — the boot window that breaks the send is the same window that ends a
+# few seconds later.
 set -u
 
 UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
+
+# ── Retry policy ──────────────────────────────────────────────────────────────
+# Overridable so tests run fast and callers with different latency budgets
+# (e.g. cron-wrapper.sh, which must not stall a cron job for 5 minutes) can
+# tighten the loop.
+MAX_ATTEMPTS="${ROBOTHOR_ALERT_MAX_ATTEMPTS:-10}"
+RETRY_DELAY="${ROBOTHOR_ALERT_RETRY_DELAY:-30}"
+# Overridable so a hermetic test/CI stub can receive the POST instead of the
+# real Telegram API.
+API_BASE="${ROBOTHOR_TELEGRAM_API_BASE:-https://api.telegram.org}"
 
 # ── Cooldown: dedup repeated pages for the same unit ──────────────────────────
 # A unit crash-looping on a short timer (e.g. every 15 minutes) would otherwise
@@ -41,6 +61,7 @@ if [[ -f "$STAMP_FILE" ]]; then
     fi
 fi
 
+# ── Credentials recovery ──────────────────────────────────────────────────────
 # The credentials live ONLY in /run/robothor/secrets.env, and /run is tmpfs — so
 # on a cold boot the file does not exist until some service's ExecStartPre
 # decrypts it. That is exactly when services fail to start, which is exactly when
@@ -49,37 +70,58 @@ fi
 #
 # An alert that is silent during a boot failure is worse than no alert. This unit
 # runs as root and the age key is root-readable, so recover the secrets rather
-# than give up. Best-effort: if it still cannot get a token, it exits non-zero
-# below, loudly.
-if [[ -z "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" ]]; then
+# than give up. Called on every retry attempt: the secrets that were missing on
+# attempt 1 are usually decrypted by attempt 2 or 3.
+DEFAULT_SECRETS="/run/robothor/secrets.env"
+source_secrets() {
+    [[ -n "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" ]] && return 0
     # Overridable so the suite can point this at a fixture. Without that, a test
     # run on the live box would source the REAL secrets and page the operator for
     # real — the same class of accident as the benchmark runner that sent actual
     # emails.
-    SECRETS="${ROBOTHOR_SECRETS_FILE:-/run/robothor/secrets.env}"
-    if [[ ! -r "$SECRETS" ]]; then
-        DECRYPT="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/decrypt-secrets.sh"
-        [[ -x "$DECRYPT" ]] && "$DECRYPT" >/dev/null 2>&1 || true
+    local secrets="${ROBOTHOR_SECRETS_FILE:-$DEFAULT_SECRETS}"
+    # The decrypt fallback only ever writes the default path, so invoking it
+    # for an overridden ROBOTHOR_SECRETS_FILE would be pointless (and would let
+    # a test run touch the real secrets machinery).
+    if [[ ! -r "$secrets" && "$secrets" == "$DEFAULT_SECRETS" ]]; then
+        local decrypt
+        decrypt="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/decrypt-secrets.sh"
+        if [[ -x "$decrypt" ]]; then
+            "$decrypt" >/dev/null 2>&1 || true
+        fi
     fi
-    if [[ -r "$SECRETS" ]]; then
+    if [[ -r "$secrets" ]]; then
+        set -a
         # shellcheck disable=SC1090
-        set -a; source "$SECRETS"; set +a
+        source "$secrets"
+        set +a
     fi
-fi
-
-if [[ -z "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" ]]; then
-    echo "send_failure_alert: ROBOTHOR_TELEGRAM_BOT_TOKEN is not set" >&2
-    exit 1
-fi
-if [[ -z "${ROBOTHOR_TELEGRAM_CHAT_ID:-}" ]]; then
-    echo "send_failure_alert: ROBOTHOR_TELEGRAM_CHAT_ID is not set" >&2
-    exit 1
-fi
+}
 
 HOST="$(hostname -s 2>/dev/null || echo unknown-host)"
-JOURNAL="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
 
-TEXT="🔴 ${UNIT} FAILED on ${HOST}
+# ── Bounded retry loop ────────────────────────────────────────────────────────
+attempt=0
+while (( attempt < MAX_ATTEMPTS )); do
+    attempt=$(( attempt + 1 ))
+    if (( attempt > 1 )); then
+        sleep "$RETRY_DELAY"
+    fi
+
+    source_secrets
+
+    if [[ -z "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" ]]; then
+        echo "send_failure_alert: ROBOTHOR_TELEGRAM_BOT_TOKEN is not set (attempt ${attempt}/${MAX_ATTEMPTS})" >&2
+        continue
+    fi
+    if [[ -z "${ROBOTHOR_TELEGRAM_CHAT_ID:-}" ]]; then
+        echo "send_failure_alert: ROBOTHOR_TELEGRAM_CHAT_ID is not set (attempt ${attempt}/${MAX_ATTEMPTS})" >&2
+        continue
+    fi
+
+    # Rebuilt each attempt: the journal tail sharpens as the failure plays out.
+    JOURNAL="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
+    TEXT="🔴 ${UNIT} FAILED on ${HOST}
 $(date -Is)
 
 Last journal lines:
@@ -87,16 +129,20 @@ ${JOURNAL:-<journal unavailable>}
 
 Check: systemctl status ${UNIT}"
 
-if curl -sS --max-time 15 \
-    --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
-    --data-urlencode "text=${TEXT}" \
-    "https://api.telegram.org/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null; then
-    # Touch the stamp only AFTER a successful send, so a failed send (e.g.
-    # Telegram is down) does not suppress the retry on the next failure.
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    touch "$STAMP_FILE" 2>/dev/null || true
-    exit 0
-fi
+    # --retry inside curl covers transient blips within an attempt; the outer
+    # loop covers the minutes-long boot-DNS window.
+    if curl -sS --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 \
+        --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=${TEXT}" \
+        "${API_BASE}/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null; then
+        # Touch the stamp only AFTER a successful send, so a failed send (e.g.
+        # Telegram is down) does not suppress the retry on the next failure.
+        mkdir -p "$STATE_DIR" 2>/dev/null || true
+        touch "$STAMP_FILE" 2>/dev/null || true
+        exit 0
+    fi
+    echo "send_failure_alert: send attempt ${attempt}/${MAX_ATTEMPTS} failed" >&2
+done
 
-echo "send_failure_alert: failed to send Telegram message" >&2
+echo "send_failure_alert: failed to send Telegram message after ${MAX_ATTEMPTS} attempts" >&2
 exit 1

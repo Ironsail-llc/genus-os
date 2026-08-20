@@ -4,7 +4,7 @@ import { Sidebar, type ViewId } from "@/components/layout/sidebar";
 
 // Mock next/image
 vi.mock("next/image", () => ({
-  default: (props: Record<string, unknown>) => <img {...props} />,
+  default: (props: Record<string, unknown>) => <img alt="" {...props} />,
 }));
 
 // Mock shadcn tooltip (render children directly)

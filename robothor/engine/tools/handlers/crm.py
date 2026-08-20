@@ -13,10 +13,44 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
+# Task-mutating / operator-facing CRM tools — refused when ctx.is_benchmark.
+# Mirrors _GWS_MUTATING_TOOLS (handlers/gws.py): a benchmark run otherwise
+# materializes fixture text as real crm_tasks and notifications, which the
+# briefing then reports as genuine events. Reads (get_task, list_tasks,
+# search_records, …) stay allowed so benchmark prompts can inspect state.
+_CRM_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "resolve_task",
+        "delete_task",
+        "approve_task",
+        "reject_task",
+        "send_notification",
+    }
+)
+
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        HANDLERS[name] = fn
+        if name in _CRM_MUTATING_TOOLS:
+
+            async def gated(
+                args: dict[str, Any],
+                ctx: ToolContext,
+                _fn: Callable[..., Any] = fn,
+                _name: str = name,
+            ) -> dict[str, Any]:
+                if ctx.is_benchmark:
+                    return {
+                        "error": f"benchmark sandbox: {_name} writes are disabled",
+                        "guard": "is_benchmark",
+                    }
+                return cast("dict[str, Any]", await _fn(args, ctx))
+
+            HANDLERS[name] = gated
+        else:
+            HANDLERS[name] = fn
         return fn
 
     return decorator

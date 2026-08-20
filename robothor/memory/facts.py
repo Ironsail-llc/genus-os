@@ -284,16 +284,26 @@ async def _extract_facts_inner(
     return []
 
 
-def _write_dedup_enabled() -> bool:
-    """Reject byte-identical active facts at write time (WS-3). Default OFF.
+_dedup_flag_warned = False
 
-    Requires migration 078 (partial unique index on active (tenant_id,
-    content_hash)). When on, store_fact/store_facts_batch
-    ``ON CONFLICT ... DO NOTHING`` and return the existing id instead of minting
-    a fresh copy of a fact already in memory. Do NOT enable before 078 is applied.
+
+def _write_dedup_enabled() -> bool:
+    """Write-time dedup is always on. The MEMORY_WRITE_DEDUP flag is retired.
+
+    Migration 078's partial unique index on active (tenant_id, content_hash)
+    is global, so gating dedup per-process turned duplicate stores from any
+    writer launched without the flag (e.g. cron-launched ingest) into hard
+    duplicate-key ERRORs. The env var is read only to warn that it no longer
+    does anything.
     """
-    raw = os.environ.get("MEMORY_WRITE_DEDUP", "0").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    global _dedup_flag_warned  # noqa: PLW0603
+    if os.environ.get("MEMORY_WRITE_DEDUP") is not None and not _dedup_flag_warned:
+        logger.warning(
+            "MEMORY_WRITE_DEDUP is deprecated and ignored — "
+            "write-time dedup is always enabled (migration 078 index is global)"
+        )
+        _dedup_flag_warned = True
+    return True
 
 
 _INSERT_FACT_SQL = """
@@ -311,25 +321,23 @@ _INSERT_FACT_ON_CONFLICT = (
 def _insert_fact(cur: Any, params: tuple[Any, ...], *, tenant_id: str, content_hash: str) -> int:
     """Insert one memory_facts row and return its id.
 
-    With MEMORY_WRITE_DEDUP on, a byte-identical active fact short-circuits to
-    the existing row's id (no new row) via the partial unique index. With the
-    flag off this is a plain ``INSERT ... RETURNING id`` (unchanged behaviour).
+    Dedup is unconditional: a byte-identical active fact short-circuits to
+    the existing row's id (no new row, no duplicate-key error) via the 078
+    partial unique index.
     """
-    if _write_dedup_enabled():
-        cur.execute(_INSERT_FACT_SQL + _INSERT_FACT_ON_CONFLICT + " RETURNING id", params)
-        row = cur.fetchone()
-        if row is not None:
-            return int(row[0])
-        cur.execute(
-            "SELECT id FROM memory_facts "
-            "WHERE tenant_id = %s AND content_hash = %s AND is_active = TRUE "
-            "ORDER BY id DESC LIMIT 1",
-            (tenant_id, content_hash),
-        )
-        existing = cur.fetchone()
-        return int(existing[0]) if existing else 0
-    cur.execute(_INSERT_FACT_SQL + " RETURNING id", params)
-    return int(cur.fetchone()[0])
+    _write_dedup_enabled()  # emits the deprecation warning if the retired flag is set
+    cur.execute(_INSERT_FACT_SQL + _INSERT_FACT_ON_CONFLICT + " RETURNING id", params)
+    row = cur.fetchone()
+    if row is not None:
+        return int(row[0])
+    cur.execute(
+        "SELECT id FROM memory_facts "
+        "WHERE tenant_id = %s AND content_hash = %s AND is_active = TRUE "
+        "ORDER BY id DESC LIMIT 1",
+        (tenant_id, content_hash),
+    )
+    existing = cur.fetchone()
+    return int(existing[0]) if existing else 0
 
 
 async def store_fact(

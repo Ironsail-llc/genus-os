@@ -340,6 +340,17 @@ async def _execute_tool(
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
 
+    # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
+    # ContextVar for the duration of the handler call. DAL paths that
+    # create operator-facing state (dal.create_session_goal) cannot see
+    # ToolContext, so this is how the sandbox reaches them regardless of
+    # which handler (create_goal, thread machinery, …) invoked the write.
+    sandbox_token = None
+    if is_benchmark:
+        from robothor.crm.dal import set_benchmark_sandbox
+
+        sandbox_token = set_benchmark_sandbox(True)
+
     # Wrap handler invocation: an unhandled exception here used to propagate
     # out of the runner, leaving agent_runs rows in 'running' state until the
     # 30-min reaper fired. Returning a structured error lets the LLM decide
@@ -369,6 +380,11 @@ async def _execute_tool(
         err_msg = f"{type(e).__name__}: {e}"
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
         return {"error": err_msg, "tool_crashed": True}
+    finally:
+        if sandbox_token is not None:
+            from robothor.crm.dal import reset_benchmark_sandbox
+
+            reset_benchmark_sandbox(sandbox_token)
     if isinstance(result, dict) and "error" in result:
         _audit_tool_call(
             name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]

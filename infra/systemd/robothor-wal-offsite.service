@@ -5,6 +5,9 @@
 Description=Robothor — WAL archive offsite replication + prune
 After=network-online.target postgresql.service
 Wants=network-online.target
+# The prune horizon is read from the newest basebackup on the encrypted backup
+# volume — do not run against a missing mount at boot (Persistent=true).
+RequiresMountsFor=/mnt/robothor-backup
 OnFailure=robothor-alert@%n.service
 
 [Service]

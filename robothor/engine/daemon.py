@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -141,15 +142,48 @@ def classify_reap_reason(
     )
 
 
+def _cleanup_stale_workflow_runs() -> int:
+    """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
+
+    Engine shutdown mid-run used to leave workflow_runs rows 'running'
+    forever: retention excludes 'running' rows, so orphans were immortal
+    (29 found in the 2026-08 diagnosis, oldest 171 days). The max workflow
+    timeout is 900s, so anything 'running' for 2 hours is dead. Returns the
+    number of rows reaped.
+    """
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE workflow_runs SET status='timeout', "
+                "completed_at=NOW(), "
+                "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
+                "error_message='Reaped: engine restarted mid-run' "
+                "WHERE status='running' AND started_at < NOW() - INTERVAL '2 hours'"
+            )
+            reaped = cur.rowcount or 0
+            conn.commit()
+            if reaped:
+                logger.warning("Cleaned up %d stale workflow runs", reaped)
+            return reaped
+    except Exception as e:
+        logger.warning("Stale workflow run cleanup failed: %s", e)
+        return 0
+
+
 def _cleanup_stale_runs() -> int:
     """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
 
     Called on startup and periodically by the watchdog. Instead of applying a
     single hardcoded error_message to every reaped row, this now inspects the
     run's step history to produce a truthful diagnosis (see classify_reap_reason).
+    Also reaps workflow_runs stuck 'running' >2h (engine restarts mid-run).
 
-    Returns the number of runs cleaned up.
+    Returns the number of runs cleaned up (agent + workflow).
     """
+    wf_reaped = _cleanup_stale_workflow_runs()
     try:
         from robothor.db.connection import get_connection
 
@@ -164,7 +198,7 @@ def _cleanup_stale_runs() -> int:
             )
             stale = cur.fetchall()
             if not stale:
-                return 0
+                return wf_reaped
 
             for run_id, agent_id, started_at in stale:
                 started_iso = started_at.isoformat() if started_at is not None else ""
@@ -193,10 +227,10 @@ def _cleanup_stale_runs() -> int:
             for row in stale:
                 release_sync(row[1])
 
-            return len(stale)
+            return len(stale) + wf_reaped
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
-        return 0
+        return wf_reaped
 
 
 async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
@@ -278,7 +312,7 @@ async def _maybe_run_alert_selftest() -> None:
         logger.debug("Alert delivery self-test failed: %s", e)
 
 
-def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
+def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:
     """Log the outcome of each finished top-level subsystem task.
 
     Mirrors task_registry.py's ``_on_done``: a task that ended cancelled
@@ -289,15 +323,25 @@ def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
     watchdog cancelling the wrong task (Aug 5/9 crashes); the sleep-inside-
     try fixes on the curiosity/curator loops are the primary fix, this is
     the backstop for any other task that ends up cancelled.
+
+    Returns:
+        True when any finished task ended with an exception — i.e. this
+        shutdown was triggered by a subsystem crash, not a clean stop.
+        ``run()`` threads this into the process exit code so systemd's
+        OnFailure pager fires (a crash that exits 0 crash-loops silently
+        behind Restart=always forever).
     """
+    failed = False
     for task in done:
         if task.cancelled():
             logger.error("Task %s was cancelled externally", task.get_name())
             continue
         if task.exception():
             logger.error("Task %s failed: %s", task.get_name(), task.exception())
+            failed = True
         else:
             logger.info("Task %s completed", task.get_name())
+    return failed
 
 
 def _select_log_renderer() -> Any:
@@ -321,8 +365,8 @@ def _select_log_renderer() -> Any:
     return structlog.processors.JSONRenderer()
 
 
-async def main() -> None:
-    """Start all engine subsystems."""
+async def main() -> int:
+    """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
     # loading agents, or starting any background subsystem. The Engine verifies
     # Bridge-issued tokens but is not an SSO exchange authority, so it must not
@@ -604,8 +648,9 @@ async def main() -> None:
     # which completes the telegram task — that's our shutdown trigger)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-    # Log what finished
-    _log_task_results(done)
+    # Log what finished — and remember whether this shutdown is a subsystem
+    # crash (non-zero exit → OnFailure pages) or a clean stop (exit 0).
+    subsystem_crashed = _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
 
@@ -662,6 +707,7 @@ async def main() -> None:
 
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
+    return 1 if subsystem_crashed else 0
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:
@@ -683,6 +729,54 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
         logger.debug("Watchdog event recording failed", exc_info=True)
 
 
+# Daily maintenance (chat-session TTL + data retention) fires on wall-clock,
+# not uptime: the old `tick_count % 2880` gate required 24h of *continuous*
+# uptime, which a daemon restarting more than once a day never reached, so
+# retention silently starved.
+_DAILY_MAINTENANCE_INTERVAL_SECONDS = 24 * 3600
+
+# Matches the entry format written by _record_watchdog_event, e.g.
+# a line of the form ``[<YYYY-MM-DD HH:MM> UTC] <event_type>: <detail>``.
+_WATCHDOG_EVENT_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\] ([a-z_]+):")
+
+
+def _read_last_watchdog_event_ts(*event_types: str) -> float | None:
+    """Newest UNIX timestamp among watchdog_log entries of the given types.
+
+    Reads the same memory block _record_watchdog_event() appends to, so the
+    last-run marker survives daemon restarts. Returns None when the block is
+    missing, unreadable, or holds no matching entry.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        from robothor.memory.blocks import read_block
+
+        existing = read_block("watchdog_log")
+        content = existing.get("content", "") if "error" not in existing else ""
+    except Exception:
+        logger.debug("Reading watchdog_log block failed", exc_info=True)
+        return None
+
+    latest: float | None = None
+    for line in (content or "").splitlines():
+        match = _WATCHDOG_EVENT_RE.match(line.strip())
+        if not match or match.group(2) not in event_types:
+            continue
+        try:
+            ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=UTC).timestamp()
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    return latest
+
+
+def _daily_maintenance_due(now: float, last_run: float | None) -> bool:
+    """True when daily maintenance should fire: never run, or >=24h ago."""
+    return last_run is None or (now - last_run) >= _DAILY_MAINTENANCE_INTERVAL_SECONDS
+
+
 async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
     global _autodream_stale_alerted  # noqa: PLW0603
@@ -690,6 +784,17 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
+
+    # Wall-clock gate for daily maintenance — persisted via the watchdog_log
+    # block so restarts don't reset the clock. Legacy retention_* event names
+    # are recognized so the first post-upgrade boot doesn't re-fire early.
+    loop = asyncio.get_running_loop()
+    daily_maintenance_last: float | None = await loop.run_in_executor(
+        None,
+        lambda: _read_last_watchdog_event_ts(
+            "daily_maintenance", "retention_cleanup", "retention_timeout"
+        ),
+    )
 
     while True:
         await asyncio.sleep(30)
@@ -803,8 +908,34 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.debug("Detectors: zombie_runner check failed: %s", e)
 
-        # Daily chat session TTL cleanup (every 2880 ticks = 24h)
-        if tick_count % 2880 == 0:
+        # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
+        if tick_count % 20 == 0:
+            try:
+                from robothor.engine.detectors import (
+                    stuck_workflow_detector,
+                    workflow_failure_streak_detector,
+                )
+
+                fired = await stuck_workflow_detector()
+                if fired:
+                    logger.info("Detectors: %d stuck-workflow alerts fired", fired)
+                fired = await workflow_failure_streak_detector()
+                if fired:
+                    logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: workflow health checks failed: %s", e)
+
+        # Daily maintenance: chat-session TTL cleanup + data retention.
+        # Wall-clock gated (>=24h since the persisted last run, checked every
+        # 10 ticks = 5 min) so daemon restarts can never starve it — the old
+        # `% 2880` gate needed 24h of continuous uptime.
+        if tick_count % 10 == 0 and _daily_maintenance_due(time.time(), daily_maintenance_last):
+            daily_maintenance_last = time.time()
+            # Recorded up front (and unconditionally) so a failed or empty
+            # sweep still advances the persisted clock instead of re-firing
+            # every 5 minutes.
+            _record_watchdog_event("daily_maintenance", "chat TTL + retention sweep started")
+
             try:
                 from robothor.engine.chat_store import cleanup_stale_sessions
 
@@ -815,8 +946,6 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
             except Exception as e:
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
-        # Data retention cleanup (every 2880 ticks = 24h)
-        if tick_count % 2880 == 0:
             try:
                 from robothor.engine.retention import run_retention_cleanup
 
@@ -834,6 +963,19 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                 _record_watchdog_event("retention_timeout", "cleanup exceeded 300s")
             except Exception as e:
                 logger.warning("Watchdog: retention cleanup failed: %s", e)
+
+        # Chat-message embedding backfill (every 60 ticks = 30 min).
+        # Sweeps rows the fire-and-forget embed task missed (process restart)
+        # and everything the sync scheduler save path never embeds at all.
+        if tick_count % 60 == 0:
+            try:
+                from robothor.engine.chat_store import backfill_chat_embeddings
+
+                embedded = await backfill_chat_embeddings()
+                if embedded:
+                    logger.info("Watchdog: backfilled embeddings for %d chat messages", embedded)
+            except Exception as e:
+                logger.warning("Watchdog: chat embedding backfill failed: %s", e)
 
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
@@ -1179,12 +1321,17 @@ async def _autodream_loop() -> None:
 def run() -> None:
     """Entry point for python -m robothor.engine.daemon"""
     try:
-        asyncio.run(main())
+        exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        return
     except Exception as e:
         logger.error("Engine crashed: %s", e, exc_info=True)
         sys.exit(1)
+    if exit_code != 0:
+        # A subsystem task died and triggered this shutdown. Exit non-zero so
+        # systemd's OnFailure pager fires — exit 0 here means Restart=always
+        # silently crash-loops the engine with no page, forever.
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

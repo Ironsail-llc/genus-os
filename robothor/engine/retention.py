@@ -19,13 +19,23 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Retention policy — ordered children-first for FK cascade safety.
-# Each entry: table_name → {days, timestamp_col, batch_size, extra_where?}
+# Each entry: table_name → {days, timestamp_col, batch_size, extra_where?,
+# action?, set_clause?}. action defaults to "delete"; "update" applies
+# set_clause to expired rows instead of deleting them (set_clause must make
+# the rows stop matching the WHERE so the batch loop terminates).
 RETENTION_POLICY: OrderedDict[str, dict[str, Any]] = OrderedDict(
     [
         # ── Hot tier (30 days) — high-volume detail tables ──
         (
             "agent_run_steps",
             {"days": 30, "timestamp_col": "created_at", "batch_size": 5000},
+        ),
+        (
+            "delphi_market_snapshots",
+            # Delphi shadow-pipeline collector: ~60-95k rows/day of orderbook
+            # JSONB with no unbounded-history consumer. Instance-land table —
+            # cleanup no-ops harmlessly where it doesn't exist.
+            {"days": 30, "timestamp_col": "ts", "batch_size": 5000},
         ),
         (
             "agent_run_checkpoints",
@@ -65,6 +75,14 @@ RETENTION_POLICY: OrderedDict[str, dict[str, Any]] = OrderedDict(
             "autodream_runs",
             {"days": 90, "timestamp_col": "started_at", "batch_size": 1000},
         ),
+        (
+            "delphi_intents",
+            {"days": 90, "timestamp_col": "created_at", "batch_size": 5000},
+        ),
+        (
+            "delphi_estimates",
+            {"days": 90, "timestamp_col": "ts", "batch_size": 5000},
+        ),
         # ── Cool tier (180 days) — summary-level records ──
         # Parent tables last — CASCADE will take remaining children
         (
@@ -85,6 +103,21 @@ RETENTION_POLICY: OrderedDict[str, dict[str, Any]] = OrderedDict(
                 "extra_where": "status IN ('completed', 'failed', 'timeout', 'cancelled')",
             },
         ),
+        # ── UPDATE-based policies — hygiene without data loss ──
+        (
+            "memory_facts",
+            # Superseded facts stay for audit, but their embeddings only
+            # bloat the HNSW indexes: strip vectors from rows inactive >90d.
+            # embedding IS NOT NULL in the WHERE makes each pass terminate.
+            {
+                "days": 90,
+                "timestamp_col": "updated_at",
+                "batch_size": 5000,
+                "action": "update",
+                "set_clause": "embedding = NULL",
+                "extra_where": "is_active = FALSE AND embedding IS NOT NULL",
+            },
+        ),
     ]
 )
 
@@ -99,16 +132,29 @@ def _cleanup_table(
     timestamp_col: str,
     batch_size: int = 5000,
     extra_where: str | None = None,
+    action: str = "delete",
+    set_clause: str | None = None,
 ) -> int:
-    """Delete rows older than *days* in batches. Returns total rows deleted.
+    """Apply the retention action to rows older than *days*, in batches.
+
+    ``action="delete"`` (default) deletes expired rows; ``action="update"``
+    applies *set_clause* to them instead (e.g. ``"embedding = NULL"``) — the
+    clause must make the rows stop matching the WHERE so the loop terminates.
+    Returns total rows affected.
 
     Uses a ctid-based subquery to grab a limited batch of row pointers,
-    deletes exactly those, and commits. Each batch holds a lock only briefly.
+    touches exactly those, and commits. Each batch holds a lock only briefly.
     """
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Table {table!r} is not in the retention allowlist")
     if not re.fullmatch(r"[a-z_]+", timestamp_col):
         raise ValueError(f"Invalid timestamp column name: {timestamp_col!r}")
+    if action not in ("delete", "update"):
+        raise ValueError(f"Unknown retention action: {action!r}")
+    if action == "update" and not set_clause:
+        raise ValueError("action='update' requires a set_clause")
+    if action == "delete" and set_clause:
+        raise ValueError("set_clause is only valid with action='update'")
 
     from robothor.db.connection import get_connection
 
@@ -116,20 +162,21 @@ def _cleanup_table(
     if extra_where:
         where = f"{where} AND {extra_where}"
 
+    if action == "update":
+        statement = f"UPDATE {table} SET {set_clause} WHERE ctid = ANY("  # noqa: S608
+    else:
+        statement = f"DELETE FROM {table} WHERE ctid = ANY("  # noqa: S608
+    statement += f"  ARRAY(SELECT ctid FROM {table} WHERE {where} LIMIT %s))"  # noqa: S608
+
     total = 0
     with get_connection() as conn:
         while True:
             cur = conn.cursor()
-            cur.execute(
-                f"DELETE FROM {table} WHERE ctid = ANY("  # noqa: S608
-                f"  ARRAY(SELECT ctid FROM {table} WHERE {where} LIMIT %s)"
-                f")",
-                (batch_size,),
-            )
-            batch_deleted = cur.rowcount
+            cur.execute(statement, (batch_size,))
+            batch_affected = cur.rowcount
             conn.commit()
-            total += batch_deleted or 0
-            if batch_deleted < batch_size:
+            total += batch_affected or 0
+            if batch_affected < batch_size:
                 break
     return total
 
@@ -149,6 +196,8 @@ def run_retention_cleanup() -> dict[str, int]:
                 timestamp_col=policy["timestamp_col"],
                 batch_size=policy.get("batch_size", 5000),
                 extra_where=policy.get("extra_where"),
+                action=policy.get("action", "delete"),
+                set_clause=policy.get("set_clause"),
             )
             results[table] = deleted
             if deleted > 0:

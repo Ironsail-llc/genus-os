@@ -1,15 +1,18 @@
 """Targeted failure-mode detectors — run periodically from the daemon watchdog.
 
 These are **read-only observers**. They never kill runs. Each detector queries
-the DB for a specific signal, compares against a threshold, and fires a
-Telegram alert through `robothor.engine.alerts.alert()` when the signal
-crosses. In-process dedup prevents alert storms on repeated signals.
+the DB for a specific signal, compares against a threshold, and fires an
+alert through `robothor.engine.alerts.alert()` when the signal crosses
+(warning-level alerts land in the crm_agent_notifications digest, not a
+Telegram page). In-process dedup prevents alert storms on repeated signals.
 
 Detectors included:
-    - repeat_error_detector       — same (agent, error_type) ≥3 in last hour
-    - tool_degradation_detector   — tool failure volume or rate spike
-    - runaway_burn_detector       — runs with >500K tokens still running
-    - zombie_runner_detector      — running rows with no recent step activity
+    - repeat_error_detector             — same (agent, error_type) ≥3 in last hour
+    - tool_degradation_detector         — tool failure volume or rate spike
+    - runaway_burn_detector             — runs with >500K tokens still running
+    - zombie_runner_detector            — running rows with no recent step activity
+    - stuck_workflow_detector           — workflow_runs 'running' beyond timeout+grace
+    - workflow_failure_streak_detector  — same workflow failing ≥3 consecutive runs
 
 None of these are global timeouts. They alert so the operator (or an agent
 with self-diagnosis tools) can decide whether to intervene.
@@ -22,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -29,6 +33,42 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
+
+# Tools served by the vision service (tools/handlers/vision.py proxies these
+# over HTTP). When the operator has administratively disabled that service,
+# their failures are expected — paging about them is noise nobody can act on.
+_VISION_TOOLS = frozenset(
+    {
+        "look",
+        "who_is_here",
+        "enroll_face",
+        "enroll_face_from_image",
+        "list_enrolled_faces",
+        "unenroll_face",
+        "set_vision_mode",
+    }
+)
+
+
+def _vision_service_disabled() -> bool:
+    """True when the vision service is administratively disabled.
+
+    Reads the mode file the vision service persists its mode to
+    (``<state_dir>/vision_mode.txt`` — see robothor/vision/service.py
+    ``_mode_file``). The ~5 lines of path convention are deliberately
+    duplicated here instead of imported: the engine must not import the
+    vision package (heavy cv2/numpy deps, separate service boundary).
+    """
+    try:
+        state_dir = Path(
+            os.environ.get("STATE_DIR")
+            or os.environ.get("ROBOTHOR_MEMORY_DIR")
+            or (Path.home() / "robothor" / "memory")
+        )
+        mode_file = state_dir / "vision_mode.txt"
+        return mode_file.is_file() and mode_file.read_text().strip() == "disabled"
+    except Exception:
+        return False
 
 
 # ── Dedup store ─────────────────────────────────────────────────────────
@@ -104,7 +144,8 @@ async def repeat_error_detector(tenant_id: str = DEFAULT_TENANT) -> int:
             f"last: {c.get('last_occurrence', '?')}\n"
             f"sample: {sample_text}"
         )
-        await alert("warning", f"Repeat errors: {agent}", body)
+        if not await alert("warning", f"Repeat errors: {agent}", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -172,8 +213,19 @@ async def tool_degradation_detector() -> int:
         return 0
     from robothor.engine.alerts import alert
 
+    vision_disabled: bool | None = None  # lazy — one stat() per tick at most
     for t in bad_tools:
         name = t["tool_name"]
+        if name in _VISION_TOOLS:
+            if vision_disabled is None:
+                vision_disabled = _vision_service_disabled()
+            if vision_disabled:
+                logger.info(
+                    "Suppressing tool-degradation alert for %s — "
+                    "vision service is administratively disabled",
+                    name,
+                )
+                continue
         fingerprint = f"tool_deg:{name}"
         if not _should_fire(fingerprint):
             continue
@@ -181,7 +233,8 @@ async def tool_degradation_detector() -> int:
             f"{name}: {t['failures']}/{t['total']} failed in last hour "
             f"(rate {t['failure_rate'] * 100:.0f}%)"
         )
-        await alert("warning", f"Tool degradation: {name}", body)
+        if not await alert("warning", f"Tool degradation: {name}", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -239,7 +292,8 @@ async def runaway_burn_detector() -> int:
             f"agent={r.get('agent_id')} model={r.get('model_used')} "
             f"tokens={total:,} elapsed={r.get('elapsed_s')}s run_id={run_id}"
         )
-        await alert("warning", "Runaway-burn (out-of-band)", body)
+        if not await alert("warning", "Runaway-burn (out-of-band)", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -304,6 +358,130 @@ async def zombie_runner_detector() -> int:
             f"agent={z.get('agent_id')} run_id={run_id} "
             f"age={z.get('age_s')}s last_step_at={z.get('last_step_at')}"
         )
-        await alert("warning", "Zombie runner (no recent steps)", body)
+        if not await alert("warning", "Zombie runner (no recent steps)", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
+        fired += 1
+    return fired
+
+
+# ── 5. Stuck workflow runs ──────────────────────────────────────────────
+
+
+def check_stuck_workflow_runs(
+    timeout_seconds: int = 900,
+    grace_seconds: int = 600,
+) -> list[dict[str, Any]]:
+    """workflow_runs still 'running' beyond the workflow timeout + grace.
+
+    Per-workflow timeouts live in YAML (not the DB), so the threshold uses
+    the platform's maximum workflow timeout (900s default) plus a grace
+    period. Anything 'running' past that is an orphan — usually an engine
+    restart mid-run whose CancelledError finalizer could not persist.
+    Alert-only: the daemon reaper owns the state transition.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, workflow_id, started_at,
+                   EXTRACT(EPOCH FROM (NOW() - started_at))::int AS age_s
+            FROM workflow_runs
+            WHERE status = 'running'
+              AND started_at < NOW() - make_interval(secs => %s)
+            ORDER BY started_at ASC
+            LIMIT 10
+            """,
+            (timeout_seconds + grace_seconds,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+async def stuck_workflow_detector() -> int:
+    """Alert on workflow_runs stuck 'running' beyond timeout + grace."""
+    if not detectors_enabled():
+        return 0
+    fired = 0
+    try:
+        stuck = check_stuck_workflow_runs()
+    except Exception as e:
+        logger.debug("stuck_workflow_detector query failed: %s", e)
+        return 0
+    from robothor.engine.alerts import alert
+
+    for s in stuck:
+        run_id = str(s["id"])
+        fingerprint = f"workflow-stuck:{run_id}"
+        if not _should_fire(fingerprint):
+            continue
+        body = (
+            f"workflow={s.get('workflow_id')} run_id={run_id} "
+            f"age={s.get('age_s')}s started_at={s.get('started_at')}"
+        )
+        await alert("warning", "Stuck workflow run", body)
+        fired += 1
+    return fired
+
+
+# ── 6. Workflow failure streaks ─────────────────────────────────────────
+
+
+def check_workflow_failure_streaks(
+    threshold: int = 3,
+) -> list[dict[str, Any]]:
+    """Workflows whose last ``threshold`` terminal runs all failed/timed out.
+
+    'cancelled' and 'skipped' rows are excluded from the window — a shutdown
+    mid-run says nothing about the workflow's health either way.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT workflow_id,
+                   COUNT(*) AS streak,
+                   (ARRAY_AGG(error_message ORDER BY rn))[1] AS last_error
+            FROM (
+                SELECT workflow_id, status, error_message,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY workflow_id ORDER BY started_at DESC
+                       ) AS rn
+                FROM workflow_runs
+                WHERE status IN ('completed', 'failed', 'timeout')
+            ) recent
+            WHERE rn <= %s
+            GROUP BY workflow_id
+            HAVING COUNT(*) >= %s
+               AND BOOL_AND(status IN ('failed', 'timeout'))
+            LIMIT 10
+            """,
+            (threshold, threshold),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+async def workflow_failure_streak_detector() -> int:
+    """Alert when the same workflow has failed several consecutive runs."""
+    if not detectors_enabled():
+        return 0
+    fired = 0
+    try:
+        streaks = check_workflow_failure_streaks()
+    except Exception as e:
+        logger.debug("workflow_failure_streak_detector query failed: %s", e)
+        return 0
+    from robothor.engine.alerts import alert
+
+    for s in streaks:
+        workflow_id = str(s.get("workflow_id") or "unknown")
+        fingerprint = f"workflow-failing:{workflow_id}"
+        if not _should_fire(fingerprint):
+            continue
+        last_error = str(s.get("last_error") or "")[:300]
+        body = f"last {s.get('streak')} runs all failed/timed out.\nlast error: {last_error}"
+        await alert("warning", f"Workflow failing repeatedly: {workflow_id}", body)
         fired += 1
     return fired

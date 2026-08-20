@@ -134,6 +134,39 @@ def _ollama_url() -> str:
         return "http://localhost:11434"
 
 
+def _num_ctx_option() -> int | None:
+    """Optional per-request context-window clamp (ROBOTHOR_OLLAMA_NUM_CTX).
+
+    The Ollama *server's* context-length default can over-ask a model — the
+    2026-08-20 journal showed num_ctx=262144 requested against a model with
+    n_ctx_train=40960 ("requested context size too large for model"), wasting
+    VRAM. No repo code sends num_ctx, so the server default applies unless the
+    operator sets this env to the model's training context; a per-request
+    ``options.num_ctx`` overrides the server default. Unset (the default)
+    keeps current behavior.
+    """
+    raw = os.environ.get("ROBOTHOR_OLLAMA_NUM_CTX", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("ROBOTHOR_OLLAMA_NUM_CTX=%r is not an integer — ignoring", raw)
+        return None
+    if value <= 0:
+        logger.warning("ROBOTHOR_OLLAMA_NUM_CTX=%d is not positive — ignoring", value)
+        return None
+    return value
+
+
+def _apply_num_ctx(options: dict[str, Any]) -> dict[str, Any]:
+    """Add the num_ctx clamp to a generation options dict when configured."""
+    num_ctx = _num_ctx_option()
+    if num_ctx is not None:
+        options["num_ctx"] = num_ctx
+    return options
+
+
 def _embedding_model() -> str:
     """Get embedding model name."""
     model = os.environ.get("ROBOTHOR_EMBEDDING_MODEL")
@@ -214,14 +247,16 @@ async def generate_stream(
         "prompt": prompt,
         "stream": True,
         "keep_alive": _keep_alive_for("generation"),
-        "options": {
-            "temperature": effective_temp,
-            "num_predict": max_tokens,
-            "top_p": 0.95,
-            "top_k": 20,
-            "repeat_penalty": 1.0,
-            "num_gpu": 999,
-        },
+        "options": _apply_num_ctx(
+            {
+                "temperature": effective_temp,
+                "num_predict": max_tokens,
+                "top_p": 0.95,
+                "top_k": 20,
+                "repeat_penalty": 1.0,
+                "num_gpu": 999,
+            }
+        ),
     }
     if system:
         payload["system"] = system
@@ -275,14 +310,16 @@ async def chat(
         "messages": messages,
         "stream": False,
         "keep_alive": _keep_alive_for("generation"),
-        "options": {
-            "temperature": effective_temp,
-            "num_predict": effective_tokens,
-            "top_p": 0.95,
-            "top_k": 20,
-            "repeat_penalty": 1.0,
-            "num_gpu": 999,
-        },
+        "options": _apply_num_ctx(
+            {
+                "temperature": effective_temp,
+                "num_predict": effective_tokens,
+                "top_p": 0.95,
+                "top_k": 20,
+                "repeat_penalty": 1.0,
+                "num_gpu": 999,
+            }
+        ),
     }
 
     # Only add think parameter for Qwen models (others don't support it)
@@ -379,14 +416,16 @@ async def chat_stream(
         "stream": True,
         "think": think,
         "keep_alive": _keep_alive_for("generation"),
-        "options": {
-            "temperature": effective_temp,
-            "num_predict": max_tokens,
-            "top_p": 0.95,
-            "top_k": 20,
-            "repeat_penalty": 1.0,
-            "num_gpu": 999,
-        },
+        "options": _apply_num_ctx(
+            {
+                "temperature": effective_temp,
+                "num_predict": max_tokens,
+                "top_p": 0.95,
+                "top_k": 20,
+                "repeat_penalty": 1.0,
+                "num_gpu": 999,
+            }
+        ),
     }
 
     url = _ollama_url()
