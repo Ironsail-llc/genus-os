@@ -1,11 +1,14 @@
 """
 Vision service — always-on background service with switchable detection modes.
 
-Three modes:
+Four modes:
   disarmed — Camera connected, health endpoint up, no processing.
   basic    — Smart detection: motion -> YOLO -> InsightFace -> alerts for
              unknown persons, async VLM follow-up.
   armed    — Same as basic + per-frame tracking (no motion gate).
+  disabled — Deliberately off (e.g. thermal): no camera analysis, camera
+             endpoints answer {"available": false, "mode": "disabled"}.
+             Persisted, so a restart stays disabled until re-enabled.
 
 Models (YOLO + InsightFace) are loaded at startup. Unknown person detection
 triggers alerts within 2 seconds, with async VLM analysis following.
@@ -28,12 +31,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
+import shutil
 import signal
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -63,7 +68,10 @@ def _get_cv2() -> Any:
 
 
 # Valid modes
-VALID_MODES = ("disarmed", "basic", "armed")
+VALID_MODES = ("disarmed", "basic", "armed", "disabled")
+
+# Endpoints that require camera analysis — unavailable while disabled.
+_CAMERA_ENDPOINTS = ("/detections", "/identifications", "/look", "/enroll", "/enroll-from-image")
 
 
 class CameraStream:
@@ -127,6 +135,7 @@ class VisionService:
         person_alert_cooldown: float | None = None,
         person_gone_timeout: int | None = None,
         alert_manager: AlertManager | None = None,
+        snapshot_retention_days: int | None = None,
     ):
         # Connection URLs
         self.rtsp_url = rtsp_url or os.environ.get("RTSP_URL", "rtsp://localhost:8554/webcam")
@@ -162,6 +171,14 @@ class VisionService:
         )
         self.person_gone_timeout = person_gone_timeout or int(
             os.environ.get("PERSON_GONE_TIMEOUT", "60")
+        )
+
+        # Snapshot retention: day-directories older than this are pruned at
+        # startup and once per day. <= 0 disables pruning.
+        self.snapshot_retention_days = (
+            snapshot_retention_days
+            if snapshot_retention_days is not None
+            else int(os.environ.get("ROBOTHOR_VISION_SNAPSHOT_RETENTION_DAYS", "14"))
         )
 
         # Mode
@@ -241,7 +258,7 @@ class VisionService:
             self.detector._ensure_loaded()
             self.recognizer._ensure_loaded()
 
-        if mode == "disarmed":
+        if mode in ("disarmed", "disabled"):
             self.people_present.clear()
 
         return mode
@@ -256,6 +273,46 @@ class VisionService:
         path = day_dir / now.strftime("%H%M%S.jpg")
         _get_cv2().imwrite(str(path), frame)
         return str(path)
+
+    def cleanup_snapshots(self) -> int:
+        """Delete snapshot day-directories older than the retention window.
+
+        Returns the number of day-directories removed. Non-date entries under
+        the snapshot dir are left untouched. Disabled when
+        snapshot_retention_days <= 0.
+        """
+        if self.snapshot_retention_days <= 0:
+            return 0
+        if not self.snapshot_dir.is_dir():
+            return 0
+        cutoff = datetime.now(tz=UTC).date() - timedelta(days=self.snapshot_retention_days)
+        removed = 0
+        for day_dir in self.snapshot_dir.iterdir():
+            if not day_dir.is_dir():
+                continue
+            try:
+                day = datetime.strptime(day_dir.name, "%Y-%m-%d").replace(tzinfo=UTC).date()
+            except ValueError:
+                continue
+            if day < cutoff:
+                shutil.rmtree(day_dir, ignore_errors=True)
+                removed += 1
+        if removed:
+            logger.info(
+                "Snapshot retention: removed %d day-dir(s) older than %d days",
+                removed,
+                self.snapshot_retention_days,
+            )
+        return removed
+
+    async def _snapshot_retention_loop(self) -> None:
+        """Run the snapshot retention pass once per day."""
+        while self.running:
+            await asyncio.sleep(86400)
+            try:
+                self.cleanup_snapshots()
+            except Exception as e:
+                logger.warning("Snapshot retention pass failed: %r", e)
 
     async def ingest_event(self, event_text: str, metadata: dict[str, Any]) -> None:
         """Post a vision event to the orchestrator for ingestion."""
@@ -398,6 +455,53 @@ class VisionService:
             return self._last_unknown_id
         return None
 
+    def _zero_enrollment_degraded(self) -> bool:
+        """True when no faces are enrolled.
+
+        With zero enrollments every person is 'unknown' by construction, so
+        the per-face alert + VLM follow-up path is a guaranteed runaway
+        (2026-08-18 thermal incident). Unknown-person handling degrades to
+        motion-only until at least one face is enrolled.
+        """
+        if not self.recognizer.enrolled_names:
+            logger.debug("Zero faces enrolled — unknown-person handling degraded to motion-only")
+            return True
+        return False
+
+    # ── Startup Guards ───────────────────────────────────────────
+
+    def _warn_if_cpu_fallback(self) -> None:
+        """Warn when onnxruntime has no CUDA provider (InsightFace on CPU)."""
+        try:
+            import onnxruntime
+        except ImportError:
+            return
+        try:
+            providers = list(onnxruntime.get_available_providers())
+        except Exception:
+            return
+        if "CUDAExecutionProvider" not in providers:
+            logger.warning(
+                "onnxruntime has no CUDAExecutionProvider (available=%s) — "
+                "InsightFace will fall back to CPU, adding CPU/thermal load",
+                providers,
+            )
+
+    def _startup_checks(self) -> None:
+        """One-time startup guards: zero-enrollment, CPU fallback, retention."""
+        if not self.recognizer.enrolled_names:
+            logger.warning(
+                "No faces enrolled — every person is 'unknown' by construction; "
+                "unknown-person handling degraded to motion-only (no per-face "
+                "alerts or VLM follow-up). Enroll via POST /enroll or "
+                "/enroll-from-image to restore full detection."
+            )
+        self._warn_if_cpu_fallback()
+        try:
+            self.cleanup_snapshots()
+        except Exception as e:
+            logger.warning("Snapshot retention pass failed: %r", e)
+
     # ── Frame Processing ─────────────────────────────────────────
 
     async def process_frame_basic(self, frame: np.ndarray) -> None:
@@ -479,6 +583,8 @@ class VisionService:
                 else:
                     self.people_present[name]["last_seen"] = now_str
             else:
+                if self._zero_enrollment_degraded():
+                    continue
                 existing = self._match_recent_unknown(face["embedding"], now_ts)
                 if existing:
                     self.people_present[existing]["last_seen"] = now_str
@@ -503,18 +609,18 @@ class VisionService:
                     await self._alert_unknown(
                         frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
                     )
+                    await self.publish_event(
+                        "vision.person_unknown",
+                        {
+                            "snapshot": snapshot_path,
+                            "camera": self.camera_id,
+                        },
+                    )
                 else:
                     logger.debug("Alert suppressed (known person home) for %s", unknown_id)
-                await self.publish_event(
-                    "vision.person_unknown",
-                    {
-                        "snapshot": snapshot_path,
-                        "camera": self.camera_id,
-                    },
-                )
 
         # Person detected but no face visible
-        if persons and not faces:
+        if persons and not faces and not self._zero_enrollment_degraded():
             if now_ts - self._last_person_alert_time < self.person_alert_cooldown:
                 return
             self._last_person_alert_time = now_ts
@@ -629,6 +735,8 @@ class VisionService:
                     else:
                         self.people_present[name]["last_seen"] = now_str
                 else:
+                    if self._zero_enrollment_degraded():
+                        continue
                     now_ts = time.time()
                     existing = self._match_recent_unknown(face["embedding"], now_ts)
                     if existing:
@@ -657,10 +765,17 @@ class VisionService:
                         await self._alert_unknown(
                             frame, snapshot_path, f"Unknown person detected at {self.camera_id}"
                         )
+                        await self.publish_event(
+                            "vision.person_unknown",
+                            {
+                                "snapshot": snapshot_path,
+                                "camera": self.camera_id,
+                            },
+                        )
                     else:
                         logger.debug("Alert suppressed (known person home) for %s", unknown_id)
 
-            if persons and not faces:
+            if persons and not faces and not self._zero_enrollment_degraded():
                 key = "_person_no_face"
                 if key not in self.people_present:
                     snapshot_path = (
@@ -919,11 +1034,22 @@ class VisionService:
 
     async def _route_request(self, method: str, path: str, body: str) -> bytes:
         """Route an HTTP request to the appropriate handler."""
+        if self.current_mode == "disabled" and path in _CAMERA_ENDPOINTS:
+            return self._json_response(
+                "503 Service Unavailable",
+                {
+                    "available": False,
+                    "mode": "disabled",
+                    "error": "Vision is disabled by the operator",
+                },
+            )
+
         if path == "/health":
             return self._json_response(
                 "200 OK",
                 {
                     "running": self.running,
+                    "available": self.current_mode != "disabled",
                     "mode": self.current_mode,
                     "started_at": self.start_time,
                     "people_present": [k for k in self.people_present if not k.startswith("_")],
@@ -952,7 +1078,8 @@ class VisionService:
                 )
             except (json.JSONDecodeError, KeyError):
                 return self._json_response(
-                    "400 Bad Request", {"error": 'Send JSON: {"mode": "basic|armed|disarmed"}'}
+                    "400 Bad Request",
+                    {"error": 'Send JSON: {"mode": "basic|armed|disarmed|disabled"}'},
                 )
             except ValueError as e:
                 return self._json_response("400 Bad Request", {"error": str(e)})
@@ -1153,7 +1280,7 @@ class VisionService:
         while self.running:
             t0 = time.time()
 
-            if self.current_mode == "disarmed":
+            if self.current_mode in ("disarmed", "disabled"):
                 await asyncio.sleep(interval)
                 continue
 
@@ -1204,12 +1331,18 @@ class VisionService:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.face_data_dir.mkdir(parents=True, exist_ok=True)
 
+        self._startup_checks()
+
         server = await asyncio.start_server(self.handle_request, "127.0.0.1", self.health_port)
         logger.info("HTTP endpoint listening on port %d", self.health_port)
 
+        retention_task = asyncio.create_task(self._snapshot_retention_loop())
         try:
             await self.detection_loop()
         finally:
+            retention_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retention_task
             server.close()
             await server.wait_closed()
             logger.info("Vision service stopped")
