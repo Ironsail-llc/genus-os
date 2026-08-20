@@ -641,7 +641,12 @@ When operated continuously, the computer-vision service supports three modes:
 ```
 
 - Models loaded at startup unconditionally (~306 MB)
-- 120-second `PERSON_ALERT_COOLDOWN` prevents alert spam
+- 120-second `PERSON_ALERT_COOLDOWN` prevents alert spam (enforced in both basic
+  and armed modes)
+- Repeat sightings of the same unknown face are deduplicated by embedding
+  similarity — no new `unknown_NNN` id or alert per frame
+- At most one VLM follow-up in flight at a time (60s request timeout); snapshots
+  are written only when an alert actually fires
 - InsightFace runs on CPU (no CUDA provider on this system)
 - Mode switchable at runtime without restart: `POST /mode {"mode": "armed"}`
 - Live stream: `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access protected)

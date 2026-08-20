@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import numpy as np
 import pytest
 
@@ -495,6 +499,139 @@ class TestArmedMode:
         ):
             await service.process_frame_armed(fake_frame)
         assert "Bob" in service.people_present
+
+
+# ─── Runaway-Load Guardrails ────────────────────────────────────
+# Added after the 2026-08-18 thermal incident: armed mode alerted on every
+# frame, spawning unbounded VLM requests that saturated Ollama and the GPU.
+
+
+@contextmanager
+def _person_with_face_patches(service, embedding):
+    """Patches for a frame containing one person whose face doesn't match."""
+    with (
+        patch(
+            "robothor.vision.service.detect_motion",
+            return_value=(True, 0.3, np.zeros((100, 100))),
+        ),
+        patch.object(
+            service.detector,
+            "detect",
+            return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+        ),
+        patch.object(
+            service.recognizer,
+            "detect",
+            return_value=[{"bbox": [0, 0, 50, 50], "embedding": embedding, "det_score": 0.95}],
+        ),
+        patch.object(service.recognizer, "match", return_value=(None, 0.2)),
+    ):
+        yield
+
+
+class TestArmedModeGuardrails:
+    @pytest.mark.asyncio
+    async def test_unknown_person_cooldown_armed(self, service, fake_frame):
+        """Armed mode must respect person_alert_cooldown like basic mode does."""
+        service._last_person_alert_time = time.time()  # just alerted
+        with (
+            _person_with_face_patches(service, np.ones(512)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+        ):
+            await service.process_frame_armed(fake_frame)
+        mock_alert.assert_not_called()
+        assert not any(k.startswith("unknown_") for k in service.people_present)
+
+    @pytest.mark.asyncio
+    async def test_unknown_person_dedup_by_embedding(self, service, fake_frame):
+        """The same unmatched face must not mint a new unknown_NNN every frame."""
+        embedding = np.ones(512) / np.sqrt(512)
+        service._last_person_alert_time = 0
+        with (
+            _person_with_face_patches(service, embedding),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+        ):
+            await service.process_frame_armed(fake_frame)
+            service._last_person_alert_time = 0  # clear cooldown to isolate dedup
+            await service.process_frame_armed(fake_frame)
+        assert mock_alert.call_count == 1
+        unknown_keys = [k for k in service.people_present if k.startswith("unknown_")]
+        assert len(unknown_keys) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_snapshot_when_suppressed_armed(self, service, fake_frame):
+        """Snapshots should only be written when an alert actually fires."""
+        service.alerts_suppressed = True
+        service._last_person_alert_time = 0
+        with (
+            _person_with_face_patches(service, np.ones(512)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg") as mock_snap,
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock),
+        ):
+            await service.process_frame_armed(fake_frame)
+        mock_snap.assert_not_called()
+
+
+class TestVLMGuardrails:
+    @pytest.mark.asyncio
+    async def test_vlm_followup_single_flight(self, service, fake_frame):
+        """At most one VLM follow-up may be in flight at a time."""
+        started = 0
+
+        async def slow_followup(frame, snapshot_path):
+            nonlocal started
+            started += 1
+            await asyncio.sleep(0.2)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=mock_cv2),
+            patch.object(service, "_vlm_followup", side_effect=slow_followup),
+        ):
+            await service._alert_unknown(fake_frame, "/tmp/a.jpg", "msg")
+            await asyncio.sleep(0.05)  # let the first task start
+            await service._alert_unknown(fake_frame, "/tmp/b.jpg", "msg")
+            await asyncio.sleep(0.3)  # drain
+        assert started == 1
+
+    @pytest.mark.asyncio
+    async def test_vlm_timeout_reduced(self, service, fake_frame):
+        """VLM requests must time out at 60s, not 300s (queue-collapse guard)."""
+        mock_cv2 = MagicMock()
+        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
+        with (
+            patch("robothor.vision.service._get_cv2", return_value=mock_cv2),
+            patch("robothor.vision.service.httpx.AsyncClient") as mock_client_cls,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"message": {"content": "ok"}}
+            mock_resp.raise_for_status = MagicMock()
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_client
+
+            await service.analyze_vlm(fake_frame)
+        assert mock_client_cls.call_args.kwargs["timeout"] == 60.0
+
+
+class TestIngestionErrorLogging:
+    @pytest.mark.asyncio
+    async def test_ingest_error_logs_exception_type(self, service, caplog):
+        """httpx timeouts stringify to '' — the log line must name the type."""
+        with patch("robothor.vision.service.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout(""))
+            mock_client_cls.return_value = mock_client
+            with caplog.at_level(logging.WARNING):
+                await service.ingest_event("test event", {})
+        assert "ReadTimeout" in caplog.text
 
 
 # ─── Departure Tracking ─────────────────────────────────────────
