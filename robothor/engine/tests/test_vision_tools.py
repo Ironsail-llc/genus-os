@@ -2,9 +2,10 @@
 identity graph via ``face_identities`` (Task 7, Unified Identity Context).
 
 The vision service (robothor/vision/service.py) stays DB-free; these
-handlers proxy to it over HTTP (mocked at the existing ``httpx.AsyncClient``
-seam, see test_apollo_tools.py) and separately read/write ``face_identities``
-(mocked at the ``_get_conn`` seam, see test_identity_tools.py).
+handlers proxy to it over HTTP through the shared service client (mocked at
+the ``service_client.httpx.AsyncClient`` seam) and separately read/write
+``face_identities`` (mocked at the ``_get_conn`` seam, see
+test_identity_tools.py).
 """
 
 from __future__ import annotations
@@ -17,8 +18,16 @@ import pytest
 
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.vision import HANDLERS
+from robothor.engine.tools.service_client import reset_circuit_breakers
 
 CTX = ToolContext(agent_id="test", tenant_id="test-tenant")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_breakers():
+    reset_circuit_breakers()
+    yield
+    reset_circuit_breakers()
 
 
 def _mock_response(json_data: dict, status_code: int = 200) -> httpx.Response:
@@ -34,10 +43,11 @@ def _mock_client(*, get: httpx.Response | None = None, post: httpx.Response | No
     client = AsyncMock()
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=False)
-    if get is not None:
-        client.get = AsyncMock(return_value=get)
-    if post is not None:
-        client.post = AsyncMock(return_value=post)
+
+    async def _request(method: str, url: str, **kwargs):
+        return get if method.upper() == "GET" else post
+
+    client.request = AsyncMock(side_effect=_request)
     return client
 
 
@@ -75,7 +85,7 @@ class TestEnrollFaceUnlinked:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["enroll_face"]({"name": "front-door"}, CTX)
@@ -97,7 +107,7 @@ class TestEnrollFaceUnlinked:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["enroll_face"]({"name": "front-door"}, CTX)
@@ -122,7 +132,7 @@ class TestEnrollFaceLinked:
         person = {"id": "person-1", "name": {"firstName": "Alice", "lastName": "Rivera"}}
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
             patch("robothor.crm.dal.get_person", return_value=person),
         ):
@@ -148,7 +158,7 @@ class TestEnrollFaceLinked:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
             patch("robothor.crm.dal.get_person", return_value=None),
         ):
@@ -171,7 +181,7 @@ class TestEnrollFaceLinked:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["enroll_face"](
@@ -192,7 +202,7 @@ class TestEnrollFaceLinked:
         client = _mock_client(post=resp)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", _fail_conn),
         ):
             result = await HANDLERS["enroll_face"]({"name": "front-door"}, CTX)
@@ -213,7 +223,7 @@ class TestEnrollFaceFromImage:
         person = {"id": "person-1", "name": {"firstName": "Alice", "lastName": "Rivera"}}
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
             patch("robothor.crm.dal.get_person", return_value=person),
         ):
@@ -237,7 +247,7 @@ class TestEnrollFaceFromImage:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["enroll_face_from_image"](
@@ -260,7 +270,7 @@ class TestUnenrollFace:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["unenroll_face"]({"name": "front-door"}, CTX)
@@ -273,8 +283,9 @@ class TestUnenrollFace:
 
     @pytest.mark.asyncio
     async def test_unenroll_service_404_does_not_touch_db(self):
-        """Service reports the name wasn't enrolled (404): raise_for_status()
-        raises before the DELETE runs -- no partial/incorrect delete."""
+        """Service reports the name wasn't enrolled (404): the shared client
+        maps it to a structured error before the DELETE runs -- no
+        partial/incorrect delete, and no exception escapes the tool."""
         resp = _mock_response(
             {"success": False, "error": "front-door not enrolled"}, status_code=404
         )
@@ -283,12 +294,12 @@ class TestUnenrollFace:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
-            pytest.raises(httpx.HTTPStatusError),
         ):
-            await HANDLERS["unenroll_face"]({"name": "front-door"}, CTX)
+            result = await HANDLERS["unenroll_face"]({"name": "front-door"}, CTX)
 
+        assert result["error"] == "vision service error (HTTP 404)"
         cur.execute.assert_not_called()
 
     @pytest.mark.asyncio
@@ -297,7 +308,7 @@ class TestUnenrollFace:
         client = _mock_client(post=resp)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", _fail_conn),
         ):
             result = await HANDLERS["unenroll_face"]({"name": "front-door"}, CTX)
@@ -316,7 +327,7 @@ class TestWhoIsHere:
         )
         client = _mock_client(get=resp)
 
-        with patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client):
+        with patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client):
             result = await HANDLERS["who_is_here"]({}, CTX)
 
         assert result["people_present"] == []
@@ -338,7 +349,7 @@ class TestWhoIsHere:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["who_is_here"]({}, CTX)
@@ -366,7 +377,7 @@ class TestWhoIsHere:
         fake_conn, _ = _mock_db(cur)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", fake_conn),
         ):
             result = await HANDLERS["who_is_here"]({}, CTX)
@@ -383,7 +394,7 @@ class TestWhoIsHere:
         client = _mock_client(get=resp)
 
         with (
-            patch("robothor.engine.tools.handlers.vision.httpx.AsyncClient", return_value=client),
+            patch("robothor.engine.tools.service_client.httpx.AsyncClient", return_value=client),
             patch("robothor.engine.tools.handlers.vision._get_conn", _fail_conn),
         ):
             result = await HANDLERS["who_is_here"]({}, CTX)

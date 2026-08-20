@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -438,6 +439,20 @@ async def _get_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         rows_dropped_by_scope,
         scope_for_query,
     )
+
+    # Validate at the tool boundary: LLM-hallucinated placeholder ids
+    # ("task_jkl012") used to reach the uuid-typed SQL parameter verbatim and
+    # crash with psycopg2 InvalidTextRepresentation.
+    task_id = args.get("id", "")
+    try:
+        uuid.UUID(str(task_id))
+    except ValueError:
+        return {
+            "error": (
+                f"invalid task id {task_id!r} — expected a UUID; "
+                "use list_tasks or list_my_tasks to find real task ids"
+            )
+        }
 
     _mode = data_scoping_mode()
     result = await asyncio.to_thread(
@@ -977,10 +992,24 @@ async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     from robothor.engine.feature_flags import data_scoping_mode
     from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
 
+    # Validate at the tool boundary: LLM-hallucinated placeholder ids
+    # ("cnv-00456") used to reach the integer-typed SQL parameter verbatim and
+    # crash with psycopg2 InvalidTextRepresentation.
+    raw_conversation_id = args.get("conversationId")
+    try:
+        conversation_id = int(str(raw_conversation_id))
+    except (TypeError, ValueError):
+        return {
+            "error": (
+                f"invalid conversation id {raw_conversation_id!r} — expected an integer id; "
+                "use list_conversations to find real conversation ids"
+            )
+        }
+
     _mode = data_scoping_mode()
     result = await asyncio.to_thread(
         list_messages,
-        args["conversationId"],
+        conversation_id,
         tenant_id=ctx.tenant_id,
         scope=scope_for_query(_mode, ctx.identity),
     )
@@ -994,9 +1023,7 @@ async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # mode would apply and log the would-be refusal, without denying.
         from robothor.crm.dal import get_conversation
 
-        convo = await asyncio.to_thread(
-            get_conversation, args["conversationId"], tenant_id=ctx.tenant_id
-        )
+        convo = await asyncio.to_thread(get_conversation, conversation_id, tenant_id=ctx.tenant_id)
         convo_person = (convo or {}).get("person_id") if convo else None
         if convo_person not in (None, _obs_scope.person_id):
             log_would_drop(

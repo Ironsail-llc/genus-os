@@ -8,6 +8,8 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
+
 from robothor.constants import DEFAULT_TENANT
 
 if TYPE_CHECKING:
@@ -355,6 +357,24 @@ async def _execute_tool(
     # whether to retry, skip, or surface to the operator.
     try:
         result = cast("dict[str, Any]", await handler(args, ctx))
+    except httpx.HTTPStatusError as e:
+        # A backing service responded with an error status. Map to a short
+        # structured error: the raw exception text embeds the internal
+        # loopback URL, which must never reach agent context.
+        status = e.response.status_code
+        err_msg = f"backing service error (HTTP {status})"
+        logger.warning("Tool %s: %s", name, err_msg)
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
+        return {"error": err_msg, "retryable": status >= 500}
+    except httpx.HTTPError as e:
+        # Transport-level failure (connect refused, timeout, protocol error)
+        # from a handler that didn't route through service_client — e.g. the
+        # memory tools when the embedding service is down. An operational
+        # state, not a bug: one warning line, no traceback, no crash flag.
+        err_msg = f"backing service unreachable: {type(e).__name__}"
+        logger.warning("Tool %s: %s", name, err_msg)
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
+        return {"error": err_msg, "retryable": True}
     except Exception as e:
         logger.exception("Tool %s raised unhandled exception", name)
         err_msg = f"{type(e).__name__}: {e}"
