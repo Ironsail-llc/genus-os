@@ -1,3 +1,9 @@
+## [1.32.0](https://github.com/Ironsail-llc/genus-os/compare/v1.31.2...v1.32.0) (2026-08-20)
+
+### Features
+
+* **memory:** flag-gated remote provider for memory generation ([#263](https://github.com/Ironsail-llc/genus-os/issues/263)) ([ef8c4c0](https://github.com/Ironsail-llc/genus-os/commit/ef8c4c058f4132cf051bf31bf4ac434ed11bc61d))
+
 ## [1.31.2](https://github.com/Ironsail-llc/genus-os/compare/v1.31.1...v1.31.2) (2026-08-20)
 
 ### Bug Fixes
