@@ -1,3 +1,10 @@
+## [1.33.1](https://github.com/Ironsail-llc/genus-os/compare/v1.33.0...v1.33.1) (2026-08-20)
+
+### Bug Fixes
+
+* **vision:** runaway-load guardrails for the VLM follow-up path ([#270](https://github.com/Ironsail-llc/genus-os/issues/270)) ([07bf2d2](https://github.com/Ironsail-llc/genus-os/commit/07bf2d299b98564f6f2c532c289674d90caea7d3))
+* **vision:** snapshot_path is optional when alerts are suppressed ([#273](https://github.com/Ironsail-llc/genus-os/issues/273)) ([383a6f3](https://github.com/Ironsail-llc/genus-os/commit/383a6f339ac7c01185a9a72fab3125beca64bd8f))
+
 ## [1.33.0](https://github.com/Ironsail-llc/genus-os/compare/v1.32.0...v1.33.0) (2026-08-20)
 
 ### Features
