@@ -56,6 +56,10 @@ markdown_extensions:
 # Allowlist: everything under docs/ is excluded unless re-included here.
 # This keeps internal material (runbooks, benchmarks, plans, agent schemas,
 # workflow YAML) off the public site by default.
+# !/assets/ re-includes the Material theme's own CSS/JS/search workers: they
+# register as docs files, so the /* catch-all strips them and the deployed
+# site renders unstyled without it. (docs/assets/ does not exist in the repo,
+# so nothing from docs/ sneaks in through this entry.)
 exclude_docs: |
   /*
   !/index.md
@@ -70,6 +74,7 @@ exclude_docs: |
   !/contributing.md
   !/security.md
   !/images
+  !/assets/
 
 validation:
   omitted_files: warn

@@ -1,4 +1,14 @@
 # Documentation site build (mkdocs.yml + .github/workflows/docs.yml).
 # Kept separate from pyproject extras so the Pages build never installs the
 # platform package or its dependency tree.
+#
+# Exact pins (including the rendering-relevant transitives) so the published
+# site is reproducible and the CI toolchain can't drift under us. Bump
+# deliberately: update the pins together and rebuild with --strict locally.
 mkdocs-material==9.7.7
+mkdocs==1.6.1
+pymdown-extensions==11.0.1
+mkdocs-material-extensions==1.3.1
+markdown==3.10.3
+jinja2==3.1.6
+pygments==2.19.2

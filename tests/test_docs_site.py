@@ -101,6 +101,12 @@ def test_mkdocs_site_is_an_allowlist() -> None:
     assert all(line.startswith("!") for line in lines[1:]), (
         "after the /* catch-all, every entry must be a re-include"
     )
+    # The Material theme's CSS/JS/search workers register as docs files, so
+    # the /* catch-all strips them too. Without this re-include the deployed
+    # site is raw unstyled HTML (strict builds do NOT catch it).
+    assert "!/assets/" in lines, (
+        "exclude_docs must re-include /assets/ or the theme's CSS/JS is stripped"
+    )
 
 
 def test_mkdocs_nav_pages_exist_and_are_allowlisted() -> None:
