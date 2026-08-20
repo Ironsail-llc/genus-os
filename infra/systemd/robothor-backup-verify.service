@@ -18,4 +18,4 @@ User=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 Environment=ROBOTHOR_OFFSITE_VERIFY_ONLY=1
-ExecStart=/usr/bin/env bash /opt/robothor/scripts/backup-offsite.sh
+ExecStart=/usr/bin/bash /opt/robothor/scripts/backup-offsite.sh

@@ -29,7 +29,7 @@ User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor
 
-ExecStart=/usr/bin/env python -m robothor.vision.service
+ExecStart=/opt/robothor/venv/bin/python -m robothor.vision.service
 
 EnvironmentFile=/etc/robothor/robothor.env
 

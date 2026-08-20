@@ -416,3 +416,33 @@ def test_repo_templates_use_canonical_spellings(unit: Path):
             f"{unit.name}: {home} is an instance home path — use /home/robothor "
             "(the placeholder) or /opt/robothor for workspace paths"
         )
+
+
+def test_execstart_never_relies_on_bare_env_lookup():
+    """`/usr/bin/env python` (or any bare command) is unrunnable under
+    systemd: units get PATH=/usr/bin:/bin, which has no `python` on Ubuntu
+    and no venv entry points. Every ExecStart must use an absolute
+    interpreter/binary path (env is fine when it only sets VAR=val before an
+    absolute path). Live incident 2026-08-20: installing the templates took
+    down the bridge and orchestrator with status=127."""
+    for unit in repo_units():
+        # join systemd line continuations so multiline ExecStarts parse whole
+        text = unit.read_text().replace("\\\n", " ")
+        for line in text.splitlines():
+            if not line.startswith(("ExecStart=", "ExecStartPre=")):
+                continue
+            cmd = line.split("=", 1)[1].lstrip("-@:+!").strip()
+            parts = cmd.split()
+            if not parts:
+                continue
+            if parts[0].endswith("/env"):
+                # env is fine only for VAR=val assignments before an absolute path
+                real = next((p for p in parts[1:] if "=" not in p or p.startswith("/")), "")
+                assert real.startswith("/"), (
+                    f"{unit.name}: {line!r} relies on PATH lookup of {real!r} — "
+                    "systemd units must use absolute paths"
+                )
+            else:
+                assert parts[0].startswith("/"), (
+                    f"{unit.name}: {line!r} does not use an absolute path"
+                )

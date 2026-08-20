@@ -23,7 +23,7 @@ User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor
 
-ExecStart=/usr/bin/env robothor serve --host 0.0.0.0 --port 9099
+ExecStart=/opt/robothor/venv/bin/robothor serve --host 0.0.0.0 --port 9099
 
 EnvironmentFile=/etc/robothor/robothor.env
 

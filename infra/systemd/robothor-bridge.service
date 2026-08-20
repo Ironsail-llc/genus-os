@@ -25,9 +25,9 @@ Type=exec
 # Set User to the system user that runs Genus OS
 User=robothor
 Group=robothor
-WorkingDirectory=/opt/robothor
+WorkingDirectory=/opt/robothor/crm/bridge
 
-ExecStart=/usr/bin/env python -m robothor.bridge.service
+ExecStart=/opt/robothor/crm/bridge/venv/bin/python bridge_service.py
 
 EnvironmentFile=/etc/robothor/robothor.env
 
