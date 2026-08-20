@@ -420,7 +420,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "name": "intent_add",
                 "description": (
                     "Record a STANDING INTENT — an ongoing objective the operator is "
-                    "working toward (e.g. 'grow Valhalla revenue'), not a one-off task. "
+                    "working toward (e.g. 'grow quarterly revenue'), not a one-off task. "
                     "Persists across sessions so it can be advanced proactively."
                 ),
                 "parameters": {

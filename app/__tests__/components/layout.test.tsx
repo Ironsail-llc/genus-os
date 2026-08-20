@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 
 // Mock next/image
 vi.mock("next/image", () => ({
-  default: (props: Record<string, unknown>) => <img {...props} />,
+  default: (props: Record<string, unknown>) => <img alt="" {...props} />,
 }));
 
 // Mock shadcn tooltip

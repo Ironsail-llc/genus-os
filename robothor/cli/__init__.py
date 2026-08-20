@@ -14,6 +14,9 @@ Usage:
     robothor snapshot       # Backup, verify, restore, and retain instance state
     robothor auth           # Manage user accounts / identity
     robothor user           # Register/link users into the identity graph
+    robothor export         # Export configuration as a portable bundle
+    robothor import         # Import configuration from another agent platform
+    robothor tenant         # Create, list, and inspect tenants
     robothor pipeline       # (coming in v0.2)
 """
 
@@ -555,6 +558,56 @@ def main(argv: list[str] | None = None) -> int:
         "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
     )
 
+    # export — portable configuration bundle (agents, skills, opt-in memory)
+    export_parser = subparsers.add_parser(
+        "export", help="Export configuration as a portable bundle"
+    )
+    export_parser.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+    export_parser.add_argument(
+        "--output", default=None, help="Output directory (default: ./robothor-export-<tenant>)"
+    )
+    export_parser.add_argument(
+        "--include-memory",
+        action="store_true",
+        help="Include memory block contents (opt-in — may contain PII)",
+    )
+
+    # import — migrate configuration from another agent platform
+    platform_import_parser = subparsers.add_parser(
+        "import", help="Import configuration from another agent platform"
+    )
+    platform_import_parser.add_argument(
+        "platform",
+        nargs="?",
+        default="auto",
+        choices=["auto", "hermes", "generic"],
+        help="Source platform (default: auto-detect)",
+    )
+    platform_import_parser.add_argument(
+        "--source", default=None, help="Source path (file or directory)"
+    )
+    platform_import_parser.add_argument(
+        "--tenant", default=None, help="Target tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+
+    # tenant — multi-tenant administration
+    tenant_parser = subparsers.add_parser("tenant", help="Create, list, and inspect tenants")
+    tenant_sub = tenant_parser.add_subparsers(dest="tenant_command")
+    tenant_create = tenant_sub.add_parser("create", help="Create a new tenant")
+    tenant_create.add_argument("id", help="Tenant ID (e.g. acme)")
+    tenant_create.add_argument("--name", default=None, help="Display name (default: tenant ID)")
+    tenant_create.add_argument(
+        "--telegram-user-id", default=None, help="Bind a Telegram user id to the new tenant"
+    )
+    tenant_create.add_argument("--parent", default=None, help="Parent tenant ID")
+    tenant_sub.add_parser("list", help="List all tenants")
+    tenant_status = tenant_sub.add_parser(
+        "status", help="Show tenant details, memory stats, and recent run counts"
+    )
+    tenant_status.add_argument("tenant_id", help="Tenant ID")
+
     # engine
     # run -- quick single-shot agent execution
     run_parser = subparsers.add_parser("run", help="Run agent with a message (non-interactive)")
@@ -711,6 +764,18 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.user import cmd_user
 
         return cmd_user(args)
+    if args.command == "export":
+        from robothor.cli.exporter import cmd_export
+
+        return cmd_export(args)
+    if args.command == "import":
+        from robothor.cli.importer import cmd_import
+
+        return cmd_import(args)
+    if args.command == "tenant":
+        from robothor.cli.tenant import cmd_tenant
+
+        return cmd_tenant(args)
     if args.command == "run":
         from robothor.cli.engine import cmd_run
 

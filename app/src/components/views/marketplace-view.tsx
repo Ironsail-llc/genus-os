@@ -66,7 +66,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
         const err = await res.json();
         setMessage({ text: err.detail || "Install failed", type: "error" });
       }
-    } catch (e) {
+    } catch {
       setMessage({ text: "Install failed: network error", type: "error" });
     } finally {
       setInstalling(false);

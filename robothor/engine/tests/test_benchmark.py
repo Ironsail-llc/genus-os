@@ -953,7 +953,7 @@ class TestBenchmarkSandbox:
     """Benchmark sub-agents must run with a tight read-only allow-list.
 
     Regression coverage for the 2026-05-28 incident where benchmark sub-agents
-    sent real emails to Samantha @ ironsailpharma.com via:
+    sent real emails to an external contact (alice@example.com) via:
         gws_gmail_send  → BLOCKED ✓
         invoke_skill('send-email') → returned shell instructions
         exec 'gog gmail send ...' → SENT real email.

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ChatPanel } from "../chat-panel";
 
@@ -82,7 +82,6 @@ describe("ChatPanel streaming UX", () => {
     // During streaming, tool indicator should briefly appear
     await waitFor(
       () => {
-        const indicator = screen.queryByTestId("tool-indicator");
         // Tool indicator may flash — just verify the component renders without crash
         expect(screen.getByTestId("streaming-message")).toBeTruthy();
       },
@@ -127,8 +126,7 @@ describe("ChatPanel streaming UX", () => {
     // Step progress should appear during streaming
     await waitFor(
       () => {
-        const progress = screen.queryByTestId("step-progress");
-        // May flash briefly — verify no crash
+        // Step progress may flash briefly — verify no crash
         expect(screen.getByTestId("streaming-message")).toBeTruthy();
       },
       { timeout: 2000 }
