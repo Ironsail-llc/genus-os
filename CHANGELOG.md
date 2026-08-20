@@ -1,3 +1,9 @@
+## [1.31.2](https://github.com/Ironsail-llc/genus-os/compare/v1.31.1...v1.31.2) (2026-08-20)
+
+### Bug Fixes
+
+* **security:** untrack instance artifacts leaked into the public repo ([#262](https://github.com/Ironsail-llc/genus-os/issues/262)) ([8a6e399](https://github.com/Ironsail-llc/genus-os/commit/8a6e39920344cc00eeb5678d1b5f26e1a6d43f06)), closes [#260](https://github.com/Ironsail-llc/genus-os/issues/260)
+
 ## [1.31.1](https://github.com/Ironsail-llc/genus-os/compare/v1.31.0...v1.31.1) (2026-08-20)
 
 ### Bug Fixes
