@@ -201,8 +201,13 @@ def run_retention_cleanup() -> dict[str, int]:
             )
             results[table] = deleted
             if deleted > 0:
+                # "updated" for UPDATE-based hygiene policies (e.g. stripping
+                # embeddings): logging "deleted 75k rows from memory_facts"
+                # for a non-destructive pass reads as memory loss.
+                verb = "updated" if policy.get("action") == "update" else "deleted"
                 logger.info(
-                    "Retention: deleted %d rows from %s (>%d days)",
+                    "Retention: %s %d rows in %s (>%d days)",
+                    verb,
                     deleted,
                     table,
                     policy["days"],
