@@ -391,9 +391,7 @@ class VisionService:
         import numpy as np  # runtime import: numpy is type-only at module level
 
         prev = self._last_unknown_embedding
-        sim = float(
-            np.dot(embedding, prev) / (np.linalg.norm(embedding) * np.linalg.norm(prev))
-        )
+        sim = float(np.dot(embedding, prev) / (np.linalg.norm(embedding) * np.linalg.norm(prev)))
         if sim >= self.recognizer.match_threshold:
             return self._last_unknown_id
         return None
