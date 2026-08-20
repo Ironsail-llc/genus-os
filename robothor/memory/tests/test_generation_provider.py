@@ -8,9 +8,11 @@ back to local loudly (WARNING + counter) — never silently.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from robothor.memory import generation
@@ -21,9 +23,13 @@ def _reset_state(monkeypatch):
     """Isolate provider env vars and module state per test."""
     monkeypatch.delenv(generation.PROVIDER_ENV, raising=False)
     monkeypatch.delenv(generation.REMOTE_MODEL_ENV, raising=False)
+    monkeypatch.delenv(generation.CONCURRENCY_ENV, raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     generation.remote_fallback_count = 0
+    generation.consecutive_fallback_count = 0
     generation._missing_key_logged = False
+    generation._remote_sem = None
+    generation._remote_sem_loop = None
 
 
 # ─── Default provider: local ollama, no remote calls ────────────────────
@@ -202,6 +208,8 @@ def test_strip_think_blocks_passthrough():
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, payload):
         self._payload = payload
 
@@ -368,3 +376,196 @@ async def test_extract_facts_uses_generation_seam(monkeypatch):
 
     fake.assert_awaited()
     assert result and result[0]["fact_text"] == "Alice prefers tea over coffee"
+
+
+# ─── 429 backoff before fallback ─────────────────────────────────────────
+
+
+class _ScriptedClient:
+    """Fake httpx.AsyncClient returning scripted status codes per POST."""
+
+    script: list[int] = []
+    calls: int = 0
+    good_payload: dict = {"choices": [{"message": {"content": "remote ok"}}]}
+
+    def __init__(self, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, json=None, headers=None):
+        cls = type(self)
+        status = cls.script[min(cls.calls, len(cls.script) - 1)]
+        cls.calls += 1
+        request = httpx.Request("POST", url)
+        if status == 200:
+            return httpx.Response(200, json=cls.good_payload, request=request)
+        return httpx.Response(status, text="rate limited", request=request)
+
+
+@pytest.fixture
+def scripted_client(monkeypatch):
+    _ScriptedClient.script = []
+    _ScriptedClient.calls = 0
+    monkeypatch.setattr(generation.httpx, "AsyncClient", _ScriptedClient)
+    # No real sleeping in tests.
+    monkeypatch.setattr(generation, "RETRY_429_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(generation, "RETRY_429_CAP_SECONDS", 0.0)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    return _ScriptedClient
+
+
+async def test_429_is_retried_with_backoff_then_succeeds(scripted_client, caplog):
+    scripted_client.script = [429, 429, 200]
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation._openrouter_chat(
+            [{"role": "user", "content": "x"}],
+            temperature=0.2,
+            max_tokens=64,
+            format=None,
+            think=False,
+        )
+
+    assert result == "remote ok"
+    assert scripted_client.calls == 3
+    assert any("429" in r.getMessage() for r in caplog.records)
+
+
+async def test_429_storm_exhausts_retries_then_raises(scripted_client):
+    scripted_client.script = [429]
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await generation._openrouter_chat(
+            [{"role": "user", "content": "x"}],
+            temperature=0.2,
+            max_tokens=64,
+            format=None,
+            think=False,
+        )
+    assert scripted_client.calls == generation.RETRY_429_MAX_ATTEMPTS
+
+
+async def test_429_exhaustion_falls_back_to_local(scripted_client, monkeypatch, caplog):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    scripted_client.script = [429]
+    local = AsyncMock(return_value="local result")
+    monkeypatch.setattr(generation.ollama, "chat", local)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.chat([{"role": "user", "content": "x"}])
+
+    assert result == "local result"
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_500_is_not_retried_in_remote_client(scripted_client):
+    """Only 429 gets the backoff loop — other failures fall back immediately."""
+    scripted_client.script = [500]
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await generation._openrouter_chat(
+            [{"role": "user", "content": "x"}],
+            temperature=0.2,
+            max_tokens=64,
+            format=None,
+            think=False,
+        )
+    assert scripted_client.calls == 1
+
+
+# ─── consecutive-fallback streak alarm ───────────────────────────────────
+
+
+async def test_consecutive_fallback_streak_logs_error(monkeypatch, caplog):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(generation.ollama, "generate", AsyncMock(return_value="local"))
+    monkeypatch.setattr(generation, "_openrouter_chat", AsyncMock(side_effect=RuntimeError("boom")))
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        for _ in range(generation.FALLBACK_STREAK_THRESHOLD):
+            await generation.generate(prompt="x")
+
+    errors = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and generation.FALLBACK_STREAK_MARKER in r.getMessage()
+    ]
+    assert len(errors) == 1, "the streak alarm must fire once the threshold is reached"
+    assert generation.consecutive_fallback_count == generation.FALLBACK_STREAK_THRESHOLD
+
+
+async def test_remote_success_resets_consecutive_streak(monkeypatch):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(generation.ollama, "generate", AsyncMock(return_value="local"))
+    remote = AsyncMock(side_effect=[RuntimeError("boom"), "remote ok"])
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await generation.generate(prompt="a")
+    assert generation.consecutive_fallback_count == 1
+    await generation.generate(prompt="b")
+    assert generation.consecutive_fallback_count == 0
+    # The lifetime counter is NOT reset — it is a monotonic metric.
+    assert generation.remote_fallback_count == 1
+
+
+# ─── bounded remote concurrency ──────────────────────────────────────────
+
+
+async def test_remote_concurrency_is_bounded(monkeypatch):
+    monkeypatch.setenv(generation.CONCURRENCY_ENV, "2")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    in_flight = {"now": 0, "peak": 0}
+
+    class _SlowClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            in_flight["now"] += 1
+            in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
+            await asyncio.sleep(0.01)
+            in_flight["now"] -= 1
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(generation.httpx, "AsyncClient", _SlowClient)
+
+    async def one():
+        return await generation._openrouter_chat(
+            [{"role": "user", "content": "x"}],
+            temperature=0.2,
+            max_tokens=64,
+            format=None,
+            think=False,
+        )
+
+    results = await asyncio.gather(*[one() for _ in range(6)])
+    assert all(r == "ok" for r in results)
+    assert in_flight["peak"] <= 2
+
+
+def test_concurrency_env_default_and_override(monkeypatch):
+    monkeypatch.delenv(generation.CONCURRENCY_ENV, raising=False)
+    assert generation._remote_concurrency() == generation.DEFAULT_REMOTE_CONCURRENCY
+    monkeypatch.setenv(generation.CONCURRENCY_ENV, "7")
+    assert generation._remote_concurrency() == 7
+    monkeypatch.setenv(generation.CONCURRENCY_ENV, "garbage")
+    assert generation._remote_concurrency() == generation.DEFAULT_REMOTE_CONCURRENCY

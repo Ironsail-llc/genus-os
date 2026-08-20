@@ -34,8 +34,11 @@ OpenAI-style ``response_format`` json_schema and strips any inline
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import os
+import random
 import re
 from typing import Any
 
@@ -50,6 +53,26 @@ REMOTE_MODEL_ENV = "ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL"
 DEFAULT_REMOTE_MODEL = "openrouter/xiaomi/mimo-v2.5"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 REMOTE_TIMEOUT_S = 60.0
+
+# Bounded remote concurrency: the nightly memory batch used to fan out
+# unthrottled and got rate-limited 26x in one hour (2026-08-20), silently
+# pushing the whole load back onto the local GPU the remote offload exists
+# to protect.
+CONCURRENCY_ENV = "ROBOTHOR_MEMORY_GENERATION_CONCURRENCY"
+DEFAULT_REMOTE_CONCURRENCY = 4
+
+# 429s are retried with exponential backoff BEFORE falling back to local
+# ollama — a rate limit is a "slow down" signal, not a provider outage.
+RETRY_429_MAX_ATTEMPTS = 4  # 1 initial call + 3 backoff retries
+RETRY_429_BASE_SECONDS = 2.0
+RETRY_429_CAP_SECONDS = 30.0
+RETRY_429_JITTER_FRACTION = 0.25
+
+# After this many CONSECUTIVE remote→local fallbacks, escalate to ERROR with
+# a grep-able marker: sustained fallback means the GPU offload is defeated
+# and the operator should look at the remote provider.
+FALLBACK_STREAK_THRESHOLD = 5
+FALLBACK_STREAK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK_STREAK"
 
 # Remote reasoning tokens count against max_tokens (unlike local Ollama, which
 # budgets the separate ``thinking`` channel on top of num_predict — see
@@ -66,8 +89,69 @@ MISSING_KEY_MARKER = "MEMORY_GENERATION_REMOTE_MISCONFIGURED"
 # Module counter: number of remote-generation calls that fell back to local.
 remote_fallback_count: int = 0
 
+# CONSECUTIVE fallbacks since the last remote success — resets on success,
+# drives the FALLBACK_STREAK_MARKER escalation.
+consecutive_fallback_count: int = 0
+
 # Log the missing-key ERROR once per process, not once per memory write.
 _missing_key_logged: bool = False
+
+# Per-event-loop semaphore bounding concurrent remote calls. Lazily (re)built
+# so CLI scripts with their own asyncio.run() don't trip over a semaphore
+# bound to a dead loop.
+_remote_sem: asyncio.Semaphore | None = None
+_remote_sem_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _remote_concurrency() -> int:
+    """Max concurrent remote generation calls (env-tunable, defaults sane)."""
+    raw = os.environ.get(CONCURRENCY_ENV, "").strip()
+    if not raw:
+        return DEFAULT_REMOTE_CONCURRENCY
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer — using default %d",
+            CONCURRENCY_ENV,
+            raw,
+            DEFAULT_REMOTE_CONCURRENCY,
+        )
+        return DEFAULT_REMOTE_CONCURRENCY
+    return value if value > 0 else DEFAULT_REMOTE_CONCURRENCY
+
+
+def _remote_semaphore() -> asyncio.Semaphore:
+    """The current loop's remote-concurrency semaphore."""
+    global _remote_sem, _remote_sem_loop
+    loop = asyncio.get_running_loop()
+    if _remote_sem is None or _remote_sem_loop is not loop:
+        _remote_sem = asyncio.Semaphore(_remote_concurrency())
+        _remote_sem_loop = loop
+    return _remote_sem
+
+
+def _retry_429_backoff_seconds(attempt: int, response: httpx.Response | None = None) -> float:
+    """Jittered exponential backoff for 429 retry ``attempt`` (0-indexed).
+
+    Honors a finite Retry-After header when present, clamped to the cap so a
+    misbehaving server can't blow the retry budget.
+    """
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after is not None:
+            try:
+                seconds: float | None = float(retry_after)
+            except ValueError:
+                seconds = None
+            if seconds is not None and math.isfinite(seconds):
+                return min(max(seconds, 0.0), RETRY_429_CAP_SECONDS)
+
+    # float() because int ** int is Any to mypy (recorded platform lesson).
+    capped = min(RETRY_429_BASE_SECONDS * float(2**attempt), RETRY_429_CAP_SECONDS)
+    jitter = capped * RETRY_429_JITTER_FRACTION
+    return max(0.0, capped + random.uniform(-jitter, jitter))
+
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -115,8 +199,9 @@ def _remote_enabled() -> bool:
 
 
 def _record_fallback(error: Exception) -> None:
-    global remote_fallback_count
+    global consecutive_fallback_count, remote_fallback_count
     remote_fallback_count += 1
+    consecutive_fallback_count += 1
     logger.warning(
         "%s #%d: remote memory generation via %s failed (%s: %s) — falling back to local ollama",
         FALLBACK_MARKER,
@@ -125,6 +210,21 @@ def _record_fallback(error: Exception) -> None:
         type(error).__name__,
         error,
     )
+    # Fires at the threshold and every multiple after it, so a sustained
+    # outage keeps re-surfacing in the journal instead of alarming once.
+    if consecutive_fallback_count % FALLBACK_STREAK_THRESHOLD == 0:
+        logger.error(
+            "%s: %d consecutive remote memory-generation fallbacks — the GPU "
+            "offload is defeated; check the remote provider (%s) and its rate limits",
+            FALLBACK_STREAK_MARKER,
+            consecutive_fallback_count,
+            _remote_model(),
+        )
+
+
+def _record_remote_success() -> None:
+    global consecutive_fallback_count
+    consecutive_fallback_count = 0
 
 
 async def _openrouter_chat(
@@ -168,10 +268,27 @@ async def _openrouter_chat(
         "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
-        resp = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    # Bounded concurrency + 429 backoff: the nightly batch must not stampede
+    # the remote provider, and a rate limit is retried (it means "slow down"),
+    # not immediately dumped onto the local GPU.
+    async with _remote_semaphore():
+        async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
+            for attempt in range(RETRY_429_MAX_ATTEMPTS):
+                resp = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
+                if resp.status_code == 429 and attempt < RETRY_429_MAX_ATTEMPTS - 1:
+                    wait = _retry_429_backoff_seconds(attempt, resp)
+                    logger.warning(
+                        "remote memory generation rate-limited (429) — retrying "
+                        "in %.1fs (attempt %d/%d)",
+                        wait,
+                        attempt + 1,
+                        RETRY_429_MAX_ATTEMPTS,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
 
     content = strip_think_blocks(data["choices"][0]["message"]["content"] or "")
     if not content:
@@ -200,7 +317,7 @@ async def chat(
     """
     if _remote_enabled():
         try:
-            return await _openrouter_chat(
+            content = await _openrouter_chat(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -209,6 +326,9 @@ async def chat(
             )
         except Exception as e:
             _record_fallback(e)
+        else:
+            _record_remote_success()
+            return content
     return await ollama.chat(
         messages,
         temperature=temperature,
@@ -235,7 +355,7 @@ async def generate(
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            return await _openrouter_chat(
+            content = await _openrouter_chat(
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -244,6 +364,9 @@ async def generate(
             )
         except Exception as e:
             _record_fallback(e)
+        else:
+            _record_remote_success()
+            return content
     return await ollama.generate(
         prompt=prompt,
         system=system,
