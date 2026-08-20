@@ -138,6 +138,114 @@ class TestToolDegradationDetector:
         mock_alert.assert_awaited_once()
         assert "log_interaction" in mock_alert.await_args.args[1]
 
+    @pytest.mark.asyncio
+    async def test_vision_tools_suppressed_when_vision_disabled(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No alerts for tools whose backing service is administratively off.
+
+        The vision service persists its mode to <state_dir>/vision_mode.txt;
+        'disabled' means the operator turned it off on purpose (thermal), so
+        paging about who_is_here failing 5/5 is noise the operator cannot act
+        on. Non-vision tools must still fire.
+        """
+        monkeypatch.setenv("ROBOTHOR_MEMORY_DIR", str(tmp_path))
+        monkeypatch.delenv("STATE_DIR", raising=False)
+        (tmp_path / "vision_mode.txt").write_text("disabled\n")
+
+        flagged = [
+            {"tool_name": "who_is_here", "total": 5, "failures": 5, "failure_rate": 1.0},
+            {"tool_name": "look", "total": 6, "failures": 6, "failure_rate": 1.0},
+            {"tool_name": "read_file", "total": 63, "failures": 40, "failure_rate": 0.635},
+        ]
+        with (
+            patch("robothor.engine.detectors.check_tool_degradation", return_value=flagged),
+            patch("robothor.engine.alerts.alert", new=AsyncMock(return_value=True)) as mock_alert,
+        ):
+            fired = await detectors.tool_degradation_detector()
+
+        assert fired == 1, "only the non-vision tool should alert"
+        mock_alert.assert_awaited_once()
+        assert "read_file" in mock_alert.await_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_vision_tools_fire_when_vision_not_disabled(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_MEMORY_DIR", str(tmp_path))
+        monkeypatch.delenv("STATE_DIR", raising=False)
+        (tmp_path / "vision_mode.txt").write_text("armed")
+
+        flagged = [
+            {"tool_name": "who_is_here", "total": 5, "failures": 5, "failure_rate": 1.0},
+        ]
+        with (
+            patch("robothor.engine.detectors.check_tool_degradation", return_value=flagged),
+            patch("robothor.engine.alerts.alert", new=AsyncMock(return_value=True)) as mock_alert,
+        ):
+            fired = await detectors.tool_degradation_detector()
+
+        assert fired == 1
+        mock_alert.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_vision_tools_fire_when_mode_file_absent(self, tmp_path, monkeypatch) -> None:
+        """No mode file = service state unknown = do not suppress."""
+        monkeypatch.setenv("ROBOTHOR_MEMORY_DIR", str(tmp_path))
+        monkeypatch.delenv("STATE_DIR", raising=False)
+
+        flagged = [
+            {"tool_name": "who_is_here", "total": 5, "failures": 5, "failure_rate": 1.0},
+        ]
+        with (
+            patch("robothor.engine.detectors.check_tool_degradation", return_value=flagged),
+            patch("robothor.engine.alerts.alert", new=AsyncMock(return_value=True)) as mock_alert,
+        ):
+            fired = await detectors.tool_degradation_detector()
+
+        assert fired == 1
+        mock_alert.assert_awaited_once()
+
+
+class TestFailedDeliveryLogsWarning:
+    """alert() returning False must not vanish — detectors log a warning."""
+
+    @pytest.mark.asyncio
+    async def test_tool_degradation_warns_when_alert_delivery_fails(self, caplog) -> None:
+        import logging
+
+        flagged = [
+            {"tool_name": "read_file", "total": 20, "failures": 15, "failure_rate": 0.75},
+        ]
+        with (
+            patch("robothor.engine.detectors.check_tool_degradation", return_value=flagged),
+            patch("robothor.engine.alerts.alert", new=AsyncMock(return_value=False)),
+            caplog.at_level(logging.WARNING, logger="robothor.engine.detectors"),
+        ):
+            fired = await detectors.tool_degradation_detector()
+
+        assert fired == 1
+        assert any("delivery failed" in rec.message.lower() for rec in caplog.records), (
+            "a dropped alert must at least leave a warning in the journal"
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeat_error_warns_when_alert_delivery_fails(self, caplog) -> None:
+        import logging
+
+        patterns = {
+            "patterns": [
+                {"agent_id": "main", "error_type": "timeout", "count": 5},
+            ]
+        }
+        with (
+            patch("robothor.engine.analytics.get_failure_patterns", return_value=patterns),
+            patch("robothor.engine.alerts.alert", new=AsyncMock(return_value=False)),
+            caplog.at_level(logging.WARNING, logger="robothor.engine.detectors"),
+        ):
+            fired = await detectors.repeat_error_detector()
+
+        assert fired == 1
+        assert any("delivery failed" in rec.message.lower() for rec in caplog.records)
+
 
 class TestRunawayBurnDetector:
     @pytest.mark.asyncio

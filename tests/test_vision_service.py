@@ -63,7 +63,7 @@ def fake_frame():
 
 class TestModeManagement:
     def test_valid_modes(self):
-        assert VALID_MODES == ("disarmed", "basic", "armed")
+        assert VALID_MODES == ("disarmed", "basic", "armed", "disabled")
 
     def test_initial_mode(self, service):
         assert service.current_mode == "disarmed"
@@ -241,7 +241,7 @@ class TestHTTPRouting:
         resp = await service._route_request("GET", "/mode", "")
         body = json.loads(resp.decode().split("\r\n\r\n")[1])
         assert body["mode"] == "disarmed"
-        assert body["valid_modes"] == ["disarmed", "basic", "armed"]
+        assert body["valid_modes"] == ["disarmed", "basic", "armed", "disabled"]
 
     @pytest.mark.asyncio
     async def test_mode_post_valid(self, service):
@@ -385,6 +385,7 @@ class TestBasicMode:
 
     @pytest.mark.asyncio
     async def test_unknown_person_triggers_alert(self, service, fake_frame):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service._last_person_alert_time = 0  # no cooldown
         with (
             patch(
@@ -414,6 +415,7 @@ class TestBasicMode:
 
     @pytest.mark.asyncio
     async def test_unknown_person_cooldown(self, service, fake_frame):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service._last_person_alert_time = time.time()  # just alerted
         with (
             patch(
@@ -440,6 +442,7 @@ class TestBasicMode:
 
     @pytest.mark.asyncio
     async def test_person_no_face_triggers_alert(self, service, fake_frame):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service._last_person_alert_time = 0
         with (
             patch(
@@ -533,6 +536,7 @@ class TestArmedModeGuardrails:
     @pytest.mark.asyncio
     async def test_unknown_person_cooldown_armed(self, service, fake_frame):
         """Armed mode must respect person_alert_cooldown like basic mode does."""
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service._last_person_alert_time = time.time()  # just alerted
         with (
             _person_with_face_patches(service, np.ones(512)),
@@ -546,6 +550,7 @@ class TestArmedModeGuardrails:
     @pytest.mark.asyncio
     async def test_unknown_person_dedup_by_embedding(self, service, fake_frame):
         """The same unmatched face must not mint a new unknown_NNN every frame."""
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         embedding = np.ones(512) / np.sqrt(512)
         service._last_person_alert_time = 0
         with (
@@ -566,6 +571,7 @@ class TestArmedModeGuardrails:
         """A lingering unknown face must re-alert once the cooldown window has
         elapsed — dedup exists to stop per-frame spam, not to alert on a
         loitering intruder exactly once for their whole visit."""
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         embedding = np.ones(512) / np.sqrt(512)
         service._last_person_alert_time = 0
         with (
@@ -583,6 +589,7 @@ class TestArmedModeGuardrails:
     async def test_different_unknown_person_still_alerts(self, service, fake_frame):
         """A genuinely different face (low similarity) must not be silently
         merged into the tracked unknown identity and must still alert."""
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         embedding_a = np.zeros(512)
         embedding_a[0] = 1.0
         embedding_b = np.zeros(512)
@@ -607,6 +614,7 @@ class TestArmedModeGuardrails:
     @pytest.mark.asyncio
     async def test_no_snapshot_when_suppressed_armed(self, service, fake_frame):
         """Snapshots should only be written when an alert actually fires."""
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service.alerts_suppressed = True
         service._last_person_alert_time = 0
         with (
@@ -1010,6 +1018,7 @@ class TestAlertSuppression:
 
     @pytest.mark.asyncio
     async def test_suppression_skips_alert_basic_mode(self, service, fake_frame):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
         service.alerts_suppressed = True
         service._last_person_alert_time = 0
         with (
@@ -1103,3 +1112,301 @@ class TestSuppressionPersistence:
         body = json.loads(resp.decode().split("\r\n\r\n")[1])
         assert body["alerts_suppressed"] is True
         assert service.alerts_suppressed is True
+
+
+# ─── Disabled Mode ──────────────────────────────────────────────
+# 'disabled' is the operator's deliberate off-switch: it survives restarts
+# via the mode file, runs no camera analysis, and camera endpoints answer
+# with a structured unavailable response instead of touching the camera.
+
+
+class TestDisabledMode:
+    def test_set_mode_disabled_persists(self, service, tmp_dirs):
+        _, _, state_dir = tmp_dirs
+        result = service.set_mode("disabled")
+        assert result == "disabled"
+        assert service.current_mode == "disabled"
+        assert (state_dir / "vision_mode.txt").read_text().strip() == "disabled"
+        assert service.load_mode() == "disabled"
+
+    def test_set_mode_disabled_skips_model_load_and_clears_people(self, service):
+        service.people_present = {"Alice": {"last_seen": "2024-01-01"}}
+        with (
+            patch.object(service.detector, "_ensure_loaded") as mock_det,
+            patch.object(service.recognizer, "_ensure_loaded") as mock_rec,
+        ):
+            service.set_mode("disabled")
+        mock_det.assert_not_called()
+        mock_rec.assert_not_called()
+        assert service.people_present == {}
+
+    def test_load_mode_accepts_disabled(self, service, tmp_dirs):
+        _, _, state_dir = tmp_dirs
+        (state_dir / "vision_mode.txt").write_text("disabled")
+        assert service.load_mode() == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_mode_post_disabled(self, service):
+        resp = await service._route_request("POST", "/mode", '{"mode": "disabled"}')
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["mode"] == "disabled"
+        assert service.current_mode == "disabled"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("GET", "/detections"),
+            ("GET", "/identifications"),
+            ("POST", "/look"),
+            ("POST", "/enroll"),
+            ("POST", "/enroll-from-image"),
+        ],
+    )
+    async def test_camera_endpoints_unavailable_when_disabled(self, service, method, path):
+        service.current_mode = "disabled"
+        body_str = '{"name": "Alice", "image_paths": ["/tmp/a.jpg"]}'
+        with patch("robothor.vision.service.CameraStream") as mock_cam_cls:
+            resp = await service._route_request(method, path, body_str)
+        mock_cam_cls.assert_not_called()
+        assert b"503" in resp
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["available"] is False
+        assert body["mode"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_health_reports_disabled(self, service):
+        service.current_mode = "disabled"
+        resp = await service._route_request("GET", "/health", "")
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["mode"] == "disabled"
+        assert body["available"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_reports_available_when_not_disabled(self, service):
+        resp = await service._route_request("GET", "/health", "")
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_mode_endpoint_still_works_when_disabled(self, service):
+        """The mode endpoint must stay reachable so vision can be re-enabled."""
+        service.current_mode = "disabled"
+        resp = await service._route_request("GET", "/mode", "")
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["mode"] == "disabled"
+        with (
+            patch.object(service.detector, "_ensure_loaded"),
+            patch.object(service.recognizer, "_ensure_loaded"),
+        ):
+            resp = await service._route_request("POST", "/mode", '{"mode": "basic"}')
+        body = json.loads(resp.decode().split("\r\n\r\n")[1])
+        assert body["mode"] == "basic"
+        assert service.current_mode == "basic"
+
+
+# ─── Zero-Enrollment Guard ──────────────────────────────────────
+# With zero enrolled faces every person is 'unknown' by construction, so the
+# per-face alert + VLM path is a guaranteed runaway (2026-08-18 incident).
+# Unknown-person handling must degrade to motion-only until someone enrolls.
+
+
+class TestZeroEnrollmentGuard:
+    @pytest.mark.asyncio
+    async def test_unknown_face_degraded_basic(self, service, fake_frame):
+        assert service.recognizer.enrolled_names == []
+        service._last_person_alert_time = 0
+        with (
+            _person_with_face_patches(service, np.ones(512)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "publish_event", new_callable=AsyncMock) as mock_pub,
+        ):
+            await service.process_frame_basic(fake_frame)
+        mock_alert.assert_not_called()
+        assert not any(c.args[0] == "vision.person_unknown" for c in mock_pub.call_args_list)
+        assert not any(k.startswith("unknown_") for k in service.people_present)
+
+    @pytest.mark.asyncio
+    async def test_unknown_face_degraded_armed(self, service, fake_frame):
+        assert service.recognizer.enrolled_names == []
+        service._last_person_alert_time = 0
+        with (
+            _person_with_face_patches(service, np.ones(512)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "publish_event", new_callable=AsyncMock) as mock_pub,
+        ):
+            await service.process_frame_armed(fake_frame)
+        mock_alert.assert_not_called()
+        assert not any(c.args[0] == "vision.person_unknown" for c in mock_pub.call_args_list)
+        assert not any(k.startswith("unknown_") for k in service.people_present)
+
+    @pytest.mark.asyncio
+    async def test_person_no_face_degraded_basic(self, service, fake_frame):
+        assert service.recognizer.enrolled_names == []
+        service._last_person_alert_time = 0
+        with (
+            patch(
+                "robothor.vision.service.detect_motion",
+                return_value=(True, 0.3, np.zeros((100, 100))),
+            ),
+            patch.object(
+                service.detector,
+                "detect",
+                return_value=[{"class": "person", "confidence": 0.9, "bbox": [0, 0, 50, 50]}],
+            ),
+            patch.object(service.recognizer, "detect", return_value=[]),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+            patch.object(service, "ingest_event", new_callable=AsyncMock),
+        ):
+            await service.process_frame_basic(fake_frame)
+        mock_alert.assert_not_called()
+
+    def test_startup_warning_zero_enrollment(self, service, caplog):
+        with (
+            patch.object(service, "_warn_if_cpu_fallback"),
+            caplog.at_level(logging.WARNING),
+        ):
+            service._startup_checks()
+        assert "No faces enrolled" in caplog.text
+
+    def test_no_startup_warning_when_enrolled(self, service, caplog):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
+        with (
+            patch.object(service, "_warn_if_cpu_fallback"),
+            caplog.at_level(logging.WARNING),
+        ):
+            service._startup_checks()
+        assert "No faces enrolled" not in caplog.text
+
+
+# ─── person_unknown Publish Gating ──────────────────────────────
+# Both frame-processing modes must have identical event semantics:
+# vision.person_unknown fires exactly when an alert would (not suppressed).
+
+
+class TestPersonUnknownPublishGating:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["basic", "armed"])
+    @pytest.mark.parametrize("suppressed", [False, True])
+    async def test_publish_gated_on_suppression(self, service, fake_frame, mode, suppressed):
+        service.recognizer.enrolled = {"Alice": np.ones(512, dtype=np.float32)}
+        service.alerts_suppressed = suppressed
+        service._last_person_alert_time = 0
+        process = service.process_frame_basic if mode == "basic" else service.process_frame_armed
+        with (
+            _person_with_face_patches(service, np.ones(512)),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock),
+            patch.object(service, "publish_event", new_callable=AsyncMock) as mock_pub,
+            patch.object(service, "_check_auto_arm", new_callable=AsyncMock),
+        ):
+            await process(fake_frame)
+        published = [c.args[0] for c in mock_pub.call_args_list]
+        if suppressed:
+            assert "vision.person_unknown" not in published
+        else:
+            assert published.count("vision.person_unknown") == 1
+
+
+# ─── Snapshot Retention ─────────────────────────────────────────
+
+
+class TestSnapshotRetention:
+    def _make_day_dir(self, snapshot_dir, days_ago):
+        day = (datetime.now(tz=UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+        d = snapshot_dir / day
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "120000.jpg").write_bytes(b"fake-jpeg")
+        return d
+
+    def test_default_retention_days(self, service):
+        assert service.snapshot_retention_days == 14
+
+    def test_cleanup_removes_only_old_day_dirs(self, service, tmp_dirs):
+        snapshot_dir = tmp_dirs[0]
+        old = self._make_day_dir(snapshot_dir, 20)
+        recent = self._make_day_dir(snapshot_dir, 5)
+        today = self._make_day_dir(snapshot_dir, 0)
+        other = snapshot_dir / "not-a-date"
+        other.mkdir()
+        stray = snapshot_dir / "stray.jpg"
+        stray.write_bytes(b"x")
+        removed = service.cleanup_snapshots()
+        assert removed == 1
+        assert not old.exists()
+        assert recent.exists()
+        assert today.exists()
+        assert other.exists()
+        assert stray.exists()
+
+    def test_retention_days_env_override(self, tmp_dirs, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.setenv("ROBOTHOR_VISION_SNAPSHOT_RETENTION_DAYS", "3")
+        snapshot_dir, face_dir, state_dir = tmp_dirs
+        svc = VisionService(snapshot_dir=snapshot_dir, face_data_dir=face_dir, state_dir=state_dir)
+        assert svc.snapshot_retention_days == 3
+        old = self._make_day_dir(snapshot_dir, 4)
+        recent = self._make_day_dir(snapshot_dir, 2)
+        assert svc.cleanup_snapshots() == 1
+        assert not old.exists()
+        assert recent.exists()
+
+    def test_retention_disabled_with_nonpositive_days(self, tmp_dirs, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.setenv("ROBOTHOR_VISION_SNAPSHOT_RETENTION_DAYS", "0")
+        snapshot_dir, face_dir, state_dir = tmp_dirs
+        svc = VisionService(snapshot_dir=snapshot_dir, face_data_dir=face_dir, state_dir=state_dir)
+        ancient = self._make_day_dir(snapshot_dir, 100)
+        assert svc.cleanup_snapshots() == 0
+        assert ancient.exists()
+
+    def test_cleanup_missing_snapshot_dir_is_noop(self, service):
+        service.snapshot_dir = service.snapshot_dir / "does-not-exist"
+        assert service.cleanup_snapshots() == 0
+
+    def test_startup_checks_run_retention(self, service):
+        with (
+            patch.object(service, "cleanup_snapshots") as mock_clean,
+            patch.object(service, "_warn_if_cpu_fallback"),
+        ):
+            service._startup_checks()
+        mock_clean.assert_called_once()
+
+
+# ─── CPU Fallback Warning ───────────────────────────────────────
+# InsightFace silently fell back to CPUExecutionProvider during the 2026-08
+# thermal crisis; the fallback must be a visible WARNING at startup.
+
+
+class TestCpuFallbackWarning:
+    def test_warns_when_no_cuda_provider(self, service, caplog):
+        fake_ort = MagicMock()
+        fake_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+        with (
+            patch.dict("sys.modules", {"onnxruntime": fake_ort}),
+            caplog.at_level(logging.WARNING),
+        ):
+            service._warn_if_cpu_fallback()
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings
+        assert "CPU" in caplog.text
+
+    def test_no_warning_with_cuda_provider(self, service, caplog):
+        fake_ort = MagicMock()
+        fake_ort.get_available_providers.return_value = [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        with (
+            patch.dict("sys.modules", {"onnxruntime": fake_ort}),
+            caplog.at_level(logging.WARNING),
+        ):
+            service._warn_if_cpu_fallback()
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_no_crash_without_onnxruntime(self, service):
+        with patch.dict("sys.modules", {"onnxruntime": None}):
+            service._warn_if_cpu_fallback()  # must not raise
