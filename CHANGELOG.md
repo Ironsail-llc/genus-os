@@ -1,3 +1,12 @@
+## [1.33.3](https://github.com/Ironsail-llc/genus-os/compare/v1.33.2...v1.33.3) (2026-08-20)
+
+### Bug Fixes
+
+* **engine:** agent_runs trigger-type constraint covers every TriggerType value ([#275](https://github.com/Ironsail-llc/genus-os/issues/275)) ([0291148](https://github.com/Ironsail-llc/genus-os/commit/02911483a44fa0a08a1c9b2496423655fea057c7))
+* **engine:** planner normalizes LLM plan steps and formatting is non-fatal ([#278](https://github.com/Ironsail-llc/genus-os/issues/278)) ([73b3f7e](https://github.com/Ironsail-llc/genus-os/commit/73b3f7e322c1de5be77aadf56794a7f5ba3aefe8))
+* **engine:** register unreachable tool schemas and enforce registry parity ([#277](https://github.com/Ironsail-llc/genus-os/issues/277)) ([a16f440](https://github.com/Ironsail-llc/genus-os/commit/a16f440431364a736ac6ef3466019979916686f5))
+* **tests:** tests must never touch the production database ([#276](https://github.com/Ironsail-llc/genus-os/issues/276)) ([b41c2b0](https://github.com/Ironsail-llc/genus-os/commit/b41c2b02c1d7a7cb592270738986a3ab7b00d734))
+
 ## [1.33.2](https://github.com/Ironsail-llc/genus-os/compare/v1.33.1...v1.33.2) (2026-08-20)
 
 ### Bug Fixes
