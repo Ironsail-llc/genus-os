@@ -181,10 +181,13 @@ class TestOtherCrmHandlersWireScope:
 
     @pytest.mark.asyncio
     async def test_get_task(self):
+        # get_task now validates the id shape at the tool boundary, so the
+        # fixture id must be a real UUID for the call to reach the DAL.
+        task_id = "123e4567-e89b-12d3-a456-426614174000"
         with _mode_env("enforce"), patch("robothor.crm.dal.get_task") as mock_get:
-            mock_get.return_value = {"id": "task-1"}
+            mock_get.return_value = {"id": task_id}
             await _call(
-                "get_task", {"id": "task-1"}, identity=RESTRICTED_IDENTITY, user_role="member"
+                "get_task", {"id": task_id}, identity=RESTRICTED_IDENTITY, user_role="member"
             )
         assert mock_get.call_args.kwargs.get("scope") is not None
 

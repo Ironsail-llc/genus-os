@@ -9,16 +9,23 @@ enroll/unenroll calls to the vision service over HTTP (unchanged) and
 separately reads/writes ``face_identities`` (migration 089) to link a label
 to a ``crm_people`` row. See ``robothor/identity/resolvers.py::_resolve_vision``
 for the read side of this table.
+
+All vision-service HTTP goes through ``call_service`` so a stopped service
+degrades to a short structured "vision service offline" error (with a circuit
+breaker suppressing re-probes) instead of a raw ConnectError traceback. When
+the persisted vision mode file says the operator disabled vision, the offline
+answer says exactly that.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from robothor.engine.tools.dispatch import ToolContext, _cfg
+from robothor.engine.tools.service_client import bridge_headers, call_service
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -43,13 +50,52 @@ def _get_conn() -> Any:
     return get_db()
 
 
+def _vision_mode_file() -> Path:
+    """The vision service's persisted mode file.
+
+    Mirrors robothor/vision/service.py: ``STATE_DIR`` (or
+    ``ROBOTHOR_MEMORY_DIR``, or ``~/robothor/memory``) / ``vision_mode.txt``.
+    """
+    state_dir = os.environ.get("STATE_DIR") or os.environ.get(
+        "ROBOTHOR_MEMORY_DIR", str(Path.home() / "robothor" / "memory")
+    )
+    return Path(state_dir) / "vision_mode.txt"
+
+
+def _operator_disabled_result() -> dict[str, Any] | None:
+    """If the mode file says the operator disabled vision, say so.
+
+    Newer vision services persist a ``disabled`` mode; both its presence and
+    absence are tolerated — any other mode (or no file) returns None and the
+    plain offline error stands.
+    """
+    try:
+        mode = _vision_mode_file().read_text().strip()
+    except OSError:
+        return None
+    if mode == "disabled":
+        return {"available": False, "mode": "disabled", "reason": "vision disabled by operator"}
+    return None
+
+
+async def _vision_call(
+    method: str, path: str, *, json: Any | None = None, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Call the vision service; on offline, explain an operator disable."""
+    result = await call_service(
+        "vision", method, f"{_cfg().vision_url}{path}", json=json, timeout=timeout
+    )
+    if result.get("error") == "vision service offline":
+        disabled = _operator_disabled_result()
+        if disabled is not None:
+            return disabled
+    return result
+
+
 @_handler("look")
 async def _look(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     prompt = args.get("prompt", "Describe what you see in this image in detail.")
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        resp = await client.post(f"{_cfg().vision_url}/look", json={"prompt": prompt})
-        resp.raise_for_status()
-        return dict(resp.json())
+    return await _vision_call("POST", "/look", json={"prompt": prompt}, timeout=300.0)
 
 
 def _join_face_identities(ctx: ToolContext, labels: list[str]) -> list[dict[str, Any]]:
@@ -104,10 +150,9 @@ def _join_face_identities(ctx: ToolContext, labels: list[str]) -> list[dict[str,
 
 @_handler("who_is_here")
 async def _who_is_here(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{_cfg().vision_url}/health")
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _vision_call("GET", "/health")
+    if "error" in data or data.get("available") is False:
+        return data
     labels = data.get("people_present", [])
     return {
         "people_present": labels,
@@ -200,10 +245,7 @@ async def _enroll_face(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     face_name = args.get("name", "")
     if not face_name:
         return {"error": "Name is required for face enrollment"}
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(f"{_cfg().vision_url}/enroll", json={"name": face_name})
-        resp.raise_for_status()
-        result = dict(resp.json())
+    result = await _vision_call("POST", "/enroll", json={"name": face_name}, timeout=30.0)
     if result.get("success"):
         result["identity"] = _link_face_enrollment(
             ctx, face_name, args.get("person_id", ""), args.get("person_name", "")
@@ -219,13 +261,12 @@ async def _enroll_face_from_image(args: dict[str, Any], ctx: ToolContext) -> dic
         return {"error": "Name is required"}
     if not image_paths:
         return {"error": "image_paths is required"}
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{_cfg().vision_url}/enroll-from-image",
-            json={"name": face_name, "image_paths": image_paths},
-        )
-        resp.raise_for_status()
-        result = dict(resp.json())
+    result = await _vision_call(
+        "POST",
+        "/enroll-from-image",
+        json={"name": face_name, "image_paths": image_paths},
+        timeout=60.0,
+    )
     if result.get("success"):
         result["identity"] = _link_face_enrollment(
             ctx, face_name, args.get("person_id", ""), args.get("person_name", "")
@@ -235,10 +276,7 @@ async def _enroll_face_from_image(args: dict[str, Any], ctx: ToolContext) -> dic
 
 @_handler("list_enrolled_faces")
 async def _list_enrolled_faces(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{_cfg().vision_url}/enrolled")
-        resp.raise_for_status()
-        return dict(resp.json())
+    return await _vision_call("GET", "/enrolled")
 
 
 def _delete_face_identity(ctx: ToolContext, face_label: str) -> None:
@@ -263,11 +301,9 @@ async def _unenroll_face(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     face_name = args.get("name", "")
     if not face_name:
         return {"error": "Name is required"}
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(f"{_cfg().vision_url}/unenroll", json={"name": face_name})
-        resp.raise_for_status()
-        result = dict(resp.json())
-    _delete_face_identity(ctx, face_name)
+    result = await _vision_call("POST", "/unenroll", json={"name": face_name})
+    if result.get("success"):
+        _delete_face_identity(ctx, face_name)
     return result
 
 
@@ -276,27 +312,24 @@ async def _set_vision_mode(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     mode = args.get("mode", "")
     if mode not in ("disarmed", "basic", "armed"):
         return {"error": f"Invalid mode: {mode}. Valid: disarmed, basic, armed"}
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(f"{_cfg().vision_url}/mode", json={"mode": mode})
-        resp.raise_for_status()
-        return dict(resp.json())
+    return await _vision_call("POST", "/mode", json={"mode": mode}, timeout=30.0)
 
 
 @_handler("log_interaction")
 async def _log_interaction(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{_cfg().bridge_url}/log-interaction",
-            json={
-                k: args.get(k, "")
-                for k in [
-                    "contact_name",
-                    "channel",
-                    "direction",
-                    "content_summary",
-                    "channel_identifier",
-                ]
-            },
-        )
-        resp.raise_for_status()
-        return dict(resp.json())
+    return await call_service(
+        "bridge",
+        "POST",
+        f"{_cfg().bridge_url}/log-interaction",
+        json={
+            k: args.get(k, "")
+            for k in [
+                "contact_name",
+                "channel",
+                "direction",
+                "content_summary",
+                "channel_identifier",
+            ]
+        },
+        headers=bridge_headers(f"engine:{ctx.agent_id}", ctx.tenant_id),
+    )
