@@ -319,3 +319,46 @@ class TestEmbedKeepAlive:
         await get_embedding_async("some text")
 
         assert seen_payloads[0]["keep_alive"] == "-1m"
+
+
+class TestNumCtxClamp:
+    """ROBOTHOR_OLLAMA_NUM_CTX clamps the request context window.
+
+    The Aug-20 journal showed Ollama warning 'requested context size too large
+    for model' (num_ctx=262144 vs n_ctx_train=40960). The over-ask originates
+    in the Ollama *server's* own context-length default — no repo code sends
+    num_ctx — so the platform-side fix is an explicit per-request clamp the
+    operator can set to the model's training context.
+    """
+
+    async def _chat_payload(self) -> dict:
+        seen: list[dict] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            seen.append(_json.loads(request.content))
+            return _chat_response()
+
+        _install_transport(handler)
+        await chat(messages=[{"role": "user", "content": "hi"}])
+        return seen[0]
+
+    async def test_no_num_ctx_by_default(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_OLLAMA_NUM_CTX", raising=False)
+        payload = await self._chat_payload()
+        assert "num_ctx" not in payload["options"]
+
+    async def test_env_clamp_sets_num_ctx(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_NUM_CTX", "40960")
+        payload = await self._chat_payload()
+        assert payload["options"]["num_ctx"] == 40960
+
+    async def test_garbage_and_nonpositive_values_are_ignored(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_NUM_CTX", "banana")
+        payload = await self._chat_payload()
+        assert "num_ctx" not in payload["options"]
+
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_NUM_CTX", "0")
+        payload = await self._chat_payload()
+        assert "num_ctx" not in payload["options"]

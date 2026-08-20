@@ -28,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import random
 import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
@@ -38,7 +40,7 @@ import litellm
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
-from robothor.engine.model_breaker import get_model_breaker
+from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -61,8 +63,49 @@ STREAM_CHUNK_TIMEOUT = 90
 # non-streaming). Must be longer than STREAM_CHUNK_TIMEOUT so a slow
 # first chunk is handled by the per-chunk watchdog rather than killing
 # the whole request. Ollama gets more headroom for cold-start loads.
-LLM_REQUEST_TIMEOUT = 120
+
+
+def _timeout_from_env(name: str, default: int) -> int:
+    """Read a positive-integer timeout from the environment, or the default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer — using default %ds", name, raw, default)
+        return default
+    return value if value > 0 else default
+
+
+LLM_REQUEST_TIMEOUT = _timeout_from_env("ROBOTHOR_LLM_TIMEOUT", 120)
+# Non-interactive (cron/workflow) runs get more headroom: nobody is waiting
+# on the reply, and a large classify context on a reasoning model can
+# legitimately take >120s of wall-clock generation (2026-08-20: all three
+# chain models were cancelled at exactly 120s while small concurrent calls
+# succeeded — the chain exhausted on slowness, not provider death).
+LLM_REQUEST_TIMEOUT_BATCH = _timeout_from_env("ROBOTHOR_LLM_TIMEOUT_BATCH", 300)
 LLM_REQUEST_TIMEOUT_OLLAMA = 600
+
+# Trigger types whose runs are batch-shaped (no human waiting on the reply)
+# and therefore get LLM_REQUEST_TIMEOUT_BATCH per model.
+_BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow"})
+
+# One in-place retry per model for transient failures (timeout / 5xx) before
+# advancing the fallback chain, with a short jitter so a provider blip is not
+# re-hit instantly. A transient 502 used to burn the model's only attempt and
+# exhaust the whole chain within minutes.
+TRANSIENT_RETRIES_PER_MODEL = 1
+TRANSIENT_RETRY_JITTER_MIN = 2.0
+TRANSIENT_RETRY_JITTER_MAX = 5.0
+_TRANSIENT_RETRY_STATUSES = frozenset({500, 502, 503, 504})
+
+
+def _is_transient_model_error(e: BaseException) -> bool:
+    """True for failures worth one same-model retry: timeouts and 5xx."""
+    if isinstance(e, TimeoutError):
+        return True
+    return getattr(e, "status_code", None) in _TRANSIENT_RETRY_STATUSES
 
 
 def _safe_token_count(usage: Any, attr: str) -> int:
@@ -268,23 +311,38 @@ class LLMClient:
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
         """Dispatch to streaming or non-streaming LLM call."""
-        if on_content or on_stream_event:
-            return await self._call_llm_streaming(
+        # Batch-shaped runs (cron/workflow) get the higher non-interactive
+        # per-model timeout; interactive triggers keep the default.
+        timeout_override: float | None = None
+        trigger = getattr(session.run, "trigger_type", None)
+        if trigger is not None and str(trigger) in _BATCH_TRIGGER_TYPES:
+            timeout_override = float(LLM_REQUEST_TIMEOUT_BATCH)
+
+        # Expose the run id to the model breaker so a trip during this call
+        # can be recorded as a guardrail event against the run.
+        run_token = _current_run_id_var.set(getattr(session.run, "id", None))
+        try:
+            if on_content or on_stream_event:
+                return await self._call_llm_streaming(
+                    session.messages,
+                    models,
+                    tool_schemas,
+                    on_content,
+                    broken_models=broken_models,
+                    temperature=temperature,
+                    on_stream_event=on_stream_event,
+                    timeout_override=timeout_override,
+                )
+            return await self._call_llm(
                 session.messages,
                 models,
                 tool_schemas,
-                on_content,
                 broken_models=broken_models,
                 temperature=temperature,
-                on_stream_event=on_stream_event,
+                timeout_override=timeout_override,
             )
-        return await self._call_llm(
-            session.messages,
-            models,
-            tool_schemas,
-            broken_models=broken_models,
-            temperature=temperature,
-        )
+        finally:
+            _current_run_id_var.reset(run_token)
 
     # ─── Pre-flight ──────────────────────────────────────────────────
 
@@ -397,8 +455,14 @@ class LLMClient:
         temperature: float,
         *,
         stream: bool = False,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
-        """Build kwargs dict for litellm.acompletion."""
+        """Build kwargs dict for litellm.acompletion.
+
+        ``request_timeout`` overrides the HTTP-level timeout so it stays in
+        step with the caller's per-call ``asyncio.timeout`` budget (e.g. the
+        batch timeout for cron/workflow runs).
+        """
         from robothor.engine.model_registry import (
             get_model_limits,
             get_output_tokens,
@@ -465,9 +529,13 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": get_output_tokens(model, input_est),
             "timeout": (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
+                request_timeout
+                if request_timeout is not None
+                else (
+                    LLM_REQUEST_TIMEOUT_OLLAMA
+                    if model.startswith("ollama_chat/")
+                    else LLM_REQUEST_TIMEOUT
+                )
             ),
         }
         # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
@@ -565,8 +633,14 @@ class LLMClient:
         tools: list[dict[str, Any]],
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
+        timeout_override: float | None = None,
     ) -> Any:
-        """Call LLM with model fallback. Returns litellm response or None."""
+        """Call LLM with model fallback. Returns litellm response or None.
+
+        Each model gets one in-place retry (short jitter) for transient
+        failures — timeouts and 5xx — before the chain advances, so a single
+        provider blip no longer burns a model's only attempt.
+        """
         input_est = await self._prepare_llm_call(messages, models, broken_models)
         last_error: Exception | None = None
 
@@ -591,43 +665,74 @@ class LLMClient:
             # `timeout` kwarg already passed to litellm is best-effort and
             # was observed silently ignored, causing 1800s stalls against
             # codex/gpt-5.5 in the 2026-05-28 incident.
-            per_call_timeout = (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
-            )
-            try:
-                kwargs = self._build_llm_kwargs(model, messages, tools, input_est, temperature)
-                async with asyncio.timeout(per_call_timeout):
-                    if is_codex_model(model):
-                        result = await codex_acompletion(**kwargs)
-                    else:
-                        result = await litellm.acompletion(**kwargs)
-                breaker.record_success(model)
-                return result
-            except TimeoutError as e:
-                breaker.record_failure(model, reason=f"timeout after {per_call_timeout}s")
-                logger.warning(
-                    "LLM call to %s exceeded %ds — cancelling and falling back",
-                    _sanitize(model),
-                    per_call_timeout,
+            if model.startswith("ollama_chat/"):
+                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
+            else:
+                per_call_timeout = (
+                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
                 )
-                self._handle_model_error(e, model, broken_models)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"model_fallback:{model}")
-            except Exception as e:
-                breaker.record_failure(model, reason=str(e)[:120])
-                self._handle_model_error(e, model, broken_models)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"model_fallback:{model}")
+            attempts = 1 + TRANSIENT_RETRIES_PER_MODEL
+            for attempt in range(attempts):
+                try:
+                    kwargs = self._build_llm_kwargs(
+                        model,
+                        messages,
+                        tools,
+                        input_est,
+                        temperature,
+                        request_timeout=per_call_timeout,
+                    )
+                    async with asyncio.timeout(per_call_timeout):
+                        if is_codex_model(model):
+                            result = await codex_acompletion(**kwargs)
+                        else:
+                            result = await litellm.acompletion(**kwargs)
+                    breaker.record_success(model)
+                    return result
+                except Exception as e:
+                    last_error = e
+                    is_timeout = isinstance(e, TimeoutError)
+                    if attempt < attempts - 1 and _is_transient_model_error(e):
+                        delay = random.uniform(
+                            TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
+                        )
+                        logger.warning(
+                            "Model %s transient failure (%s) — retrying same model "
+                            "in %.1fs (attempt %d/%d)",
+                            _sanitize(model),
+                            _sanitize(f"timeout after {per_call_timeout}s" if is_timeout else e),
+                            delay,
+                            attempt + 1,
+                            attempts,
+                        )
+                        if self._active_watchdog:
+                            self._active_watchdog.touch(f"model_retry:{model}")
+                        await asyncio.sleep(delay)
+                        continue
+                    # Giving up on this model — record the failure once per
+                    # chain advancement (a retried-then-recovered blip must
+                    # not count double toward the breaker threshold).
+                    if is_timeout:
+                        breaker.record_failure(model, reason=f"timeout after {per_call_timeout}s")
+                        logger.warning(
+                            "LLM call to %s exceeded %ds — cancelling and falling back",
+                            _sanitize(model),
+                            per_call_timeout,
+                        )
+                    else:
+                        breaker.record_failure(model, reason=str(e)[:120])
+                    self._handle_model_error(e, model, broken_models)
+                    if self._active_watchdog:
+                        self._active_watchdog.touch(f"model_fallback:{model}")
+                    break  # advance to the next model in the chain
 
+        # repr(), not str(): str(TimeoutError()) is "" and produced the
+        # infamous blank "last error: " exhaustion log.
         logger.error(
             "All models failed. Models: %s, broken: %s, last error: %s",
             _sanitize(models),
             _sanitize(broken_models or set()),
-            _sanitize(last_error),
+            _sanitize(repr(last_error)),
         )
         return None
 
@@ -642,8 +747,14 @@ class LLMClient:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        timeout_override: float | None = None,
     ) -> Any:
         """Call LLM with streaming. Returns reconstructed ModelResponse.
+
+        No in-place transient retry here (unlike ``_call_llm``): a retry after
+        partial content has already been emitted to ``on_content`` would show
+        the user duplicated text; stalled streams already fall back via the
+        per-chunk timeout.
 
         Emits structured events to ``on_stream_event`` if provided:
         - ``{"type": "text_delta", "delta": "...", "accumulated": "..."}``
@@ -666,14 +777,21 @@ class LLMClient:
             # Per-call timeout for the initial stream-creation await.
             # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
             # in the consumption loop below. See _call_llm for context.
-            per_call_timeout = (
-                LLM_REQUEST_TIMEOUT_OLLAMA
-                if model.startswith("ollama_chat/")
-                else LLM_REQUEST_TIMEOUT
-            )
+            if model.startswith("ollama_chat/"):
+                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
+            else:
+                per_call_timeout = (
+                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
+                )
             try:
                 kwargs = self._build_llm_kwargs(
-                    model, messages, tools, input_est, temperature, stream=True
+                    model,
+                    messages,
+                    tools,
+                    input_est,
+                    temperature,
+                    stream=True,
+                    request_timeout=per_call_timeout,
                 )
                 if is_codex_model(model):
                     async with asyncio.timeout(per_call_timeout):
@@ -807,5 +925,6 @@ class LLMClient:
                 if self._active_watchdog:
                     self._active_watchdog.touch(f"stream_error_fallback:{model}")
 
-        logger.error("All models failed (streaming). Last error: %s", last_error)
+        # repr(): str(TimeoutError()) is "" — see _call_llm's exhaustion log.
+        logger.error("All models failed (streaming). Last error: %s", _sanitize(repr(last_error)))
         return None
