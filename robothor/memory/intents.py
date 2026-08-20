@@ -27,6 +27,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -345,7 +346,7 @@ async def infer_intents_from_facts(*, tenant_id: str = "", fact_limit: int = 50)
         + "\n".join(f"- {f}" for f in facts)
     )
     try:
-        raw = await llm_client.generate(
+        raw = await generation.generate(
             prompt=prompt,
             system="Infer standing intents as a JSON array.",
             max_tokens=1024,

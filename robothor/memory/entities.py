@@ -18,7 +18,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
-from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ async def extract_entities(text: str) -> dict[str, Any]:
 Text: {text}"""
 
     try:
-        raw = await llm_client.generate(
+        raw = await generation.generate(
             prompt=prompt,
             system="Extract entities and relations from the text.",
             max_tokens=2048,
@@ -516,7 +516,7 @@ async def infer_relations(
                 f"Use simple verb phrases (works_at, manages, uses, collaborates_with, belongs_to, etc.)."
             )
 
-            raw = await llm_client.generate(
+            raw = await generation.generate(
                 prompt=prompt,
                 system="Infer entity relationships from shared facts.",
                 max_tokens=512,

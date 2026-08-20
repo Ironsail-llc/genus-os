@@ -31,6 +31,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -249,7 +250,7 @@ async def judge_importance(content: str, timeout_s: float = 30.0) -> float:
 Fact: "{content}" """
 
         raw = await asyncio.wait_for(
-            llm_client.generate(
+            generation.generate(
                 prompt=prompt,
                 system="Rate the importance of this fact.",
                 max_tokens=64,
@@ -371,7 +372,7 @@ Facts:
 Return ONLY the consolidated statement, nothing else."""
 
     try:
-        consolidated = await llm_client.generate(
+        consolidated = await generation.generate(
             prompt=prompt,
             system="Combine these facts into a single statement.",
             max_tokens=256,
@@ -663,7 +664,7 @@ Return up to 3 insights. Each insight must:
 - Be at least 20 characters long"""
 
     try:
-        raw = await llm_client.generate(
+        raw = await generation.generate(
             prompt=prompt,
             system="Find cross-domain connections between these facts.",
             max_tokens=512,

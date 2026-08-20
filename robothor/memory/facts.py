@@ -8,7 +8,9 @@ Architecture:
     Content -> LLM extraction -> Parse JSON -> Store with embedding -> pgvector search
 
 Dependencies:
-    - robothor.llm.ollama for LLM generation and embeddings
+    - robothor.memory.generation for LLM generation (local ollama by default,
+      remote via ROBOTHOR_MEMORY_GENERATION_PROVIDER)
+    - robothor.llm.ollama for embeddings (always local)
     - PostgreSQL with pgvector for storage and search
 """
 
@@ -29,6 +31,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 from robothor.memory.drift import (
     audit_snapshot,
     compute_fact_hash,
@@ -258,7 +261,7 @@ async def _extract_facts_inner(
     for attempt in range(max_retries):
         try:
             logger.info("extract_facts attempt %d/%d", attempt + 1, max_retries)
-            raw = await llm_client.generate(
+            raw = await generation.generate(
                 prompt=prompt,
                 system="Extract facts from the content as a JSON array.",
                 max_tokens=1024,

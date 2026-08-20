@@ -23,6 +23,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
+from robothor.memory import generation
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ async def _summarize_cluster(cluster: list[dict[str, Any]]) -> tuple[str, str]:
         "required": ["title", "summary"],
     }
     try:
-        raw = await llm_client.generate(
+        raw = await generation.generate(
             prompt=prompt,
             system="Summarize the episode. Return valid JSON.",
             max_tokens=400,
