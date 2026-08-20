@@ -82,7 +82,7 @@ COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
-COPY conftest.py /app/
+COPY conftest.py hatch_build.py /app/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps -e .
@@ -99,7 +99,7 @@ COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
-COPY conftest.py /app/
+COPY conftest.py hatch_build.py /app/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps .
