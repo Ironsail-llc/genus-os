@@ -61,9 +61,14 @@ containing `MEMORY_GENERATION_REMOTE_FALLBACK` — watch for that marker.
 |----------|---------|-------------|
 | `ROBOTHOR_MEMORY_GENERATION_PROVIDER` | `ollama` | `ollama` (local, unchanged behavior) or `openrouter` (remote) |
 | `ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL` | `openrouter/xiaomi/mimo-v2.5` | Remote model when the provider is `openrouter` |
+| `ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S` | `1.5` | Minimum seconds between remote generation calls (`0` disables pacing) |
 
 `openrouter` requires `OPENROUTER_API_KEY` in the environment; if it is
-missing, an ERROR is logged once and generation stays local.
+missing, an ERROR is logged once and generation stays local. Remote 429/503
+responses are retried up to 3 attempts with jittered exponential backoff
+(finite `Retry-After` honored, each sleep capped at 20s, 45s total budget);
+timeouts and network errors get one retry; other errors fall back to local
+immediately.
 
 ## Service Ports
 

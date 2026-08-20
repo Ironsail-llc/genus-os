@@ -8,9 +8,12 @@ back to local loudly (WARNING + counter) — never silently.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from robothor.memory import generation
@@ -22,8 +25,13 @@ def _reset_state(monkeypatch):
     monkeypatch.delenv(generation.PROVIDER_ENV, raising=False)
     monkeypatch.delenv(generation.REMOTE_MODEL_ENV, raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    # Disable inter-call pacing by default so unrelated tests stay fast;
+    # pacing tests set their own interval.
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "0")
     generation.remote_fallback_count = 0
     generation._missing_key_logged = False
+    generation._last_remote_call_at = 0.0
+    generation._pacing_lock = None  # never reuse a lock across event loops
 
 
 # ─── Default provider: local ollama, no remote calls ────────────────────
@@ -368,3 +376,246 @@ async def test_extract_facts_uses_generation_seam(monkeypatch):
 
     fake.assert_awaited()
     assert result and result[0]["fact_text"] == "Alice prefers tea over coffee"
+
+
+# ─── Rate-limit retry: 429/503 back off before falling back ──────────────
+#
+# Incident 2026-08-19 04:43: a ~26-call nightly batch hit OpenRouter's rate
+# limit; every call abandoned remote after a single 429 and fell back to
+# local. 429/503 must be retried with backoff; other 4xx stay fail-fast.
+
+
+def _status_error(status: int, headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", generation.OPENROUTER_API_URL)
+    response = httpx.Response(status, headers=headers or {}, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=request, response=response)
+
+
+def _remote_env(monkeypatch):
+    monkeypatch.setenv(generation.PROVIDER_ENV, "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+
+def _fake_sleep(monkeypatch) -> list[float]:
+    """Fake clock: record requested sleeps, return immediately."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(generation.asyncio, "sleep", fake_sleep)
+    return sleeps
+
+
+async def test_429_then_success_retries_without_fallback(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=[_status_error(429), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "remote result"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+    assert generation.remote_fallback_count == 0
+    # The loud-fallback marker fires only when remote is abandoned.
+    assert not any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_503_then_success_retries_without_fallback(monkeypatch):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=[_status_error(503), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.generate(prompt="x") == "remote result"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+
+
+async def test_429_exhaustion_falls_back_with_marker(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=_status_error(429))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    assert remote.await_count == generation.REMOTE_RATE_LIMIT_MAX_ATTEMPTS
+    assert len(sleeps) == generation.REMOTE_RATE_LIMIT_MAX_ATTEMPTS - 1
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_400_stays_fail_fast(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=_status_error(400))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    remote.assert_awaited_once()
+    assert sleeps == []
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_timeout_retried_once_then_fallback(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    assert remote.await_count == 2  # one retry, then fallback
+    assert len(sleeps) == 1
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+async def test_timeout_then_success_does_not_fall_back(monkeypatch):
+    _remote_env(monkeypatch)
+    _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local result")
+    remote = AsyncMock(side_effect=[httpx.ConnectError("reset"), "remote result"])
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.generate(prompt="x") == "remote result"
+    local.assert_not_awaited()
+    assert generation.remote_fallback_count == 0
+
+
+async def test_chat_retries_429_too(monkeypatch):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    local = AsyncMock(return_value="local chat")
+    remote = AsyncMock(side_effect=[_status_error(429), "remote chat"])
+    monkeypatch.setattr(generation.ollama, "chat", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    assert await generation.chat([{"role": "user", "content": "hi"}]) == "remote chat"
+    local.assert_not_awaited()
+    assert remote.await_count == 2
+    assert len(sleeps) == 1
+
+
+# ─── Retry-After handling ─────────────────────────────────────────────────
+
+
+def test_backoff_honors_finite_retry_after():
+    err = _status_error(429, {"Retry-After": "7"})
+    assert generation._remote_backoff_seconds(0, err) == 7.0
+
+
+def test_backoff_caps_retry_after():
+    err = _status_error(429, {"Retry-After": "9999"})
+    assert generation._remote_backoff_seconds(0, err) == generation.REMOTE_BACKOFF_CAP_SECONDS
+
+
+def test_backoff_clamps_negative_retry_after():
+    err = _status_error(429, {"Retry-After": "-5"})
+    assert generation._remote_backoff_seconds(0, err) == 0.0
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "soon", ""])
+def test_backoff_ignores_garbage_retry_after(value):
+    # nan slips through min/max clamps and would reach asyncio.sleep(nan).
+    err = _status_error(429, {"Retry-After": value})
+    wait = generation._remote_backoff_seconds(0, err)
+    assert math.isfinite(wait)
+    assert 0 < wait <= generation.REMOTE_BACKOFF_CAP_SECONDS
+
+
+def test_backoff_is_jittered_exponential():
+    # attempt 0: base 2s +/-25%; attempt 1: 6s +/-25%; always <= per-sleep cap.
+    for _ in range(20):
+        first = generation._remote_backoff_seconds(0)
+        second = generation._remote_backoff_seconds(1)
+        assert 1.5 <= first <= 2.5
+        assert 4.5 <= second <= 7.5
+
+
+async def test_sleep_budget_exhaustion_falls_back_with_marker(monkeypatch, caplog):
+    _remote_env(monkeypatch)
+    sleeps = _fake_sleep(monkeypatch)
+    monkeypatch.setattr(generation, "REMOTE_BACKOFF_BUDGET_SECONDS", 5.0)
+    local = AsyncMock(return_value="local result")
+    # Retry-After 10s > remaining 5s budget: abandon remote instead of sleeping.
+    remote = AsyncMock(side_effect=_status_error(429, {"Retry-After": "10"}))
+    monkeypatch.setattr(generation.ollama, "generate", local)
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+        result = await generation.generate(prompt="x")
+
+    assert result == "local result"
+    remote.assert_awaited_once()
+    assert sleeps == []
+    assert generation.remote_fallback_count == 1
+    assert any(generation.FALLBACK_MARKER in r.getMessage() for r in caplog.records)
+
+
+# ─── Inter-call pacing ────────────────────────────────────────────────────
+
+
+async def test_pacing_spaces_concurrent_remote_calls(monkeypatch):
+    _remote_env(monkeypatch)
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "1.5")
+    sleeps = _fake_sleep(monkeypatch)
+    remote = AsyncMock(return_value="remote result")
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await asyncio.gather(generation.generate(prompt="a"), generation.generate(prompt="b"))
+
+    assert remote.await_count == 2
+    # First call goes straight through; the second waits out the interval.
+    assert len(sleeps) == 1
+    assert 1.0 <= sleeps[0] <= 1.5
+
+
+async def test_pacing_zero_disables(monkeypatch):
+    _remote_env(monkeypatch)
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "0")
+    sleeps = _fake_sleep(monkeypatch)
+    remote = AsyncMock(return_value="remote result")
+    monkeypatch.setattr(generation, "_openrouter_chat", remote)
+
+    await generation.generate(prompt="a")
+    await generation.generate(prompt="b")
+
+    assert sleeps == []
+
+
+def test_min_interval_env_override_and_defaults(monkeypatch):
+    monkeypatch.delenv(generation.MIN_INTERVAL_ENV, raising=False)
+    assert generation._min_interval_s() == generation.DEFAULT_MIN_INTERVAL_S
+
+    monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "2.5")
+    assert generation._min_interval_s() == 2.5
+
+    for garbage in ("soon", "nan", "inf", "-1"):
+        monkeypatch.setenv(generation.MIN_INTERVAL_ENV, garbage)
+        assert generation._min_interval_s() == generation.DEFAULT_MIN_INTERVAL_S
