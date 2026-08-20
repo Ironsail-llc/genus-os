@@ -1,9 +1,10 @@
 """Targeted failure-mode detectors — run periodically from the daemon watchdog.
 
 These are **read-only observers**. They never kill runs. Each detector queries
-the DB for a specific signal, compares against a threshold, and fires a
-Telegram alert through `robothor.engine.alerts.alert()` when the signal
-crosses. In-process dedup prevents alert storms on repeated signals.
+the DB for a specific signal, compares against a threshold, and fires an
+alert through `robothor.engine.alerts.alert()` when the signal crosses
+(warning-level alerts land in the crm_agent_notifications digest, not a
+Telegram page). In-process dedup prevents alert storms on repeated signals.
 
 Detectors included:
     - repeat_error_detector       — same (agent, error_type) ≥3 in last hour
@@ -22,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -29,6 +31,42 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
+
+# Tools served by the vision service (tools/handlers/vision.py proxies these
+# over HTTP). When the operator has administratively disabled that service,
+# their failures are expected — paging about them is noise nobody can act on.
+_VISION_TOOLS = frozenset(
+    {
+        "look",
+        "who_is_here",
+        "enroll_face",
+        "enroll_face_from_image",
+        "list_enrolled_faces",
+        "unenroll_face",
+        "set_vision_mode",
+    }
+)
+
+
+def _vision_service_disabled() -> bool:
+    """True when the vision service is administratively disabled.
+
+    Reads the mode file the vision service persists its mode to
+    (``<state_dir>/vision_mode.txt`` — see robothor/vision/service.py
+    ``_mode_file``). The ~5 lines of path convention are deliberately
+    duplicated here instead of imported: the engine must not import the
+    vision package (heavy cv2/numpy deps, separate service boundary).
+    """
+    try:
+        state_dir = Path(
+            os.environ.get("STATE_DIR")
+            or os.environ.get("ROBOTHOR_MEMORY_DIR")
+            or (Path.home() / "robothor" / "memory")
+        )
+        mode_file = state_dir / "vision_mode.txt"
+        return mode_file.is_file() and mode_file.read_text().strip() == "disabled"
+    except Exception:
+        return False
 
 
 # ── Dedup store ─────────────────────────────────────────────────────────
@@ -104,7 +142,8 @@ async def repeat_error_detector(tenant_id: str = DEFAULT_TENANT) -> int:
             f"last: {c.get('last_occurrence', '?')}\n"
             f"sample: {sample_text}"
         )
-        await alert("warning", f"Repeat errors: {agent}", body)
+        if not await alert("warning", f"Repeat errors: {agent}", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -172,8 +211,19 @@ async def tool_degradation_detector() -> int:
         return 0
     from robothor.engine.alerts import alert
 
+    vision_disabled: bool | None = None  # lazy — one stat() per tick at most
     for t in bad_tools:
         name = t["tool_name"]
+        if name in _VISION_TOOLS:
+            if vision_disabled is None:
+                vision_disabled = _vision_service_disabled()
+            if vision_disabled:
+                logger.info(
+                    "Suppressing tool-degradation alert for %s — "
+                    "vision service is administratively disabled",
+                    name,
+                )
+                continue
         fingerprint = f"tool_deg:{name}"
         if not _should_fire(fingerprint):
             continue
@@ -181,7 +231,8 @@ async def tool_degradation_detector() -> int:
             f"{name}: {t['failures']}/{t['total']} failed in last hour "
             f"(rate {t['failure_rate'] * 100:.0f}%)"
         )
-        await alert("warning", f"Tool degradation: {name}", body)
+        if not await alert("warning", f"Tool degradation: {name}", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -239,7 +290,8 @@ async def runaway_burn_detector() -> int:
             f"agent={r.get('agent_id')} model={r.get('model_used')} "
             f"tokens={total:,} elapsed={r.get('elapsed_s')}s run_id={run_id}"
         )
-        await alert("warning", "Runaway-burn (out-of-band)", body)
+        if not await alert("warning", "Runaway-burn (out-of-band)", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
 
@@ -304,6 +356,7 @@ async def zombie_runner_detector() -> int:
             f"agent={z.get('agent_id')} run_id={run_id} "
             f"age={z.get('age_s')}s last_step_at={z.get('last_step_at')}"
         )
-        await alert("warning", "Zombie runner (no recent steps)", body)
+        if not await alert("warning", "Zombie runner (no recent steps)", body):
+            logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
