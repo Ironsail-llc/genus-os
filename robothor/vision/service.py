@@ -319,7 +319,9 @@ class VisionService:
 
     # ── Alert Helpers ────────────────────────────────────────────
 
-    async def _alert_unknown(self, frame: np.ndarray, snapshot_path: str, message: str) -> None:
+    async def _alert_unknown(
+        self, frame: np.ndarray, snapshot_path: str | None, message: str
+    ) -> None:
         """Send instant alert for unknown person, then fire-and-forget VLM follow-up."""
         # Encode frame as JPEG for alert
         _, buf = _get_cv2().imencode(".jpg", frame)
@@ -339,7 +341,7 @@ class VisionService:
         else:
             logger.debug("VLM follow-up already in flight; skipping")
 
-    async def _vlm_followup(self, frame: np.ndarray, snapshot_path: str) -> None:
+    async def _vlm_followup(self, frame: np.ndarray, snapshot_path: str | None) -> None:
         """Async VLM follow-up: analyze unknown person and send description."""
         try:
             description = await self.analyze_vlm(
@@ -421,7 +423,7 @@ class VisionService:
                 self._last_motion_time = now_ts
                 self.last_detection_time = now_str
                 object_classes = list({d["class"] for d in detections})
-                snapshot_path = self.save_snapshot(frame)
+                snapshot_path: str | None = self.save_snapshot(frame)
                 logger.info(
                     "Motion detected (score=%.3f, objects=%s)",
                     motion_score,
@@ -562,7 +564,7 @@ class VisionService:
             if now_ts - self._last_motion_time >= self.motion_cooldown:
                 self._last_motion_time = now_ts
                 object_classes = list({d["class"] for d in detections})
-                snapshot_path = self.save_snapshot(frame)
+                snapshot_path: str | None = self.save_snapshot(frame)
                 logger.info(
                     "Motion detected (score=%.3f, objects=%s)",
                     motion_score,
@@ -961,7 +963,7 @@ class VisionService:
             camera.release()
             if frame is not None:
                 detections = self.detector.detect(frame)
-                snapshot_path = self.save_snapshot(frame)
+                snapshot_path: str | None = self.save_snapshot(frame)
                 return self._json_response(
                     "200 OK", {"detections": detections, "snapshot_path": snapshot_path}
                 )
