@@ -933,8 +933,8 @@ _CURATOR_CHECK_INTERVAL = 6 * 3600  # re-evaluate cadence every 6h
 async def _curator_loop(scheduler: Any) -> None:
     """Skill-library maintenance (Phase 3 / Rip 5).
 
-    Tier 1 ALWAYS (no flag, no LLM): apply_skill_lifecycle() persists time-derived
-    stale/archived transitions — reversible, content-preserving anti-bloat.
+    Tier 1 ALWAYS (no flag, no LLM): apply_skill_lifecycle() reports time-derived
+    stale/archived states (pure-derived, never persisted) — anti-bloat telemetry.
     Tier 2 OPT-IN (curator_enabled(), default OFF): destructive LLM consolidation.
     Cadence keyed to should_run_curator (default 7d); only acts when engine idle.
     """
@@ -966,9 +966,9 @@ async def _curator_loop(scheduler: Any) -> None:
                 continue
 
             loop = asyncio.get_running_loop()
-            transitions = await loop.run_in_executor(None, apply_skill_lifecycle)
-            if any(transitions.values()):
-                logger.info("curator: lifecycle transitions %s", transitions)
+            lifecycle = await loop.run_in_executor(None, apply_skill_lifecycle)
+            if any(lifecycle.values()):
+                logger.info("curator: lifecycle report %s", lifecycle)
 
             if curator_enabled():
                 if running_agents():

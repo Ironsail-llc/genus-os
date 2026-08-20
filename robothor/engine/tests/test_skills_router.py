@@ -128,7 +128,7 @@ class TestSkillView:
                 return_value=body,
             ),
             patch(
-                "robothor.engine.skills.read_skill_meta",
+                "robothor.engine.skills.read_skill_view",
                 return_value={"usage_count": 3, "write_origin": "background_review"},
             ),
             patch("robothor.engine.skills.increment_usage"),
@@ -169,8 +169,8 @@ class TestSkillView:
                 return_value=body,
             ),
             patch(
-                "robothor.engine.skills.read_skill_meta",
-                return_value=None,  # no meta yet
+                "robothor.engine.skills.read_skill_view",
+                return_value=None,  # no meta or state yet
             ),
             patch(
                 "robothor.engine.skills.increment_usage",

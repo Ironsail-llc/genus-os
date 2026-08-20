@@ -98,15 +98,47 @@ class TestCatalogFilterAndLifecycle:
         skills_mod._skills_cache = None
         assert "pinned-old" in build_skill_catalog(load_skills())
 
-    def test_apply_lifecycle_persists_transitions(self, tmp_path):
+    def test_sidecar_last_used_keeps_skill_in_catalog(self, tmp_path, monkeypatch):
+        """The catalog filter reads last_used from the state.json sidecar."""
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        real_now = datetime.now(UTC)
+        _make_skill(
+            tmp_path, "old-but-hot", created_at=(real_now - timedelta(days=200)).isoformat()
+        )
+        (tmp_path / "agents" / "skills" / "old-but-hot" / "state.json").write_text(
+            json.dumps({"usage_count": 4, "last_used": (real_now - timedelta(days=1)).isoformat()})
+        )
+        import robothor.engine.skills as skills_mod
+
+        skills_mod._skills_cache = None
+        assert "old-but-hot" in build_skill_catalog(load_skills())
+
+    def test_apply_lifecycle_reports_without_persisting(self, tmp_path):
+        """Lifecycle state is pure-derived — the pass reports it but never
+        writes it back into meta.json (which is tracked, static metadata)."""
         base = tmp_path / "agents" / "skills"
         _make_skill(tmp_path, "going-stale", created_at=(NOW - timedelta(days=45)).isoformat())
         _make_skill(tmp_path, "going-archived", created_at=(NOW - timedelta(days=200)).isoformat())
+        stale_bytes = (base / "going-stale" / "meta.json").read_bytes()
+        archived_bytes = (base / "going-archived" / "meta.json").read_bytes()
         result = apply_skill_lifecycle(base=base, now=NOW)
-        assert "going-stale" in result["to_stale"]
-        assert "going-archived" in result["to_archived"]
+        assert "going-stale" in result["stale"]
+        assert "going-archived" in result["archived"]
+        assert (base / "going-stale" / "meta.json").read_bytes() == stale_bytes
+        assert (base / "going-archived" / "meta.json").read_bytes() == archived_bytes
         persisted = json.loads((base / "going-archived" / "meta.json").read_text())
-        assert persisted["state"] == "archived"
+        assert "state" not in persisted
+
+    def test_lifecycle_uses_sidecar_last_used(self, tmp_path):
+        """A fresh last_used in state.json keeps an old skill active."""
+        base = tmp_path / "agents" / "skills"
+        _make_skill(tmp_path, "old-but-hot", created_at=(NOW - timedelta(days=200)).isoformat())
+        (base / "old-but-hot" / "state.json").write_text(
+            json.dumps({"usage_count": 4, "last_used": (NOW - timedelta(days=1)).isoformat()})
+        )
+        result = apply_skill_lifecycle(base=base, now=NOW)
+        assert "old-but-hot" not in result["stale"]
+        assert "old-but-hot" not in result["archived"]
 
 
 # ─── skill_archive handler (curator's only destructive action) ──────

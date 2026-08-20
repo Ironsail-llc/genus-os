@@ -128,14 +128,15 @@ def list_curator_candidates(
     out without touching them.
 
     ``meta_loader`` lets tests inject a fake meta lookup; defaults
-    to ``robothor.engine.skills.read_skill_meta``.
+    to ``robothor.engine.skills.read_skill_view`` (meta.json static
+    fields merged with state.json runtime telemetry).
     """
-    from robothor.engine.skills import load_skills, read_skill_meta
+    from robothor.engine.skills import load_skills, read_skill_view
 
     if skills is None:
         skills = load_skills()
     if meta_loader is None:
-        meta_loader = read_skill_meta
+        meta_loader = read_skill_view
 
     candidates: list[SkillDefinition] = []
     pinned: list[str] = []

@@ -372,7 +372,7 @@ async def _get_accretion_ledger(args: dict[str, Any], ctx: ToolContext) -> dict[
     def _query() -> dict[str, Any]:
         from robothor.db.connection import get_connection
         from robothor.engine.goals import compute_goal_metrics
-        from robothor.engine.skills import compute_skill_state, load_skills, read_skill_meta
+        from robothor.engine.skills import load_skills, read_skill_view
 
         ws = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
 
@@ -382,10 +382,10 @@ async def _get_accretion_ledger(args: dict[str, Any], ctx: ToolContext) -> dict[
         archived = 0
         usage: list[tuple[str, int]] = []
         for name in skills:
-            meta = read_skill_meta(name) or {}
-            if compute_skill_state(meta) == "archived":
+            view = read_skill_view(name) or {}
+            if view.get("state") == "archived":
                 archived += 1
-            usage.append((name, int(meta.get("usage_count", 0))))
+            usage.append((name, int(view.get("usage_count", 0))))
         usage.sort(key=lambda x: x[1], reverse=True)
         top_used = [f"{n}({c})" for n, c in usage[:3] if c > 0]
 

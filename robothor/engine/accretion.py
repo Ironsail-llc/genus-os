@@ -63,28 +63,29 @@ def get_accretion_ledger(limit: int = 30) -> dict[str, Any]:
     their runtime usage telemetry so the operator can audit what the fleet has
     learned.
     """
-    import json
     import subprocess
     from pathlib import Path
+
+    from robothor.engine.skills import read_skill_view
 
     workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
     skills_dir = workspace / "agents" / "skills"
     entries: list[dict[str, Any]] = []
     try:
         for meta_path in sorted(skills_dir.glob("*/meta.json")):
-            try:
-                meta = json.loads(meta_path.read_text())
-            except Exception:
+            name = meta_path.parent.name
+            view = read_skill_view(name, base=skills_dir)
+            if view is None:
                 continue
-            if meta.get("created_by") in (None, "operator", "human"):
+            if view.get("created_by") in (None, "operator", "human"):
                 continue  # ledger tracks AGENT-authored skills
             entries.append(
                 {
-                    "skill": meta_path.parent.name,
-                    "created_by": meta.get("created_by"),
-                    "created_at": meta.get("created_at"),
-                    "usage_count": meta.get("usage_count", 0),
-                    "last_used": meta.get("last_used"),
+                    "skill": name,
+                    "created_by": view.get("created_by"),
+                    "created_at": view.get("created_at"),
+                    "usage_count": view.get("usage_count", 0),
+                    "last_used": view.get("last_used"),
                 }
             )
             if len(entries) >= limit:

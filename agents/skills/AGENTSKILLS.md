@@ -9,7 +9,8 @@ frontmatter convention so they're portable across the broader ecosystem
 ```
 agents/skills/<kebab-name>/
   SKILL.md          # YAML frontmatter + markdown body (this file)
-  meta.json         # runtime sidecar — usage_count, write_origin, …
+  meta.json         # static, tracked metadata — created_by, write_origin, …
+  state.json        # gitignored runtime telemetry — usage_count, last_used
   references/       # optional: long-form supporting notes
   templates/        # optional: starter files to copy + edit
   scripts/          # optional: deterministic helper scripts
@@ -42,12 +43,25 @@ When the rip is off, the legacy verbose catalog (description +
 signature + triggers per skill) is rendered — preserves backwards
 compatibility while Rip 3 rolls out.
 
-## meta.json sidecar (runtime state)
+## meta.json (static metadata) + state.json (runtime telemetry)
+
+meta.json is tracked in git and stays byte-stable at runtime. All mutable
+telemetry lives in a gitignored `state.json` sidecar next to it, and the
+lifecycle `state` is derived on the fly (never persisted). Read skills
+through `robothor.engine.skills.read_skill_view` — it merges both files
+(sidecar wins per key) and adds the derived `state`.
+
+state.json (gitignored, written atomically):
 
 | Key | Set by | Used for |
 |---|---|---|
 | `usage_count` | `skill_view`, `invoke_skill` | Curator ranks stale skills |
-| `last_used` | `invoke_skill` | Curator's `latest_activity_at` heuristic |
+| `last_used` | `skill_view`, `invoke_skill` | Lifecycle staleness anchor |
+
+meta.json (tracked, static):
+
+| Key | Set by | Used for |
+|---|---|---|
 | `created_by` | `create_skill` | Audit trail |
 | `write_origin` | `create_skill` (Rip 4) | `"foreground"` or `"background_review"` |
 | `is_agent_created` | `create_skill` (Rip 4) | `True` only for background-review-fork writes; curator only touches these |

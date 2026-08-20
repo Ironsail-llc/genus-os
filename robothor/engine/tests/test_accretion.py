@@ -46,6 +46,26 @@ class TestLedger:
         names = {e["skill"] for e in led["skills"]}
         assert "agent-skill" in names
         assert "human-skill" not in names  # operator-authored excluded
+        # Legacy runtime keys still inside meta.json remain readable.
+        by_name = {e["skill"]: e for e in led["skills"]}
+        assert by_name["agent-skill"]["usage_count"] == 3
+
+    def test_ledger_prefers_state_sidecar(self, tmp_path, monkeypatch):
+        """usage telemetry comes from state.json when present (sidecar wins)."""
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        sk = tmp_path / "agents" / "skills"
+        (sk / "agent-skill").mkdir(parents=True)
+        (sk / "agent-skill" / "meta.json").write_text(
+            json.dumps({"created_by": "auto-agent", "usage_count": 3})
+        )
+        (sk / "agent-skill" / "state.json").write_text(
+            json.dumps({"usage_count": 11, "last_used": "2026-08-19T00:00:00+00:00"})
+        )
+
+        led = accretion.get_accretion_ledger()
+        by_name = {e["skill"]: e for e in led["skills"]}
+        assert by_name["agent-skill"]["usage_count"] == 11
+        assert by_name["agent-skill"]["last_used"] == "2026-08-19T00:00:00+00:00"
 
 
 def test_ledger_tool_registered():

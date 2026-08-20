@@ -368,6 +368,17 @@ def main(argv: list[str] | None = None) -> int:
     vault_sub.add_parser("export-env", help="Export all secrets as KEY=VALUE")
     vault_sub.add_parser("audit", help="Audit secret usage across the codebase")
 
+    # skills
+    skills_parser = subparsers.add_parser("skills", help="Skill library maintenance")
+    skills_sub = skills_parser.add_subparsers(dest="skills_command")
+    skills_sub.add_parser(
+        "migrate-state",
+        help=(
+            "Move runtime keys (usage_count, last_used, state) out of tracked "
+            "meta.json files into gitignored state.json sidecars (idempotent)"
+        ),
+    )
+
     # agent
     agent_parser = subparsers.add_parser("agent", help="Agent management")
     agent_sub = agent_parser.add_subparsers(dest="agent_command")
@@ -684,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.agent import cmd_agent
 
         return cmd_agent(args)
+    if args.command == "skills":
+        from robothor.cli.skills import cmd_skills
+
+        return cmd_skills(args)
     if args.command == "federation":
         from robothor.cli.federation import cmd_federation
 

@@ -15,8 +15,10 @@ import pytest
 from robothor.engine.skills import (
     _content_hash,
     create_skill_meta,
+    create_skill_state,
     increment_usage,
     read_skill_meta,
+    read_skill_state,
     validate_skill_name,
     write_skill_file,
     write_skill_meta,
@@ -63,9 +65,11 @@ class TestSkillMeta:
         assert meta["auto_generated"] is True
         assert meta["created_by"] == "main"
         assert meta["revision"] == 1
-        assert meta["usage_count"] == 0
-        assert meta["last_used"] is None
         assert meta["revision_history"] == []
+        # Runtime telemetry lives in the state.json sidecar, never meta.json.
+        assert "usage_count" not in meta
+        assert "last_used" not in meta
+        assert "state" not in meta
 
     def test_read_write_meta(self, tmp_path: Path):
         meta = {"revision": 1, "usage_count": 5}
@@ -82,17 +86,21 @@ class TestSkillMeta:
     def test_increment_usage(self, tmp_path: Path):
         meta = create_skill_meta(created_by="main")
         write_skill_meta("test-skill", meta, base=tmp_path)
+        meta_bytes = (tmp_path / "test-skill" / "meta.json").read_bytes()
 
         increment_usage("test-skill", base=tmp_path)
 
-        updated = read_skill_meta("test-skill", base=tmp_path)
-        assert updated is not None
-        assert updated["usage_count"] == 1
-        assert updated["last_used"] is not None
+        # Counter lands in the state.json sidecar; meta.json is untouched.
+        state = read_skill_state("test-skill", base=tmp_path)
+        assert state is not None
+        assert state["usage_count"] == 1
+        assert state["last_used"] is not None
+        assert (tmp_path / "test-skill" / "meta.json").read_bytes() == meta_bytes
 
-    def test_increment_usage_no_meta(self, tmp_path: Path):
-        """increment_usage is a no-op when meta.json doesn't exist."""
+    def test_increment_usage_no_skill(self, tmp_path: Path):
+        """increment_usage is a no-op when the skill directory doesn't exist."""
         increment_usage("no-such-skill", base=tmp_path)  # should not raise
+        assert not (tmp_path / "no-such-skill").exists()
 
 
 # ─── write_skill_file Tests ─────────────────────────────────────────
@@ -209,6 +217,8 @@ class TestCreateSkillHandler:
         assert meta["auto_generated"] is True
         assert meta["created_by"] == "test-agent"
         assert meta["revision"] == 1
+        assert "usage_count" not in meta  # runtime keys live in state.json
+        assert read_skill_state("test-deploy", base=skills_dir) == create_skill_state()
 
     @pytest.mark.asyncio
     async def test_create_invalid_name(self, skills_dir: Path):
@@ -392,7 +402,7 @@ class TestUpdateSkillHandler:
 class TestInvokeSkillUsageTracking:
     @pytest.mark.asyncio
     async def test_invoke_increments_usage(self, skills_dir: Path):
-        """invoke_skill increments usage_count in meta.json."""
+        """invoke_skill increments usage_count in the state.json sidecar."""
         from robothor.engine.tools.handlers.skills import _invoke_skill
 
         # Create a skill with meta.json
@@ -401,6 +411,7 @@ class TestInvokeSkillUsageTracking:
 
         write_skill_file("trackable", fm, "Do the thing", base=skills_dir)
         write_skill_meta("trackable", create_skill_meta(created_by="test"), base=skills_dir)
+        meta_bytes = (skills_dir / "trackable" / "meta.json").read_bytes()
 
         ctx = _FakeCtx()
         with _patch_skills_dir(skills_dir):
@@ -408,6 +419,8 @@ class TestInvokeSkillUsageTracking:
 
         assert "content" in result
 
-        meta = read_skill_meta("trackable", base=skills_dir)
-        assert meta is not None
-        assert meta["usage_count"] == 1
+        state = read_skill_state("trackable", base=skills_dir)
+        assert state is not None
+        assert state["usage_count"] == 1
+        # The tracked file is byte-identical after invocation.
+        assert (skills_dir / "trackable" / "meta.json").read_bytes() == meta_bytes
