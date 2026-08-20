@@ -364,10 +364,9 @@ class TestFailureAlerting:
         kwargs = mock_notify.call_args.kwargs
         assert kwargs["from_agent"] == "engine"
         assert kwargs["to_agent"] == "main"
-        # 'workflow_failure' is rejected by the crm_agent_notifications CHECK
-        # constraint (migration 031) — the row must use an allowed type and
-        # carry the workflow_failure kind in metadata instead.
-        assert kwargs["notification_type"] == "agent_error"
+        # Migration 099 added 'workflow_failure' to the crm_agent_notifications
+        # CHECK constraint, so the row uses the precise type directly.
+        assert kwargs["notification_type"] == "workflow_failure"
         assert kwargs["metadata"]["kind"] == "workflow_failure"
         assert kwargs["metadata"]["workflow_id"] == "test-wf"
         assert "test-wf" in kwargs["subject"]

@@ -84,7 +84,7 @@ immediately.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROBOTHOR_VISION_MODE` | `disarmed` | Default mode: `disarmed`, `basic`, `armed` |
+| `ROBOTHOR_VISION_MODE` | `disarmed` | Default mode: `disarmed`, `basic`, `armed`, `disabled` |
 | `ROBOTHOR_CAMERA_SOURCE` | `/dev/video0` | Camera device, RTSP URL, or video file |
 | `ROBOTHOR_CAMERA_WIDTH` | `640` | Capture width |
 | `ROBOTHOR_CAMERA_HEIGHT` | `480` | Capture height |

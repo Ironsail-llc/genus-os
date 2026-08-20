@@ -579,15 +579,14 @@ class WorkflowEngine:
         try:
             from robothor.crm import dal
 
-            # 'workflow_failure' is not in the crm_agent_notifications CHECK
-            # constraint (migration 031) — an INSERT with it would be silently
-            # rejected, which is the exact failure mode this control exists to
-            # prevent. Use the allowed 'agent_error' type and carry the precise
-            # kind in metadata.
+            # 'workflow_failure' is allowed by the crm_agent_notifications
+            # CHECK constraint since migration 099; the drift test in
+            # test_schema_drift.py keeps the write sites and the constraint
+            # in lockstep.
             notif_id = dal.send_notification(
                 from_agent="engine",
                 to_agent="main",
-                notification_type="agent_error",
+                notification_type="workflow_failure",
                 subject=f"Workflow failed: {run.workflow_id}",
                 body=(
                     f"Workflow '{run.workflow_id}' finished {run.status.value} "

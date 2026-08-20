@@ -608,13 +608,14 @@ Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/
 
 ## Vision System
 
-When operated continuously, the computer-vision service supports three modes:
+When operated continuously, the computer-vision service supports four modes:
 
 | Mode | Behavior |
 |------|----------|
 | **disarmed** | Camera streams but no processing |
 | **basic** | Motion detection → YOLO → InsightFace → instant Telegram photo alert → async VLM follow-up |
 | **armed** | Same as basic + per-frame tracking for continuous monitoring |
+| **disabled** | Service deliberately off (e.g. thermal constraints) — no camera analysis; persists across restarts until re-enabled |
 
 ### Detection Pipeline (basic/armed)
 
@@ -811,6 +812,11 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 | Scheduler | — | APScheduler cron jobs from YAML manifests |
 | Event Hooks | — | Redis Stream consumers (email, calendar triggers) |
 | Tool Registry | — | 54 tools, direct DAL calls (no HTTP roundtrip) |
+
+Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
+pages Telegram immediately; `warning`/`info` become `alert_digest`
+notification rows the morning briefing and heartbeat surface without paging
+(see `docs/runbooks/PAGING.md`).
 
 ### Voice & SMS (Twilio)
 

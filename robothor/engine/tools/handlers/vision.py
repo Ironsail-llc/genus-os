@@ -307,11 +307,16 @@ async def _unenroll_face(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     return result
 
 
+# Keep in lockstep with robothor/vision/service.py VALID_MODES
+# (pinned by test_vision_tools.py::TestSetVisionMode).
+_SET_MODE_VALID = ("disarmed", "basic", "armed", "disabled")
+
+
 @_handler("set_vision_mode")
 async def _set_vision_mode(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     mode = args.get("mode", "")
-    if mode not in ("disarmed", "basic", "armed"):
-        return {"error": f"Invalid mode: {mode}. Valid: disarmed, basic, armed"}
+    if mode not in _SET_MODE_VALID:
+        return {"error": f"Invalid mode: {mode}. Valid: {', '.join(_SET_MODE_VALID)}"}
     return await _vision_call("POST", "/mode", json={"mode": mode}, timeout=30.0)
 
 
