@@ -1,3 +1,9 @@
+## [1.33.0](https://github.com/Ironsail-llc/genus-os/compare/v1.32.0...v1.33.0) (2026-08-20)
+
+### Features
+
+* **docs:** mkdocs site published via GitHub Pages ([#268](https://github.com/Ironsail-llc/genus-os/issues/268)) ([66719f9](https://github.com/Ironsail-llc/genus-os/commit/66719f911263dc540897c4e9341f78d12708c143))
+
 ## [1.32.0](https://github.com/Ironsail-llc/genus-os/compare/v1.31.2...v1.32.0) (2026-08-20)
 
 ### Features
