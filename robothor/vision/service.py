@@ -201,6 +201,13 @@ class VisionService:
         self._last_person_alert_time: float = 0.0
         self._unknown_counter = 0
 
+        # Runaway-load guardrails: at most one VLM follow-up in flight, and
+        # remember the last unknown face so the same person isn't re-alerted
+        # every frame (each alert costs a full VLM inference).
+        self._vlm_task: asyncio.Task[None] | None = None
+        self._last_unknown_embedding: np.ndarray | None = None
+        self._last_unknown_id: str | None = None
+
     # ── Mode Management ──────────────────────────────────────────
 
     def _mode_file(self) -> Path:
@@ -268,7 +275,8 @@ class VisionService:
                 else:
                     logger.warning("Ingestion failed (%d): %s", resp.status_code, resp.text[:200])
         except Exception as e:
-            logger.warning("Ingestion error: %s", e)
+            # %r: httpx timeouts stringify to "" — the type is the message
+            logger.warning("Ingestion error: %r", e)
 
     async def publish_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Publish to event bus (best-effort)."""
@@ -303,7 +311,7 @@ class VisionService:
             "options": {"temperature": 0.3, "num_predict": 1024, "num_gpu": 999},
         }
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
             resp.raise_for_status()
             result: str = resp.json()["message"]["content"]
@@ -324,8 +332,12 @@ class VisionService:
             metadata={"snapshot_path": snapshot_path, "camera_id": self.camera_id},
         )
 
-        # Fire-and-forget VLM analysis
-        asyncio.create_task(self._vlm_followup(frame.copy(), snapshot_path))
+        # Fire-and-forget VLM analysis — at most one in flight so a stream of
+        # detections can't pile 5-minute requests onto Ollama.
+        if self._vlm_task is None or self._vlm_task.done():
+            self._vlm_task = asyncio.create_task(self._vlm_followup(frame.copy(), snapshot_path))
+        else:
+            logger.debug("VLM follow-up already in flight; skipping")
 
     async def _vlm_followup(self, frame: np.ndarray, snapshot_path: str) -> None:
         """Async VLM follow-up: analyze unknown person and send description."""
@@ -359,6 +371,32 @@ class VisionService:
         """Generate a unique unknown person ID."""
         self._unknown_counter += 1
         return f"unknown_{self._unknown_counter:03d}"
+
+    def _match_recent_unknown(self, embedding: np.ndarray, now_ts: float) -> str | None:
+        """Return the tracked unknown id if this face matches the most recent unknown.
+
+        Only dedups within the alert cooldown window: this exists to stop a
+        single lingering face from re-alerting on every frame, not to
+        suppress alerts for that person forever. Once person_alert_cooldown
+        has elapsed, a still-present unknown face is treated as fresh again
+        so a lingering intruder keeps getting periodic alerts rather than
+        exactly one for the whole time they're on camera.
+        """
+        if self._last_unknown_embedding is None or self._last_unknown_id is None:
+            return None
+        if self._last_unknown_id not in self.people_present:
+            return None
+        if now_ts - self._last_person_alert_time >= self.person_alert_cooldown:
+            return None
+        import numpy as np  # runtime import: numpy is type-only at module level
+
+        prev = self._last_unknown_embedding
+        sim = float(
+            np.dot(embedding, prev) / (np.linalg.norm(embedding) * np.linalg.norm(prev))
+        )
+        if sim >= self.recognizer.match_threshold:
+            return self._last_unknown_id
+        return None
 
     # ── Frame Processing ─────────────────────────────────────────
 
@@ -441,12 +479,18 @@ class VisionService:
                 else:
                     self.people_present[name]["last_seen"] = now_str
             else:
+                existing = self._match_recent_unknown(face["embedding"], now_ts)
+                if existing:
+                    self.people_present[existing]["last_seen"] = now_str
+                    continue
                 if now_ts - self._last_person_alert_time < self.person_alert_cooldown:
                     logger.debug("Unknown person detected but within alert cooldown")
                     continue
                 self._last_person_alert_time = now_ts
                 unknown_id = self._get_unknown_id()
-                snapshot_path = self.save_snapshot(frame)
+                self._last_unknown_embedding = face["embedding"]
+                self._last_unknown_id = unknown_id
+                snapshot_path = self.save_snapshot(frame) if not self.alerts_suppressed else None
                 self.people_present[unknown_id] = {
                     "last_seen": now_str,
                     "arrived_at": now_str,
@@ -474,7 +518,7 @@ class VisionService:
             if now_ts - self._last_person_alert_time < self.person_alert_cooldown:
                 return
             self._last_person_alert_time = now_ts
-            snapshot_path = self.save_snapshot(frame)
+            snapshot_path = self.save_snapshot(frame) if not self.alerts_suppressed else None
             if not self.alerts_suppressed:
                 logger.info("Person detected (no face visible) — sending alert")
                 await self._alert_unknown(
@@ -585,8 +629,22 @@ class VisionService:
                     else:
                         self.people_present[name]["last_seen"] = now_str
                 else:
+                    now_ts = time.time()
+                    existing = self._match_recent_unknown(face["embedding"], now_ts)
+                    if existing:
+                        self.people_present[existing]["last_seen"] = now_str
+                        seen_this_frame.add(existing)
+                        continue
+                    if now_ts - self._last_person_alert_time < self.person_alert_cooldown:
+                        logger.debug("Unknown person detected but within alert cooldown")
+                        continue
+                    self._last_person_alert_time = now_ts
                     unknown_id = self._get_unknown_id()
-                    snapshot_path = self.save_snapshot(frame)
+                    self._last_unknown_embedding = face["embedding"]
+                    self._last_unknown_id = unknown_id
+                    snapshot_path = (
+                        self.save_snapshot(frame) if not self.alerts_suppressed else None
+                    )
                     self.people_present[unknown_id] = {
                         "last_seen": now_str,
                         "arrived_at": now_str,
@@ -605,7 +663,9 @@ class VisionService:
             if persons and not faces:
                 key = "_person_no_face"
                 if key not in self.people_present:
-                    snapshot_path = self.save_snapshot(frame)
+                    snapshot_path = (
+                        self.save_snapshot(frame) if not self.alerts_suppressed else None
+                    )
                     self.people_present[key] = {
                         "last_seen": now_str,
                         "arrived_at": now_str,
