@@ -43,8 +43,12 @@ def _get_connection() -> Any:
     except Exception as e:
         logger.warning("Audit: pool unavailable, using direct DSN: %s", e)
         from robothor.config import get_config
+        from robothor.db.connection import assert_test_database
 
         cfg = get_config()
+        # The pool guard above can be routed around by this fallback — apply the
+        # same "never touch a non-test database from pytest" check here.
+        assert_test_database(cfg.db.name)
         return psycopg2.connect(cfg.db.dsn)
 
 

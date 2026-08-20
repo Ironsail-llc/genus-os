@@ -16,7 +16,7 @@ A circuit breaker fixes both halves:
 
 from __future__ import annotations
 
-from robothor.engine.model_breaker import ModelBreaker
+from robothor.engine.model_breaker import ModelBreaker, get_model_breaker
 
 
 def test_closed_by_default():
@@ -68,3 +68,31 @@ def test_alerts_the_operator_once_when_it_trips():
     )
     assert alerts[0][0] == "gpt-x"
     assert "401" in alerts[0][1]
+
+
+# ─── The global breaker must be inert under pytest ─────────────────────
+#
+# The production singleton is wired to _alert_operator, which writes a real
+# crm_agent_notifications row and posts to Telegram. 92 of the 145 breaker
+# escalations in the operator's inbox were written by pytest runs tripping the
+# global breaker with the fixture model 'openrouter/test/model'. The autouse
+# fixture in robothor/engine/tests/conftest.py swaps in a fresh breaker with
+# on_open=None per test; these tests pin that behaviour.
+
+
+def test_global_breaker_is_inert_under_pytest():
+    b = get_model_breaker()
+    assert b.on_open is None, (
+        "tests must never send real operator escalations — the engine tests "
+        "conftest must swap the global breaker for one with on_open=None"
+    )
+    # Tripping it fully must not raise and must not alert anyone.
+    for _ in range(b.threshold):
+        b.record_failure("openrouter/test/model", reason="unit-test trip")
+    assert b.is_open("openrouter/test/model")
+
+
+def test_global_breaker_state_does_not_leak_between_tests():
+    # The previous test opened the circuit for the fixture model; a fresh
+    # breaker per test means this test must see it closed again.
+    assert not get_model_breaker().is_open("openrouter/test/model")
