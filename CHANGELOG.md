@@ -1,3 +1,9 @@
+## [1.33.6](https://github.com/Ironsail-llc/genus-os/compare/v1.33.5...v1.33.6) (2026-08-20)
+
+### Bug Fixes
+
+* **workflows:** repair goal-review agent ref, raise vision timeout ([#295](https://github.com/Ironsail-llc/genus-os/issues/295)) ([01185d0](https://github.com/Ironsail-llc/genus-os/commit/01185d0a8b94f5bf696f3efad5044a92dd01c080)), closes [#283](https://github.com/Ironsail-llc/genus-os/issues/283) [284/#289](https://github.com/284/genus-os/issues/289)
+
 ## [1.33.5](https://github.com/Ironsail-llc/genus-os/compare/v1.33.4...v1.33.5) (2026-08-20)
 
 ### Bug Fixes
