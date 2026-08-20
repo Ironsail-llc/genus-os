@@ -278,7 +278,7 @@ async def _maybe_run_alert_selftest() -> None:
         logger.debug("Alert delivery self-test failed: %s", e)
 
 
-def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
+def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:
     """Log the outcome of each finished top-level subsystem task.
 
     Mirrors task_registry.py's ``_on_done``: a task that ended cancelled
@@ -289,19 +289,29 @@ def _log_task_results(done: set[asyncio.Task[Any]]) -> None:
     watchdog cancelling the wrong task (Aug 5/9 crashes); the sleep-inside-
     try fixes on the curiosity/curator loops are the primary fix, this is
     the backstop for any other task that ends up cancelled.
+
+    Returns:
+        True when any finished task ended with an exception — i.e. this
+        shutdown was triggered by a subsystem crash, not a clean stop.
+        ``run()`` threads this into the process exit code so systemd's
+        OnFailure pager fires (a crash that exits 0 crash-loops silently
+        behind Restart=always forever).
     """
+    failed = False
     for task in done:
         if task.cancelled():
             logger.error("Task %s was cancelled externally", task.get_name())
             continue
         if task.exception():
             logger.error("Task %s failed: %s", task.get_name(), task.exception())
+            failed = True
         else:
             logger.info("Task %s completed", task.get_name())
+    return failed
 
 
-async def main() -> None:
-    """Start all engine subsystems."""
+async def main() -> int:
+    """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
     # loading agents, or starting any background subsystem. The Engine verifies
     # Bridge-issued tokens but is not an SSO exchange authority, so it must not
@@ -587,8 +597,9 @@ async def main() -> None:
     # which completes the telegram task — that's our shutdown trigger)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-    # Log what finished
-    _log_task_results(done)
+    # Log what finished — and remember whether this shutdown is a subsystem
+    # crash (non-zero exit → OnFailure pages) or a clean stop (exit 0).
+    subsystem_crashed = _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
 
@@ -645,6 +656,7 @@ async def main() -> None:
 
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
+    return 1 if subsystem_crashed else 0
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:
@@ -1162,12 +1174,17 @@ async def _autodream_loop() -> None:
 def run() -> None:
     """Entry point for python -m robothor.engine.daemon"""
     try:
-        asyncio.run(main())
+        exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        return
     except Exception as e:
         logger.error("Engine crashed: %s", e, exc_info=True)
         sys.exit(1)
+    if exit_code != 0:
+        # A subsystem task died and triggered this shutdown. Exit non-zero so
+        # systemd's OnFailure pager fires — exit 0 here means Restart=always
+        # silently crash-loops the engine with no page, forever.
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
