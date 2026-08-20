@@ -192,6 +192,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "list_tasks",
         "list_my_tasks",
         "get_task",
+        "get_contact_360",
+        "list_contact_messages",
         "search_records",
         "get_metadata_objects",
         "get_object_metadata",
@@ -203,9 +205,12 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Engine status
         "list_agent_runs",
         "get_agent_run",
+        "classify_run_failure",
         "list_agent_schedules",
         "get_agent_stats",
         "get_goal",
+        # Memory write-status probe (read-only)
+        "memory_write_status",
         # Vault read-only tools
         "vault_get",
         "vault_list",

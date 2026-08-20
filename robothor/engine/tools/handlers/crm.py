@@ -1043,57 +1043,6 @@ async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     return {"error": "Merge failed — one or both IDs not found"}
 
 
-# ── Agent Reviews ──
-
-
-@_handler("review_agent")
-async def _review_agent(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Submit a review for an agent."""
-    from robothor.crm.dal import create_review
-
-    agent_id = args.get("agent_id", "").strip()
-    if not agent_id:
-        return {"error": "agent_id is required"}
-    rating = args.get("rating")
-    if not isinstance(rating, int) or not 1 <= rating <= 5:
-        return {"error": "rating must be an integer 1-5"}
-
-    review_id = await asyncio.to_thread(
-        create_review,
-        agent_id=agent_id,
-        reviewer=args.get("reviewer", ctx.agent_id),
-        reviewer_type=args.get("reviewer_type", "agent"),
-        rating=rating,
-        categories=args.get("categories"),
-        feedback=args.get("feedback"),
-        action_items=args.get("action_items"),
-        run_id=args.get("run_id"),
-        tenant_id=ctx.tenant_id,
-    )
-    return (
-        {"success": True, "review_id": review_id}
-        if review_id
-        else {"error": "Failed to create review"}
-    )
-
-
-@_handler("get_agent_reviews")
-async def _get_agent_reviews(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Get reviews and summary for an agent."""
-    from robothor.crm.dal import get_review_summary, get_reviews
-
-    agent_id = args.get("agent_id", "").strip()
-    if not agent_id:
-        return {"error": "agent_id is required"}
-
-    days = args.get("days", 30)
-    reviews = await asyncio.to_thread(get_reviews, agent_id, days=days, tenant_id=ctx.tenant_id)
-    summary = await asyncio.to_thread(
-        get_review_summary, agent_id, days=days, tenant_id=ctx.tenant_id
-    )
-    return {"reviews": reviews, "summary": summary}
-
-
 # ── Contact 360 — agent-facing holistic lookup ───────────────────────────
 
 
