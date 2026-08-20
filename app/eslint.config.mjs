@@ -13,6 +13,14 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    // Test files mock next/image with a plain <img>; the LCP/bandwidth
+    // concern behind no-img-element does not apply outside the app bundle.
+    files: ["**/__tests__/**", "**/*.test.tsx", "**/*.test.ts"],
+    rules: {
+      "@next/next/no-img-element": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

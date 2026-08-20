@@ -11,12 +11,12 @@ def test_render_has_sections_and_excludes_nothing() -> None:
     text = wc._render(
         tasks=[{"status": "TODO", "title": "Fix OpenRouter login", "next_action": "confirm"}],
         facts=[{"category": "decision", "fact_text": "Paused email-briefing cron"}],
-        intents=[{"title": "Grow Valhalla revenue"}],
+        intents=[{"title": "Grow Acme revenue"}],
     )
     assert "Open tasks (1)" in text
     assert "[TODO] Fix OpenRouter login → confirm" in text
     assert "(decision) Paused email-briefing cron" in text
-    assert "Standing intents" in text and "Grow Valhalla revenue" in text
+    assert "Standing intents" in text and "Grow Acme revenue" in text
     assert "refreshed" in text
 
 

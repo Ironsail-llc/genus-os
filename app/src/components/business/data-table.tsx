@@ -31,7 +31,6 @@ interface DataTableProps {
   /** LLM-friendly alias for data */
   rows?: Row[];
   /** ColumnDef[] or simple string[] (auto-converted) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   columns?: ColumnDef<Row>[] | string[];
 }
 
@@ -73,6 +72,7 @@ export function DataTable({ title, data, rows, columns }: DataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- useReactTable returns non-memoizable functions; React Compiler skips this component by design
   const table = useReactTable({
     data: resolvedData,
     columns: resolvedColumns,
