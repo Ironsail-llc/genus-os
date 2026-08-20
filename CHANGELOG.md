@@ -1,3 +1,9 @@
+## [1.33.2](https://github.com/Ironsail-llc/genus-os/compare/v1.33.1...v1.33.2) (2026-08-20)
+
+### Bug Fixes
+
+* **memory:** back off and pace remote generation under rate limits ([#274](https://github.com/Ironsail-llc/genus-os/issues/274)) ([63392dc](https://github.com/Ironsail-llc/genus-os/commit/63392dc31b67533d61bf3aea1309b1ffc4007e6c)), closes [#255](https://github.com/Ironsail-llc/genus-os/issues/255)
+
 ## [1.33.1](https://github.com/Ironsail-llc/genus-os/compare/v1.33.0...v1.33.1) (2026-08-20)
 
 ### Bug Fixes
