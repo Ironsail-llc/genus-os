@@ -17,9 +17,9 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 Genus OS employs defense-in-depth security across secrets management, agent execution, and access control. For detailed inventories and compliance mappings, see:
 
-- **[Security Controls Inventory](docs/compliance/SECURITY_CONTROLS.md)** — 20+ controls across 6 categories
-- **[SOC 2 Mapping](docs/compliance/SOC2_MAPPING.md)** — controls mapped to Trust Service Criteria
-- **[HIPAA Mapping](docs/compliance/HIPAA_MAPPING.md)** — generic platform safeguards for healthcare deployments
+- **[Security Controls Inventory](https://github.com/Ironsail-llc/genus-os/blob/main/docs/compliance/SECURITY_CONTROLS.md)** — 20+ controls across 6 categories
+- **[SOC 2 Mapping](https://github.com/Ironsail-llc/genus-os/blob/main/docs/compliance/SOC2_MAPPING.md)** — controls mapped to Trust Service Criteria
+- **[HIPAA Mapping](https://github.com/Ironsail-llc/genus-os/blob/main/docs/compliance/HIPAA_MAPPING.md)** — generic platform safeguards for healthcare deployments
 
 ### Audit API
 
