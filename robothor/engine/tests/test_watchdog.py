@@ -309,3 +309,102 @@ class TestSupervisorCancelledTaskHandling:
         assert any("orphan-victim" in rec.message for rec in caplog.records), (
             "the cancelled task should still be logged, just not via .exception()"
         )
+
+
+class TestDailyMaintenanceGate:
+    """Wall-clock gate for daily maintenance (retention + chat-session TTL).
+
+    The old gate was `tick_count % 2880 == 0` — 24h of *continuous uptime* —
+    which a daemon restarting daily never reaches. The new gate is pure
+    wall-clock: due when 24h have elapsed since the persisted last run,
+    regardless of how many times the process restarted.
+    """
+
+    def test_due_when_never_run(self):
+        assert daemon._daily_maintenance_due(1_000_000.0, None) is True
+
+    def test_not_due_within_24h(self):
+        now = 1_000_000.0
+        assert daemon._daily_maintenance_due(now, now - 23 * 3600) is False
+
+    def test_due_at_exactly_24h(self):
+        now = 1_000_000.0
+        assert daemon._daily_maintenance_due(now, now - 24 * 3600) is True
+
+    def test_due_after_24h(self):
+        now = 1_000_000.0
+        assert daemon._daily_maintenance_due(now, now - 25 * 3600) is True
+
+    def test_restart_does_not_reset_the_clock(self):
+        """Simulate a daemon restart: a fresh process reads the persisted
+        marker and fires based on wall-clock age, not process uptime."""
+        now = time.time()
+        marker_25h_old = now - 25 * 3600
+        # Fresh process, tick counter effectively 0 — still due immediately.
+        assert daemon._daily_maintenance_due(now, marker_25h_old) is True
+        # And a marker from 1h ago keeps it quiet even across many restarts.
+        assert daemon._daily_maintenance_due(now, now - 3600) is False
+
+
+class TestReadLastWatchdogEventTs:
+    def _block(self, content):
+        return {"content": content}
+
+    def test_reads_latest_matching_event(self, monkeypatch):
+        import robothor.memory.blocks as blocks
+
+        content = (
+            "[2026-08-18 06:00 UTC] pg_failure: consecutive=1: boom\n"
+            "[2026-08-18 08:13 UTC] daily_maintenance: sweep started\n"
+            "[2026-08-19 08:20 UTC] daily_maintenance: sweep started\n"
+        )
+        monkeypatch.setattr(blocks, "read_block", lambda name, **kw: self._block(content))
+        ts = daemon._read_last_watchdog_event_ts("daily_maintenance")
+        assert ts is not None
+        from datetime import UTC, datetime
+
+        expected = datetime(2026, 8, 19, 8, 20, tzinfo=UTC).timestamp()
+        assert ts == expected
+
+    def test_legacy_retention_events_are_recognized(self, monkeypatch):
+        """Old instances only have retention_cleanup entries — those count too
+        so the first post-upgrade boot doesn't immediately re-fire."""
+        import robothor.memory.blocks as blocks
+
+        content = "[2026-07-25 08:13 UTC] retention_cleanup: deleted 2977 rows\n"
+        monkeypatch.setattr(blocks, "read_block", lambda name, **kw: self._block(content))
+        ts = daemon._read_last_watchdog_event_ts("daily_maintenance", "retention_cleanup")
+        assert ts is not None
+
+    def test_ignores_non_matching_events(self, monkeypatch):
+        import robothor.memory.blocks as blocks
+
+        content = "[2026-08-19 06:00 UTC] pg_failure: consecutive=3: boom\n"
+        monkeypatch.setattr(blocks, "read_block", lambda name, **kw: self._block(content))
+        assert daemon._read_last_watchdog_event_ts("daily_maintenance") is None
+
+    def test_none_on_missing_block(self, monkeypatch):
+        import robothor.memory.blocks as blocks
+
+        monkeypatch.setattr(blocks, "read_block", lambda name, **kw: {"error": "block not found"})
+        assert daemon._read_last_watchdog_event_ts("daily_maintenance") is None
+
+    def test_none_on_read_failure(self, monkeypatch):
+        import robothor.memory.blocks as blocks
+
+        def _boom(name, **kw):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(blocks, "read_block", _boom)
+        assert daemon._read_last_watchdog_event_ts("daily_maintenance") is None
+
+    def test_malformed_lines_are_skipped(self, monkeypatch):
+        import robothor.memory.blocks as blocks
+
+        content = (
+            "garbage line\n"
+            "[not-a-date UTC] daily_maintenance: x\n"
+            "[2026-08-19 08:20 UTC] daily_maintenance: ok\n"
+        )
+        monkeypatch.setattr(blocks, "read_block", lambda name, **kw: self._block(content))
+        assert daemon._read_last_watchdog_event_ts("daily_maintenance") is not None

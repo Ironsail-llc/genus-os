@@ -529,6 +529,89 @@ async def _embed_turns(message_ids: list[int], texts: list[str]) -> None:
         logger.warning("chat turn embedding persist failed: %s", e)
 
 
+async def backfill_chat_embeddings(limit: int = 100) -> int:
+    """Embed chat_messages rows whose embedding was never persisted.
+
+    Both save paths can leave ``embedded_at IS NULL`` rows behind: the async
+    path's fire-and-forget ``_embed_turns`` task dies on process restart, and
+    the scheduler's sync ``save_exchange`` never schedules embedding at all.
+    This sweep (run periodically from the daemon watchdog) picks up the
+    newest *limit* unembedded rows so recent turns become searchable first.
+
+    Best-effort: returns 0 and leaves rows untouched when the database or
+    the embedding service is unavailable — the next sweep retries.
+
+    Returns the number of rows embedded.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _fetch() -> list[dict[str, Any]]:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                SELECT id, message
+                FROM chat_messages
+                WHERE embedded_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return list(cur.fetchall())
+
+    try:
+        rows = await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        logger.warning("chat embedding backfill: fetch failed: %s", e)
+        return 0
+    if not rows:
+        return 0
+
+    ids: list[int] = []
+    texts: list[str] = []
+    for row in rows:
+        message = row.get("message") or {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str):
+            content = json.dumps(content) if content is not None else ""
+        ids.append(int(row["id"]))
+        texts.append(content)
+
+    try:
+        from robothor.llm import ollama as llm_client
+
+        embeddings = await llm_client.get_embeddings_batch_async(texts)
+    except Exception as e:
+        logger.warning("chat embedding backfill: embedding service unavailable, skipping: %s", e)
+        return 0
+
+    def _update() -> int:
+        updated = 0
+        with get_connection() as conn:
+            cur = conn.cursor()
+            for mid, emb in zip(ids, embeddings, strict=True):
+                if emb is None:
+                    continue
+                cur.execute(
+                    """
+                    UPDATE chat_messages
+                    SET embedding = %s, embedded_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (emb, mid),
+                )
+                updated += 1
+            conn.commit()
+        return updated
+
+    try:
+        return await loop.run_in_executor(None, _update)
+    except Exception as e:
+        logger.warning("chat embedding backfill: persist failed: %s", e)
+        return 0
+
+
 def search_chat_turns(
     query_embedding: list[float],
     limit: int = 5,
