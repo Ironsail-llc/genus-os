@@ -1,3 +1,13 @@
+## [1.33.5](https://github.com/Ironsail-llc/genus-os/compare/v1.33.4...v1.33.5) (2026-08-20)
+
+### Bug Fixes
+
+* **engine:** honest retention log verb for update policies ([#294](https://github.com/Ironsail-llc/genus-os/issues/294)) ([64d8497](https://github.com/Ironsail-llc/genus-os/commit/64d84970cee3baa06d1da815e595cfeecd8a6f8d))
+* **engine:** tools degrade gracefully when backing services are down ([#289](https://github.com/Ironsail-llc/genus-os/issues/289)) ([8439c88](https://github.com/Ironsail-llc/genus-os/commit/8439c88f94c38bfa0ce183a106026e0e43b7b412)), closes [#176](https://github.com/Ironsail-llc/genus-os/issues/176) [#284](https://github.com/Ironsail-llc/genus-os/issues/284)
+* **engine:** widen notification types and expose vision disabled mode ([#291](https://github.com/Ironsail-llc/genus-os/issues/291)) ([86988f3](https://github.com/Ironsail-llc/genus-os/commit/86988f3f319333cfdf84f9917a3e836b78bff99d)), closes [#284](https://github.com/Ironsail-llc/genus-os/issues/284) [#282](https://github.com/Ironsail-llc/genus-os/issues/282) [#283](https://github.com/Ironsail-llc/genus-os/issues/283) [#284](https://github.com/Ironsail-llc/genus-os/issues/284)
+* **infra:** unit templates use absolute ExecStart paths ([#293](https://github.com/Ironsail-llc/genus-os/issues/293)) ([b600aaf](https://github.com/Ironsail-llc/genus-os/commit/b600aaf3b8f86be70a98de08abf980a906c8b38c))
+* **tests:** skip live-data quality-gate audit on test databases ([#292](https://github.com/Ironsail-llc/genus-os/issues/292)) ([cdf616f](https://github.com/Ironsail-llc/genus-os/commit/cdf616f4eced8cd98273b13ed7e146ee53ceb9cd))
+
 ## [1.33.4](https://github.com/Ironsail-llc/genus-os/compare/v1.33.3...v1.33.4) (2026-08-20)
 
 ### Bug Fixes
