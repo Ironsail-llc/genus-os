@@ -554,11 +554,55 @@ class TestArmedModeGuardrails:
             patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
         ):
             await service.process_frame_armed(fake_frame)
-            service._last_person_alert_time = 0  # clear cooldown to isolate dedup
+            # Second frame arrives immediately after (well inside the cooldown
+            # window) — the same face must dedup, not mint a second alert.
             await service.process_frame_armed(fake_frame)
         assert mock_alert.call_count == 1
         unknown_keys = [k for k in service.people_present if k.startswith("unknown_")]
         assert len(unknown_keys) == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_person_dedup_expires_with_cooldown(self, service, fake_frame):
+        """A lingering unknown face must re-alert once the cooldown window has
+        elapsed — dedup exists to stop per-frame spam, not to alert on a
+        loitering intruder exactly once for their whole visit."""
+        embedding = np.ones(512) / np.sqrt(512)
+        service._last_person_alert_time = 0
+        with (
+            _person_with_face_patches(service, embedding),
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+        ):
+            await service.process_frame_armed(fake_frame)
+            # Cooldown window has fully elapsed since the first alert.
+            service._last_person_alert_time -= service.person_alert_cooldown + 1
+            await service.process_frame_armed(fake_frame)
+        assert mock_alert.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_different_unknown_person_still_alerts(self, service, fake_frame):
+        """A genuinely different face (low similarity) must not be silently
+        merged into the tracked unknown identity and must still alert."""
+        embedding_a = np.zeros(512)
+        embedding_a[0] = 1.0
+        embedding_b = np.zeros(512)
+        embedding_b[1] = 1.0  # orthogonal to embedding_a -> similarity 0.0
+        service._last_person_alert_time = 0
+        with (
+            patch.object(service, "save_snapshot", return_value="/tmp/snap.jpg"),
+            patch.object(service, "_alert_unknown", new_callable=AsyncMock) as mock_alert,
+        ):
+            with _person_with_face_patches(service, embedding_a):
+                await service.process_frame_armed(fake_frame)
+            # Clear the (global, pre-existing) alert cooldown so this
+            # isolates the embedding-dedup layer specifically: a different
+            # face must never be merged into the previous unknown identity.
+            service._last_person_alert_time -= service.person_alert_cooldown + 1
+            with _person_with_face_patches(service, embedding_b):
+                await service.process_frame_armed(fake_frame)
+        assert mock_alert.call_count == 2
+        unknown_keys = [k for k in service.people_present if k.startswith("unknown_")]
+        assert len(unknown_keys) == 2
 
     @pytest.mark.asyncio
     async def test_no_snapshot_when_suppressed_armed(self, service, fake_frame):

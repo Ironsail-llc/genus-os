@@ -372,11 +372,21 @@ class VisionService:
         self._unknown_counter += 1
         return f"unknown_{self._unknown_counter:03d}"
 
-    def _match_recent_unknown(self, embedding: np.ndarray) -> str | None:
-        """Return the tracked unknown id if this face matches the most recent unknown."""
+    def _match_recent_unknown(self, embedding: np.ndarray, now_ts: float) -> str | None:
+        """Return the tracked unknown id if this face matches the most recent unknown.
+
+        Only dedups within the alert cooldown window: this exists to stop a
+        single lingering face from re-alerting on every frame, not to
+        suppress alerts for that person forever. Once person_alert_cooldown
+        has elapsed, a still-present unknown face is treated as fresh again
+        so a lingering intruder keeps getting periodic alerts rather than
+        exactly one for the whole time they're on camera.
+        """
         if self._last_unknown_embedding is None or self._last_unknown_id is None:
             return None
         if self._last_unknown_id not in self.people_present:
+            return None
+        if now_ts - self._last_person_alert_time >= self.person_alert_cooldown:
             return None
         import numpy as np  # runtime import: numpy is type-only at module level
 
@@ -469,7 +479,7 @@ class VisionService:
                 else:
                     self.people_present[name]["last_seen"] = now_str
             else:
-                existing = self._match_recent_unknown(face["embedding"])
+                existing = self._match_recent_unknown(face["embedding"], now_ts)
                 if existing:
                     self.people_present[existing]["last_seen"] = now_str
                     continue
@@ -619,12 +629,12 @@ class VisionService:
                     else:
                         self.people_present[name]["last_seen"] = now_str
                 else:
-                    existing = self._match_recent_unknown(face["embedding"])
+                    now_ts = time.time()
+                    existing = self._match_recent_unknown(face["embedding"], now_ts)
                     if existing:
                         self.people_present[existing]["last_seen"] = now_str
                         seen_this_frame.add(existing)
                         continue
-                    now_ts = time.time()
                     if now_ts - self._last_person_alert_time < self.person_alert_cooldown:
                         logger.debug("Unknown person detected but within alert cooldown")
                         continue
