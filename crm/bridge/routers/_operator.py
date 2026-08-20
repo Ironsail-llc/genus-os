@@ -18,11 +18,12 @@ import os
 
 from fastapi import HTTPException, Request
 
-PLATFORM_TENANT = (
-    os.environ.get("ROBOTHOR_PLATFORM_TENANT")
-    or os.environ.get("ROBOTHOR_DEFAULT_TENANT")
-    or "robothor-primary"
-)
+from robothor.constants import DEFAULT_TENANT
+
+# ROBOTHOR_PLATFORM_TENANT overrides; otherwise the gate agrees with the rest
+# of the bridge on DEFAULT_TENANT (which itself honors ROBOTHOR_DEFAULT_TENANT).
+# Never a hardcoded instance tenant id — see CLAUDE.md rule 1.
+PLATFORM_TENANT = os.environ.get("ROBOTHOR_PLATFORM_TENANT") or DEFAULT_TENANT
 
 OPERATOR_ROLES = frozenset({"owner", "admin"})
 
