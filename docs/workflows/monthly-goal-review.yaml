@@ -17,7 +17,7 @@ timeout_seconds: 900
 steps:
   - id: review
     type: agent
-    agent_id: devops-manager
+    agent_id: devops-analyst
     message: |
       Monthly goal review. Examine the past 30 days of agent performance and
       evaluate whether the goal system itself is working:

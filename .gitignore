@@ -35,6 +35,7 @@ brain/instructions/
 brain/scripts/
 brain/memory/
 brain/archives/
+brain/ops-log/
 brain/journals/
 brain/db.sqlite3
 brain/*.sqlite3
