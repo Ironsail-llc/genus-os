@@ -70,6 +70,12 @@ def run_send(
         # run pointed at it would leave a stamp that could suppress a real
         # page later.
         "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        # These tests predate the boot-window retry loop and assert on exact
+        # curl call counts — pin a single fast attempt so they keep testing
+        # what they always tested. The retry behavior itself is covered in
+        # tests/test_pager_hardening.py.
+        "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
+        "ROBOTHOR_ALERT_RETRY_DELAY": "0",
     }
     env.update(env_extra)
     return subprocess.run(
@@ -87,7 +93,10 @@ def test_alert_template_unit_exists_and_invokes_sender():
     assert ALERT_UNIT.exists(), "infra/systemd/robothor-alert@.service missing"
     text = ALERT_UNIT.read_text()
     assert "send_failure_alert.sh %i" in text
-    assert "Type=oneshot" in text
+    # Type=exec, not oneshot: systemd forbids Restart= on oneshot units, and
+    # the pager unit must retry itself when a page cannot be delivered
+    # (see tests/test_pager_hardening.py::TestAlertUnitRetriesItself).
+    assert "Type=exec" in text
 
 
 def test_send_posts_unit_name_to_telegram(tmp_path: Path):
@@ -171,9 +180,7 @@ class TestCooldownDedup:
         assert result.returncode == 0, result.stdout + result.stderr
         assert curl_call_count(log) == 1
 
-    def test_second_call_within_cooldown_is_suppressed_without_curling(
-        self, tmp_path: Path
-    ):
+    def test_second_call_within_cooldown_is_suppressed_without_curling(self, tmp_path: Path):
         log = fake_curl(tmp_path)
         env = dict(self.ENV)
         first = run_send(tmp_path, "robothor-engine.service", env)
@@ -189,9 +196,7 @@ class TestCooldownDedup:
             second.stdout + second.stderr
         )
 
-    def test_a_different_unit_is_not_suppressed_by_the_first_units_cooldown(
-        self, tmp_path: Path
-    ):
+    def test_a_different_unit_is_not_suppressed_by_the_first_units_cooldown(self, tmp_path: Path):
         log = fake_curl(tmp_path)
         env = dict(self.ENV)
         run_send(tmp_path, "robothor-engine.service", env)

@@ -523,6 +523,13 @@ class AgentRun:
     outcome_assessment: str | None = None  # "successful" | "partial" | "incorrect" | "abandoned"
     outcome_notes: str | None = None
 
+    # Set when the agent_runs INSERT was rejected deterministically (CHECK/FK/
+    # unique violation). The run itself keeps executing — tracking must never
+    # break the run — but dependent DB writes (steps, which FK to the missing
+    # run row) are skipped, and spawned children record parent_run_id=NULL
+    # instead of failing their own insert on the parent FK.
+    tracking_disabled: bool = False
+
     steps: list[RunStep] = field(default_factory=list)
     # Index of the first not-yet-persisted step. Bumped as the session
     # flushes steps mid-run so _persist_run_sync doesn't re-insert

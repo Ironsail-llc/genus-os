@@ -29,7 +29,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
     from robothor.memory.blocks import seed_blocks_for_tenant
 
     tenant_id = args.id
-    display_name = args.name
+    display_name = args.name or tenant_id
     telegram_user_id = getattr(args, "telegram_user_id", None)
     parent = getattr(args, "parent", None)
 

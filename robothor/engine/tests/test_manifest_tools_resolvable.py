@@ -80,3 +80,46 @@ def test_warns_once_across_reinstantiated_registries(sample_agent_config, caplog
         _registry().get_tool_names(cfg)  # second instance must NOT re-warn
     hits = [r for r in caplog.records if "bogus_across_reg" in r.getMessage()]
     assert len(hits) == 1
+
+
+async def test_unresolved_tools_escalate_via_alerts(sample_agent_config, monkeypatch):
+    """Manifest/registry drift is operator-actionable, and the journald warning
+    alone proved invisible (107 unactioned warnings over 4 months). The drop
+    must also escalate once per agent through robothor.engine.alerts."""
+    import robothor.engine.alerts as alerts_mod
+    from robothor.engine.task_registry import get_task_registry
+
+    calls: list[tuple[str, str, str]] = []
+
+    async def _fake_alert(level, title, body, **kwargs):
+        calls.append((level, title, body))
+        return True
+
+    monkeypatch.setattr(alerts_mod, "alert", _fake_alert)
+
+    reg = _registry()
+    cfg = dataclasses.replace(
+        sample_agent_config,
+        tools_allowed=[min(reg._schemas), "bogus_escalation_tool"],
+    )
+    reg.get_tool_names(cfg)
+    reg.get_tool_names(cfg)  # dedup: second build must not re-alert
+    await get_task_registry().drain(timeout=5.0)
+
+    assert len(calls) == 1
+    level, title, body = calls[0]
+    assert level == "warning"
+    assert cfg.id in title
+    assert "bogus_escalation_tool" in body
+
+
+def test_unresolved_tools_no_event_loop_does_not_crash(sample_agent_config):
+    """CLI/template-validation paths build registries with no running loop —
+    the escalation must degrade to log-only, never raise."""
+    reg = _registry()
+    cfg = dataclasses.replace(
+        sample_agent_config,
+        tools_allowed=[min(reg._schemas), "bogus_no_loop_tool"],
+    )
+    names = reg.get_tool_names(cfg)  # must not raise
+    assert "bogus_no_loop_tool" not in names

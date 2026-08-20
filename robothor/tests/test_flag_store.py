@@ -66,7 +66,7 @@ def flag_store_db(db_conn, monkeypatch):
 
     # set_flag() writes through its own committed path, so the rollback this
     # fixture otherwise relies on does not reclaim it. A leaked
-    # `updated_by='operator:philip'` row is treated by store._read_db as an
+    # `updated_by='operator:alice'` row is treated by store._read_db as an
     # authoritative operator override — not a migration seed — so it silently
     # changes what resolve() returns for every later test in the session, and
     # test_feature_flags_modes starts asserting 'enforce' == 'observe'.
@@ -97,7 +97,7 @@ def test_env_wins_when_only_a_seed_row_exists(monkeypatch, flag_store_db):
 
 
 def test_operator_row_wins_over_env(monkeypatch, flag_store_db):
-    flag_store_db.seed("ROBOTHOR_RIP_7_MODE", "alert", by="operator:philip")
+    flag_store_db.seed("ROBOTHOR_RIP_7_MODE", "alert", by="operator:alice")
     monkeypatch.setenv("ROBOTHOR_RIP_7_MODE", "observe")
     assert store.resolve("ROBOTHOR_RIP_7_MODE") == "alert"
 
@@ -110,7 +110,7 @@ def test_db_unreachable_falls_through_to_env(monkeypatch):
 
 
 def test_set_flag_writes_audit_and_notifies(flag_store_db):
-    store.set_flag("ROBOTHOR_RBAC_MODE", "enforce", actor="operator:philip", reason="promote")
+    store.set_flag("ROBOTHOR_RBAC_MODE", "enforce", actor="operator:alice", reason="promote")
     rows = flag_store_db.audit("ROBOTHOR_RBAC_MODE")
     assert rows and rows[-1]["to_value"] == "enforce"
-    assert rows[-1]["actor"] == "operator:philip"
+    assert rows[-1]["actor"] == "operator:alice"

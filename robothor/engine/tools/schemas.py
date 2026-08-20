@@ -220,6 +220,24 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["classify_run_failure"] = {
+        "type": "function",
+        "function": {
+            "name": "classify_run_failure",
+            "description": (
+                "Return ground-truth classification of a run's failure. Call this "
+                "instead of parsing agent_runs.error_message — the reaper's "
+                "error_message is a label, not a diagnosis. Inspects the run's "
+                "step history and the daemon's boot timestamp to produce a "
+                "structured diagnosis."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"run_id": {"type": "string", "description": "The run UUID"}},
+                "required": ["run_id"],
+            },
+        },
+    }
     schemas["list_agent_schedules"] = {
         "type": "function",
         "function": {
@@ -253,6 +271,92 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                 },
                 "required": ["agent_id"],
+            },
+        },
+    }
+
+    # ── Memory write confirmation ──
+    # store_memory queues fact extraction asynchronously and its response tells
+    # the agent to "use memory_write_status with this job_id if confirmation
+    # matters" — so the tool must be advertisable. Agents with a tools_allowed
+    # list still have to opt in via their manifest.
+    schemas["memory_write_status"] = {
+        "type": "function",
+        "function": {
+            "name": "memory_write_status",
+            "description": (
+                "Check the status of a deferred (queued) memory write. Use after "
+                "store_memory returns status='queued' when write confirmation "
+                "matters."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "integer",
+                        "description": "Write job id returned by store_memory",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    }
+
+    # ── Contact 360 — agent-facing holistic CRM lookup ──
+    schemas["get_contact_360"] = {
+        "type": "function",
+        "function": {
+            "name": "get_contact_360",
+            "description": (
+                "Get the unified view of a contact: identity, counts, recent "
+                "timeline, open tasks, recent notes, and memory snippets. Look up "
+                "by person id, or by a channel identifier (email, phone, telegram "
+                "id)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "person_id UUID (preferred)"},
+                    "identifier": {
+                        "type": "string",
+                        "description": "Channel identifier string (email, phone, telegram id) — used when id is not given",
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": "Channel for identifier lookup (default 'email')",
+                        "default": "email",
+                    },
+                    "timeline_limit": {
+                        "type": "integer",
+                        "description": "How many timeline rows to include (default 50)",
+                        "default": 50,
+                    },
+                },
+            },
+        },
+    }
+    schemas["list_contact_messages"] = {
+        "type": "function",
+        "function": {
+            "name": "list_contact_messages",
+            "description": (
+                "Fetch message bodies for a CRM person, optionally filtered by channel."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "person_id UUID"},
+                    "channel": {
+                        "type": "string",
+                        "description": "Optional channel filter (e.g. email, telegram)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max messages to return (default 100)",
+                        "default": 100,
+                    },
+                },
+                "required": ["id"],
             },
         },
     }
@@ -420,7 +524,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "name": "intent_add",
                 "description": (
                     "Record a STANDING INTENT — an ongoing objective the operator is "
-                    "working toward (e.g. 'grow Valhalla revenue'), not a one-off task. "
+                    "working toward (e.g. 'grow quarterly revenue'), not a one-off task. "
                     "Persists across sessions so it can be advanced proactively."
                 ),
                 "parameters": {
@@ -2105,6 +2209,24 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["skill_view"] = {
+        "type": "function",
+        "function": {
+            "name": "skill_view",
+            "description": (
+                "Load the full body of one skill on demand. The system-prompt "
+                "catalog lists only names and truncated descriptions; call this "
+                "with a skill's name when you need the complete procedure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the skill to load"},
+                },
+                "required": ["name"],
+            },
+        },
+    }
     schemas["update_skill"] = {
         "type": "function",
         "function": {

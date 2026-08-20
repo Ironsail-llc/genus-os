@@ -14,9 +14,9 @@ from robothor.engine.warmup import _extract_entity_candidates, _warmup_recall_v2
 class TestCandidates:
     def test_capitalized_only_when_not_lowercase_ok(self) -> None:
         out = _extract_entity_candidates(
-            "Did Philip confirm the OpenRouter login was legitimate?", lowercase_ok=False
+            "Did Alice confirm the OpenRouter login was legitimate?", lowercase_ok=False
         )
-        assert "Philip" in out and "OpenRouter" in out
+        assert "Alice" in out and "OpenRouter" in out
         assert "Did" not in out  # capitalized sentence-start stopword
         assert "login" not in out  # lowercase excluded in legacy mode
 

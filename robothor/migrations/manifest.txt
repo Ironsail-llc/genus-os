@@ -100,4 +100,5 @@ crm/093_memory_write_jobs.sql
 crm/094_memory_decay_shadow.sql
 crm/095_memory_bitemporal.sql
 crm/096_memory_block_budget.sql
+crm/097_trigger_type_channel_event.sql
 crm/098_tenant_column_defaults.sql

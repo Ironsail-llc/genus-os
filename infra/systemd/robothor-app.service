@@ -1,0 +1,34 @@
+# Genus OS dashboard (Next.js standalone server) — systemd service template.
+#
+# Rendered by scripts/render-unit.sh (see infra/systemd/README.md):
+#   /opt/robothor  -> $ROBOTHOR_WORKSPACE
+#   /home/robothor -> $ROBOTHOR_SERVICE_HOME
+#   User=robothor  -> $ROBOTHOR_SERVICE_USER
+[Unit]
+Description=Robothor Business Layer
+After=network.target robothor-bridge.service robothor-crm.service
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor/app
+ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
+# Next standalone output does not include static assets — stage them in.
+ExecStartPre=/bin/bash -c 'cp -r .next/static .next/standalone/.next/static 2>/dev/null; cp -r public .next/standalone/public 2>/dev/null; true'
+EnvironmentFile=-/run/robothor/secrets.env
+Environment=NODE_ENV=production
+Environment=PORT=3004
+Environment=HOME=/home/robothor
+ExecStart=/usr/bin/node .next/standalone/server.js
+Restart=always
+RestartSec=5
+KillMode=control-group
+# Node exits 128+15=143 on SIGTERM. Without this, every clean `systemctl stop`
+# is recorded as "Failed with result exit-code" (observed on both stops in the
+# 48h before this line existed), polluting failure telemetry and making real
+# failures harder to spot.
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target

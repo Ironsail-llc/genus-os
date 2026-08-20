@@ -4,11 +4,24 @@
 #   1. Copy to /etc/systemd/system/ and adjust the two paths below to your
 #      instance workspace (ROBOTHOR_WORKSPACE).
 #   2. Wire units up: scripts/install_onfailure_alerts.sh robothor-engine.service ...
+#
+# systemd fires OnFailure= exactly once per failure, so a page this unit fails
+# to deliver is lost forever — which happened twice on the 2026-08-19 boot
+# (DNS not up; secrets not yet decrypted). The sender script retries internally
+# (~5min budget) and this unit additionally restarts itself on failure so
+# systemd keeps retrying a page that exhausted the script's own budget.
 [Unit]
 Description=Robothor failure alert for %i
+# Bound the systemd-level retries: 5 starts per hour, then give up loudly.
+StartLimitIntervalSec=3600
+StartLimitBurst=5
 
 [Service]
-Type=oneshot
+# Type=exec (not oneshot): systemd forbids Restart= on oneshot units, and
+# the retrying sender can legitimately run for minutes.
+Type=exec
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 ExecStart=/usr/bin/env bash /opt/robothor/scripts/send_failure_alert.sh %i
+Restart=on-failure
+RestartSec=60

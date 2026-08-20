@@ -494,6 +494,12 @@ class AgentSession:
 
         Returns the number of steps that were flushed.
         """
+        # The run row was never created (deterministic INSERT rejection, e.g.
+        # a CHECK-constraint violation) — every step insert would fail the
+        # run_id FK, so don't attempt any.
+        if self.run.tracking_disabled:
+            return 0
+
         # Lazy import to avoid circular dep at module load.
         from robothor.engine.tracking import create_step, create_steps_batch
 
