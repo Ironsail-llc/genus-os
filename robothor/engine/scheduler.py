@@ -29,6 +29,7 @@ from robothor.engine.tracking import (
     update_schedule_state,
     upsert_schedule,
 )
+from robothor.sanitize import sanitize_log
 
 # Circuit breaker: skip agent after this many consecutive errors
 CIRCUIT_BREAKER_THRESHOLD = 5
@@ -43,6 +44,19 @@ logger = logging.getLogger(__name__)
 def _now_iso() -> str:
     """UTC ISO timestamp for log correlation."""
     return datetime.now(UTC).isoformat()
+
+
+def _next_fire_time(trigger: CronTrigger) -> str:
+    """Next fire time for a cron trigger, as a log-friendly string.
+
+    Never raises: a startup log line is not worth crashing the scheduler for.
+    """
+    try:
+        next_fire = trigger.get_next_fire_time(None, datetime.now(UTC))
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("Could not compute next fire time: %s", e)
+        return "unknown"
+    return next_fire.isoformat() if next_fire else "never"
 
 
 def _is_heartbeat_trigger(trigger_detail: str | None) -> bool:
@@ -413,33 +427,7 @@ class CronScheduler:
         except Exception as e:
             logger.warning("could not register memory vault projection: %s", e)
 
-        wf_loaded = 0
-        if self.workflow_engine:
-            for wf, wf_trigger in self.workflow_engine.get_workflows_for_cron():
-                try:
-                    wf_cron_trigger = CronTrigger.from_crontab(
-                        wf_trigger.cron,
-                        timezone=wf_trigger.timezone,
-                    )
-                    self.scheduler.add_job(
-                        self._run_workflow,
-                        trigger=wf_cron_trigger,
-                        args=[wf.id],
-                        id=f"workflow:{wf.id}",
-                        name=f"workflow:{wf.name}",
-                        max_instances=1,
-                        coalesce=True,
-                        misfire_grace_time=60,
-                    )
-                    wf_loaded += 1
-                except Exception as e:
-                    logger.error(
-                        "Invalid workflow cron for %s: %s — %s",
-                        wf.id,
-                        wf_trigger.cron,
-                        e,
-                    )
-            logger.info("Loaded %d workflow cron jobs", wf_loaded)
+        await self._register_workflow_cron_jobs()
 
         # Catch up cron occurrences missed while the daemon was down. The
         # in-memory jobstore has no record of these — misfire_grace_time only
@@ -955,6 +943,149 @@ class CronScheduler:
                 logger.warning("channel_wake execute failed: %s", e)
         finally:
             await release(dedup_key)
+
+    async def _register_workflow_cron_jobs(self) -> int:
+        """Register one APScheduler job per cron-triggered workflow.
+
+        Every workflow that declares a cron trigger must come out of this with
+        a job. A workflow that does not has *no* trigger at all — it never runs
+        again, and the only prior evidence was the gap between two aggregate
+        log lines ("Loaded 5 workflows" vs "Loaded 4 workflow cron jobs"),
+        which named nothing and reached nobody.
+
+        So: one INFO line per registered job (id, cron, next fire time), a
+        parity check that names every workflow whose cron did not register,
+        and a warning-level alert so the miss reaches the operator instead of
+        dying in the log. A failure on one workflow never skips the rest.
+
+        Returns:
+            The number of workflow cron jobs successfully registered.
+        """
+        if not self.workflow_engine:
+            return 0
+
+        try:
+            cron_workflows = list(self.workflow_engine.get_workflows_for_cron())
+        except Exception as e:
+            logger.error("Could not enumerate cron-triggered workflows: %s", e)
+            await self._alert_workflow_cron_failure(
+                "Workflow cron registration skipped entirely",
+                f"No workflow cron job was registered — enumeration failed: {e}",
+                {"error": str(e)},
+            )
+            return 0
+
+        expected: dict[str, str] = {}
+        registered: set[str] = set()
+        failures: dict[str, str] = {}
+
+        for wf, wf_trigger in cron_workflows:
+            expected[wf.id] = wf_trigger.cron
+            try:
+                wf_cron_trigger = CronTrigger.from_crontab(
+                    wf_trigger.cron,
+                    timezone=wf_trigger.timezone,
+                )
+                self.scheduler.add_job(
+                    self._run_workflow,
+                    trigger=wf_cron_trigger,
+                    args=[wf.id],
+                    id=f"workflow:{wf.id}",
+                    name=f"workflow:{wf.name}",
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=60,
+                )
+            except Exception as e:
+                failures[wf.id] = f"{type(e).__name__}: {e}"
+                logger.error(
+                    "Workflow cron registration FAILED for %s (cron=%s tz=%s): %s: %s",
+                    sanitize_log(wf.id),
+                    sanitize_log(wf_trigger.cron),
+                    sanitize_log(wf_trigger.timezone),
+                    type(e).__name__,
+                    e,
+                )
+                continue
+
+            registered.add(wf.id)
+            logger.info(
+                "Registered workflow cron: workflow=%s cron=%s tz=%s next_fire=%s",
+                sanitize_log(wf.id),
+                sanitize_log(wf_trigger.cron),
+                sanitize_log(wf_trigger.timezone),
+                _next_fire_time(wf_cron_trigger),
+            )
+
+        logger.info(
+            "Loaded %d workflow cron jobs from %d cron-triggered workflow(s)",
+            len(registered),
+            len(expected),
+        )
+
+        # Parity: declared-with-a-cron vs actually-registered. `missing` lost
+        # its only trigger and will never fire again. `degraded` registered one
+        # trigger but lost another (the job id is per-workflow, so a second
+        # cron trigger collides) — a lost run window either way.
+        missing = sorted(set(expected) - registered)
+        degraded = sorted(set(failures) - set(missing))
+        if not missing and not degraded:
+            return len(registered)
+
+        detail = "; ".join(
+            f"{sanitize_log(wf_id)} (cron={sanitize_log(expected[wf_id])}): "
+            f"{failures.get(wf_id, 'no registration attempt recorded')}"
+            for wf_id in missing + degraded
+        )
+        logger.error(
+            "Workflow cron parity check FAILED (%d of %d cron-triggered "
+            "workflow(s) registered): %d with NO trigger %s, %d missing a "
+            "trigger %s — %s",
+            len(registered),
+            len(expected),
+            len(missing),
+            [sanitize_log(w) for w in missing],
+            len(degraded),
+            [sanitize_log(w) for w in degraded],
+            detail,
+        )
+        safe_missing = [sanitize_log(wf_id) for wf_id in missing]
+        safe_degraded = [sanitize_log(wf_id) for wf_id in degraded]
+        await self._alert_workflow_cron_failure(
+            f"Workflow cron registration incomplete: "
+            f"{len(missing) + len(degraded)} workflow(s) affected",
+            (
+                f"{len(registered)} of {len(expected)} cron-triggered workflow(s) "
+                f"registered.\n"
+                f"No trigger at all (will never fire): "
+                f"{', '.join(safe_missing) or 'none'}\n"
+                f"Lost at least one trigger: {', '.join(safe_degraded) or 'none'}\n"
+                f"{detail}"
+            ),
+            {
+                "missing_workflows": safe_missing,
+                "degraded_workflows": safe_degraded,
+                "registered": len(registered),
+                "expected": len(expected),
+            },
+        )
+
+        return len(registered)
+
+    async def _alert_workflow_cron_failure(
+        self, title: str, body: str, metadata: dict[str, Any]
+    ) -> None:
+        """Raise a warning-level alert so the operator sees it (never fatal).
+
+        A dropped workflow cron used to live and die in the log. Routing it
+        through ``alerts.alert`` puts it in the operator's digest instead.
+        """
+        try:
+            from robothor.engine.alerts import alert
+
+            await alert("warning", title, body, metadata=metadata)
+        except Exception as e:  # an alert failure must not stop the scheduler booting
+            logger.error("Failed to alert workflow cron failure (%s): %s", title, e)
 
     async def _run_workflow(self, workflow_id: str) -> None:
         """Execute a workflow as a scheduled cron job."""

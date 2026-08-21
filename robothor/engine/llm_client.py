@@ -91,6 +91,12 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 # and therefore get LLM_REQUEST_TIMEOUT_BATCH per model.
 _BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow"})
 
+# Marker prepended to engine-injected context when it is rewritten from the
+# ``developer`` role to a user turn (Anthropic-family models only — see
+# ``LLMClient._normalize_developer_role``). Keeps the provenance visible to the
+# model so it does not read engine context as operator speech.
+ENGINE_CONTEXT_PREFIX = "[engine] "
+
 # One in-place retry per model for transient failures (timeout / 5xx) before
 # advancing the fallback chain, with a short jitter so a provider blip is not
 # re-hit instantly. A transient 502 used to burn the model's only attempt and
@@ -424,8 +430,80 @@ class LLMClient:
         return cleaned if dropped else messages
 
     @staticmethod
+    def _is_anthropic_family(model: str) -> bool:
+        """True for models served by the Anthropic Messages API shape.
+
+        Matches the model *string* rather than a single prefix so every routing
+        spelling is covered: ``anthropic/claude-…`` (direct),
+        ``openrouter/anthropic/claude-…`` (proxied), ``bedrock/anthropic.claude-…``
+        and bare ``claude-…`` aliases.
+        """
+        lowered = model.lower()
+        return "anthropic/" in lowered or "claude" in lowered
+
+    @staticmethod
+    def _normalize_developer_role(
+        model: str, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Rewrite engine ``developer`` turns as user turns for Anthropic models.
+
+        The engine injects context (plan, budget warnings, verification-retry
+        feedback) with ``role=ENGINE_CONTEXT_ROLE`` — ``"developer"`` — often at
+        the conversation TAIL. litellm maps ``developer`` → ``system`` for
+        non-OpenAI providers, and the Anthropic transformation then *hoists*
+        every system turn out of the message list into the top-level ``system``
+        parameter. What Anthropic actually receives therefore ends with the
+        assistant turn that preceded the developer message, and it rejects that:
+
+            "This model does not support assistant message prefill.
+             The conversation must end with a user message."
+
+        ``_guard_trailing_assistant`` cannot see this — at guard time the list
+        still ends with the developer turn. Since MiMo (and other OpenAI-shaped
+        providers) accept ``developer`` verbatim, the failure hit only the
+        Anthropic last-resort leg of the fallback chain, i.e. exactly when it
+        was needed most. Normalizing here, *before* the guard, keeps the context
+        in the conversation and leaves a legitimate user turn at the tail.
+
+        Non-anthropic models are returned untouched (same list object), so their
+        payloads stay byte-identical.
+        """
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+        if not LLMClient._is_anthropic_family(model):
+            return messages
+        if not any(m.get("role") == ENGINE_CONTEXT_ROLE for m in messages):
+            return messages
+
+        normalized: list[dict[str, Any]] = []
+        converted = 0
+        for msg in messages:
+            if msg.get("role") != ENGINE_CONTEXT_ROLE:
+                normalized.append(msg)
+                continue
+            converted += 1
+            rewritten = dict(msg)
+            rewritten["role"] = "user"
+            content = msg.get("content")
+            if isinstance(content, list):
+                rewritten["content"] = [
+                    {"type": "text", "text": ENGINE_CONTEXT_PREFIX.strip()},
+                    *content,
+                ]
+            else:
+                rewritten["content"] = f"{ENGINE_CONTEXT_PREFIX}{content or ''}"
+            normalized.append(rewritten)
+
+        logger.debug(
+            "Normalized %d developer-role message(s) to user turns for %s",
+            converted,
+            model,
+        )
+        return normalized
+
+    @staticmethod
     def _guard_trailing_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Drop a trailing assistant message before an LLM call.
+        """Drop trailing assistant messages before an LLM call.
 
         OpenRouter-proxied Anthropic (via Azure/Google) rejects requests whose
         final message is an assistant turn with:
@@ -436,13 +514,21 @@ class LLMClient:
         run's response that was carried into history without its follow-up, or
         a checkpoint restored after a user turn was lost. Drop it so the LLM
         call can proceed.
+
+        Strips *every* trailing assistant turn, not just the last one: there is
+        only one pre-flight pass per call, so leaving a second orphan behind
+        would still trip the prefill rejection.
         """
-        if messages and messages[-1].get("role") == "assistant":
-            logger.warning(
-                "Dropping trailing assistant message before LLM call (prefill-rejection guard)"
-            )
-            return messages[:-1]
-        return messages
+        end = len(messages)
+        while end > 0 and messages[end - 1].get("role") == "assistant":
+            end -= 1
+        if end == len(messages):
+            return messages
+        logger.warning(
+            "Dropping %d trailing assistant message(s) before LLM call (prefill-rejection guard)",
+            len(messages) - end,
+        )
+        return messages[:end]
 
     # ─── Request kwargs ──────────────────────────────────────────────
 
@@ -518,6 +604,12 @@ class LLMClient:
         # Defense in depth: drop orphaned tool_result messages that would
         # cause "unexpected tool_use_id" API errors.
         messages = LLMClient._validate_tool_pairs(messages)
+
+        # Anthropic hoists developer/system turns out of the message list, which
+        # can strand an assistant turn at the tail. Rewrite them as user turns
+        # BEFORE the prefill guard runs so the guard sees the real terminator.
+        # No-op (same list object) for every non-anthropic model.
+        messages = LLMClient._normalize_developer_role(model, messages)
 
         # Defense in depth: drop a trailing assistant message, which OpenRouter-
         # proxied Anthropic rejects with "model does not support prefill".
