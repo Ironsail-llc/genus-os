@@ -1,3 +1,9 @@
+## [1.34.1](https://github.com/Ironsail-llc/genus-os/compare/v1.34.0...v1.34.1) (2026-08-21)
+
+### Bug Fixes
+
+* **events:** stop the test suite publishing to production Redis ([#312](https://github.com/Ironsail-llc/genus-os/issues/312)) ([f14e789](https://github.com/Ironsail-llc/genus-os/commit/f14e789fe4f73faf73edcf3caeb07c4ddf9e7782))
+
 ## [1.34.0](https://github.com/Ironsail-llc/genus-os/compare/v1.33.8...v1.34.0) (2026-08-21)
 
 ### Features
