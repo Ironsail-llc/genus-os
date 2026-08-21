@@ -78,6 +78,38 @@ async def test_batch_survives_a_row_pointing_at_a_missing_entity(
     ]
 
 
+async def test_batch_survives_a_duplicate_pair(db_cursor, mock_get_connection, entity_fixture):
+    """The same relation proposed twice in one batch used to kill the batch.
+
+    ``ON CONFLICT DO UPDATE`` cannot touch a row the same command inserted, so
+    Postgres raises ``CardinalityViolation: ON CONFLICT DO UPDATE command cannot
+    affect row a second time`` for the whole statement. LLM extraction emits a
+    duplicate pair routinely — the same relation mentioned by two facts in one
+    batch — so this cost relations even when every entity id was valid.
+    """
+    from robothor.memory.entities import add_relations_batch
+
+    tenant, ids, _missing = entity_fixture
+    rows = [
+        (ids["alpha"], ids["beta"], "uses", None, 0.5),
+        (ids["alpha"], ids["beta"], "uses", None, 0.9),  # same constrained key
+        (ids["beta"], ids["gamma"], "manages", None, 1.0),
+    ]
+
+    stored = await add_relations_batch(rows, tenant_id=tenant)
+
+    assert stored == 3
+    db_cursor.execute(
+        """
+        SELECT relation_type, confidence FROM memory_relations
+        WHERE tenant_id = %s ORDER BY relation_type
+        """,
+        (tenant,),
+    )
+    persisted = [(r["relation_type"], r["confidence"]) for r in db_cursor.fetchall()]
+    assert persisted == [("manages", 1.0), ("uses", 0.9)]
+
+
 async def test_batch_drops_none_ids_before_touching_postgres(
     db_cursor, mock_get_connection, entity_fixture
 ):
