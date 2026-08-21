@@ -312,7 +312,7 @@ class TestDurableWritesSatisfyRecordUpdate:
             ("update_task", {"task_id": "t1", "status": "done"}),
             ("store_memory", {"content": "the payment is pending"}),
             ("memory_block_write", {"block": "notes", "content": "x"}),
-            ("gws_calendar_create", {"summary": "Bachelor party"}),
+            ("gws_calendar_create", {"summary": "Team offsite"}),
             ("create_person", {"name": "Alice"}),
         ],
     )
