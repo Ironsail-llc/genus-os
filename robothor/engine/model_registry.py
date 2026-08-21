@@ -272,6 +272,34 @@ def _dynamic_model_limits(model_id: str) -> ModelLimits | None:
 
 _DATED_SLUG_RE = re.compile(r"-2\d{7}$")  # e.g. xiaomi/mimo-v2.5-20260422
 
+# Routing prefixes we add to reach a provider. The provider never echoes them
+# back, so they must come off before two ids can be compared.
+_ROUTE_PREFIXES = ("openrouter/", "litellm_proxy/", "ollama_chat/", "ollama/")
+
+
+def canonical_model_id(model_id: str) -> str:
+    """Normalize a model id so request and response forms compare equal.
+
+    ``openrouter/xiaomi/mimo-v2.5`` (what a manifest configures) and
+    ``xiaomi/mimo-v2.5-20260422`` (what the provider reports back, and what
+    ``agent_runs.model_used`` therefore stores) name the same model. Strip the
+    routing prefix and the dated release suffix and lowercase. Anything that
+    compares a configured model id against a recorded one must go through
+    here, or every healthy run looks like a fallback.
+
+    Args:
+        model_id: A model id in either request or response form.
+
+    Returns:
+        The lowercased id with routing prefix and dated slug removed.
+    """
+    canonical = (model_id or "").strip().lower()
+    for prefix in _ROUTE_PREFIXES:
+        if canonical.startswith(prefix):
+            canonical = canonical[len(prefix) :]
+            break
+    return _DATED_SLUG_RE.sub("", canonical)
+
 
 def _registry_candidates(model_id: str) -> list[str]:
     """Aliases under which a model id may appear in ``_MODEL_REGISTRY``.

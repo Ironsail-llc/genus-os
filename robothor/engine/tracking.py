@@ -127,8 +127,15 @@ def update_run(
     budget_exhausted: bool | None = None,
     outcome_assessment: str | None = None,
     outcome_notes: str | None = None,
+    verified_status: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> bool:
-    """Update an existing run with new fields."""
+    """Update an existing run with new fields.
+
+    ``verified_status`` / ``verification`` are the migration-100 claim
+    verification columns (see ``robothor.engine.run_verification``); the
+    latter is a dict serialised into the ``jsonb`` column.
+    """
     updates: list[str] = []
     values: list[Any] = []
 
@@ -154,6 +161,8 @@ def update_run(
         "budget_exhausted": budget_exhausted,
         "outcome_assessment": outcome_assessment,
         "outcome_notes": outcome_notes,
+        "verified_status": verified_status,
+        "verification": json.dumps(verification, default=str) if verification else None,
     }
 
     for col, val in field_map.items():

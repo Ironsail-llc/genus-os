@@ -81,3 +81,39 @@ leave live and mirror disagreeing.
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | observe → alert | 3 events — review, then 7-day ladder |
 | `ROBOTHOR_RIP_7_MODE`, `ROBOTHOR_RIP_13_MODE` | observe → alert | ladder overdue |
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | observe | 363 would-blocks — triage + canary before any flip |
+| `ROBOTHOR_RUN_VERIFICATION_MODE` | observe | new 2026-08-21 — soak the `unverified_claims` rate before alert |
+
+### `ROBOTHOR_RUN_VERIFICATION_MODE` — what each rung does
+
+Run-level claim verification (`robothor/engine/run_verification.py`) compares a
+finished run's claims against the tools that actually succeeded in its own
+trace. Unlike `ROBOTHOR_COMPLETION_CONTRACTS_MODE` it needs no session goal and
+is not limited to "task complete" phrasings.
+
+| Rung | Behaviour |
+|------|-----------|
+| `off` | never computed |
+| `observe` | verdict stamped on `agent_runs.verified_status` / `.verification`, one `agent_guardrail_events` row per non-`no_claims` verdict, a note appended to `outcome_notes`. Nothing else changes. |
+| `alert` | observe + `notify_guardrail_alert` to the operator on any non-`verified` verdict |
+| `enforce` | records exactly as `alert` today — gating delivery/task resolution on the verdict is a follow-up PR, and this rung must not be promoted until that lands |
+
+Soak query:
+
+```sql
+SELECT verified_status, count(*)
+FROM agent_runs
+WHERE created_at > now() - interval '7 days' AND verified_status IS NOT NULL
+GROUP BY 1 ORDER BY 2 DESC;
+
+SELECT agent_id, verification->>'unsupported' AS kinds, left(output_text, 120)
+FROM agent_runs
+WHERE verified_status = 'unverified_claims'
+ORDER BY created_at DESC LIMIT 20;
+```
+
+Expect a low single-digit percentage. A 400-run replay of recent production
+traffic (2026-08-21) produced 387 `no_claims`, 6 `verified`, 7
+`unverified_claims` — 1.75%, and the run that motivated the control is among
+the 7. The dominant residual class is briefing/summary agents reporting work a
+*different* run performed; that is signal, not a bug, but it is the thing to
+triage before promoting.

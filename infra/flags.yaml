@@ -189,6 +189,22 @@ flags:
       figure can be checked against a hand-run query on agent_runs before the
       numbers change. Promote per docs/runbooks/BENCHMARK_DECONTAMINATION.md.
 
+  - name: ROBOTHOR_RUN_VERIFICATION_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-05"
+    soak: >
+      NEW 2026-08-21. Checks a run's final claims against its own tool trace —
+      the control that would have caught run 6cb7e492 ("✅ Payment confirmed —
+      $270 sent to Colt via Venmo") whose entire trace was one write_file to
+      /tmp. Observe records verified_status/verification on agent_runs and one
+      guardrail event per non-no_claims verdict; it changes NO delivery and NO
+      task resolution. Promotion evidence required before alert: >=5 days of
+      verdicts, a false-positive rate under 10% on a 10-run/week operator
+      spot-check, and the Venmo-style probe caught in production data — not a
+      green test. Do NOT promote to enforce until the acting-on-verdict PR
+      (honest-failure banner + auto-resolve gating) has landed and soaked.
+
   - name: ROBOTHOR_TOOL_VERIFY_MODE
     owner: ops
     mode: observe

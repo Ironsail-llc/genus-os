@@ -523,6 +523,13 @@ class AgentRun:
     outcome_assessment: str | None = None  # "successful" | "partial" | "incorrect" | "abandoned"
     outcome_notes: str | None = None
 
+    # Claim verification against the tool trace (migration 100, flag-gated by
+    # ROBOTHOR_RUN_VERIFICATION_*). verified_status is one of
+    # run_verification.VERIFICATION_STATUSES; verification is that module's
+    # Verdict.to_payload(). Both stay None while the flag is off.
+    verified_status: str | None = None
+    verification: dict[str, Any] | None = None
+
     # Set when the agent_runs INSERT was rejected deterministically (CHECK/FK/
     # unique violation). The run itself keeps executing — tracking must never
     # break the run — but dependent DB writes (steps, which FK to the missing

@@ -604,6 +604,23 @@ Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/
 
 `buddy_watch.py` (parallel LLM cron), `_maybe_append_buddy_reflection` in `delivery.py` (heartbeat appendix), `_buddy_status_context` warmup hook, `flag_underperformers` + escalation mechanics in `buddy.py`, XP/level/streak gamification (constants, LevelInfo, DailyStats dataclasses), `improvement-analyst` agent + workflow (subsumed by `buddy`'s aggregation pass). Legacy `docs/workflows/nightwatch.yaml` is retired.
 
+### Run claim verification — `robothor/engine/run_verification.py`
+
+The judge above rates *prose*, and prose judges are near-chance at catching an
+agent that asserts work it never did — they anchor on confident language. This
+module does the independent check: at the end of every run `_finish_run` calls
+it (before `_persist_run`, so the verdict reaches `_assess_outcome` and the
+persisted row), and it compares the run's **claims** against the tools that
+actually **succeeded** in its own trace.
+
+- **Pure** — `extract_claims(text)` + `match_claims_to_trace(claims, steps)`, no DB/LLM/clock, so real incidents replay as unit tests.
+- **Claim classes** — `sent_email`, `sent_message`, `record_update`, `crm_write`, `calendar_event`, `file_written`, `scheduled`, `task_completed`, `payment`. Each names the tool families that can satisfy it. `payment` names none: no payment integration exists in this system, so the class is unsupported by construction.
+- **`record_update` is the sharp one** — "filed / confirmed / tracked / noted / logged / updated / marked done" is a claim about a RECORD, satisfied only by a durable write (CRM, memory, calendar, schedule, or a file outside a temp dir). A note to `/tmp` is not a record.
+- **Deferred tools** — RIP-16 routes most tools through the `tool_call` meta-tool, so `agent_run_steps.tool_name` is literally `'tool_call'` and the real name is at `tool_input['name']` (this is why `gws_gmail_send` shows 0 calls in per-tool analytics). `resolve_tool_name` unwraps that, including nesting.
+- **Abstention is never punished** — negation and abstention windows (shared with `completion_contract.py`) drop "I could not send the email", and quoted / blockquoted / fenced spans are masked so a claim the agent *reports* is not a claim it *makes*.
+- **Verdicts** — `no_claims` | `verified` | `unverified_claims` | `failed_verification`, persisted to `agent_runs.verified_status` + `agent_runs.verification` (jsonb) by migration 100, which also creates the per-claim evidence ledger `agent_run_evidence` (`run_id`, `step_id`, `kind`, `reference`, `verified`, `detail`, `created_at`; tenant scope inherited via `run_id`).
+- **Flag** — `ROBOTHOR_RUN_VERIFICATION_ENABLED` / `_MODE` on the standard off→observe→alert→enforce ladder, shipping at **observe**: record only, no delivery gating, no task resolution, no change to `outcome_assessment`. See `docs/runbooks/GUARDRAIL_FLIPS.md`.
+
 ---
 
 ## Vision System
@@ -815,7 +832,10 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
 pages Telegram immediately; `warning`/`info` become `alert_digest`
-notification rows the morning briefing and heartbeat surface without paging
+notification rows in `crm_agent_notifications` addressed to the operator-facing
+agent. `robothor/engine/warmup.py` is the reader: both the heartbeat preamble
+and the operator's first interactive turn render an `UNREAD ALERTS (N)` section
+and acknowledge only the rows whose text survived into the delivered preamble
 (see `docs/runbooks/PAGING.md`).
 
 #### Delivery status vocabulary
