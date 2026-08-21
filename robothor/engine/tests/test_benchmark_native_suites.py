@@ -124,10 +124,18 @@ class TestFleetActuallyGoesRed:
         # `memory` row — a test that goes red because production's timer
         # slipped is a test that gets muted.
         from robothor.constants import DEFAULT_TENANT
-        from robothor.db.connection import get_connection
+        from robothor.db.connection import (
+            assert_test_database_write,
+            connection_database_name,
+            get_connection,
+        )
 
         agent_id = "native-suite-freshness-probe"
         with get_connection() as conn:
+            # The only direct benchmark_results INSERT in the suite. Guard it
+            # like the production writers: this row must never land in a real
+            # database, where the unfiltered "latest row" goal metric reads it.
+            assert_test_database_write(connection_database_name(conn), "benchmark_results")
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO benchmark_results "
