@@ -263,15 +263,22 @@ def _cmd_add(args: Namespace) -> int:
         from robothor.memory.entities import upsert_entity
 
         entity_id = asyncio.run(upsert_entity(name, "person", tenant_id=tenant))
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                UPDATE contact_identifiers SET memory_entity_id = %s
-                WHERE tenant_id = %s AND person_id = %s AND memory_entity_id IS NULL
-                """,
-                (entity_id, tenant, resolved_person_id),
+        if entity_id is None:
+            # upsert_entity rejected the name as unusable, so there is no row to
+            # point at — writing NULL (or a sentinel) here would only look linked.
+            memory_note = (
+                f"memory entity link skipped (notice): {name!r} is not a usable entity name"
             )
+        else:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE contact_identifiers SET memory_entity_id = %s
+                    WHERE tenant_id = %s AND person_id = %s AND memory_entity_id IS NULL
+                    """,
+                    (entity_id, tenant, resolved_person_id),
+                )
     except Exception as exc:  # degrade gracefully -- never block registration
         memory_note = f"memory entity link skipped (notice): {exc}"
 

@@ -3155,6 +3155,25 @@ def send_notification(
             return None
 
 
+def get_notification(
+    notification_id: str, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
+    """Get a single agent notification by ID, or None when it does not exist.
+
+    The inbox read is agent-scoped and limit-bounded, so it cannot answer
+    "does this specific row exist" — which is exactly what a post-condition
+    read-back needs after ``send_notification`` claims success.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM crm_agent_notifications WHERE id = %s AND tenant_id = %s",
+            (notification_id, tenant_id),
+        )
+        row = cur.fetchone()
+        return notification_to_dict(row) if row else None
+
+
 def get_agent_inbox(
     agent_id: str,
     unread_only: bool = True,

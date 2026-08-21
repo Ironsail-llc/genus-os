@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
+import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
@@ -21,6 +23,48 @@ from robothor.db.connection import get_connection
 from robothor.memory import generation
 
 logger = logging.getLogger(__name__)
+
+# Junk-entity guard. Deliberately conservative: it must reject only names that
+# cannot be a real entity in any language, because a false positive silently
+# drops a real node out of the graph. Two rules, nothing more:
+#   * a canonical dashed UUID — the extractor occasionally echoes a row id back
+#     as an entity "name" ("3f7c1e9a-…"), which is never a person or project;
+#   * fewer than two characters after stripping — "", "  ", "x" carry no
+#     meaning and collide with every other one-character fragment.
+# Short real names ("AI", "R2", "3M") and partial hex strings stay valid.
+_UUID_NAME_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+MIN_ENTITY_NAME_LENGTH = 2
+
+# Relations are inserted in chunks; a chunk that Postgres rejects is retried
+# row by row so one bad row costs one relation, not the whole batch.
+RELATION_CHUNK_SIZE = 500
+
+_RELATION_SAVEPOINT = "robothor_relations_chunk"
+
+
+def is_junk_entity_name(name: str | None) -> bool:
+    """Whether ``name`` is unusable as an entity name (see ``_UUID_NAME_RE``)."""
+    if not isinstance(name, str):
+        return True
+    stripped = name.strip()
+    if len(stripped) < MIN_ENTITY_NAME_LENGTH:
+        return True
+    return bool(_UUID_NAME_RE.match(stripped))
+
+
+def _is_valid_entity_id(value: Any) -> bool:
+    """Whether ``value`` can be an entity id: a non-negative int (0 included).
+
+    ``bool`` is an ``int`` subclass and is never a real id, so it is rejected.
+    Negative values catch any surviving ``-1`` sentinel — the truthy sentinel
+    whose FK violation used to destroy an entire relation batch.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
 
 VALID_ENTITY_TYPES = [
     "person",
@@ -123,7 +167,7 @@ async def upsert_entity(
     aliases: list[str] | None = None,
     *,
     tenant_id: str = "",
-) -> int:
+) -> int | None:
     """Insert or update an entity, incrementing mention count on conflict.
 
     Args:
@@ -133,9 +177,20 @@ async def upsert_entity(
         tenant_id: Tenant scope for data isolation.
 
     Returns:
-        Entity ID.
+        The entity ID, or ``None`` when the name is junk (see
+        :func:`is_junk_entity_name`) and no row was written. ``None`` — never a
+        numeric sentinel like ``-1``, which is truthy and would sail through a
+        caller's ``if entity_id:`` guard straight into a relation insert that
+        the ``memory_relations`` foreign key then rejects, taking the whole
+        batch with it. Callers MUST test ``is not None`` (id 0 is a valid id).
     """
     _tenant = tenant_id or DEFAULT_TENANT
+    if is_junk_entity_name(name):
+        logger.warning(
+            "skipping junk entity name %r (type=%s, tenant=%s)", name, entity_type, _tenant
+        )
+        return None
+    name = name.strip()
     entity_type = entity_type.lower()
     if entity_type not in VALID_ENTITY_TYPES:
         entity_type = "technology"
@@ -198,36 +253,110 @@ async def add_relation(
     return rel_id
 
 
+_RELATION_INSERT_SQL = """
+    INSERT INTO memory_relations
+        (source_entity_id, target_entity_id, relation_type, fact_id, confidence, tenant_id)
+    VALUES %s
+    ON CONFLICT (tenant_id, source_entity_id, target_entity_id, relation_type) DO UPDATE
+    SET confidence = GREATEST(memory_relations.confidence, EXCLUDED.confidence)
+"""
+
+
+def _insert_relation_chunk(cur: Any, chunk: list[tuple[Any, ...]]) -> bool:
+    """Insert one chunk inside a SAVEPOINT. Returns False if Postgres rejected it.
+
+    Without the savepoint a rejected statement aborts the surrounding
+    transaction, so every later chunk would fail too. The savepoint is always
+    released so a long batch cannot grow an unbounded savepoint stack.
+    """
+    from psycopg2.extras import execute_values
+
+    cur.execute(f"SAVEPOINT {_RELATION_SAVEPOINT}")
+    try:
+        execute_values(cur, _RELATION_INSERT_SQL, chunk)
+    except psycopg2.Error as exc:
+        cur.execute(f"ROLLBACK TO SAVEPOINT {_RELATION_SAVEPOINT}")
+        cur.execute(f"RELEASE SAVEPOINT {_RELATION_SAVEPOINT}")
+        # A multi-row chunk failing is the interesting event; the row-by-row
+        # retries that follow are summarised once by the caller instead of
+        # emitting one WARNING each.
+        log = logger.warning if len(chunk) > 1 else logger.debug
+        log("memory_relations rejected a chunk of %d row(s): %s", len(chunk), exc)
+        return False
+    cur.execute(f"RELEASE SAVEPOINT {_RELATION_SAVEPOINT}")
+    return True
+
+
 async def add_relations_batch(
     rows: list[tuple[int, int, str, int | None, float]],
     *,
     tenant_id: str = "",
 ) -> int:
-    """Insert many relations in a SINGLE round-trip (fixes the N+1 in the
-    extract paths). ``rows`` are ``(source_id, target_id, relation_type,
+    """Insert many relations in as few round-trips as possible (fixes the N+1 in
+    the extract paths). ``rows`` are ``(source_id, target_id, relation_type,
     fact_id, confidence)``. Same upsert semantics as :func:`add_relation`.
-    Returns the number of rows inserted/updated.
+
+    One bad row cannot cost the batch. Rows whose endpoints are not valid entity
+    ids are dropped before the insert, and a chunk that Postgres still rejects
+    (a stale id, an entity deleted between upsert and insert) is retried row by
+    row. Every drop is logged at WARNING with a count — ``memory_relations`` has
+    foreign keys to ``memory_entities(id)``, so a single unusable row used to
+    make Postgres reject the whole ``execute_values`` statement while
+    ``ingestion.py`` swallowed the error, losing the batch silently.
+
+    Returns the number of rows actually inserted/updated.
     """
     if not rows:
         return 0
-    from psycopg2.extras import execute_values
 
     _tenant = tenant_id or DEFAULT_TENANT
-    values = [(s, t, rt, fid, conf, _tenant) for (s, t, rt, fid, conf) in rows]
+    values: list[tuple[Any, ...]] = []
+    invalid = 0
+    for source_id, target_id, relation_type, fact_id, confidence in rows:
+        if not (_is_valid_entity_id(source_id) and _is_valid_entity_id(target_id)):
+            invalid += 1
+            continue
+        if not isinstance(relation_type, str) or not relation_type.strip():
+            invalid += 1
+            continue
+        values.append((source_id, target_id, relation_type, fact_id, confidence, _tenant))
+
+    if invalid:
+        logger.warning(
+            "dropped %d of %d relation row(s) with missing or invalid entity ids "
+            "(tenant=%s) — the remaining %d are still being stored",
+            invalid,
+            len(rows),
+            _tenant,
+            len(values),
+        )
+    if not values:
+        return 0
+
+    inserted = 0
+    rejected = 0
     with get_connection() as conn:
         cur = conn.cursor()
-        execute_values(
-            cur,
-            """
-            INSERT INTO memory_relations
-                (source_entity_id, target_entity_id, relation_type, fact_id, confidence, tenant_id)
-            VALUES %s
-            ON CONFLICT (tenant_id, source_entity_id, target_entity_id, relation_type) DO UPDATE
-            SET confidence = GREATEST(memory_relations.confidence, EXCLUDED.confidence)
-            """,
-            values,
+        for start in range(0, len(values), RELATION_CHUNK_SIZE):
+            chunk = values[start : start + RELATION_CHUNK_SIZE]
+            if _insert_relation_chunk(cur, chunk):
+                inserted += len(chunk)
+                continue
+            for row in chunk:
+                if _insert_relation_chunk(cur, [row]):
+                    inserted += 1
+                else:
+                    rejected += 1
+
+    if rejected:
+        logger.warning(
+            "postgres rejected %d of %d relation row(s) (tenant=%s); %d stored",
+            rejected,
+            len(values),
+            _tenant,
+            inserted,
         )
-    return len(values)
+    return inserted
 
 
 async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None:
@@ -319,6 +448,62 @@ async def get_all_about(entity_name: str, *, tenant_id: str = "") -> dict[str, A
     }
 
 
+async def _store_entities(
+    extracted_entities: list[dict[str, Any]],
+    *,
+    tenant_id: str = "",
+) -> dict[str, int]:
+    """Upsert extracted entities, returning ``{name: entity_id}`` for the STORED ones.
+
+    A junk name yields ``None`` from :func:`upsert_entity` and is simply absent
+    from the mapping, so it can never become a relation endpoint. The result's
+    length is the honest "entities stored" count.
+    """
+    entity_ids: dict[str, int] = {}
+    skipped = 0
+    for e in extracted_entities:
+        entity_id = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
+        if entity_id is None:
+            skipped += 1
+            continue
+        entity_ids[e["name"]] = entity_id
+    if skipped:
+        logger.warning(
+            "entity extraction skipped %d of %d unusable entity name(s)",
+            skipped,
+            len(extracted_entities),
+        )
+    return entity_ids
+
+
+def _relation_rows(
+    relations: list[dict[str, Any]],
+    entity_ids: dict[str, int],
+    fact_id: int | None,
+) -> list[tuple[int, int, str, int | None, float]]:
+    """Build relation rows, keeping only those whose endpoints were stored.
+
+    The membership test is ``is not None``, not truthiness: entity id 0 is a
+    valid id, and a truthy sentinel must never pass for one.
+    """
+    rows: list[tuple[int, int, str, int | None, float]] = []
+    dropped = 0
+    for r in relations:
+        source_id = entity_ids.get(r["source"])
+        target_id = entity_ids.get(r["target"])
+        if source_id is None or target_id is None:
+            dropped += 1
+            continue
+        rows.append((source_id, target_id, r["relation"], fact_id, 1.0))
+    if dropped:
+        logger.info(
+            "dropped %d of %d extracted relation(s) with an unstored endpoint",
+            dropped,
+            len(relations),
+        )
+    return rows
+
+
 async def extract_and_store_entities(
     content: str,
     fact_id: int | None = None,
@@ -337,20 +522,12 @@ async def extract_and_store_entities(
     """
     extracted = await extract_entities(content)
 
-    entity_ids = {}
-    for e in extracted["entities"]:
-        eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
-        entity_ids[e["name"]] = eid
-
-    rel_rows: list[tuple[int, int, str, int | None, float]] = [
-        (src_id, tgt_id, r["relation"], fact_id, 1.0)
-        for r in extracted["relations"]
-        if (src_id := entity_ids.get(r["source"])) and (tgt_id := entity_ids.get(r["target"]))
-    ]
+    entity_ids = await _store_entities(extracted["entities"], tenant_id=tenant_id)
+    rel_rows = _relation_rows(extracted["relations"], entity_ids, fact_id)
     relations_stored = await add_relations_batch(rel_rows, tenant_id=tenant_id)
 
     return {
-        "entities_stored": len(extracted["entities"]),
+        "entities_stored": len(entity_ids),
         "relations_stored": relations_stored,
     }
 
@@ -387,21 +564,13 @@ async def extract_entities_batch(fact_ids: list[int], *, tenant_id: str = "") ->
 
     extracted = await extract_entities(combined)
 
-    entity_ids = {}
-    for e in extracted["entities"]:
-        eid = await upsert_entity(e["name"], e["type"], tenant_id=tenant_id)
-        entity_ids[e["name"]] = eid
-
+    entity_ids = await _store_entities(extracted["entities"], tenant_id=tenant_id)
     ref_fact_id = fact_ids[0] if fact_ids else None
-    rel_rows: list[tuple[int, int, str, int | None, float]] = [
-        (src_id, tgt_id, r["relation"], ref_fact_id, 1.0)
-        for r in extracted["relations"]
-        if (src_id := entity_ids.get(r["source"])) and (tgt_id := entity_ids.get(r["target"]))
-    ]
+    rel_rows = _relation_rows(extracted["relations"], entity_ids, ref_fact_id)
     relations_stored = await add_relations_batch(rel_rows, tenant_id=tenant_id)
 
     return {
-        "entities_stored": len(extracted["entities"]),
+        "entities_stored": len(entity_ids),
         "relations_stored": relations_stored,
     }
 
