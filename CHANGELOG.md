@@ -1,3 +1,14 @@
+## [1.33.8](https://github.com/Ironsail-llc/genus-os/compare/v1.33.7...v1.33.8) (2026-08-21)
+
+### Bug Fixes
+
+* **engine:** make workflow cron registration loud and parity-checked ([#301](https://github.com/Ironsail-llc/genus-os/issues/301)) ([510078d](https://github.com/Ironsail-llc/genus-os/commit/510078dc850d4cdf1ef69bac62e1bdff3db69aa1))
+* **engine:** normalize developer-role turns per model before prefill guard ([#299](https://github.com/Ironsail-llc/genus-os/issues/299)) ([b8cdf4a](https://github.com/Ironsail-llc/genus-os/commit/b8cdf4ad6ed44ffbe39f906c13b0488951f4be5d))
+* **memory:** chat-turn TTL joins tenant through chat_sessions ([#297](https://github.com/Ironsail-llc/genus-os/issues/297)) ([be5b903](https://github.com/Ironsail-llc/genus-os/commit/be5b903759f61aab9152034f8df0f72de69daa1a))
+* **memory:** junk-entity guard returns None so relation batches survive ([#302](https://github.com/Ironsail-llc/genus-os/issues/302)) ([5e0a3a2](https://github.com/Ironsail-llc/genus-os/commit/5e0a3a2a32b0aca81e30c0ca2991d3aeb381f05e))
+* **memory:** page when memory generation loses both remote and local ([#298](https://github.com/Ironsail-llc/genus-os/issues/298)) ([ea267f3](https://github.com/Ironsail-llc/genus-os/commit/ea267f31f7c4fe51c5971e4c1a0a37c8557497ba))
+* **tests:** benchmark tests cannot write live benchmark_results ([#300](https://github.com/Ironsail-llc/genus-os/issues/300)) ([3195df6](https://github.com/Ironsail-llc/genus-os/commit/3195df6b44d57bf843ed7168c9b02b45efd56c00)), closes [#276](https://github.com/Ironsail-llc/genus-os/issues/276)
+
 ## [1.33.7](https://github.com/Ironsail-llc/genus-os/compare/v1.33.6...v1.33.7) (2026-08-21)
 
 ### Bug Fixes
