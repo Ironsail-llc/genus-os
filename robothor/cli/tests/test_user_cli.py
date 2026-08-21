@@ -255,6 +255,33 @@ def test_user_add_memory_entity_failure_degrades_gracefully(capsys) -> None:
     assert "notice" in out.lower() or "skipped" in out.lower()
 
 
+def test_user_add_skips_entity_link_when_upsert_returns_none(capsys) -> None:
+    """A junk name yields no entity id — never write NULL/sentinel to the bridge."""
+    args = _base_add_args()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        None,  # _find_person_by_email: no existing person
+        (42, "stable-user-id"),
+        (1,),
+        (2,),
+        ("acct-1",),
+    ]
+    with (
+        patch("robothor.crm.dal.get_tenant", return_value={"id": "acme"}),
+        patch("robothor.crm.dal.create_person", return_value="person-99"),
+        patch("robothor.db.connection.get_connection", return_value=_mock_conn(cur)),
+        patch("robothor.memory.entities.upsert_entity", return_value=None),
+    ):
+        rc = cmd_user(args)
+
+    assert rc == 0
+    linked = [c for c in cur.execute.call_args_list if "memory_entity_id = %s" in c[0][0]]
+    assert not linked, f"contact_identifiers must not be linked to a missing entity: {linked}"
+    out = capsys.readouterr().out
+    assert "memory entity" in out.lower()
+    assert "skipped" in out.lower()
+
+
 # ─── add: owner uniqueness ───────────────────────────────────────────────
 
 

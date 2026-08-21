@@ -144,12 +144,18 @@ async def demo_entity_graph():
         f"React(#{react_id}), Sarah(#{sarah_id}), Marcus(#{marcus_id})"
     )
 
-    # Add relationships between entities
-    await add_relation(horizon_id, fastapi_id, "built_with")
-    await add_relation(horizon_id, react_id, "built_with")
-    await add_relation(sarah_id, horizon_id, "leads_backend")
-    await add_relation(marcus_id, horizon_id, "leads_frontend")
-    print("Added relations: Horizon->FastAPI, Horizon->React, Sarah->Horizon, Marcus->Horizon")
+    # upsert_entity returns None for an unusable name (a bare UUID, or under two
+    # characters). Test `is not None` -- never truthiness -- before using an id:
+    # a relation pointing at a non-existent entity is rejected by the FK.
+    stored = [horizon_id, fastapi_id, react_id, sarah_id, marcus_id]
+    if all(entity_id is not None for entity_id in stored):
+        await add_relation(horizon_id, fastapi_id, "built_with")
+        await add_relation(horizon_id, react_id, "built_with")
+        await add_relation(sarah_id, horizon_id, "leads_backend")
+        await add_relation(marcus_id, horizon_id, "leads_frontend")
+        print("Added relations: Horizon->FastAPI, Horizon->React, Sarah->Horizon, Marcus->Horizon")
+    else:
+        print("Skipped relations: at least one entity name was rejected as unusable")
 
     # Method B: Auto-extract entities from text
     print("\n--- Automatic entity extraction from text ---")

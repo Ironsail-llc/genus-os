@@ -52,6 +52,10 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
     update_model_override_async,
 )
+from robothor.engine.chunking import (
+    TELEGRAM_MAX_MESSAGE_LENGTH,
+    split_telegram_message,
+)
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.models import PlanState, TriggerType
 from robothor.engine.task_registry import get_task_registry
@@ -65,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──
 
-MAX_MESSAGE_LENGTH = 4096
+MAX_MESSAGE_LENGTH = TELEGRAM_MAX_MESSAGE_LENGTH
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
@@ -3567,11 +3571,23 @@ class TelegramBot:
     async def send_message(self, chat_id: str, text: str, **_ignored: Any) -> list[Any]:
         """Send a message to a Telegram chat, splitting if needed.
 
-        Returns the list of Message objects returned by the Telegram API —
-        one per chunk — so callers (channel bus) can record platform
-        message_ids for reply-to resolution. The list may contain None
-        entries for chunks that failed send after both HTML and plain-text
-        retries; callers should filter those out.
+        Never raises: a chunk that fails as HTML is retried as plain text,
+        and a chunk that fails both is logged and **omitted from the
+        result**. The returned list therefore holds one Message per chunk
+        that actually reached Telegram and is SHORTER than the chunk count
+        when sends failed (empty when they all did) — it is the only
+        evidence of delivery, which is why ``delivery._deliver_telegram``
+        compares its length against ``split_telegram_message`` rather than
+        assuming a send succeeded.
+
+        Args:
+            chat_id: Target Telegram chat id.
+            text: Message body; split on ``MAX_MESSAGE_LENGTH``.
+
+        Returns:
+            The Message objects Telegram acknowledged, in send order, so
+            callers (the channel bus) can record platform message_ids for
+            reply-to resolution.
         """
         if not text:
             return []
@@ -3605,24 +3621,13 @@ class TelegramBot:
         return sent
 
     def _split_message(self, text: str) -> list[str]:
-        """Split text into chunks that fit Telegram's limit."""
-        if len(text) <= MAX_MESSAGE_LENGTH:
-            return [text]
+        """Split text into chunks that fit Telegram's limit.
 
-        chunks = []
-        while text:
-            if len(text) <= MAX_MESSAGE_LENGTH:
-                chunks.append(text)
-                break
-
-            split_pos = text.rfind("\n", 0, MAX_MESSAGE_LENGTH)
-            if split_pos == -1 or split_pos < MAX_MESSAGE_LENGTH // 2:
-                split_pos = MAX_MESSAGE_LENGTH
-
-            chunks.append(text[:split_pos])
-            text = text[split_pos:].lstrip("\n")
-
-        return chunks
+        Delegates to ``robothor.engine.chunking.split_telegram_message`` so
+        the delivery layer can predict the chunk count with the exact same
+        algorithm (see that module's docstring).
+        """
+        return split_telegram_message(text, MAX_MESSAGE_LENGTH)
 
     async def start_polling(self) -> None:
         """Start the bot in long-polling mode."""

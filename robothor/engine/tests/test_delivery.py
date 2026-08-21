@@ -1,4 +1,4 @@
-"""Tests for delivery module — unexpanded env var guard."""
+"""Tests for delivery module — unexpanded env var guard, delivery-status truth."""
 
 from __future__ import annotations
 
@@ -6,14 +6,28 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from robothor.engine.chunking import split_telegram_message
 from robothor.engine.delivery import _deliver_telegram, set_telegram_sender
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode, RunStatus
 
 
+class _FakeMessage:
+    """Stand-in for an aiogram Message returned by a successful send."""
+
+    def __init__(self, message_id: int) -> None:
+        self.message_id = message_id
+
+
 @pytest.fixture(autouse=True)
 def _register_mock_sender():
-    """Register a mock Telegram sender for all tests."""
-    sender = AsyncMock()
+    """Register a mock Telegram sender for all tests.
+
+    The default return value is a one-message list, matching what
+    ``TelegramBot.send_message`` really returns for a single-chunk body — a
+    bare ``AsyncMock`` returns a truthy ``MagicMock`` that would let a broken
+    delivery-status check look green forever.
+    """
+    sender = AsyncMock(return_value=[_FakeMessage(1)])
     set_telegram_sender(sender)
     yield sender
     set_telegram_sender(None)  # type: ignore[arg-type]
@@ -332,3 +346,326 @@ class TestHeartbeatDeliveryReframing:
         _register_mock_sender.assert_called_once()
         sent_body = _register_mock_sender.call_args[0][1]
         assert "⚠️ Beat ended" in sent_body
+
+
+class TestDeliveryStatusTruth:
+    """``delivery_status`` must be derived from the sender's real result.
+
+    ``TelegramBot.send_message`` swallows every per-chunk exception: it tries
+    HTML, retries as plain text, and on double failure logs and returns a list
+    that is simply *missing* that chunk (possibly empty). It never raises. So
+    a delivery that reached nobody is indistinguishable from a delivered one
+    unless the returned list is actually counted — the same assumption that
+    hid the alerts arity bug while 432+ pages went nowhere.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_result_is_a_failure(self, _register_mock_sender):
+        """Sender returned no messages: nothing reached the operator."""
+        _register_mock_sender.return_value = []
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "test message", run)
+
+        assert result is False
+        assert run.delivery_status is not None
+        assert run.delivery_status.startswith("failed:")
+        assert "telegram" in run.delivery_status
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_none_result_is_a_failure(self, _register_mock_sender):
+        """A sender that returns None never delivered anything either."""
+        _register_mock_sender.return_value = None
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "test message", run)
+
+        assert result is False
+        assert (run.delivery_status or "").startswith("failed:")
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_sender_exception_is_recorded_not_crashed(self, _register_mock_sender):
+        """A raising sender is handled, recorded as failed, and never crashes."""
+        _register_mock_sender.side_effect = RuntimeError("telegram network down")
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "test message", run)
+
+        assert result is False
+        assert (run.delivery_status or "").startswith("failed:")
+        assert "telegram network down" in (run.delivery_status or "")
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_partial_multi_chunk_send_is_not_delivered(self, _register_mock_sender):
+        """3 chunks go out, 2 come back: a truncated briefing is not delivered."""
+        body = "x" * (4096 * 2 + 100)
+        config = _make_config()
+        # Precondition: the body the sender will chunk really is 3 chunks.
+        expected_chunks = split_telegram_message(f"*{config.name}*\n\n{body}")
+        assert len(expected_chunks) == 3
+
+        _register_mock_sender.return_value = [_FakeMessage(11), _FakeMessage(12)]
+        run = _make_run()
+
+        result = await _deliver_telegram(config, body, run)
+
+        assert result is False
+        assert run.delivery_status == "partial:2/3"
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_full_multi_chunk_send_is_delivered(self, _register_mock_sender):
+        """All 3 chunks acknowledged: that is a real delivery."""
+        body = "x" * (4096 * 2 + 100)
+        _register_mock_sender.return_value = [
+            _FakeMessage(11),
+            _FakeMessage(12),
+            _FakeMessage(13),
+        ]
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, body, run)
+
+        assert result is True
+        assert run.delivery_status == "delivered"
+        assert run.delivered_at is not None
+
+    @pytest.mark.asyncio
+    async def test_happy_path_single_chunk(self, _register_mock_sender):
+        """One chunk out, one message back: delivered, with a timestamp."""
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "short message", run)
+
+        assert result is True
+        assert run.delivery_status == "delivered"
+        assert run.delivered_at is not None
+        assert run.delivery_channel == "telegram"
+
+    @pytest.mark.asyncio
+    async def test_missing_sender_is_recorded(self):
+        """No registered sender is a delivery failure, not a silent no-op."""
+        set_telegram_sender(None)  # type: ignore[arg-type]
+        config = _make_config()
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "test message", run)
+
+        assert result is False
+        assert (run.delivery_status or "").startswith("failed:")
+
+    @pytest.mark.asyncio
+    async def test_unexpanded_chat_id_is_recorded(self, _register_mock_sender):
+        """The ${VAR} guard must leave a status behind, not a NULL column."""
+        config = _make_config(delivery_to="${ROBOTHOR_TELEGRAM_CHAT_ID}")
+        run = _make_run()
+
+        result = await _deliver_telegram(config, "test message", run)
+
+        assert result is False
+        assert (run.delivery_status or "").startswith("failed:")
+
+    @pytest.mark.asyncio
+    async def test_failed_send_does_not_surface_to_channel_bus(
+        self, _register_mock_sender, monkeypatch
+    ):
+        """Nothing landed, so nothing may be recorded as said."""
+        calls: list[dict] = []
+
+        async def _record(**kwargs: object) -> None:
+            calls.append(dict(kwargs))
+
+        monkeypatch.setattr("robothor.engine.delivery._dispatch_post_delivery", _record)
+        _register_mock_sender.return_value = []
+
+        await _deliver_telegram(_make_config(), "test message", _make_run())
+
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_partial_send_still_maps_the_ids_that_landed(
+        self, _register_mock_sender, monkeypatch
+    ):
+        """The chunks that did land must stay resolvable for reply-to."""
+        calls: list[dict] = []
+
+        async def _record(**kwargs: object) -> None:
+            calls.append(dict(kwargs))
+
+        monkeypatch.setattr("robothor.engine.delivery._dispatch_post_delivery", _record)
+        _register_mock_sender.return_value = [_FakeMessage(11), _FakeMessage(12)]
+
+        await _deliver_telegram(_make_config(), "x" * (4096 * 2 + 100), _make_run())
+
+        assert len(calls) == 1
+        assert calls[0]["platform_message_ids"] == ["11", "12"]
+
+
+class TestEventBusDeliveryStatusTruth:
+    """``publish()`` returns ``str | None`` and never raises — so a 'published'
+    status written without checking the return value is a guess."""
+
+    @pytest.mark.asyncio
+    async def test_publish_returning_none_is_a_failure(self, monkeypatch):
+        from robothor.engine import delivery as delivery_mod
+
+        monkeypatch.setattr("robothor.events.bus.publish", lambda **kw: None)
+        config = _make_config(delivery_mode=DeliveryMode.LOG)
+        run = _make_run()
+
+        result = await delivery_mod._deliver_event_bus(config, "text", run)
+
+        assert result is False
+        assert (run.delivery_status or "").startswith("failed:")
+
+    @pytest.mark.asyncio
+    async def test_publish_returning_id_is_published(self, monkeypatch):
+        from robothor.engine import delivery as delivery_mod
+
+        monkeypatch.setattr("robothor.events.bus.publish", lambda **kw: "1699-0")
+        config = _make_config(delivery_mode=DeliveryMode.LOG)
+        run = _make_run()
+
+        result = await delivery_mod._deliver_event_bus(config, "text", run)
+
+        assert result is True
+        assert run.delivery_status == "published"
+        assert run.delivery_channel == "event_bus"
+
+    @pytest.mark.asyncio
+    async def test_publish_raising_is_recorded(self, monkeypatch):
+        from robothor.engine import delivery as delivery_mod
+
+        def _boom(**kw: object) -> str:
+            raise RuntimeError("redis down")
+
+        monkeypatch.setattr("robothor.events.bus.publish", _boom)
+        config = _make_config(delivery_mode=DeliveryMode.LOG)
+        run = _make_run()
+
+        result = await delivery_mod._deliver_event_bus(config, "text", run)
+
+        assert result is False
+        assert "redis down" in (run.delivery_status or "")
+
+    @pytest.mark.asyncio
+    async def test_disabled_bus_is_not_reported_as_published(self, monkeypatch):
+        """A disabled bus swallows the publish — say so instead of 'published'."""
+        from robothor.engine import delivery as delivery_mod
+
+        monkeypatch.setattr("robothor.events.bus.EVENT_BUS_ENABLED", False)
+        config = _make_config(delivery_mode=DeliveryMode.LOG)
+        run = _make_run()
+
+        result = await delivery_mod._deliver_event_bus(config, "text", run)
+
+        assert result is False
+        assert run.delivery_status == "failed:event_bus_disabled"
+
+
+class TestRealSendPathProbe:
+    """End-to-end probe against the REAL ``TelegramBot.send_message``.
+
+    Everything above stubs the sender. These fire an actual Telegram API
+    failure through the real swallow path — only the aiogram transport is
+    faked — because a test that mocks the failing dependency certifies a
+    broken control forever. ``send_message`` catches the exception, retries
+    as plain text, catches again, logs, and returns a SHORT list; delivery
+    must read that as a failure.
+    """
+
+    @pytest.fixture
+    def bot(self, engine_config):
+        from unittest.mock import MagicMock, patch
+
+        from robothor.engine.telegram import TelegramBot
+
+        with (
+            patch("robothor.engine.telegram.Bot") as mock_bot_cls,
+            patch("robothor.engine.telegram.Dispatcher"),
+        ):
+            transport = MagicMock()
+            mock_bot_cls.return_value = transport
+            bot = TelegramBot(engine_config, MagicMock())
+            bot.bot = transport
+            yield bot
+
+    @pytest.mark.asyncio
+    async def test_total_api_failure_is_never_reported_delivered(self, bot):
+        """Every chunk rejected by Telegram: the run must not claim delivery."""
+        from robothor.engine.delivery import deliver
+
+        async def _always_fails(**kwargs: object) -> None:
+            raise RuntimeError("Bad Request: chat not found")
+
+        bot.bot.send_message = _always_fails
+        set_telegram_sender(bot.send_message)
+
+        config = _make_config()
+        run = _make_run(output_text="Morning briefing: 3 tasks, 1 PR open.")
+
+        result = await deliver(config, run)
+
+        assert result is False
+        assert run.delivery_status == "failed:telegram_send"
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_one_bad_chunk_makes_the_briefing_partial(self, bot):
+        """Chunk 2 of 3 is rejected: a truncated briefing is not delivered."""
+        from robothor.engine.delivery import deliver
+
+        attempts = {"n": 0}
+
+        async def _second_chunk_fails(**kwargs: object) -> _FakeMessage:
+            attempts["n"] += 1
+            # Attempts 2 and 3 are the HTML and plain-text tries for chunk 2.
+            if attempts["n"] in (2, 3):
+                raise RuntimeError("Bad Request: message text is too long")
+            return _FakeMessage(attempts["n"])
+
+        bot.bot.send_message = _second_chunk_fails
+        set_telegram_sender(bot.send_message)
+
+        config = _make_config()
+        body = "x" * (4096 * 2 + 100)
+        assert len(split_telegram_message(f"*{config.name}*\n\n{body}")) == 3
+        run = _make_run(output_text=body)
+
+        result = await deliver(config, run)
+
+        assert result is False
+        assert run.delivery_status == "partial:2/3"
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_html_failure_that_recovers_as_plain_text_is_delivered(self, bot):
+        """The plain-text retry is a real success — don't cry wolf on it."""
+        from robothor.engine.delivery import deliver
+
+        attempts = {"n": 0}
+
+        async def _html_fails_once(**kwargs: object) -> _FakeMessage:
+            attempts["n"] += 1
+            if kwargs.get("parse_mode") is not None:
+                raise RuntimeError("Bad Request: can't parse entities")
+            return _FakeMessage(attempts["n"])
+
+        bot.bot.send_message = _html_fails_once
+        set_telegram_sender(bot.send_message)
+
+        run = _make_run(output_text="Report with <unclosed markup")
+
+        result = await deliver(_make_config(), run)
+
+        assert result is True
+        assert run.delivery_status == "delivered"
+        assert run.delivered_at is not None
