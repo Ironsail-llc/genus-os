@@ -9,6 +9,7 @@ The Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hoo
 - **Tools** live in the `tools/` package: schemas in `tools/schemas.py`, per-agent filtering in `tools/registry.py`, dispatch + permission gate in `tools/dispatch.py`, and one handler module per domain under `tools/handlers/`. (The old monolithic `tools.py` / `_handle_sync_tool` / `_handle_async_tool` split is gone.)
 - **LLM dispatch** (model fallback, streaming, cost, prompt-cache kwargs, message hygiene) lives in `llm_client.LLMClient`, not in `runner.py`. `AgentRunner` owns one `self._llm` and the tool loop delegates to it. Extend `LLMClient` for provider/dispatch changes; keep `runner.py` focused on orchestration.
 - **Agent config** loaded from YAML manifests (`docs/agents/*.yaml`) by `config.py`. v2 features under `v2:` key.
+- **Delivery accounting is verified, never assumed.** Scheduled/workflow/hook runs go through `delivery.deliver()`; interactive Telegram turns don't, so `telegram.TelegramBot._record_interactive_delivery()` writes `agent_runs.delivery_status` for them. Both derive the status from the sender's return value (`send_message` returns one `Message` per delivered chunk, `[]` when every chunk failed) — the same `delivered = bool(sent)` rule `alerts.py` uses. Never mark a send delivered just because the next line ran.
 
 ## Key Entry Points
 

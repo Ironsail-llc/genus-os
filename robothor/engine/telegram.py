@@ -69,6 +69,12 @@ MAX_MESSAGE_LENGTH = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
+# Delivery status written onto an interactive run when the Telegram send
+# reported nothing sent. ``TelegramBot.send_message`` swallows per-chunk
+# exceptions and returns an empty list on total failure, so "no messages"
+# is the only signal a lost reply gives us.
+INTERACTIVE_SEND_FAILED_STATUS = "failed: telegram send returned no messages"
+
 # Closed-onboarding operator notification rate limit (Task 4, Unified
 # Identity Context) -- at most one alert per unregistered sender per hour.
 _ONBOARDING_NOTIFY_INTERVAL_SECONDS = 3600.0
@@ -1460,6 +1466,49 @@ class TelegramBot:
             sender_info=sender_info,
         )
 
+    async def _record_interactive_delivery(self, run: Any, sent: Any) -> None:
+        """Record whether an interactive reply actually reached Telegram.
+
+        ``delivery.deliver()`` is only wired into the hook, workflow and
+        scheduler paths — it never runs for an interactive chat turn — so
+        without this every ``trigger_type='telegram'`` run carried
+        ``delivery_status IS NULL`` and a reply that never landed looked
+        exactly like one that did.
+
+        Truth comes from the sender's return value, not from reaching the
+        line after the send: ``TelegramBot.send_message`` swallows per-chunk
+        exceptions and returns one ``Message`` per delivered chunk (``[]``
+        when every chunk failed). Same discipline as
+        ``robothor.engine.alerts._send_telegram``'s ``delivered = bool(sent)``.
+
+        Bookkeeping only — never raises, so a DB hiccup cannot turn a
+        successful reply into an error for the operator.
+
+        Args:
+            run: The ``AgentRun`` this reply belongs to. ``None`` is a no-op
+                (the run may not exist yet when an early failure replies).
+            sent: Whatever ``TelegramBot.send_message`` returned.
+        """
+        if run is None:
+            return
+        try:
+            delivered = bool(sent)
+            run.delivery_status = "delivered" if delivered else INTERACTIVE_SEND_FAILED_STATUS
+            run.delivered_at = datetime.now(UTC) if delivered else None
+            run.delivery_channel = "telegram"
+            if not delivered:
+                logger.warning(
+                    "Interactive Telegram reply reported no sent messages (run=%s)",
+                    getattr(run, "id", None),
+                )
+            # Imported here (not at module scope) so the DB write stays a
+            # lazy dependency and tests can patch it at its source module.
+            from robothor.engine.delivery import _persist_delivery_status
+
+            await _persist_delivery_status(run)
+        except Exception as e:
+            logger.warning("Interactive delivery bookkeeping failed: %s", e)
+
     async def _run_interactive(
         self,
         chat_id: str,
@@ -1600,6 +1649,9 @@ class TelegramBot:
         async def run_agent() -> None:
             nonlocal stream_msg_id
             _lock = self._get_session_lock(chat_id)
+            # Held outside the try so the error path can still account for
+            # the delivery of its own reply when the run itself exists.
+            run_for_delivery: Any = None
             try:
                 async with _lock:
                     history = list(session.history)
@@ -1653,6 +1705,7 @@ class TelegramBot:
                     user_role=str((_user or {}).get("role") or "user"),
                     identity=_identity,
                 )
+                run_for_delivery = run
 
                 async with _lock:
                     # Always record user message in session history
@@ -1705,6 +1758,8 @@ class TelegramBot:
                     sent_messages = await self.send_message(chat_id, f"Error: {run.error_message}")
                 else:
                     sent_messages = await self.send_message(chat_id, "Done. No output produced.")
+
+                await self._record_interactive_delivery(run, sent_messages)
 
                 assistant_platform_ids = [
                     str(m.message_id)
@@ -1831,7 +1886,14 @@ class TelegramBot:
                     )
                     if len(session.history) > self._max_history:
                         session.history[:] = session.history[-self._max_history :]
-                await self.send_message(chat_id, f"Internal error: {html.escape(str(e))}")
+                sent_error = await self.send_message(
+                    chat_id, f"Internal error: {html.escape(str(e))}"
+                )
+                # Only when nothing was recorded yet — a failure in the
+                # post-reply bookkeeping must not overwrite the real
+                # reply's already-verified outcome.
+                if getattr(run_for_delivery, "delivery_status", None) is None:
+                    await self._record_interactive_delivery(run_for_delivery, sent_error)
             finally:
                 nonlocal typing_active
                 typing_active = False
@@ -1906,6 +1968,7 @@ class TelegramBot:
         except Exception:
             stream_msg_id = None
 
+        run_for_delivery: Any = None
         try:
             model = self._model_override.get(chat_id)
             history = list(session.history)
@@ -1924,6 +1987,7 @@ class TelegramBot:
                 user_role=str(user.get("role") or "user"),
                 identity=_identity,
             )
+            run_for_delivery = run
 
             plan_text = _extract_plan_text(run.output_text or "")
 
@@ -1962,7 +2026,8 @@ class TelegramBot:
                     name=f"tg-save-plan:{chat_id}",
                 )
 
-                await self.send_message(chat_id, plan_text)
+                sent_plan = await self.send_message(chat_id, plan_text)
+                await self._record_interactive_delivery(run, sent_plan)
 
                 label = (
                     "<b>Approve this deep plan?</b>" if deep_plan else "<b>Approve this plan?</b>"
@@ -1974,10 +2039,15 @@ class TelegramBot:
                     reply_markup=kb,
                 )
             else:
-                await self.send_message(chat_id, run.output_text or "No plan produced.")
+                sent_fallback = await self.send_message(
+                    chat_id, run.output_text or "No plan produced."
+                )
+                await self._record_interactive_delivery(run, sent_fallback)
         except Exception as e:
             logger.error("Plan mode failed: %s", e, exc_info=True)
-            await self.send_message(chat_id, f"Plan mode error: {html.escape(str(e))}")
+            sent_error = await self.send_message(chat_id, f"Plan mode error: {html.escape(str(e))}")
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             typing_active = False
             typing_task.cancel()
@@ -2040,6 +2110,7 @@ class TelegramBot:
             except Exception:
                 pass
 
+        run_for_delivery: Any = None
         try:
             history = list(session.history)
 
@@ -2053,6 +2124,7 @@ class TelegramBot:
                 user_role=str(user.get("role") or "user"),
                 identity=_identity,
             )
+            run_for_delivery = run
 
             # Record in session history
             session.history.append({"role": "user", "content": f"/deep {query}"})
@@ -2090,19 +2162,25 @@ class TelegramBot:
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
                 footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
-                await self.send_message(chat_id, run.output_text)
+                sent_result = await self.send_message(chat_id, run.output_text)
+                await self._record_interactive_delivery(run, sent_result)
                 await self.bot.send_message(
                     chat_id=int(chat_id),
                     text=footer,
                 )
             elif run.error_message:
-                await self.send_message(
+                sent_failure = await self.send_message(
                     chat_id,
                     f"\u274c Deep reasoning failed: {html.escape(run.error_message)}",
                 )
+                await self._record_interactive_delivery(run, sent_failure)
         except Exception as e:
             logger.error("Deep mode failed: %s", e, exc_info=True)
-            await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
+            sent_error = await self.send_message(
+                chat_id, f"Deep reasoning error: {html.escape(str(e))}"
+            )
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             typing_active = False
             typing_task.cancel()
@@ -2163,6 +2241,7 @@ class TelegramBot:
             "Send /stop to cancel.",
         )
 
+        run_for_delivery: Any = None
         try:
             model = self._model_override.get(chat_id)
 
@@ -2195,6 +2274,7 @@ class TelegramBot:
                 user_role=str(user.get("role") or "user"),
                 identity=_identity,
             )
+            run_for_delivery = run
 
             # Track execution run ID on plan
             plan.execution_run_id = run.id
@@ -2239,17 +2319,24 @@ class TelegramBot:
             footer = f"\n\n\u2014 {duration_s:.0f}s / {cost_str}"
 
             if run.output_text:
-                await self.send_message(chat_id, run.output_text + footer)
+                sent_result = await self.send_message(chat_id, run.output_text + footer)
             elif run.error_message:
-                await self.send_message(chat_id, f"Plan failed: {run.error_message}{footer}")
+                sent_result = await self.send_message(
+                    chat_id, f"Plan failed: {run.error_message}{footer}"
+                )
             else:
-                await self.send_message(chat_id, f"Plan complete. No output.{footer}")
+                sent_result = await self.send_message(chat_id, f"Plan complete. No output.{footer}")
+            await self._record_interactive_delivery(run, sent_result)
         except asyncio.CancelledError:
             logger.info("Background plan execution cancelled for chat %s", chat_id)
-            await self.send_message(chat_id, "Plan execution cancelled.")
+            sent_cancel = await self.send_message(chat_id, "Plan execution cancelled.")
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_cancel)
         except Exception as e:
             logger.error("Background plan execution failed: %s", e, exc_info=True)
-            await self.send_message(chat_id, f"Execution error: {html.escape(str(e))}")
+            sent_error = await self.send_message(chat_id, f"Execution error: {html.escape(str(e))}")
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             self._active_tasks.pop(chat_id, None)
 
@@ -2324,6 +2411,7 @@ class TelegramBot:
             except Exception:
                 pass
 
+        run_for_delivery: Any = None
         try:
             # Build rich context from plan + exploration output
             user = plan.creator_sender_info or {}
@@ -2351,6 +2439,7 @@ class TelegramBot:
                 user_role=str(user.get("role") or "user"),
                 identity=_identity,
             )
+            run_for_delivery = run
 
             # Track execution run ID
             plan.execution_run_id = run.id
@@ -2401,16 +2490,22 @@ class TelegramBot:
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_str = f"${run.total_cost_usd:.2f}" if run.total_cost_usd else "$?.??"
                 footer = f"\n\n<i>RLM: {duration_s:.1f}s / {cost_str}</i>"
-                await self.send_message(chat_id, run.output_text)
+                sent_result = await self.send_message(chat_id, run.output_text)
+                await self._record_interactive_delivery(run, sent_result)
                 await self.bot.send_message(chat_id=int(chat_id), text=footer)
             elif run.error_message:
-                await self.send_message(
+                sent_failure = await self.send_message(
                     chat_id,
                     f"\u274c Deep reasoning failed: {html.escape(run.error_message)}",
                 )
+                await self._record_interactive_delivery(run, sent_failure)
         except Exception as e:
             logger.error("Deep plan execution failed: %s", e, exc_info=True)
-            await self.send_message(chat_id, f"Deep reasoning error: {html.escape(str(e))}")
+            sent_error = await self.send_message(
+                chat_id, f"Deep reasoning error: {html.escape(str(e))}"
+            )
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             typing_active = False
             typing_task.cancel()
@@ -2487,6 +2582,7 @@ class TelegramBot:
         except Exception:
             stream_msg_id = None
 
+        run_for_delivery: Any = None
         try:
             model = self._model_override.get(chat_id)
 
@@ -2517,6 +2613,7 @@ class TelegramBot:
                 user_role=str(user.get("role") or "user"),
                 identity=_identity,
             )
+            run_for_delivery = run
 
             revised_plan_text = _extract_plan_text(run.output_text or "")
 
@@ -2537,7 +2634,8 @@ class TelegramBot:
                 plan.plan_text = revised_plan_text
 
                 revision_label = f"<b>Plan v{plan.revision_count + 1}</b>"
-                await self.send_message(chat_id, revised_plan_text)
+                sent_revision = await self.send_message(chat_id, revised_plan_text)
+                await self._record_interactive_delivery(run, sent_revision)
 
                 kb = self._build_plan_keyboard(plan.plan_id, plan.revision_count)
                 await self.bot.send_message(
@@ -2556,10 +2654,15 @@ class TelegramBot:
                     name=f"tg-save-plan-revision:{chat_id}",
                 )
             else:
-                await self.send_message(chat_id, run.output_text or "No revised plan produced.")
+                sent_fallback = await self.send_message(
+                    chat_id, run.output_text or "No revised plan produced."
+                )
+                await self._record_interactive_delivery(run, sent_fallback)
         except Exception as e:
             logger.error("Plan iteration failed: %s", e, exc_info=True)
-            await self.send_message(chat_id, f"Revision error: {html.escape(str(e))}")
+            sent_error = await self.send_message(chat_id, f"Revision error: {html.escape(str(e))}")
+            if getattr(run_for_delivery, "delivery_status", None) is None:
+                await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             typing_active = False
             typing_task.cancel()
