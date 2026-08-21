@@ -1,3 +1,19 @@
+## [1.34.0](https://github.com/Ironsail-llc/genus-os/compare/v1.33.8...v1.34.0) (2026-08-21)
+
+### Features
+
+* **engine:** detect sustained tool outages and primary-model loss ([#308](https://github.com/Ironsail-llc/genus-os/issues/308)) ([c3425d8](https://github.com/Ironsail-llc/genus-os/commit/c3425d8703d3b9ce5aca2b01acdc730f5e9321ad))
+* **engine:** interactive replies record delivery truth ([#304](https://github.com/Ironsail-llc/genus-os/issues/304)) ([be928b1](https://github.com/Ironsail-llc/genus-os/commit/be928b16ca9ba318a4179be625bd6d3674884bf9))
+* **engine:** surface unread alert digest to the operator ([#309](https://github.com/Ironsail-llc/genus-os/issues/309)) ([d81bc82](https://github.com/Ironsail-llc/genus-os/commit/d81bc8218472acb3e3abaf44b9e576b38aebea00))
+* **engine:** verify run claims against the tool trace (observe) ([#310](https://github.com/Ironsail-llc/genus-os/issues/310)) ([3f1628c](https://github.com/Ironsail-llc/genus-os/commit/3f1628c6e1fbf495c19861d6a5a45c7dcc8b9dd2))
+* **engine:** verify side-effect tools against environment state (observe) ([#307](https://github.com/Ironsail-llc/genus-os/issues/307)) ([d25734c](https://github.com/Ironsail-llc/genus-os/commit/d25734c36ef34b0fa300bca01c4bba405ae0d21c))
+
+### Bug Fixes
+
+* **bench:** stop benchmark traffic polluting production metrics ([#311](https://github.com/Ironsail-llc/genus-os/issues/311)) ([a0f7cb9](https://github.com/Ironsail-llc/genus-os/commit/a0f7cb9e291f8f452ad0a9a75d352e59d6dfce7b))
+* **engine:** delivery_status reflects the actual sender result ([#306](https://github.com/Ironsail-llc/genus-os/issues/306)) ([3e33016](https://github.com/Ironsail-llc/genus-os/commit/3e33016e5a4def6bca1c7461046f917fd83813c1))
+* **infra:** keep the pager alive during crash loops and hard kills ([#305](https://github.com/Ironsail-llc/genus-os/issues/305)) ([553c1e8](https://github.com/Ironsail-llc/genus-os/commit/553c1e80590f0958d0a9c8a6ab1e433b8fc0d7e7))
+
 ## [1.33.8](https://github.com/Ironsail-llc/genus-os/compare/v1.33.7...v1.33.8) (2026-08-21)
 
 ### Bug Fixes

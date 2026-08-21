@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "1.33.8",
+  "version": "1.34.0",
   "private": true,
   "packageManager": "pnpm@10.34.5",
   "scripts": {
