@@ -57,15 +57,16 @@ class TestGuardTrailingAssistant:
         assert len(msgs) == 2
         assert msgs[-1]["role"] == "assistant"
 
-    def test_only_one_assistant_dropped_per_call(self) -> None:
-        # If there are two trailing assistants (pathological), only the last is
-        # dropped. Next pre-flight pass would catch the next one. Keeps guard
-        # minimal and predictable.
+    def test_every_trailing_assistant_dropped_in_one_pass(self) -> None:
+        # Two trailing assistants (pathological) are BOTH dropped. The guard
+        # runs once per call — the earlier "drop only the last, a later pass
+        # catches the rest" behavior left the request still ending on an
+        # assistant turn, so the provider rejected it anyway.
         msgs = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "a1"},
             {"role": "assistant", "content": "a2"},
         ]
         out = AgentRunner._guard_trailing_assistant(msgs)
-        assert len(out) == 2
-        assert out[-1]["content"] == "a1"
+        assert len(out) == 1
+        assert out[-1]["role"] == "user"
