@@ -385,6 +385,19 @@ async def _execute_tool(
             from robothor.crm.dal import reset_benchmark_sandbox
 
             reset_benchmark_sandbox(sandbox_token)
+    # ── Post-condition verification (grade the environment, not the transcript) ──
+    # The single choke point every tool call passes through, AFTER the handler
+    # has returned successfully. Bookkeeping only: verify_tool_result never
+    # raises and, below the enforce rung, returns the result untouched. The
+    # try/except guards the import itself, so even a broken verification module
+    # cannot fail an agent's real work.
+    try:
+        from robothor.engine.tools import verification
+
+        result = await verification.verify_tool_result(name, args, result, ctx)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Post-condition verification skipped for %s: %s", name, e)
+
     if isinstance(result, dict) and "error" in result:
         _audit_tool_call(
             name, agent_id, tenant_id, user_id=user_id, status="error", error=result["error"]
